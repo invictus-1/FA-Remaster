@@ -2372,6 +2372,13 @@ both. Ask: confirm (or make it so) that the per-beat data of beats run before th
 anything the world picture takes from each beat's sync) is kept and given to the first Beat after SwapMap, as the
 run-ahead after FinishLoad has it today, so the first picture is the same as if the beats had run after the map. Tell
 me if anything must not be called before MapReady (GameStarted? Beat?) and what the ui should call when.
+DONE (renderer, 2026-11-07, render 1cf84164, docs/render-answers.md): no renderer change needed. The sim keeps props,
+effects, hits, impacts and health until taken; the first Beat after SwapMap takes beats 2-29's events together (stamped
+tick 29; nothing shows before 30). Rules: (1) PrepareSession(sim) first, no beat running (it keeps no sim reference; the
+map's threads never touch the sim after it), then the run-ahead may start; (2) no GameStarted / Beat before SwapMap;
+(3) NotePictureBeat's no-picture branch must NOT run during the run-ahead (it takes and drops hits / impacts / health);
+(4) when beat 29 and MapReady are both done: SwapMap (no beat running), DressGamePicture as today (GameStarted,
+SetFocusArmy, SetDayAndWeather, Beat), then Beat per tick from 30. SetLoadCamera / SetLoadDayAndWeather any time.
 
 ## To the visuals track
 
