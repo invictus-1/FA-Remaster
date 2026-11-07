@@ -103,6 +103,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.water.ocean.nearSparkle = looks.seaSparkle ? 0.3f : 0.0f;  // (Sea Sparkle, render 03fc92c; 0.3 on: render 7617828)
   w.unitDetail = looks.unitDetail ? 1.0f : 0.0f;  // (Close-up Detail, render 5ee436a)
   w.clouds.mix = looks.cloudMix ? 1.0f : 0.0f;    // (Cloud Layout: Mixed / Even, render b6e66de, request 56)
+  w.stormCells = looks.stormCells;                // (Storm Clouds: Cells / Plain, render 309e718, request 57)
   w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)
   // (Shield Bending: Off nothing bent; Subtle a little, units under the shield never; Full everything behind, as 10-28)
   w.energy.bend = looks.shieldBend <= 0 ? 0.0f : looks.shieldBend == 1 ? 0.35f : 1.0f;

@@ -601,6 +601,9 @@ struct LookSettings {
   //  - cloudMix (World::clouds.mix 1 / 0, render b6e66de, request 56; Chris 2026-11-06): the 3D clouds at random places
   //    and of mixed sizes (Cloud Layout: Mixed); 0 = Even, in rows, as before. Only with the 3D clouds (Atmosphere).
   //    Console remaster_cloud_layout 0|1.
+  //  - stormCells (World::stormCells, render 309e718, request 57; Chris 2026-11-06 "Yes, keep it"): a storm's clouds in
+  //    towering cells (Storm Clouds: Cells); off = Plain, the storm as before. Only with the 3D clouds (Atmosphere).
+  //    Console remaster_storm_clouds 0|1.
   //  - shoreSoak (water.shoreSoak): the bed under the shallows drawn soaked as the wet beach; off: as before.
   //    Console remaster_shore_soak 0|1.
   //  - shieldBend (energy.bend, energy.steadyUnits): how much an energy shield bends what is behind it; 0 Off (bend 0),
@@ -623,6 +626,7 @@ struct LookSettings {
   //    radar in a faint veil; off: as ever. Consoles remaster_cloak_look 0|1, remaster_stealth_veil 0|1.
   bool oceanGlitter = true, shoreSoak = true, remasteredGate = true, ghostLook = true, guideOverGrass = true;
   bool cloakLook = true, stealthLook = true, seaSparkle = false, unitDetail = true, cloudMix = true;
+  bool stormCells = true;
   int shieldBend = 1;
   float unitGlow = 0.75f, sharpen = 0.5f;
   // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by

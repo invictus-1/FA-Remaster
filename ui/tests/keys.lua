@@ -231,7 +231,7 @@ check("the case not counting, in the registry's order", names(ConTextMatches("UI
 local ai = ConTextMatches("ai")
 check("'_' comes before letters: the ai_ names, then Air...", ai[table.getn(ai)], "AirLookAheadMult")
 check("no text, no names", table.getn(ConTextMatches("")), 0)
-check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_scorch remaster_sea_sparkle remaster_season remaster_sharpen remaster_shield_bend remaster_shore_soak remaster_snow_tracks remaster_soft_shadows remaster_stats remaster_stealth_veil")
+check("our own commands are among them", names(ConTextMatches("remaster_s")), "remaster_scorch remaster_sea_sparkle remaster_season remaster_sharpen remaster_shield_bend remaster_shore_soak remaster_snow_tracks remaster_soft_shadows remaster_stats remaster_stealth_veil remaster_storm_clouds")
 check("the cinematic camera's, Colour Vision's, the glow colour's, the lens's, the palette's, the photo's, the photo mode's and Low Latency's too", names(ConTextMatches("remaster_c")) .. " " .. names(ConTextMatches("remaster_l")) .. " " ..
     names(ConTextMatches("remaster_p")), "remaster_cinecam remaster_cloak_look remaster_cloud_layout remaster_color_vision remaster_lamp_colour remaster_lens remaster_look remaster_low_latency remaster_palette remaster_photo remaster_photo_look remaster_photo_mode")
 check("one argument, no more", pcall(ConTextMatches), false)
