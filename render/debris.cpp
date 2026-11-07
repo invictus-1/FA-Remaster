@@ -597,6 +597,14 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     d.turn = Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]};
     d.seen = clock;
     d.stamp = stamp_;
+    // [debriscommander] (its bones hidden as it dies - a commander's upgrades not built - for its baked set's chunks of them)
+    if (!d.thrown && d.model && u.firstBone + u.boneCount <= frame.bones.size()) {
+      d.hiddenBones.clear();
+      for (uint32_t k = 0; k < u.boneCount; ++k) {
+        const FrameBone& fb = frame.bones[u.firstBone + k];
+        if (fb.hidden && fb.bone < d.model->bones.size()) d.hiddenBones.push_back(d.model->bones[fb.bone].name);
+      }
+    }
     // on the ground (a land unit, a building): with its death's explosion, the flash its script makes on it (seen up to
     // half a second before its death was: the picture's frame and the effects' beat need not be the same), or four
     // seconds on at the latest; falling from the air: when it is down
@@ -605,7 +613,7 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
       d.thrown = true;
       // [bakeddebris] (a unit on the ground with a baked set of its own: its real parts instead, in the style its death calls for)
       // ([debrisairsea] an aircraft's set where it came down, with the velocity it came down with)
-      d.baked = baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(u.id, d), d.air ? d.velocity : Vec3{});
+      d.baked = baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(u.id, d), d.air ? d.velocity : Vec3{}, &d.hiddenBones);
       if (!d.baked && !d.water) Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
     }
   }
@@ -619,7 +627,7 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     if (!d.thrown && clock - d.seen < 2 && d.at.y - Ground(d.at.x, d.at.z) < 4) {
       d.thrown = true;
       // [debrispile] (a unit on the ground with a baked set: its set, as above; its wreck waits for it, BakedDebris::coming)
-      d.baked = baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(it->first, d), d.air ? d.velocity : Vec3{});
+      d.baked = baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(it->first, d), d.air ? d.velocity : Vec3{}, &d.hiddenBones);
       if (!d.baked && !d.water) Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
     }
     // (kept a while: a frame may leave a unit out for a moment)
@@ -653,8 +661,10 @@ const Model* Debris::HullFor(uint32_t unit) {  // [debrishull]
   return it != dying_.end() && it->second.baked ? baked.HullOf(it->second.unit) : nullptr;
 }
 
-std::string Debris::DebrisStyleFor(uint32_t unit, const Dying&) const {
+std::string Debris::DebrisStyleFor(uint32_t unit, const Dying& d) const {
   if (!debrisStyle.empty()) return debrisStyle;  // (--debris-style: one style for every death)
+  // [debriscommander] (a commander dies in its own nuke's blast, whatever struck it last: nothing much is left)
+  if (baked.models && !d.unit.empty() && baked.models->HasCategory(d.unit, "COMMAND")) return "vaporise";
   auto it = kills_.find(unit);
   if (it == kills_.end()) return "break";
   const KillBlow& k = it->second;

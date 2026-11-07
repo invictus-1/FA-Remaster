@@ -108,8 +108,10 @@ class BakedDebris {
   // sea, a ship): each chunk follows its keys until it meets the water (a naval set's keys end there; an air set's where
   // its chunk first touches its ground), splashes, then sinks at the JSON's "sink" units a second (0.6), slowly tilting,
   // to the sea bed, where it lies and later sinks into the bed as the land's do. A land set on water plays nothing.
+  // [debriscommander] `hidden`: the unit's bones hidden as it died (a commander's upgrades not built): a chunk whose JSON names
+  // its source bones ("from") and all of them among those is not drawn.
   bool Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style = "break",
-            Vec3 fall = {});
+            Vec3 fall = {}, const std::vector<std::string>* hidden = nullptr);
   // Moves every death on to `clock` and adds those within sight of `eye` to `meshes` (between its Begin and Prepare; null: moved
   // only).
   void Update(double clock, Vec3 eye, MeshRenderer* meshes);
@@ -149,6 +151,7 @@ class BakedDebris {
     // along the bed, and rests on its thickness, not on its length
     Vec3 along{0, 0, 1};
     float thin = 0;
+    std::vector<std::string> from;  // [debriscommander] the unit's bones it was cut from (its JSON's "from"; none: always drawn)
   };
   struct Style {
     float fps = 30;
@@ -194,6 +197,7 @@ class BakedDebris {
     // style's, or later for what sinks); which chunks have splashed
     bool sea = false;
     float stretch = 1, settled = 0;
+    std::vector<uint8_t> left;  // [debriscommander] chunks left out (of parts the unit did not have)
     std::vector<uint8_t> splashed;
     std::vector<FrameBone> bones;  // (this frame's pose: its chunks', where the model renderer reads them)
     Vec3 centre;                   // (this frame's: the middle of its chunks, how far they reach)
