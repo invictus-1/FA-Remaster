@@ -171,6 +171,7 @@ class BakedDebris {
     std::string folder, trial;  // (where its files are: the export's, and the trial folder's)
     const Model* hull = nullptr;  // [debrishull] (a ship's hull without the thrown parts; asked once)
     bool hullAsked = false;
+    bool leftTold = false;  // [debriscommander] (chunks left out: said once)
   };
   Set* SetOf(const std::string& unitId);
   const Style* StyleOf(Set& set, const std::string& unitId, const std::string& style);

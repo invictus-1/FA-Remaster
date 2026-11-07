@@ -347,6 +347,14 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
       }
       d->left[c] = all ? 1 : 0;
     }
+  {
+    int left = 0;
+    for (uint8_t l : d->left) left += l;
+    if (left > 0 && !set->leftTold) {  // (once a kind)
+      set->leftTold = true;
+      printf("render: %s: %d of its baked chunks left out (parts it did not have)\n", Lower(unitId).c_str(), left);
+    }
+  }
   if (played == 0) printf("render: %s: its baked debris (%s) first played at %.3f s\n", Lower(unitId).c_str(), style.c_str(), clock);
   deaths_.push_back(std::move(d));
   ++played;
