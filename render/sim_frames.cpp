@@ -167,14 +167,23 @@ std::vector<BlueprintLook> SimFrames::LooksOf(const moho::Sim& sim, std::vector<
 
 void SimFrames::AdoptArmies(SimFrames& from) {  // [session]
   std::vector<Vec3> colors;
+  std::vector<std::string> names;
   uint32_t seed = 0;
   {
     std::lock_guard<std::mutex> lock(from.mutex_);
     colors = std::move(from.armyColors_);
     seed = from.seed_;
+    names = from.names_;
   }
   scratch_->unitIds = std::move(from.scratch_->unitIds);
+  // ([session] the ui's request 47) the blueprints' numbering too, as the session's first reading made it: the world's lists
+  // by those numbers (World's unitModels_, iconKinds_: filled by the warm frames, which drew that reading) stay right however
+  // many beats ran in between (the start's run-ahead, beats 1-29, while the map opened). Only into a reading that has numbered
+  // nothing yet.
+  const bool fresh = scratch_->nameIndex.empty();
+  if (fresh) scratch_->nameIndex = std::move(from.scratch_->nameIndex);
   std::lock_guard<std::mutex> lock(mutex_);
+  if (fresh && names_.size() <= 1) names_ = std::move(names);
   armyColors_ = std::move(colors);
   looks_.clear();
   seed_ = seed;
