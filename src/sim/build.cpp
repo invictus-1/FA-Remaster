@@ -3468,10 +3468,17 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       // context, ShouldAbortGuardForBuilderContext 0x612600) and its dtor's status call, the queue still holding both
       // Guards, turns speed-through on; the second Guard's walk starts in the same beat and its move task's status
       // call, the queue now holding one, turns it off again (original 0 at 4758). Ours walked without that call.
-      MoveTaskWalk(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
-      U->unitStates.Insert(US("Moving"));
-      g.childMove = true;
-      g.childMoveDone = false;
+      // NewMoveTask 0x6190a0 (read) does nothing at all for a unit without a navigator (unit+0x54c null, 0x6190b9..
+      // 0x6190c1): no SetGoal, no CUnitMoveTask, so no Moving and no wait; the guard goes on to state 1 next turn.
+      // Seen (oracle recording of FAF 3840 pro replay 6v6_1): at 5527 army 1's immobile ENGINEER structure 0x10006b,
+      // given a Guard of the air factory 0x10004a, stays [Guarding] in the original and is GuardBusy at 5529; ours
+      // made a walk for it and kept Moving.
+      if (Mobile(U)) {
+        MoveTaskWalk(sim, U, Vec3{cx + fp.sizeX * 0.5f, a.y, cz + fp.sizeZ * 0.5f});
+        U->unitStates.Insert(US("Moving"));
+        g.childMove = true;
+        g.childMoveDone = false;
+      }
       t.state = 1;
       break;
     }
@@ -4518,7 +4525,12 @@ int l_ClearFocusEntity(lua_State* L) {
 }
 int l_GetGuardedUnit(lua_State* L) {  // 0x6cd380: unit+0x4e0
   Unit* u = U(L);
-  PushObject(L, FindUnit(*S(L), u->guardedId));
+  // 0x6cd408..0x6cd420 (read): the weak link's unit (+0x4e0, less 4) is pushed whenever it is set: no IsDead or
+  // DestroyQueued test, so a guarded unit that was killed is still given until it is freed. Seen (oracle recording of
+  // FAF 3840 pro replay 4v4_1): at 5646 army 3's mex 0x300003, killed, is destroyed (DestroyUnit -> CreateWreckage ->
+  // StructureUnit.CheckRepairersForRebuild); its guards 0x30004a / 0x300056, repairing it, have it as their guarded
+  // unit, so the original gives them no rebuild order; ours returned nil and they took an IssueBuildMobile.
+  PushObject(L, FindUnitAny(*S(L), u->guardedId));
   return 1;
 }
 int l_GetGuards(lua_State* L) {  // 0x6cd4e0: unit+0x500, ascending entity id

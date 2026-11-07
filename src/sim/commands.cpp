@@ -818,7 +818,15 @@ void EndPatrol(Sim& sim, Unit* u, BuildTask& t) {
     EndBuildTask(sim, u, *p.child, false);
     p.child = nullptr;
   }
-  if (!IsAlive(u)) return;
+  if (!IsAlive(u)) {
+    // The dtor has no life test before its abort (0x61b1a7..0x61b1cd): a unit killed on its patrol, which moved in
+    // the beat before, is told AbortMove too, and MakeIdle's ResetPathState 0x5ad9c0 takes PathFinding and
+    // ProblemGettingToGoal off it. Seen (oracle recording of FAF 3840 pro replay 1v1_5): army 0's 0x4c killed at 5521
+    // while its navigator searched (the original's record has no PathFinding in the kill's beat), and 0xba, 0x164,
+    // 0x3f killed with ProblemGettingToGoal (gone in the original, kept by ours until the unit went).
+    if (u->motion.bp && u->motion.bp->mobile() && !vm::SameBits(u->position, u->lastPosition)) MotionStop(u);
+    return;
+  }
   u->navIgnoreFormation = false;
   if (!vm::SameBits(u->position, u->lastPosition))  // (0x61b1a7..0x61b1c2, memcmp 0x4f0a50)
     MotionStop(u);  // AbortMove only when it moved this tick
