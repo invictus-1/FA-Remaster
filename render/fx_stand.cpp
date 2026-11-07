@@ -898,6 +898,11 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       // (a wreck: the unit's own remastered one where it has one, as the game's props are drawn; else its burnt look)
       const Model* own = b.wreck && !b.original ? world.models.RemasteredWreck(b.unit) : nullptr;
       const Model* model = own ? own : b.wreck ? world.models.Wreck(unit, false) : unit;
+      // [debrisairsea] (as the game's picture: a downed aircraft whose baked set plays is its pieces now; a ship's, its hull)
+      if (!b.wreck && !b.original) {
+        if (world.debris.Replaced(b.id)) continue;
+        if (const Model* hull = world.debris.HullFor(b.id)) model = hull;
+      }
       Pose pose;
       pose.now = pose.next = b.bones.data();
       pose.nowCount = pose.nextCount = b.bones.size();

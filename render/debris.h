@@ -103,6 +103,9 @@ class Debris {
   // [debrishull] A dying ship whose baked parts were thrown: its hull without them (BakedDebris::HullOf), drawn in its place;
   // else null (the unit's own model).
   const Model* HullFor(uint32_t unit);
+  // [debrisairsea] A dying aircraft whose baked set plays where it came down: its own model is no longer drawn (the game keeps
+  // the dead unit a moment after it lands; its pieces are it now).
+  bool Replaced(uint32_t unit) const;
   // A unit's own fragments in place of the library's (unset, or none for a unit: the library's). `unitId`: its
   // blueprint id; `unit`: its model as drawn.
   std::function<std::vector<Piece>(const std::string& unitId, const Model* unit)> fragments;

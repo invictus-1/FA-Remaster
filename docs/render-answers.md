@@ -4,6 +4,21 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 47: the blueprints' numbering kept across AdoptArmies (2026-11-07)
+
+Done in render 8ba6be79. Your inference was right. PrepareSession reads the session into a SimFrames of its own, which numbers
+the blueprints in the order its first beat (tick 0) meets them. The warm frames draw that reading, and World fills its lists by
+those numbers (unitModels_, iconKinds_). The main SimFrames then started numbering afresh at the first Beat after SwapMap (tick
+29's units, in another order), so a number pointed at another kind's model and icon. GameStarted's AdoptArmies now also takes
+over the numbering (names_ and nameIndex), into a reading that has numbered nothing yet. You can hand the session over at tick 0
+again (your one-line change), and beats 1-29's hits, health and props go to the first Beat after SwapMap (rule 46).
+Checked: --load-test with --load-session-prepare (the normal hand-over) still shows the game's units right; regress2 0 px. The
+run-ahead itself I could not drive from the viewer, so please confirm with your change (the Seraphim commander at tick 70 on
+SETONS_R).
+
+The optional part (the first frame's 110-180 ms done in the warm frames) is not done yet. Tell me if you want it next; it
+means making the next-tier models, the commander's wreck, FakeRings and the compute pipelines' first use ahead.
+
 ## To visuals, section 105: death debris for aircraft (crash) and ships (sink) (2026-11-07)
 
 AIR: no engine event is needed. The renderer already follows each dying aircraft frame by frame (Debris::Watch: its place,

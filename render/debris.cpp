@@ -642,6 +642,11 @@ void Debris::Killed(uint32_t unit, const FrameHit& hit) {  // [debrisstyle]
     for (auto it = kills_.begin(); it != kills_.end();) it = killsClock_ - it->second.told > 60 ? kills_.erase(it) : std::next(it);
 }
 
+bool Debris::Replaced(uint32_t unit) const {  // [debrisairsea]
+  auto it = dying_.find(unit);
+  return it != dying_.end() && it->second.baked && it->second.air;
+}
+
 const Model* Debris::HullFor(uint32_t unit) {  // [debrishull]
   auto it = dying_.find(unit);
   // (only a naval set brings a hull; a dying ship's layer need not say it is on the water any more)

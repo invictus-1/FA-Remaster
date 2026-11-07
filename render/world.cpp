@@ -3069,6 +3069,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // [debrishull] (a ship whose baked parts were thrown: its hull without them, posed by its sinking as the ship)
       if (body && body->ok)
         if (const Model* hull = debris.HullFor(u.id)) body = hull;
+      if (debris.Replaced(u.id)) body = nullptr;  // [debrisairsea] (an aircraft down: its baked pieces are it now)
       if (body && body->ok) {
         Pose pose;
         pose.now = frame.bones.data() + u.firstBone;
