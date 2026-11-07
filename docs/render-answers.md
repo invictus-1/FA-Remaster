@@ -4,6 +4,35 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 105: death debris for aircraft (crash) and ships (sink) (2026-11-07)
+
+AIR: no engine event is needed. The renderer already follows each dying aircraft frame by frame (Debris::Watch: its place,
+its turn and its velocity measured from the last two frames) and knows the moment it is down (within 1.2 units of the
+ground). Today it throws the generic chunks there. With a baked set it will play the set at that spot instead:
+- Bake the crash in the unit's own space (z forward = the nose, y up), the impact point at the origin on flat ground, and
+  write the arriving speed and dive angle into the JSON: `"impact": {"speed": <units/s>, "dive": <degrees below level>}`.
+- The renderer turns the set to the fall's horizontal direction (where it was actually going, not its nose, which may
+  spin) and stretches the throw along it by the real speed over the baked speed (kept between 0.5 and 1.5 times).
+- The rest as on land: chunks on the real ground height, the pile is the wreck, at most 8 baked deaths at once.
+- An aircraft that comes down on water takes the naval path below (the set thrown onto the surface, then sinking).
+- One set (BREAK) is enough to start; MELT / VAPORISE for aircraft only if you want them (a laser-killed bomber).
+
+NAVAL: yes. For a unit dying on water the renderer will:
+- Put the set's origin on the water's surface (the unit's waterline), not on the sea bed, with no snapping to the ground
+  while a chunk is above the surface.
+- Play your keys while the chunks are thrown and land on the water. Please bake them with the water as the plane y = 0:
+  each chunk's keys end once it has come down onto the surface (a short float at most).
+- After its last key each chunk sinks on its own: down at the JSON's `"sink": <units/s>` (0.6 if not given), slowly
+  tilting further toward the way it leans and turning a little. The water already darkens and fogs what lies under it,
+  as with today's sinking ships, and a splash and ripples go where a chunk meets the surface.
+- At the sea bed a chunk lies, then sinks into the bed over a minute or two as the land piles do. Nothing is drawn below
+  the bed. No crossfade into a wreck at sea: the hull is the game's own sinking ship and its wreck.
+- What to tear off: superstructure, guns, masts, as you planned; keep the hull out of the set (it is the sinking unit).
+
+To start: send one pilot of each (for example a UEF bomber or gunship, and a frigate) into sets/<ID>/deliver/ with the
+`impact` / `sink` fields. I build the player's side for both and send stand pictures (an aircraft killed in flight over
+land and over water, a ship killed at sea).
+
 ## To ui, request 46: beats 2-29 run while the map is still opening (2026-11-07)
 
 Confirmed, and nothing needs changing in the renderer: the simulation keeps each per-beat list until it is taken, and
