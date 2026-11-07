@@ -1011,6 +1011,7 @@ struct GameSession::Timeline : ReplayTimelineSource {
     return true;
   }
   std::string TakeKept() override { return std::move(kept); }
+  void CaptureForTests(const std::string& path) override { session->CaptureWindow(path); }
   void Watch(const std::vector<uint32_t>& ticks) override {
     GameSession& g = *session;
     std::lock_guard<std::mutex> lock(g.watchMutex_);
@@ -1154,12 +1155,41 @@ void GameSession::TakeFrozen(const std::vector<uint8_t>& rgba, int w, int h) {
 bool GameSession::Rewind(std::string* why) {
   rewinding_ = true;
   rewindArrived_ = false;
+  KeepMapForRewind();
   if (!Relaunch(why)) {
+    keepMap_ = false;
     EndRewind();
     return false;
   }
-  Logf(LogLevel::Info, "moho64ui: the jump back: the replay starts over behind the picture held (%.2f s after the jump was asked)", back_.ended);
+  Logf(LogLevel::Info, "moho64ui: the jump back: the replay starts over behind the picture held (%.2f s after the jump was asked)%s", back_.ended,
+       keepMap_ ? ", on the map shown (no map opened again)" : "");
   return true;
+}
+
+// The same replay starts over on the same map: when the window's picture shows this game's map, the new session is
+// begun on it at the load's end (WorldPicture::RestartMap, the renderer's answer to request 45 R1: the world as the map
+// was opened, its ground, textures, pipelines and the models made kept), so that the load opens nothing behind (on a
+// 4v4 2-3 s of each jump back went there: the same map opened again, the session's models made again). A menus' map
+// begun behind the game that is over (the replay played to its end: ServeWindowMap) is let go of first, the game's looks
+// laid back on. Ours.
+void GameSession::KeepMapForRewind() {
+  keepMap_ = false;
+#ifdef MOHO64UI_WORLD_PICTURE
+  static const bool reopen = [] {
+    const char* v = std::getenv("MOHO64UI_REWIND_REOPEN");
+    return v && *v && std::string(v) != "0";
+  }();
+  if (reopen || !wantPicture || !window || !windowPicture_ || !picture_ || !picture_->direct) return;
+  using Kind = WindowPicture::Kind;
+  WindowPicture& wp = *windowPicture_;
+  if (wp.shows != Kind::Game || wp.shownMap != map_ || !wp.picture.world() || wp.pending == Kind::Game) return;
+  if (wp.pending == Kind::Menu) {
+    wp.picture.CancelMap();
+    if (wp.menuBehindGame) GameLooksBack(wp);
+    wp.pending = Kind::None;
+  }
+  keepMap_ = true;
+#endif
 }
 
 // The beat is reached (or the replay closes): the picture held goes (PresentToWindow: the world shown again, the
@@ -1763,6 +1793,7 @@ void GameSession::End() {
     seekTo_ = 0;
     seekBack_ = false;
     back_ = BackClock{};
+    keepMap_ = false;
     EndRewind();
   }
   if (sounds) sounds->StopWorld();
@@ -1965,7 +1996,7 @@ void GameSession::BeginLoad() {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (windowPicture_) windowPicture_->failedGameMap.clear();
 #endif
-  if (wantPicture && window) BeginWindowMap(true, loadSession_->header.map);
+  if (wantPicture && window && !keepMap_) BeginWindowMap(true, loadSession_->header.map);  // (a jump back: KeepMapForRewind)
 }
 
 std::string GameSession::LoadingMapFolder() const {
@@ -2066,6 +2097,7 @@ bool GameSession::FinishLoad(std::string* why) {
     // (where the load's time went, seconds from its start: what the loading thread did, and what came after it)
     const double end = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
     char map[160] = "no map opening behind";
+    if (keepMap_) std::snprintf(map, sizeof map, "no map opening behind (a jump back: the map shown is started over)");
     if (loadMapReadyAt_ >= 0)
       std::snprintf(map, sizeof map, "the session given to the map opening behind at %.2f s, that map ready at %.2f s (%.2f s after the loading thread)",
                     loadHandedAt_, loadMapReadyAt_, loadMapReadyAt_ - loadThreadDone_);
@@ -2671,6 +2703,28 @@ void GameSession::OpenPicture() {
     // reading it back (PresentToWindow).
     using Kind = WindowPicture::Kind;
     WindowPicture& wp = *windowPicture_;
+    if (keepMap_) {
+      // A jump back on the map shown (KeepMapForRewind): the world put back as the map was opened, between frames, no
+      // beat running (FinishLoad waited for the loading thread; the old session's beats ended with it), then the new
+      // session given to the picture as after a swap. If the renderer cannot (no world, a photo being made), the map is
+      // opened again below, as for a game loaded before the window, and swapped in once ready (OpenPictureIfDue).
+      keepMap_ = false;
+      if (wp.pending == Kind::None && wp.shows == Kind::Left && wp.shownMap == map_ && wp.picture.RestartMap()) {
+        wp.shows = Kind::Game;
+        wp.fading = false;
+        auto pic = std::make_unique<Picture>(&wp.picture);
+        pic->session = this;
+        pic->direct = true;
+        StartAfresh(wp.picture, false);  // (the per-game settings, as at a swap)
+        wp.picture.SetWorldShown(true);
+        DressGamePicture(*pic);
+        picture_ = std::move(pic);
+        Logf(LogLevel::Info, "moho64ui: session: the world's picture is shown, %.3f s (the map shown started over: RestartMap)",
+             secs(t3, std::chrono::steady_clock::now()));
+        return;
+      }
+      Logf(LogLevel::Warning, "moho64ui: session: the map shown could not be started over (RestartMap): it is opened again");
+    }
     if (wp.pending != Kind::Game || wp.pendingMap != map_) {  // (not begun: a game loaded before the window was there)
       if (wp.failedGameMap == map_) {
         Logf(LogLevel::Warning, "moho64ui: session: no picture of the world: its map could not be opened");

@@ -57,10 +57,13 @@ class ReplayTimelineSource {
   // kept across jumps back; Watch anew forgets the lines taken.
   virtual void Watch(const std::vector<uint32_t>& ticks) = 0;
   virtual std::map<uint32_t, std::string> Watched() const = 0;
+  // For tests: the next frame the window shows is saved as a PNG (the host's --window-capture way; nothing without a
+  // window's picture).
+  virtual void CaptureForTests(const std::string& path) = 0;
 };
 
 // moho64ui_ReplayTimeline, moho64ui_ReplayMoments, moho64ui_ReplayFight, moho64ui_ReplaySeek, moho64ui_ReplayTakeKept,
-// moho64ui_ReplayWatchForTests, moho64ui_ReplayWatchedForTests (replay_timeline.cpp): nil where the state has no
+// moho64ui_ReplayWatchForTests, moho64ui_ReplayWatchedForTests, moho64ui_ReplayCaptureForTests (replay_timeline.cpp): nil where the state has no
 // replay timeline (UserState::Config::timeline).
 void RegisterTimelineBindings(lua_State* L);
 // The console's remaster_timeline [on|off] (the key "Replay timeline", Ctrl-T at first): the bar shown or hidden

@@ -5,7 +5,36 @@ commit, hardware, scenario, numbers). Newest first.
 
 **Hardware (all rows):** AMD Ryzen 9 9950X3D, NVIDIA RTX 4090, the screen at 240 Hz, vertical sync on.
 
-## 2026-11-06: the replay timeline's jump back, held (helper "rewind", on c3747d1 + its patch)
+## 2026-11-06 evening: the held jump back without opening the map again (helper "rewind_r1", on 862b603 + its patch)
+The held jump back (below) now begins the new session on the map the window shows (WorldPicture::RestartMap, render
+c28c5ec: 6-11 ms) instead of opening the same map again behind. `MOHO64UI_REWIND_REOPEN=1` keeps the map opened again,
+so both ran with one build, alternately; the same set-up as below (1920x1080 window, CPUs 16-31, MOHO64_PLACE=off). The
+PC was quieter this evening: the same jump forward varied by under 8%.
+
+| replay, jump | the map | click to the beat | the load through (the loading thread / the load finished) | the run ahead |
+|---|---|---|---|---|
+| 1v1 mp2, 5:02 -> 2:00, three pairs | opened again | 2.63 / 2.67 / 2.55 s | 1.84 / 1.90 / 1.85 s (1.43-1.50 / 1.77-1.84) | 0.66-0.75 s |
+| 1v1 mp2, 5:02 -> 2:00, three pairs | RestartMap | 2.19 / 2.09 / 2.25 s | 1.45 / 1.40 / 1.47 s (1.33-1.40 / the same) | 0.66-0.74 s |
+| 4v4 mp1, 20:02 -> 1:00, two pairs | opened again | 3.25 / 3.35 s | 2.35 / 2.31 s (1.53 / 2.14, 1.47 / 2.10) | 0.85 / 1.00 s |
+| 4v4 mp1, 20:02 -> 1:00, two pairs | RestartMap | 2.52 / 2.45 s | 1.60 / 1.61 s (1.40 / 1.40, 1.41 / 1.41) | 0.88 / 0.80 s |
+| 4v4 mp1, 20:02 -> 10:00 | opened again | 35.85 s | 2.36 s | 33.4 s (its jump forward 115.9 s) |
+| 4v4 mp1, 20:02 -> 10:00 | RestartMap | 39.14 s | 1.77 s | 37.3 s (its jump forward 125.2 s: the PC 8% slower) |
+
+So the load no longer waits for the map: it is through when the loading thread is (the rules, the simulation's start,
+the game's state: ~1.4 s), 0.4-0.75 s sooner than with the map opened again on main (where the session's models now
+take ~0.6 s after the loading thread, not the 2-3 s measured this morning). A short jump back is now ~0.5-0.9 s quicker
+(4v4 to 1:00: 3.3 -> 2.5 s); a long one is still nearly all run ahead (the engine's snapshot is what is left).
+- Exactness: the fingerprint after a RestartMap jump back (in a window) equals a straight playback's: the 1v1 at its own
+  pace to 2:00 vs. forward to 4:00, back to 1:00, on to 2:00 (1201 lines identical in every part); the 4v4 forward to
+  5:00 vs. forward to 6:40, back to 3:20, on to 5:00 (3001 lines, every hashed part identical; the "lua" part 1 KB apart
+  on 6 beats, as with any session started over).
+- The picture: the replay held at the beat (the viewer's pause asked with the jump), the camera set to the map's middle
+  (zoom 520, heading held), the panels hidden, captured after 150 frames; a jump back vs. a straight run to the same beat,
+  against two straight runs: 1v1 at 2:00, 7,415-16,084 pixels differ by more than 8 levels (two straight runs: 20,736);
+  4v4 at 3:20, 95,405-107,098 (two straight runs: 40,741; the map opened again: 112,691). All of it is the animated
+  water (shore waves, whitecaps) and the ground's wind-blown scatter, whose phase is the PC's clock since the map
+  opened; nothing on units, wrecks, scars or decals.
+
 Chris's third test: "skipping BACK reloads the whole replay". There is no snapshot of the simulation yet (the engine,
 2026-11-06), so a jump back still starts the replay over and runs ahead to the beat; what changed is what the player
 sees (GameSession::Rewind): the picture at the click held, dimmed, with "Rewinding to m:ss ... n%" over it, no

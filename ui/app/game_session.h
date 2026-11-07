@@ -119,8 +119,10 @@ class GameSession {
   // through the session's end, the load (no loading screen, no front end made anew; the interface's state made on the
   // loading thread as before) and the run ahead (in a window as many beats a frame as fit in kHeldChunkMs: nothing of
   // the world or of the interface drawn, no input; the new interface's scripts get their frames and every beat's sync
-  // as before), and the new interface is first drawn at the beat. Ours. MOHO64UI_REWIND_RELOAD=1: the jump back as
-  // before (the restart the player sees: the loading screen, then the beats run ahead with the world drawn).
+  // as before), and the new interface is first drawn at the beat. The map is not opened again: the new session begins
+  // on the world the window's picture shows (WorldPicture::RestartMap, KeepMapForRewind; MOHO64UI_REWIND_REOPEN=1:
+  // opened again behind, as the first held way did). Ours. MOHO64UI_REWIND_RELOAD=1: the jump back as before (the
+  // restart the player sees: the loading screen, then the beats run ahead with the world drawn).
   // JumpBackDue: the request the timeline made (RequestSessionRestart) is such a jump. FreezePicture: the next frame
   // shown is read back as the picture held (at once without the window's picture; PictureFrozen once it is there).
   // Rewind: the session ends and the replay starts over, held (Rewinding until the beat is reached).
@@ -480,6 +482,10 @@ class GameSession {
   // back), and its clock: when it was asked, and when its parts were through (seconds from then; -1 not yet).
   bool rewinding_ = false;
   bool rewindArrived_ = false;
+  // (that jump starts the session over on the map the window's picture shows, WorldPicture::RestartMap at the load's
+  // end, OpenPicture, instead of opening it again behind; MOHO64UI_REWIND_REOPEN=1: opened again, as before)
+  bool keepMap_ = false;
+  void KeepMapForRewind();
   bool freezeAsked_ = false, frozenTaken_ = false;
   int freezeWaits_ = 0;  // (frames shown without a world drawn since the freeze was asked: after 3 it is held black)
   std::vector<uint32_t> frozen_;

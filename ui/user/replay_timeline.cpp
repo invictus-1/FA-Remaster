@@ -178,6 +178,14 @@ int l_ReplayWatchedForTests(lua_State* L) {
   return 1;
 }
 
+// moho64ui_ReplayCaptureForTests(path): the next frame the window shows saved as a PNG at `path`
+// (ReplayTimelineSource::CaptureForTests). For tests only (a jump back's picture against a straight playback's).
+int l_ReplayCaptureForTests(lua_State* L) {
+  ReplayTimelineSource* source = Source(L);
+  if (source && lua_isstring(L, 1)) source->CaptureForTests(lua_tostring(L, 1));
+  return 0;
+}
+
 }  // namespace
 
 void RegisterTimelineBindings(lua_State* L) {
@@ -188,6 +196,7 @@ void RegisterTimelineBindings(lua_State* L) {
   lua_register(L, "moho64ui_ReplayTakeKept", l_ReplayTakeKept);
   lua_register(L, "moho64ui_ReplayWatchForTests", l_ReplayWatchForTests);
   lua_register(L, "moho64ui_ReplayWatchedForTests", l_ReplayWatchedForTests);
+  lua_register(L, "moho64ui_ReplayCaptureForTests", l_ReplayCaptureForTests);
 }
 
 // remaster_timeline [on|off]: the bar's Toggle (no word) or Show / Hide (/moho64ui/lua/timeline.lua). Only while a
