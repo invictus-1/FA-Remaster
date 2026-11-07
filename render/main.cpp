@@ -295,6 +295,10 @@
 //           at them close and to time many
 // --debris-show <unit>  the debris's library of shapes (debris_shapes.h) laid out in two rows over where the camera starts,
 //           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
+// --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
+//           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
+//           a puff of rock dust; the rock darkens with soot and cracks as the hits add up (with --fx-shot, --fx-hit prop and
+//           --fx-to on a rock: to see it)
 // --fx-blast <size>  with the effects stand: a blast of that size (world units, about an explosion's radius: a small
 //           tank's death 0.4, a shell's 1 to 3, an experimental's 4) at --fx-at --fx-kill-at seconds into each play
 //           (alone too, every --fx-repeat seconds)
@@ -896,6 +900,7 @@ struct Options {
   bool leafLight = false;               // --leaf-light
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
+  bool rockHits = false;                // [rockhits] --rock-hits
   std::string debrisTest, debrisShow;   // --debris-test, --debris-show
   float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
@@ -1234,6 +1239,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--movement-dust") o->movementDust = true;
     else if (a == "--movement-dust-over") o->movementDust = true, o->movementDustOver = true;
     else if (a == "--debris") o->debris = true;
+    else if (a == "--rock-hits") o->rockHits = true;  // [rockhits]
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
@@ -2263,6 +2269,7 @@ int main(int argc, char** argv) {
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;
   world.blastDebris = opt.debris;
+  world.rockHits = opt.rockHits;  // [rockhits]
   world.movementDust = opt.movementDust;
   world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
@@ -4766,6 +4773,9 @@ int main(int argc, char** argv) {
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
                world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
+      if (world.rockHits)  // [rockhits]
+        printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
+               world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());
       printf("\n");
       if (opt.wildlifeVerbose) tellFlocks("at the end");
       if (opt.timings && timing.frames > 0) {

@@ -123,6 +123,8 @@ void Debris::Clear() {
     for (Chunk& c : flying_) StopTrail(&c);
   flying_.clear();
   lying_.clear();
+  chips_.clear();  // [rockhits]
+  chipsFlying_ = 0;
   dying_.clear();
   shells_.clear();
   shellKinds_.clear();
@@ -512,6 +514,46 @@ void Debris::Throw(const std::string& unitId, const Model* model, Vec3 position,
   }
 }
 
+// [rockhits] (debris.h) Lumps of the rock's own stone (the library's lumps, kind 'r': debris_shapes.h), small, fast and
+// spinning, out from where it was struck in a cone round `out`.
+void Debris::Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, float strength) {
+  if (!rock || !rock->ok) return;
+  seed_ ^= static_cast<uint32_t>(at.x * 977.0f) * 2654435761u ^ static_cast<uint32_t>(at.z * 613.0f);
+  if (!seed_) seed_ = 1;
+  // (a frame out of `out`: two ways across it, for the cone)
+  const Vec3 side = Length(Cross(out, Vec3{0, 1, 0})) > 0.1f ? Normalize(Cross(out, Vec3{0, 1, 0})) : Vec3{1, 0, 0};
+  const Vec3 upish = Normalize(Cross(side, out));
+  const float push = 1.0f + 2.0f * std::clamp(strength, 0.0f, 1.0f);
+  for (int i = 0; i < count; ++i) {
+    if (chipsFlying_ >= mostChipsFlying || flying_.size() >= 800) break;
+    Chunk c;
+    const float big = Random();
+    c.size = c.scale = std::clamp(size * (0.3f + 0.4f * Random() + 0.3f * big * big * big), 0.025f, 0.35f);
+    c.at = at + out * (c.size * 0.6f);
+    const Vec3 tilt = Normalize(Vec3{Random() - 0.5f, Random() - 0.5f, Random() - 0.5f});
+    const float half = Random() * 3.14159265f, s = std::sin(half);
+    c.turn = Quat{tilt.x * s, tilt.y * s, tilt.z * s, std::cos(half)};
+    // (some 50 degrees round `out` at the most; the smaller, the faster; many of them only fall off it, to lie at its foot)
+    const float a = Random() * 6.2831853f, spread = 0.85f * std::sqrt(Random());
+    const Vec3 way = Normalize(out + (side * std::cos(a) + upish * std::sin(a)) * spread);
+    const float fast = Random();
+    c.velocity = way * (push * (0.2f + 1.1f * fast * fast) * std::clamp(0.12f / std::max(c.size, 0.03f), 0.7f, 1.6f)) + Vec3{0, 0.6f + 1.8f * Random(), 0};
+    c.spin = Normalize(Vec3{Random() - 0.5f, Random() - 0.5f, Random() - 0.5f}) * ((8 + 14 * Random()) * std::min(1.0f, 0.1f / std::max(c.size, 0.01f)));
+    const Looks& looks = LooksOf(rock, 'r');
+    const int k = looks.picks[std::min(static_cast<size_t>(Random() * static_cast<float>(looks.picks.size())), looks.picks.size() - 1)];
+    c.look = looks.painted[static_cast<size_t>(k)].get();
+    c.torn = shape_[k].torn.get();
+    c.solid = true;
+    c.chip = true;
+    c.color = {1, 1, 1};  // (the rock's own colours: a rock's colour multiplies its texture)
+    c.born = clock_ >= 0 ? clock_ : 0;
+    c.key = 0x40000000u | (nextKey_++ & 0x1fffffffu);
+    flying_.push_back(c);
+    ++chipsFlying_;
+    ++chipped;
+  }
+}
+
 void Debris::Watch(const Frame& frame, double clock, const std::function<const Model*(const std::string&)>& model,
                    const std::function<Vec3(uint32_t)>& color, const Blasts* flashes) {
   if (!frame.blueprints) return;
@@ -734,6 +776,7 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
     if (c.sank > 0 && clock - c.sank > 3) gone = true;
     if (gone) {
       StopTrail(&c);
+      if (c.chip) --chipsFlying_;  // [rockhits]
       flying_[i] = flying_.back();
       flying_.pop_back();
       continue;
@@ -745,6 +788,14 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
       c.settled = clock;
       c.dustAfter = 15 + 75 * Random();
       c.world = Mat4::FromTRS(c.at, c.turn, c.scale);
+      if (c.chip) {  // [rockhits] (a chip: kept as rubble for minutes, or sinking into the ground within seconds)
+        c.fading = clock + (Random() < chipsKept ? chipRubbleLasts : 1.0f + 3.0f * Random());
+        --chipsFlying_;
+        chips_.push_back(c);
+        flying_[i] = flying_.back();
+        flying_.pop_back();
+        continue;
+      }
       lying_.push_back(c);
       flying_[i] = flying_.back();
       flying_.pop_back();
@@ -770,6 +821,14 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
     ++fading;
   }
   while (!lying_.empty() && lying_.front().fading > 0 && clock - lying_.front().fading > 10) lying_.pop_front();
+  // [rockhits] the chips lying: past the most kept (counted from the newest) the older begin to sink now; each is gone three
+  // seconds after it began to sink
+  if (!chips_.empty()) {
+    int kept = 0;
+    for (auto it = chips_.rbegin(); it != chips_.rend(); ++it)
+      if (it->fading > clock && ++kept > mostChipRubble) it->fading = clock;
+    chips_.erase(std::remove_if(chips_.begin(), chips_.end(), [clock](const Chunk& c) { return clock - c.fading > 3; }), chips_.end());
+  }
   if (!meshes) return;
   // drawn as scenery (pressing no grass flat), those near enough to be more than a dot
   const bool before = meshes->addingScenery;
@@ -794,6 +853,13 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
     } else {
       Draw(meshes, c, c.world, look, clock, c.solid || away < c.size * 140);
     }
+  }
+  for (const Chunk& c : chips_) {  // [rockhits] (sinking into the ground over three seconds once its time has come)
+    const float away = Length(c.at - eye);
+    if (away > 260) continue;
+    const float f = std::clamp(static_cast<float>(clock - c.fading) / 3, 0.0f, 1.0f);
+    if (f <= 0) Draw(meshes, c, c.world, c.look, clock, away < c.size * 140);
+    else Draw(meshes, c, Mat4::FromTRS(c.at - Vec3{0, c.size * 0.7f * f, 0}, c.turn, c.scale * (1 - 0.5f * f)), c.look, clock, away < c.size * 140);
   }
   meshes->addingScenery = before;
 }

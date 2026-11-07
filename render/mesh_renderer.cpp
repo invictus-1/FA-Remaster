@@ -504,6 +504,51 @@ float DetailNoise(float2 q) {
   f = f * f * (3 - 2 * f);
   return lerp(lerp(DetailHash(c), DetailHash(c + float2(1, 0)), f.x), lerp(DetailHash(c + float2(0, 1)), DetailHash(c + 1), f.x), f.y);
 }
+// [rockhits] A rock under fire (rock_hits.h, World::rockHits), its scars from the instance's tint (RockHits::Tint): `soot`
+// darkens it in patches toward soot-black and dull, more on what faces up; `crack` opens a net of cracks over more of it,
+// dark in their depth; `dust` lays a fresh coat of pale rock dust over it, more on what faces up. By the world's place
+// (a rock stands still): the cracks' cells some 0.3 of a world unit. RockCrackEdge: how far a place is from the nearest
+// edge between the cells of a jittered grid (small along the cracks).
+float RockCrackEdge(float3 p) {
+  float3 cell = floor(p);
+  float near1 = 9, near2 = 9;
+  [loop] for (int z = -1; z <= 1; ++z)
+    for (int y = -1; y <= 1; ++y)
+      for (int x = -1; x <= 1; ++x) {
+        float3 c = cell + float3(x, y, z);
+        float d = length(c + float3(CloudHash(c), CloudHash(c + 17.3), CloudHash(c + 41.9)) * 0.8 + 0.1 - p);
+        if (d < near1) {
+          near2 = near1;
+          near1 = d;
+        } else if (d < near2) {
+          near2 = d;
+        }
+      }
+  return near2 - near1;
+}
+void RockScarSurface(float soot, float crack, float dust, float3 world, float3 vertexNormal, inout float3 base, inout float metallic,
+                     inout float roughness) {
+  float3 p = world * 2.0;
+  float blotch = CloudNoise(p * 0.45 + 3.1) * 0.65 + CloudNoise(p * 1.6 + 8.7) * 0.35;
+  float up = saturate(vertexNormal.y * 0.5 + 0.5);
+  float s = saturate((soot * (1.15 + 0.3 * up) - (1 - blotch) * 0.6) * 1.8);
+  base = lerp(base, base * 0.15 + float3(0.012, 0.011, 0.01), s);  // (darkened, its own grain still showing through)
+  roughness = lerp(roughness, 0.96, s);
+  metallic *= 1 - s;
+  // (the dust first, a thin coat: the soot shows through it, the cracks are not filled by it)
+  float coat = saturate(dust * (0.35 + 0.65 * up) * (0.55 + 0.45 * blotch));
+  base = lerp(base, float3(0.22, 0.21, 0.19), coat * 0.3);
+  roughness = lerp(roughness, 1, coat * 0.6);
+  [branch] if (crack > 0.02) {
+    // (the net wanders a little, and spreads over more of the rock as the hits add up)
+    float3 q = p * 1.6 + (float3(CloudNoise(p * 1.3), CloudNoise(p * 1.3 + 5.2), CloudNoise(p * 1.3 + 9.4)) - 0.5) * 0.9;
+    float spread = saturate((crack * 1.5 - (1 - CloudNoise(p * 0.3 + 13.1))) * 2.5);
+    float width = 0.015 + 0.03 * crack;
+    float cracked = (1 - smoothstep(width * 0.35, width, RockCrackEdge(q))) * spread;
+    base *= 1 - 0.88 * cracked;
+    roughness = lerp(roughness, 1, cracked);
+  }
+}
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -1011,6 +1056,10 @@ float4 Shade(VOut i, bool front) {
       emission += HotMetalGlow(-i.tint.y, -i.tint.z, i.shape, turn, kind.w > 0.5, albedo.rgb, spec.r, spec.g, soot) *
                   (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
     }
+    // [rockhits] a rock under fire (World::rockHits): its soot, cracks and fresh dust ride in the ghost's tint, marked by its
+    // first number between -0.35 and -0.45 (RockHits::Tint)
+    [branch] if (i.color.a < 1.5 && i.tint.z < 0 && i.tint.x < -0.3 && i.tint.x > -0.48)
+      RockScarSurface(-i.tint.y / 0.49, -i.tint.z - 0.001, (-i.tint.x - 0.35) / 0.1, i.world, vertexNormal, base, metallic, roughness);
     float3 lit = ModernLight(base, metallic, roughness, occlusion, emission, N, i.world, shadow);
     if (kind2.y > 0.5 && leaves.x < 0.5) {  // leaves: some of the light that falls on the far side comes through
       float3 falls = ToLinear(sunColor) * (lightMultiplier * modern.x);

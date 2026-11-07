@@ -32,6 +32,7 @@ std::vector<DebrisShape> MakeDebrisShapes();
 // Which of the library a piece of a unit is, by what the unit is (its blueprint id's third letter: 'b' a building,
 // 'a' an aircraft, anything else a vehicle or a ship) and two random numbers in 0..1: a building's are mostly lumps
 // of concrete and girders, an aircraft's thin plates and shards, a vehicle's or a ship's plates, panels and girders.
+// [rockhits] 'r': a rock's chips (Debris::Chip), lumps alone.
 int PickDebrisShape(char kind, float random, float random2);
 
 }  // namespace render
