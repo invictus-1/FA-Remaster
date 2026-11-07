@@ -59,6 +59,13 @@ class Ribbons {
 
   // Moves time on to `now` (seconds).
   void Update(double now);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: every trail and this frame's
+  // beams let go of, the clock back at 0. The handles go on counting (one kept from before names nothing).
+  void Clear() {
+    trails_.clear();
+    beams_.clear();
+    now_ = 0;
+  }
   // Draws this frame's beams and all trails into the current pass, which must be the scene's, and
   // forgets the beams.
   void Draw(const View& view);

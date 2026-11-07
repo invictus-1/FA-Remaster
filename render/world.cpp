@@ -445,6 +445,12 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       if (plantsReady_) printf("render: the ground cover's plants: %d trees near which they change\n", trees);
     }
   }
+  if (haveMap_) {  // [restart] (the map as opened, for RestartGame)
+    heightsAtOpen_ = map.heights;
+    propsAtOpen_ = props_;
+    decalsAtOpen_ = decals.LastAdded();
+    depositsAtOpen_ = decals.Deposits().size();
+  }
   sky_ = textures.SkyCube(haveMap_ ? map.skyCubemap : std::string());
   {  // the ring under a selected unit: a thin white circle, soft at both edges
     const int size = 128;
@@ -476,6 +482,125 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   if (energyShields) energy.Prepare();
   fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
   return true;
+}
+
+// [restart] (world.h) What a game added let go of, part by part, and the map put back as Open left it. A new game's clock
+// begins again near 0, so what waits for a moment of the game (events, hits, props' changes, flashes) would otherwise wait
+// or linger; and its entities' numbers and its blueprints' places in the frames are used again, so what is kept by them is
+// forgotten.
+void World::RestartGame() {
+  if (!haveMap_) return;
+  // the ground: the heights as the map was opened (the simulation laid some flat under its structures: ChangeGround), drawn
+  // so by the next Begin (the height texture is written within a frame); the ray tracing scene's ground made again from them
+  if (heightsAtOpen_.size() == map.heights.size()) {
+    map.heights = heightsAtOpen_;
+    heightsRestored_ = true;
+  }
+  raysGround_ = false;
+  // the props: the map's as opened, each listed in its square again (each square's group kept, filled anew); nothing made
+  // in the game (wreckage), nothing taken away under a structure; the snow's raster of them made again when it is wanted
+  if (snowPropsAhead_.valid()) snowPropsAhead_.get();
+  if (snowProps_) device_->Destroy(snowProps_);
+  snowProps_ = {};
+  snowPropsMade_ = false;
+  props_ = propsAtOpen_;
+  madeProps_.clear();
+  for (PropCell& cell : propCells_) {
+    cell.ofMap.clear();
+    cell.made.clear();
+    cell.underfoot.clear();
+    cell.changed = true;
+  }
+  for (size_t i = 0; i < props_.size(); ++i) ListProp(&props_[i], static_cast<uint32_t>(i), false);
+  clearings_.clear();
+  decorUnder_.clear();
+  propEvents_.clear();
+  recentProps_.clear();
+  recentPruned_ = 0;
+  propBeats_.clear();
+  hotProps_.clear();
+  hotOn_ = hotBefore_ = false;
+  // the game's hits not yet shown, and what was kept of its units by their numbers
+  combatPending_ = FrameCombat{};
+  combat_ = FrameCombat{};
+  hitsTaken = impactsTaken = hitsShown = impactsShown = propsChanged = propsGone = groundChanges = 0;
+  shieldHits_.clear();
+  shellHits_.clear();
+  impactBorn_.clear();
+  impactBornNext_.clear();
+  moving_.clear();
+  hullsSeen_.clear();
+  leftSlabs_.clear();
+  buildingNow_.clear();
+  remembered_.clear();
+  rememberedFor_ = -1;
+  rememberedGone.clear();
+  pickables_.clear();
+  // what was looked up by the blueprints' places in the frames (SetLooks empties six; the new game's first looks come later)
+  iconKinds_.clear();
+  unitModels_.clear();
+  shotModels_.clear();
+  entityModels_.clear();
+  originalShotModels_.clear();
+  originalEntityModels_.clear();
+  structureKind_.clear();
+  selections_.clear();
+  shotsByUnit_.clear();
+  // the lamps' levels as they faded
+  lampLevels_.clear();
+  lampClock_ = -1;
+  lampUnits_ = lampUnitsBefore_ = 0;
+  lampUnitsSmooth_ = 0;
+  nightShown_.clear();
+  nightShownBefore_.clear();
+  // the clock and what the weather has done to surfaces; what keeps frames before (the temporal upscaler, the light in the
+  // air, the clouds) starts afresh with the next frame
+  clock_ = 0;
+  time_ = 0;
+  weatherTime_ = -1;
+  wet = snowLying = 0;
+  tracksCovering_ = 0;
+  lastWeatherKnown_ = false;
+  stormSunNow_ = 0;
+  weatherCut = cameraCut = true;
+  // the parts (the debris first: its chunks' smoke trails are ribbons; the hot wrecks' smoke and the machinery's emitters
+  // before the particles go)
+  debris.Clear();
+  heat.Off(&particles);
+  machinery.Forget();
+  effects.Clear();
+  particles.Clear();  // (the map's looping effects started again by the next Render: KeepMapEffects)
+  ribbons.Clear();
+  decals.ForgetGame(decalsAtOpen_, depositsAtOpen_);
+  lights.Forget();
+  blasts.Clear();
+  volumes.Clear();
+  dust.Clear();
+  build.Begin(0, false);
+  wear.Forget();
+  tracks.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
+  tracks.Forget();
+  trackField.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
+  plantLife.SetMap(static_cast<float>(map.width), static_cast<float>(map.height));
+  water.ripples.SetMap(&map);
+  water.surf.Forget();
+  sight.Set({}, 0);
+  shadows.Forget();
+  // the interface's lists, as for a map just opened
+  selected.clear();
+  hover = 0xffffffffu;
+  hoverKind = 0;
+  ghosts.clear();
+  lines.clear();
+  rings.clear();
+  userDecals.clear();
+  placed.clear();
+  orders.legs.clear();
+  orders.marks.clear();
+  ranges.groups.clear();
+  std::fill(std::begin(playable), std::end(playable), 0.0f);
+  barAnchors.clear();
+  dyingDrawn = 0;
 }
 
 void World::SetLooks(const std::vector<BlueprintLook>& looks) {
@@ -1312,6 +1437,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   time_ = time;
   clock_ = clock;
   barAnchors.clear();
+  if (heightsRestored_) {  // [restart] (RestartGame: the ground's heights as the map was opened, drawn so; within a frame)
+    heightsRestored_ = false;
+    terrain.HeightsChanged(0, 0, map.width, map.height);
+  }
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
   // screen - icons, bars, the points the interface asks about - at the screen's own)
   screenWidth_ = width;

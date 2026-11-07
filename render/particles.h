@@ -167,6 +167,10 @@ class Particles {
   // (or, hanging on something, farther away than its LODCutoff); when it is seen again it makes up
   // the last ticks it missed.
   void Update(double now, const View* view = nullptr);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: every emitter and particle let
+  // go of at once, the flashes and the hot air with them, the clock back at 0 and the random numbers begun again as at
+  // first. The handles go on counting (one kept from before names nothing: Running says no), the blueprints read stay read.
+  void Clear();
   // Draws every living particle into the current pass, which must be the scene's.
   // Into a pass that has the scene's colour alone: the particles test the scene's depth themselves
   // (`sceneDepth`, with `zNear` the camera's near distance), sample by sample, and fade over

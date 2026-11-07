@@ -96,6 +96,17 @@ class WorldPicture {
   // A world Open made itself (Open with a map) is let go of on this thread at once, and what it made on the card stays
   // there until the picture goes (its parts do not let go of what they made): open such a picture without a map.
   bool SwapMap();
+  // [restart] (the interface's request 45 R1: a replay's jump back) A new session on the map shown, without opening it again
+  // (2-3 s on a 4v4 that way): the world is put back as the map was opened (World::RestartGame: no unit's traces, no
+  // wreckage, scars, tracks, game's decals, effects, particles, debris, dust, unit wear, hot metal or ripples; the map's
+  // props as the map has them; the ground the game laid flat as it was), and what the picture keeps of the world shown
+  // begins afresh as after SwapMap: the beats, the minimap's ground, what the focus army sees. Kept: the ground, its
+  // textures, the pipelines, the models already made, the map's own decals, props and looping effects, the sky, every
+  // setting of the picture's own and the world's switches; the lists of what the interface shows in the world begin empty.
+  // The host then calls GameStarted and Beat with the new game's simulation, as after SwapMap. Between frames (a frame
+  // LifeBarAnchors began is ended unseen), and not while Beat may be running; a map being opened behind is left as it is,
+  // with the session handed to it. False, nothing done: no world, or a photo is being made.
+  bool RestartMap();
   // [ui 39] While on, the lighting bundles' Set* calls (SetAtmosphere, SetSoftShadows, SetRayTracing, SetRayReflections,
   // SetWeatherEffects, SetGroundDetail, SetFrameGeneration, SetHiddenOutlines) are kept for the next map and not laid on
   // the world shown: give a game's looks with it on, then BeginMap, so that the map opens and is warmed with them (its

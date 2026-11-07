@@ -122,6 +122,15 @@ class World {
   // Builds the shaders and loads the map ("/maps/x/x.scmap"; empty: no map, a test scene).
   bool Open(const std::string& mapPath, const Options& options, std::string* error);
   bool HaveMap() const { return haveMap_; }
+  // [restart] (the interface's request 45 R1: a replay's jump back starts a new session on the map already open, where
+  // opening it again took 2-3 s on a 4v4) Everything a game added let go of, the map as Open left it: no unit's traces, no
+  // wreckage, scars, tracks, game's decals, effects or particles, no hits not yet shown, debris, dust, unit wear, hot metal or
+  // ripples; the map's props as the map has them; the ground the simulation laid flat as it was (drawn so from the next
+  // Begin); the clock, the weather's doings on surfaces (wet, snowLying) and what was kept of the frames before begun again;
+  // the interface's lists empty. Kept: the ground, the textures, the pipelines, the models already made, the map's own
+  // decals, props and looping effects, the sky and every setting. The host then gives the new game's frames from its start.
+  // Between frames (not between a Begin and its Render). Nothing without a map.
+  void RestartGame();
   // How the blueprints look as the simulation has them (a running game hands this over once it has
   // started): models and strategic icons then take their names from it instead of from .bp files.
   void SetLooks(const std::vector<BlueprintLook>& looks);
@@ -1057,6 +1066,13 @@ class World {
   bool haveMap_ = false;
   gfx::Texture environment_, sky_, selectionRing_;
   std::vector<PlacedProp> props_;  // the map's, by their index in the map file's list
+  // [restart] (RestartGame) the map's heights and props as Open left them, the number of the last of the map's own decals
+  // then (Decals::LastAdded) and how many deposits' marks there were; the heights put back, drawn so by the next Begin
+  std::vector<uint16_t> heightsAtOpen_;
+  std::vector<PlacedProp> propsAtOpen_;
+  uint32_t decalsAtOpen_ = 0;
+  size_t depositsAtOpen_ = 0;
+  bool heightsRestored_ = false;
   std::unordered_map<uint32_t, PlacedProp> madeProps_;  // made during the game (wreckage), by entity id
   FrameCombat combatPending_;  // AddCombat's, not yet due
   FrameCombat combat_;         // those due in the frame being added (AddFrame), for the looks that answer them

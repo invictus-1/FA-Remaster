@@ -184,6 +184,12 @@ class Decals {
   // Takes that decal away at once (a script's DecalHandle:Destroy: an objective done, a building's
   // tarmac laid again with a life time when it is killed).
   void Remove(uint32_t id);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: what the game laid let go of,
+  // the map's own kept. Every decal laid after the one numbered `lastOfMap` (LastAdded as the map was opened) goes, and
+  // every light on the ground (they have no number), the resource deposits' marks after the first `depositsOfMap`, and
+  // this frame's marks. The snow that fell on the marks is forgotten, and the marks laid before the next frame are taken
+  // as laid before the first (as for a map just opened). The numbers go on counting.
+  void ForgetGame(uint32_t lastOfMap, size_t depositsOfMap);
   // The ground's height (not the water's) at a place, given by the host: a decal whose place is
   // given far from the ground (the campaign's objective areas are made at a height of 0) is put
   // on the ground there. `waterLevel`: where the water's surface is (the map's; none: very low).

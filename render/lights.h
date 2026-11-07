@@ -54,6 +54,12 @@ class Lights {
 
   // Empties this frame's list; `now` is the effects' clock, seconds.
   void Begin(double now);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map, whose clock begins again near
+  // 0: the flashes' lights on the ground let go of, and which beams had a shadow map.
+  void Forget() {
+    flashes_.clear();
+    shadowKeys_.clear();
+  }
   // A light for this frame. `color` is linear, as bright as the surface it lights fully would be
   // (1, 1, 1: about as the sun lights it).
   // `origin` (a unit's lamp): where the model it rides on stands (its origin), which casts no

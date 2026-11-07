@@ -1076,6 +1076,19 @@ void Particles::Hide(uint32_t emitter, bool hidden) {
   e->positionBefore = e->position;  // (seen again: it starts where it is, not along the way it came unseen)
 }
 
+// [restart] (particles.h)
+void Particles::Clear() {
+  emitters_.clear();
+  index_.clear();
+  for (auto& s : sets_) s.second->particles.clear();
+  inside_.clear();
+  puffs_.clear();
+  flashes.clear();
+  liveParticles = liveEmitters = quietEmitters = 0;
+  seed_ = 0x2545f491u;  // (as at first: a game begun again throws as it threw)
+  now_ = 0;
+}
+
 void Particles::Update(double now, const View* view) {
   const auto t0 = std::chrono::steady_clock::now();
   now_ = now;

@@ -595,6 +595,24 @@ bool WorldPicture::SwapMap() {
   return true;
 }
 
+// [restart] (world_picture.h)
+bool WorldPicture::RestartMap() {
+  Impl& m = *impl_;
+  if (!m.world || m.photo.on) return false;
+  if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares the new game's)
+    m.device->EndFrame(nullptr, false);
+    m.prepared = false;
+  }
+  m.world->RestartGame();
+  m.ForgetWorld();
+  m.sessionArmies.reset();  // (a game read by a swap that GameStarted has not taken: not the new game's)
+  if (!m.load) {  // (the events PrepareSession took are the map's being opened behind; with none, there are none to keep)
+    m.heldProps.clear();
+    m.heldEffects.clear();
+  }
+  return true;
+}
+
 void WorldPicture::SetLoadDayAndWeather(float startHour, float dayLengthSeconds, bool weather) {  // [session]
   (void)dayLengthSeconds;  // (the warm frames are drawn at the day's start)
   if (!impl_->load) return;

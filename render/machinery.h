@@ -124,6 +124,12 @@ class Machinery {
   // not drawn in the frame before are let go (their emitters stopped). `eye`: where the camera is; a factory farther from it
   // than kFar is not worked out (its parts stand at rest and its emitters stop: from there its parts are a few pixels).
   void Begin(double clock, bool first, Vec3 eye);
+  // [restart] (World::RestartGame, the interface's request 45 R1; with the particles cleared) A new game on the same map,
+  // whose units' numbers are used again: every unit's parts at rest, its emitters' handles forgotten.
+  void Forget() {
+    units_.clear();
+    clock_ = 0;
+  }
   static constexpr float kFar = 250;
   // A unit drawn with a model that has machinery, standing at `at`, turned `turn`, of that faction (its emitters'): its
   // parts posed into `pose` (the simulation's bones and then the parts', in lists kept until the frame's last draw); its

@@ -28,6 +28,15 @@ class Tracks {
   bool Init(std::string* error);
   // The map the picture lies over (world units); makes the picture, untrodden.
   void SetMap(float width, float height);
+  // [restart] (World::RestartGame, the interface's request 45 R1; after SetMap) A new game on the same map, whose units'
+  // numbers are used again: where each thing last trod, the units that lay their own prints and the prints not yet drawn
+  // forgotten.
+  void Forget() {
+    last_.clear();
+    printers_.clear();
+    prints_.clear();
+    stamps_.clear();
+  }
   // Empties this frame's list of what treads.
   void Begin() {
     stamps_.clear();

@@ -51,6 +51,11 @@ class Effects {
   // `frame`, and lists this frame's beams. Call before Particles::Update and Ribbons::Update, whose
   // clock must be tick / 10 seconds.
   void Update(double tick, const Frame& frame);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: every effect kept and every
+  // event not yet due let go of (its beats begin again near 0, and its entities' numbers are used again), the counts begun
+  // again. What the effects made is let go of by its owners (Particles::Clear, Ribbons::Clear, Decals::ForgetGame,
+  // Lights::Forget).
+  void Clear();
   // Where emitters that stay where they were made were moved out to since the last call (OffsetEmitter:
   // a shield's hit effects are made at its centre and moved out to where it was struck).
   void TakeHits(std::vector<Vec3>* out) {

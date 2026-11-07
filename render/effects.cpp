@@ -63,6 +63,23 @@ bool IsTeleportEffect(const std::string& path) {
   return low.find("/unitteleport") != std::string::npos;
 }
 
+// [restart] (effects.h)
+void Effects::Clear() {
+  pending_.clear();
+  effects_.clear();
+  decalOf_.clear();
+  hanging_.clear();
+  shotGlow_.clear();
+  shotCells_.clear();
+  projectileAt_.clear();
+  beamAt_.clear();
+  entityAt_.clear();
+  armyFactions_.clear();
+  armyFactionsTick_ = 0xffffffffu;
+  hits_.clear();
+  live = started = curvesSet = notShown = shotLights = 0;
+}
+
 void Effects::Queue(std::vector<FrameEffectEvent>&& events) {
   for (FrameEffectEvent& e : events) pending_.push_back(std::move(e));
 }
