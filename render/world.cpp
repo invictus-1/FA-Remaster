@@ -2523,7 +2523,8 @@ bool World::PileKind(const std::string& unitId) {  // [debrispile]
   debris.baked.files = vfs_;
   debris.baked.models = &models;
   debris.baked.heat = &heat;
-  return debris.baked.HasPile(unitId);
+  // ([debrishull] or a water structure's wreck: drawn as its hull without the thrown parts, those lying round it)
+  return debris.baked.HasPile(unitId) || debris.baked.HullOf(unitId);
 }
 
 // The model of a prop as the simulation has it now: its blueprint's own, or the mesh a script set
@@ -2820,6 +2821,8 @@ void World::ListPiles() {
       const float yaw = std::atan2(m.m[0][2], m.m[2][2]);  // (its heading: where its front, the model's z, looks)
       const float scale = Length(Vec3{m.m[0][0], m.m[1][0], m.m[2][0]});
       debris.baked.Wreck(it->first, it->second, {m.m[0][3], m.m[1][3], m.m[2][3]}, Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)}, scale, p.born);
+      // [debrishull] (a water structure: its hull stands as its wreck, in the paint's burnt grey)
+      if (const Model* hull = debris.baked.HullOf(it->second)) meshes.Add(hull, p.world, {0.3f, 0.3f, 0.3f});
     } else if (!p.hot) {
       meshes.Add(p.model, p.world, {1, 1, 1});
     }

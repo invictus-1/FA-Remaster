@@ -145,6 +145,10 @@ class BakedDebris {
     float rests = 0;
     bool stray = false, smokes = false;
     uint32_t touches = 0;  // [debrisairsea] the key where it first meets the bake's ground (y 0; a naval set's: its last)
+    // [debrisairsea] its longest way (model units, at rest) and how far it reaches across that way: sinking, it turns to lie
+    // along the bed, and rests on its thickness, not on its length
+    Vec3 along{0, 0, 1};
+    float thin = 0;
   };
   struct Style {
     float fps = 30;
