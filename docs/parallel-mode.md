@@ -8,7 +8,9 @@ entity pass in phases with deferred callbacks, still on one thread (3.3); step 4
 step 4.4, the beat-start snapshot, sub-phases A2 and C1, and the order check of the phases (3.3, 6.1); step 4.5, phase D's
 additions to the armies kept on the units and summed in creation order, the silo step in the commit (3.3); step 4.6, phases A1, C1 and C on the worker pool (3.3). Section 8 item 4 (the armies' stages) is steps 5.x: step 5.1, the
 three stages without the army-by-army interleave, on one thread, the write trap over them (3.1); step 5.2, the steering
-stage from a spline snapshot, its cross-unit writes as messages, on the pool (3.1).
+stage from a spline snapshot, its cross-unit writes as messages, on the pool (3.1); steps 5.3-5.5, navigators,
+weapons' acquire, grid spans (3.1); step 5.6, recon's answers from the stage's start and AdvanceCoords' look at every
+entity on the pool (3.4).
 
 ## For Chris: the short version
 
@@ -374,6 +376,28 @@ the 1-thread run every beat, no Lua call in a task.
   (collision candidates, box queries, target scans) sees a schedule-free order. Intel circles: per army in parallel
   (exact already, MOHO64_PAR_INTELCOORDS).
 - **Moved list:** in parallel mode its order no longer matters (the grid no longer depends on it); it becomes a set.
+
+**Step 5.6 (e1d 2026-11-07): what was still serial in recon and AdvanceCoords.** Measured first (Tracy sub-zones, B3-16k
+parallel order at 16 threads, CPUs 16-31, shares only): recon 1.3 ms a beat of which the main loop 0.49 (the answers
+made ahead on the pool are dropped at the loop's first `OnIntelChange`, about six a recon beat in B3, so the loop worked
+nearly every unit's `CanDetect` out itself, one after another); AdvanceCoords 2.6 ms of which the dirty order's sort
+0.57 (a sort of every unit after any health change or death, which parallel order does not need), the spans on the pool
+0.34, the moved list's walk and the third list's sort, the commit loops 0.35, the placing 0.16.
+- **Recon (snapshot rule).** In parallel order every unit the main loop looks at has its `CanDetect` made before the
+  loop (on the pool from `MOHO64_PAR_RECON`'s minimum, else on the sim's thread: the same answers) and the loop takes
+  it whatever the loop's `OnIntelChange` calls did meanwhile: the stage reads the state at its start, as rule 1 has every
+  phase read. A unit the loop meets that was not looked at then (made by a script during the loop) is worked out at its
+  turn; one destroyed since is passed over as before. The original's order is unchanged (answers dropped at the first
+  Lua call).
+- **AdvanceCoords.** `GridAdvanceCoordsParallel` (entity_grid.cpp): every unit (the sim's list as it stands, not the
+  dirty order: its sort is gone from parallel order) and every entity of the third list is looked at on the pool, whether
+  its transform moved since its cells were taken and if so its new span (`SpanOf`, its own fields only); the moved ones
+  are placed one after another (the cells' lists are canonical, so neither order changes a list or a version count).
+  The commit loops (`velCommitted`, a shell's `prevPos`, the held shapes' flags) run on the pool from 4096 items.
+- **Effect.** b8 6000, B3-16k 2000 and B1 12000 in parallel order: the same fingerprints as before the step (so far no
+  `OnIntelChange` handler changed what `CanDetect` reads in the middle of a recon loop; one that did would now play
+  differently, which is why the step counts as a change of parallel order's rules). Tracy shares (B3-16k, 16 threads,
+  two builds side by side): AdvanceCoords 1.81 -> 1.21 ms a beat, recon 0.99 -> 0.83 (main loop 0.45 -> 0.29).
 
 ### 3.6 Lua callbacks: immediate or deferred (audit of FAF's unit scripts, 2026-10-31)
 

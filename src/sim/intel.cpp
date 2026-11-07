@@ -548,6 +548,7 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
 
 // CAiReconDBImpl::ReconTick 0x5c0c40 for army a
 void ReconTick(Sim& sim, lua_State* L, int a) {
+  MOHO_ZONE("recon: tick");
   // blips whose unit is gone: mobile ones go, structures stay (MaybeDead) until seen again
   std::vector<Unit*>& goneUnits = IS(sim).goneUnits;
   for (size_t i = 0; i < goneUnits.size(); ++i) {
@@ -647,13 +648,21 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
   // reads nor of the loop's own tests. From the first call on, and from any unit that is not the one expected, the
   // rest of the loop works its answers out itself, as without the switch. (The gone-units loops above may call Lua:
   // the answers are made after them.)
+  // Parallel order (docs/parallel-mode.md 3.4, step 5.6): the main loop's answers are ALL from the stage's start, as
+  // rule 1 has every phase read (snapshot reads): CanDetect of every unit the loop will look at, made before the loop
+  // (on the pool from parRecon's minimum, else on the sim's thread: the same answers), and taken at the unit's turn
+  // whatever the OnIntelChange calls of the loop did meanwhile. (B3-16k: about six such calls per recon beat, so in the
+  // original's order the loop gives up the answers made ahead at its first call and works nearly all of them out
+  // itself, one after another.) A unit the loop meets that was not in the list then (made by a script during the
+  // loop) is worked out at its turn; one destroyed since is passed over as before.
+  const bool snapshot = sim.order == SimOrder::kParallel;
   const IntelPar parRecon = IntelPars(sim).parRecon;
   IntelState& st = IS(sim);
   std::vector<IntelState::Ahead>& ahead = st.ahead;
   ahead.clear();
   bool useAhead = false;
   const uint64_t luaMark = st.luaCalls;
-  if (parRecon.mode != ParMode::kOff) {
+  if (parRecon.mode != ParMode::kOff || snapshot) {
     for (const auto& army : sim.armies()) {
       if (army.get() == us) continue;
       for (Unit* u : army->units)
@@ -665,13 +674,21 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
         for (size_t i = i0; i < i1; ++i) ahead[i].f = CanDetect(sim, a, ahead[i].u, ahead[i].at);
       });
       useAhead = true;
+    } else if (snapshot) {
+      for (IntelState::Ahead& x : ahead) x.f = CanDetect(sim, a, x.u, x.at);
+      useAhead = true;
     }
   }
+  MOHO_ZONE_N(zMain, "recon: main loop");
   size_t next = 0;  // (the loop's next unit in ahead)
   for (const auto& army : sim.armies()) {
     if (army.get() == us) continue;
     std::vector<Unit*> list = army->units;
     for (Unit* u : list) {
+      // (parallel order: the stage-start answer of this unit, if it was looked at then; a unit destroyed since is
+      // in the list, and passed over below)
+      const bool snapAnswer = snapshot && next < ahead.size() && ahead[next].u == u;
+      if (snapAnswer) ++next;
       if (!looked(u)) continue;
       // ReconCanDetect at IUnit::GetPosition (0x5c10cb -> 0x6a49b0, entity+0xac): the transform committed at the end of
       // the last beat. Recon runs before Entity::AdvanceCoords (step 13), so a unit that has had its turn of this
@@ -680,7 +697,9 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       // engineer beside it, which then holds the lower blip id (0x30000005) that army 1's orders at 2380 name.
       const Vec3& at = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
       uint8_t f;
-      if (useAhead && st.luaCalls == luaMark && next < ahead.size() && ahead[next].u == u &&
+      if (snapshot) {
+        f = snapAnswer ? ahead[next - 1].f : CanDetect(sim, a, u, at);
+      } else if (useAhead && st.luaCalls == luaMark && next < ahead.size() && ahead[next].u == u &&
           vm::SameBits(ahead[next].at, at)) {
         f = ahead[next++].f;
         if (parRecon.mode == ParMode::kVerify && f != CanDetect(sim, a, u, at))
@@ -711,6 +730,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     }
   }
   // GenerateNewBlips 0x5c0a70
+  MOHO_ZONE_N(zNew, "recon: new blips");
   for (const Pending& p : pending) {
     Unit* u = p.u;
     if (u->destroyQueued) continue;
@@ -1141,6 +1161,7 @@ void AdvanceIntelCoordsPar(Sim& sim, IntelState& st, uint32_t tick, bool allOnPo
 }  // namespace
 
 void AdvanceIntelCoords(Sim& sim) {
+  MOHO_ZONE("advancecoords: intel");
   uint32_t tick = sim.tick();
   IntelState& st = IS(sim);
   const IntelPar par = IntelPars(sim).parCoords;

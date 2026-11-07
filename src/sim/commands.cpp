@@ -1366,8 +1366,13 @@ void CommandStep(Sim& sim, Unit* u) {
   if (st == kNotStarted) StartHead(sim, u);
   if (u->task && st == kRunning) {
     // a finished task is popped and the dispatcher starts the next command at once; a new task's
-    // first Execute is in the same pass (beat_order.md 2.6)
-    for (int guard = 0; guard < 8 && u->task && st == kRunning; ++guard) {
+    // first Execute is in the same pass (beat_order.md 2.6). IAiCommandDispatchImpl::TaskTick 0x598e80 has no count:
+    // as long as each new task ends in its first Execute (-1) the next order is dispatched, the whole queue in one beat
+    // if need be (the bound here only stops a loop that never pops). Seen: 6v6_4 (FAF 3840) 4405, army 1's commander
+    // 0x100000 ends its Repair with ten orders behind it (BuildMobile xsb1106 of FAF's RingWithStorages, whose sites are
+    // taken, and Guards that end at once): the original's queue is down to the last Guard at 4405; ours stopped after
+    // eight and kept BuildMobile x3 for a beat.
+    for (int guard = 0; guard < 100000 && u->task && st == kRunning; ++guard) {
       BuildTask* task = u->task;
       int r = TickBuildTask(sim, u, *task);
       if (r == kTaskRunning) break;
@@ -1563,6 +1568,16 @@ bool FactoryCommand(CommandType t) {
 // queue stays empty while it is built (2 commands when it stands, at 2140); ours took the Move and had 3.
 bool RefusesOrderWhileBuilt(Sim& sim, const Unit* u) {
   return u->beingBuilt && !BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, u->blueprint, "CQUEMOV");
+}
+
+// ProcessUnitCommand 0x6ef9e0, after the playable-rect test and before its type switch (0x6efd90..0x6efdad): a unit
+// in state Enhancing (IsUnitState vt+0x3c, 0x26) refuses an order that comes with clear (the third argument,
+// UNIT_IssueCommand's clear: [esp+0x37c]) unless it is a Stop (type 1): the enhancement and its queue stay. Seen: 6v6_1
+// (FAF 3840) 3681, army 9's commander 0x900000, enhancing (CoolingUpgrade, its Script order of 3517), gets the stream's
+// Move with clear: the original's queue keeps the Script and the unit stays Immobile, Upgrading, Enhancing; ours took
+// the Move and dropped the enhancement.
+bool RefusesWhileEnhancing(const Unit* u, bool clear, int type) {
+  return clear && type != static_cast<int>(CommandType::Stop) && u->unitStates.Has(US("Enhancing"));
 }
 
 // ProcessUnitCommand 0x6efc8e: an order with a target (the target's type +0x10 not 0: an entity, or a point) is
@@ -1972,6 +1987,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
+    if (RefusesWhileEnhancing(u, clear, d.type)) continue;
     if (MoveCaseType(d.type) && RefusesMoveOrder(sim, u, d.target.type != 0, &d.target.pos)) continue;
     if ((d.type == static_cast<int>(CommandType::Attack) || d.type == static_cast<int>(CommandType::FormAttack)) &&
         RefusesAttackOrder(u))
@@ -2053,6 +2069,16 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // point in the message and the second in the beat's steering, two steps at once.
       const bool undispatched = hadCommands && u->headState == kNotStarted;
       const bool patrolSelf = PatrolTaskDecidesAbort(u);
+      // Nor is a mobile build without its walking child (CUnitMobileBuildTask dtor 0x5f6ac0: arm, NoReclaim, OnStopBuild,
+      // OnFailedToBuild, FreeOgridRect; neither the navigator nor CUnitMotion::Stop 0x6b8460, as IssueClearCommandsTo's
+      // buildSelf below). A walk SIM_TryToBuild 0x51ed80 gave the builder to step off the site (state 3, a navigator
+      // SetGoal of its own, no move task) goes on, and the new order's SetGoal finds the steering still driving. Seen:
+      // Seton's 1 (FAF 3840) 3427, army 4's commander 0x400000, walking off its wall's site since 3410 (state 3, its next try 49 beats on),
+      // gets a Move with clear: the original's 3428 and 3429 are the old batch's points 17 and 18, its new path from
+      // 3430; ours braked at the clear (the brake's first point handed out in the message, its second at 3428).
+      const BuildTask* headTask = hadCommands && u->headState == kRunning ? u->task : nullptr;
+      const bool buildNoWalk = headTask && headTask->type == CommandType::BuildMobile && !headTask->moving &&
+                               !headTask->sub && !headTask->gdata && !headTask->adata && !headTask->pdata && !headTask->tdata;
       // ClearCommandQueue's event 2 re-links a suspended thread before the tasks are torn down (OnEvent 0x599030:
       // 0x599050..0x599083, then TaskInterruptSubtasks 0x408d70), so a thread the teardown wakes runs after this one.
       // Seen (pro replay Seton's 2, FAF 3839): at 2128 the stream gives army 2's transport 0x200012, asleep on its
@@ -2071,7 +2097,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep || formTask) SetMoving(u, false);
-      if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf) MotionStop(u);
+      if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf && !buildNoWalk) MotionStop(u);
       SetMoving(u, false);
       at = -1;
     }

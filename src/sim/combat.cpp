@@ -50,6 +50,7 @@
 #include "sim/motion.h"
 #include "sim/navigation.h"
 #include "sim/sim.h"
+#include "sim/steering.h"
 #include "sim/sim_cache.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
@@ -938,7 +939,17 @@ bool Targetable(Sim& sim, UnitWeapon* w, Entity* e, bool peek = false) {
 bool CanAttackTarget(Sim& sim, UnitWeapon* w, const AiTarget& t, bool peek = false) {
   if (t.type == 0) return false;
   if (w->bp->ignoreIfDisabled && !w->enabled) return false;
-  if (t.type == 1) return Targetable(sim, w, TargetEntity(sim, t), peek);
+  if (t.type == 1) {
+    // CAiTarget::GetEntity 0x5e2ce0 (0x6d57f0): a target held as a recon blip (its weak pointer +4) is the blip's
+    // unit through the blip (+0x270, 0x5e2d1a): once the blip is gone there is no entity, and no weapon can attack
+    // it (GetTargetWeapon 0x5d6dc0 gives none). Seen: 4v4_5 3453, two Aeon interceptors (uaa0102) on an Attack of a
+    // dead, still falling aircraft's blip (0x700022, killed 3432): when the blip goes (3453), the attack task's first
+    // test (0x5f35f9..0x5f3611: no target weapon) ends it in the command stage and the abort's Stop takes the motion
+    // of that beat; ours took the falling unit itself and chased on until the next order cleared it.
+    Entity* e = TargetEntity(sim, t);
+    if (e && t.viaBlip && !t.fakeId && e->kind == Entity::Kind::Unit && !static_cast<const Unit*>(e)->blip) e = nullptr;
+    return Targetable(sim, w, e, peek);
+  }
   if (t.type == 2) {
     if (w->bp->cannotAttackGround) return false;
     const TerrainMap* m = sim.map();
@@ -3354,11 +3365,19 @@ Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box) {
     if (!e || e->dead || e->destroyQueued) continue;
     WorldShape s;
     if (!GetWorldShape(e, &s)) continue;
-    // the shape against the box (it is 200 high, so only xz matters): the shape's horizontal reach
-    float reach = s.type == ShapeType::Sphere ? s.r : std::max(s.half.x, s.half.z);
-    float rx = s.c.x - box.cx, rz = s.c.z - box.cz;
-    float along = std::fabs(rx * box.dx + rz * box.dz), across = std::fabs(-rx * box.dz + rz * box.dx);
-    if (along > box.along + reach || across > box.side + reach) continue;
+    // 0x61b7f4..0x61b819: the entity's collision primitive (+0x178) tests itself against the task's box (+0x84, made by
+    // RecomputePatrolSearchBox 0x61b2f0: side = the leg's direction turned a quarter about +Y, up, direction; half
+    // extents GuardScanRadius, 100, half the leg + GuardScanRadius) with its own vt+0x1c: a Box primitive is
+    // CColPrimitive_Box::CollideBox 0x4ff260 -> BoxBox 0x474830 (touching counts), a sphere its sphere-box test. The
+    // OBB's whole projection counts, not its larger half extent. Seen: 1v1_5 (FAF 3840) 4381, army 0's 0x9f on an
+    // AggressiveMove: army 1's light unit 0x10009a, its box centre 19.60 across the leg's axis (side 19), its rotated
+    // box reaching 0.62 toward it: the original's patrol attacks it, ours (reach max(0.35, 0.55)) left it out.
+    const Vec3 dir{box.dx, 0.0f, box.dz};
+    const Vec3 axes[3] = {RotateQuarterTurnY(dir), {0.0f, 1.0f, 0.0f}, dir};
+    const float half[3] = {box.side, 100.0f, box.along};
+    const Vec3 centre{box.cx, box.cy, box.cz};
+    if (!(s.type == ShapeType::Box ? BoxPrimitiveMeetsBox(s, centre, axes, half) : ShapeOverlapsOBox(s, centre, axes, half)))
+      continue;
     cand.push_back(e);
   }
   float r = CB(u).guardScanRadius;

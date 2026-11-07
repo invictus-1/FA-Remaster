@@ -1864,6 +1864,7 @@ void Sim::QueueDestroy(Entity* e) {
 void Sim::QueueDestroyAfterBeat(Entity* e) { lateDestroy_.push_back(EntityRef(e)); }
 
 void Sim::QueueLateDestroys() {
+  MOHO_ZONE("destroy: late");
   for (uint32_t ref : lateDestroy_)
     if (Entity* e = FindEntity(ref)) QueueDestroy(e);
   lateDestroy_.clear();
@@ -1875,6 +1876,7 @@ void Sim::QueueLateDestroys() {
 // objects are deleted only afterwards, so an OnDestroy can still use an entity destroyed earlier in
 // the same pass (a shield's OnDestroy calls Owner:SetShieldRatio after its unit's OnDestroy).
 void Sim::ProcessDestroyQueue() {
+  MOHO_ZONE("destroy: queue");
   lua_State* L = state_->L();
   std::vector<Entity*> done;
   for (size_t i = 0; i < destroyQueue_.size(); ++i) {  // OnDestroy may destroy more
@@ -2074,6 +2076,7 @@ const std::vector<Unit*>& Sim::MotionOrder() {
 }
 const std::vector<Unit*>& Sim::DirtyOrder() {
   if (dirtyOrderDirty_) {
+    MOHO_ZONE("advancecoords: dirty order sort");
     dirtyOrder_ = units_;
     std::sort(dirtyOrder_.begin(), dirtyOrder_.end(), [](const Unit* a, const Unit* b) { return a->dirtySeq < b->dirtySeq; });
     dirtyOrderDirty_ = false;
@@ -2511,6 +2514,7 @@ void Sim::RequestRefreshUI(Entity* e) {
 }
 
 void Sim::SyncStep(bool keep) {
+  MOHO_ZONE("sync: step");
   // The entities' refresh-UI flag (entity.h): last beat's copy is cleared, and this beat's pending flags become this
   // beat's copy (Entity::Sync's writer 0x67a290 copies +0x9a into the sync and clears it, 0x67a10b).
   for (uint32_t id : refreshSynced_)
@@ -3380,14 +3384,41 @@ void Sim::Tick() {
   KillCleanupTick(*this);
   phases.Lap(PhaseTimer::kKillCleanup);
   MOHO_LAP(lap, "advancecoords");
-  for (Unit* u : units_) u->motion.velCommitted = u->motion.lastMove;  // step 13: previous = committed = pending
-  coordsPending = false;
-  // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
-  // previous, is zero from here on; seen in the original's per-beat shell log)
-  for (Projectile* p : projectiles)
-    if (p->lastMoveTick != tick()) p->prevPos = p->position;
-  for (Entity* e : heldShapes_) e->shapeHeld = false;  // (vt+0x84: the collision shapes follow)
-  heldShapes_.clear();
+  {
+    MOHO_ZONE("advancecoords: commit loops");
+    // step 13: previous = committed = pending. (Parallel order, step 5.6: each unit's and shell's own fields, on the
+    // worker pool from kParCommitMin items; the same values in any order.)
+    constexpr size_t kParCommitMin = 4096;
+    const uint32_t now = tick();
+    auto unitsPart = [this](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i) units_[i]->motion.velCommitted = units_[i]->motion.lastMove;
+    };
+    // (the same for a shell that did not move in this beat, its impact beat for one: its velocity, committed -
+    // previous, is zero from here on; seen in the original's per-beat shell log)
+    auto shellsPart = [this, now](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i)
+        if (projectiles[i]->lastMoveTick != now) projectiles[i]->prevPos = projectiles[i]->position;
+    };
+    // (vt+0x84: the collision shapes follow; an entity is on the held list once)
+    auto heldPart = [this](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i) heldShapes_[i]->shapeHeld = false;
+    };
+    if (order == SimOrder::kParallel && units_.size() + projectiles.size() >= kParCommitMin) {
+      // (units and held shapes in one call: the held list's entities are units, shells and others, each its own flag)
+      const size_t nu = units_.size(), nh = heldShapes_.size();
+      workers_->ParallelFor("advancecoords: commit", nu + nh, 1024, [&](size_t b, size_t e, int w) {
+        if (b < nu) unitsPart(b, std::min(e, nu), w);
+        if (e > nu) heldPart(std::max(b, nu) - nu, e - nu, w);
+      });
+      shellsPart(0, projectiles.size(), 0);
+    } else {
+      unitsPart(0, units_.size(), 0);
+      shellsPart(0, projectiles.size(), 0);
+      heldPart(0, heldShapes_.size(), 0);
+    }
+    coordsPending = false;
+    heldShapes_.clear();
+  }
   GridAdvanceCoords(*this);    // step 13: moved units take their (widened) cells in the entity grid
   MotorsAdvanceCoords(*this);  // and moved props theirs
   AdvanceIntelCoords(*this);  // moved intel sources move their circles
@@ -3524,6 +3555,7 @@ void Sim::ReleaseId(uint32_t id) {
 // IdPool::Update 0x403a30, once per beat (EntityDb::Purge), and then the command database's (CCommandDb::
 // PublishSyncData 0x6e0f50, called by Sim::Sync at 0x747b0c after the purge 0x747af9; commands.h CommandIdPool)
 void Sim::UpdateIdPools() {
+  MOHO_ZONE("sync: id pools");
   // the emptied commands go first (RefreshPublishedCommandEvent's deletions, 0x6e0fa9, come before IdPool::Update
   // 0x6e0fff): an engine id's release lands in the same ring slot as before
   commandsEmptied.clear();

@@ -1210,9 +1210,21 @@ bool LandNavFollowingSlot(const Unit* u) {
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   const TerrainMap* map = sim.map();
   if (map && (x < 0 || z < 0 || x > map->width() || z > map->height())) return false;
-  // 0x720aa0 -> OCCUPY_FootprintFits(caps = -1): the occupancy layers only clear the land (1, 2) and water (8)
-  // bits, so a footprint that may be in the Air (16) always fits (a build drone over a factory)
-  if (u->blueprint && u->blueprint->hasFootprint && (Fp(u).caps & 0x10)) return true;
+  // 0x720aa0 -> OCCUPY_FootprintFits 0x7209e0 (caps = -1): the occupancy layers only clear the land (1, 2) and water
+  // (8) bits, so a footprint that may be in the Air (16) fits over a structure (a build drone over a factory). But the
+  // caps it starts from are the terrain's: OCCUPY_MobileCheck 0x564ab0 (a footprint of size 1: OCCUPY_Filter 0x720920
+  // -> 0x564df0, one cell), which give NONE at all (0x564dd6: xor eax, eax) for a footprint off the map or on a cell of a
+  // blocking terrain type (0x564bb0: the type table +0x1434), Air included: such a flyer does not fit. Seen: 4v4_2
+  // (FAF 3840) 3389, army 0's Cybran build drone 0x7 (ura0001o), drifting while it guards engineer 0x9's walls: over
+  // (479.09, 708.26) the original's repair child (state 0, 0x5f9638..0x5f96cd) finds it does not fit and walks it back
+  // to the wall (Moving, the Guard kept at 3390); ours said it fits, stayed (gap 63.45 < MaxBuildDistance 100), and its
+  // Guard ended with the wall.
+  if (u->blueprint && u->blueprint->hasFootprint && (Fp(u).caps & 0x10)) {
+    const NamedFootprint& fp = Fp(u);
+    const PathCell c = CellOf(u, x, z);
+    Navigation& nav = sim.navigation();
+    return nav.FootprintFits(nav.CellCaps(fp, c.x, c.z, true), fp, c.x, c.z) != 0;
+  }
   return Fits(sim, u, CellOf(u, x, z));
 }
 

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/trace.h"
 #include "sim/entity_grid.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
@@ -275,6 +276,7 @@ void MotorsTick(Sim& sim) {
 }
 
 void MotorsAdvanceCoords(Sim& sim) {
+  MOHO_ZONE("advancecoords: motors");
   MotorState& ms = MS(sim);
   for (Entity* e : ms.moved)
     if (!e->destroyQueued) GridUpdate(sim, e, false);

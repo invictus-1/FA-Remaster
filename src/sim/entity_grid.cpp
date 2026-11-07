@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "core/trace.h"
 #include "core/workers.h"
 #include "sim/collision.h"
 #include "sim/sim.h"
@@ -348,7 +349,13 @@ bool GridFindsInBox(Sim& sim, const Entity* e, float x0, float z0, float x1, flo
   return e->gridX0 < hi(x1) && lo(x0) < e->gridX0 + e->gridW && e->gridZ0 < hi(z1) && lo(z0) < e->gridZ0 + e->gridH;
 }
 
+namespace {
+void GridAdvanceCoordsParallel(Sim& sim);
+}  // namespace
+
 void GridAdvanceCoords(Sim& sim) {
+  MOHO_ZONE("advancecoords: grid");
+  if (sim.order == SimOrder::kParallel && sim.entityGrid().ready()) return GridAdvanceCoordsParallel(sim);
   // UpdateCollision runs here only for entities whose transform changed (AdvanceCoords 0x678f10 compares the
   // previous and the new transform, 0x67904b). A unit gets its skirt-wide cells in its constructor (Sim::CreateUnit);
   // one that a script put back on its plain box (RevertCollisionShape: an aircraft that landed, AirUnit.lua) keeps
@@ -369,22 +376,13 @@ void GridAdvanceCoords(Sim& sim) {
   // 0x10005a heads the cell, land scout 0x10006f's CheckCollisions of 8033 asks it before 0x100127, puts a record at +0
   // on it and brakes hard at 8034 (case 4). Ours went by the motion stage's order (0x10005a first) and drove on.
   // (Before: MP2 7087, the order by id had 0x10010d before 0x100008 in cell (30,36).)
-  // Parallel order (docs/parallel-mode.md 3.4, step 5.5): the cells' lists are canonical (step 2b: by creation,
-  // whatever order the entities are placed in), so the moved entities' new spans are made on the worker pool (each
-  // writes only its own gridSeen / gridPos / gridOri) and then placed one after another; the same lists and the same
-  // version counts as one by one. (Below kParCoordsMin entities, or on one thread, one by one as before.)
-  constexpr size_t kParCoordsMin = 512;
-  const bool pool = sim.order == SimOrder::kParallel && sim.entityGrid().ready() &&
-                    (sim.workers().Threads() > 1 || sim.workers().Check().mode != ParCheck::kOff);
-  std::vector<std::pair<Entity*, bool>>& moved = sim.gridMoved;
-  moved.clear();
+  // (parallel order: GridAdvanceCoordsParallel below)
   for (Unit* u : sim.DirtyOrder()) {
     if (u->destroyQueued) continue;
     if (u->gridSeen && std::memcmp(&u->gridPos, &u->position, sizeof(Vec3)) == 0 &&
         std::memcmp(&u->gridOri, &u->orientation, sizeof(Quat)) == 0)
       continue;
-    if (pool) moved.emplace_back(u, true);
-    else GridUpdate(sim, u, true);
+    GridUpdate(sim, u, true);
   }
   // The third list: shells, shields, script entities. Their turns set their transforms in the order they were
   // made (one entity stage), and that is the order UpdateCollision goes through them here; one whose cells change
@@ -399,25 +397,59 @@ void GridAdvanceCoords(Sim& sim) {
     if (!s->destroyQueued && s->kind == Entity::Kind::Entity && (s->shape.type != ShapeType::None || s->gridW))
       o.push_back(s);
   std::sort(o.begin(), o.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
-  if (!pool) {
-    for (Entity* e : o) GridUpdate(sim, e, false);
-    return;
-  }
-  for (Entity* e : o) moved.emplace_back(e, false);
+  for (Entity* e : o) GridUpdate(sim, e, false);
+}
+
+namespace {
+// Parallel order (docs/parallel-mode.md 3.4, steps 5.5 and 5.6): the cells' lists are canonical (step 2b: by creation,
+// whatever order the entities are placed in), so neither the order the moved entities are found in nor the order they
+// are placed in changes a list or a version count. Every unit (the sim's list as it stands, not the dirty order: no
+// sort of the units after a health change or a death) and every entity of the third list is looked at on the worker
+// pool: whether its transform moved since its cells were taken, and if so its new span (SpanOf: each writes only its
+// own gridSeen / gridPos / gridOri); then the moved ones are placed one after another on the sim's thread. (Below
+// kParCoordsMin entities, on the sim's thread; with one thread ParallelFor runs the same task once.)
+void GridAdvanceCoordsParallel(Sim& sim) {
+  constexpr size_t kParCoordsMin = 512;
+  std::vector<std::pair<Entity*, bool>>& all = sim.gridMoved;
+  all.clear();
+  for (Unit* u : sim.units())
+    if (!u->destroyQueued) all.emplace_back(u, true);
+  for (Projectile* p : sim.projectiles)
+    if (!p->destroyQueued && (p->shape.type != ShapeType::None || p->gridW)) all.emplace_back(p, false);
+  for (ShieldEntity* s : sim.shields)
+    if (!s->destroyQueued && (s->shape.type != ShapeType::None || s->gridW)) all.emplace_back(s, false);
+  for (Entity* s : sim.scriptEntities)
+    if (!s->destroyQueued && s->kind == Entity::Kind::Entity && (s->shape.type != ShapeType::None || s->gridW))
+      all.emplace_back(s, false);
   // (the sim's thread's list; a worker reaches it through this reference: a thread_local named in the task would be
   // the worker's own)
   static thread_local std::vector<GridSpan> spanList;
+  static thread_local std::vector<uint8_t> movedList;
   std::vector<GridSpan>& spans = spanList;
-  spans.resize(moved.size());
-  if (moved.size() >= kParCoordsMin || sim.workers().Check().mode != ParCheck::kOff) {
-    sim.workers().ParallelFor("advancecoords: grid spans", moved.size(), 64, [&](size_t b, size_t e, int) {
-      for (size_t k = b; k < e; ++k) spans[k] = SpanOf(moved[k].first, moved[k].second);
-    });
-  } else {
-    for (size_t k = 0; k < moved.size(); ++k) spans[k] = SpanOf(moved[k].first, moved[k].second);
-  }
+  std::vector<uint8_t>& moved = movedList;
+  spans.resize(all.size());
+  moved.assign(all.size(), 0);
+  auto look = [&](size_t b, size_t e, int) {
+    for (size_t k = b; k < e; ++k) {
+      Entity* x = all[k].first;
+      // (a unit that did not move keeps its cells, as the original's AdvanceCoords: GridAdvanceCoords above; the
+      // third list's entities are always looked at, and Place keeps an unchanged span)
+      if (all[k].second && x->gridSeen && std::memcmp(&x->gridPos, &x->position, sizeof(Vec3)) == 0 &&
+          std::memcmp(&x->gridOri, &x->orientation, sizeof(Quat)) == 0)
+        continue;
+      moved[k] = 1;
+      spans[k] = SpanOf(x, all[k].second);
+    }
+  };
+  if (all.size() >= kParCoordsMin || sim.workers().Check().mode != ParCheck::kOff)
+    sim.workers().ParallelFor("advancecoords: grid spans", all.size(), 256, look);
+  else
+    look(0, all.size(), 0);
+  MOHO_ZONE_N(zPlace, "advancecoords: grid place");
   EntityGrid& g = sim.entityGrid();
-  for (size_t k = 0; k < moved.size(); ++k) g.Place(moved[k].first, spans[k].x0, spans[k].z0, spans[k].w, spans[k].h);
+  for (size_t k = 0; k < all.size(); ++k)
+    if (moved[k]) g.Place(all[k].first, spans[k].x0, spans[k].z0, spans[k].w, spans[k].h);
 }
+}  // namespace
 
 }  // namespace moho
