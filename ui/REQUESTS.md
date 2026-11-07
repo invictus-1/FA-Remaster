@@ -2362,6 +2362,17 @@ interface's lists empty; settings, looks, switches kept); then GameStarted(newSi
 1-2 ms. Between frames only, never while Beat may run; false with no world or while a photo is made. The ui wires it
 into the held jump back (GameSession::Rewind) once it is on main.
 
+### 46. Beats 1-29 run while the map is still opening: their per-beat data kept for the first Beat after SwapMap (2026-11-07, not blocking)
+From the interface chat. The start's run-ahead (main 91a7f812 / 5d12884: beats 2-29 behind the loading screen, so M28's
+start freeze is not seen) now runs AFTER FinishLoad and holds the loading screen ~2.2 s past the load (~1.4 s once the
+engine's nav-mesh-in-BeginSession lands). The engine's proposal (m28s, REQUESTS 55), which the ui takes: start that
+run-ahead on the loading thread as soon as the sim has started, the interface state is made and PrepareSession is done,
+i.e. WHILE your map is still opening (on Chris's PC the map opens 4.6 s after the loading thread); LoadDone waits for
+both. Ask: confirm (or make it so) that the per-beat data of beats run before the map is ready (prop events, effects,
+anything the world picture takes from each beat's sync) is kept and given to the first Beat after SwapMap, as the
+run-ahead after FinishLoad has it today, so the first picture is the same as if the beats had run after the map. Tell
+me if anything must not be called before MapReady (GameStarted? Beat?) and what the ui should call when.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
