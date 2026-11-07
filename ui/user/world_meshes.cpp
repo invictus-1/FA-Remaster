@@ -7,7 +7,8 @@
 // every scene (WorldScene::meshes); how each is drawn goes by its shader's name and is the
 // renderer's (render/world_picture.h, SetWorldMeshes). The methods and what they take are the
 // original's (FA exe 0x86bb30 .. 0x86d5e0, AddCommandFeedbackBlip 0x857b60), written from the
-// scripts' use and the original's own notes in worldmesh.lua; their code is not read. Not built:
+// scripts' use and the original's own notes in worldmesh.lua; their code is not read (but AddCommandFeedbackBlip's
+// description, read: see there). Not built:
 // the GetInterpolated... boxes and sphere (only the position), LODCutoff.
 #include <algorithm>
 #include <cctype>
@@ -244,10 +245,35 @@ int l_GetInterpolatedPosition(lua_State* L) {
 
 // AddCommandFeedbackBlip(meshInfo, duration): a mesh that shows for `duration` seconds where an
 // order landed (meshInfo: the mesh description and Position).
+// Its description is not WorldMesh:SetMesh's (READ 2026-11-06, FA exe 0x857be0): with a MeshName (rawget, any value but
+// nil) that mesh at the description's UniformScale (0x857cdf..0x857d5e); else the BlueprintID's unit blueprint, its
+// display mesh blueprint's first level's mesh (0x857d67..0x857e7d) at the blueprint's own scale, bp+0x270 (INFERRED
+// Display.UniformScale, as MeshOfBlueprint reads it; the description's UniformScale is not read in that branch); and in
+// both the TextureName and ShaderName of the description, each a string or a script error (0x857f07..0x857fb9), for
+// the material (MeshMaterial::Create 0x85804d). FAF's OnBuildMobileIssued gives a building order's blip so: the
+// building's mesh, flag02d_albedo.dds, CommandFeedback. Ours took the blueprint's albedo and the "Unit" shader as
+// SetMesh does, and the picture drew a finished building there for the blip's 0.7 s (Chris's re-test 2026-11-06,
+// item 3: "the complete building shows for a split second before the green ghost").
 int l_AddCommandFeedbackBlip(lua_State* L) {
   luaL_checktype(L, 1, LUA_TTABLE);
   Blip blip;
   ReadDescription(L, 1, &blip.view);
+  lua_pushstring(L, "MeshName");
+  lua_rawget(L, 1);
+  const bool named = !lua_isnil(L, -1);
+  lua_pop(L, 1);
+  if (!named) {
+    float own = 1;
+    MeshOfBlueprint(L, TextField(L, 1, "BlueprintID"), &blip.view, &own);
+    blip.view.uniformScale = own;
+  }
+  for (const char* key : {"TextureName", "ShaderName"}) {
+    lua_pushstring(L, key);
+    lua_rawget(L, 1);
+    if (!lua_isstring(L, -1)) return luaL_error(L, "AddCommandFeedbackBlip: %s: string expected", key);
+    (key[0] == 'T' ? blip.view.texture : blip.view.shader) = lua_tostring(L, -1);
+    lua_pop(L, 1);
+  }
   lua_pushstring(L, "Position");
   lua_gettable(L, 1);
   ReadNumbers(L, lua_gettop(L), blip.view.position, 3);

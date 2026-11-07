@@ -1090,7 +1090,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   is gone when its time is over. The engine side keeps what the script sets and hands the list
   over with every scene (`WorldScene::meshes`); the renderer's `SetWorldMeshes` draws each by
   its shader's name. Written from the scripts' use, not read from the original's code; of the
-  `GetInterpolated...` methods only the position is built. The script's decals on the ground
+  `GetInterpolated...` methods only the position is built. `AddCommandFeedbackBlip`'s description
+  is read (FA exe 0x857be0, 2026-11-06): its TextureName and ShaderName count with a BlueprintID
+  too (FAF's building orders flash the building's shape in CommandFeedback, not a finished
+  building: `ui/tests/placeflash.lua`). The script's decals on the ground
   (`UserDecal`: `_c_CreateDecal` and the `ScriptedDecal` methods SetTexture, SetScale, SetPosition,
   SetPositionByScreen, Destroy; FA exe 0x87eb60 ..): FAF's rings under the cursor while the player
   aims (a weapon's splash for an attack order, a tactical missile's, a nuke's inner and outer

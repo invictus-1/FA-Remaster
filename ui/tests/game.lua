@@ -626,13 +626,16 @@ local function run()
     flag:SetHidden(false)
     flag:Destroy()
     check("destroyed it is gone", meshes("RallyPoint"), before)
-    -- a mark made from a blueprint (the building of a build order) has the blueprint's own size
-    local shown = meshes("Unit")
+    -- a mark made from a blueprint (the building of a build order) has the blueprint's own mesh and size, and the
+    -- description's texture and shader (FA exe 0x857be0: a flash of the building's shape, never a finished building)
+    local shown = meshes("CommandFeedback")
     AddCommandFeedbackBlip({Position = at2, BlueprintID = factory, TextureName = '/meshes/game/flag02d_albedo.dds',
         ShaderName = 'CommandFeedback', UniformScale = 1}, 0.3)
-    local n2, building = meshes("Unit")
+    local n2, building = meshes("CommandFeedback")
     check("a blueprint's mark is the blueprint's model at its size", n2 == shown + 1 and building ~= nil
+        and string.find(string.lower(building.mesh), "/units/" .. string.lower(factory) .. "/", 1, true) ~= nil
         and math.abs(building.scale - __blueprints[factory].Display.UniformScale) < 0.0001, true)
+    check("in the description's texture and shader", building and building.texture, '/meshes/game/flag02d_albedo.dds')
     local marks = meshes("CommandFeedback2")
     AddCommandFeedbackBlip({Position = at2, MeshName = '/meshes/game/crosshair02d_lod0.scm',
         TextureName = '/meshes/game/crosshair02d_albedo.dds', ShaderName = 'CommandFeedback2', UniformScale = 0.5}, 1.0)

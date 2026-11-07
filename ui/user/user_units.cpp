@@ -627,6 +627,36 @@ int l_GetUnitById(lua_State* L) {
   return 1;
 }
 
+// moho64ui_UnitBuilt(id): not an engine function of the original. The host's own for tests: what the interface's copy of
+// the unit says of its building as of the last sync, {blueprint =, fraction =, beingBuilt =, mesh =, dead =}; nil for an
+// id it does not know.
+int l_UnitBuiltForTests(lua_State* L) {
+  UnitStore& store = Store(L);
+  auto it = store.units.find(static_cast<uint32_t>(std::strtoul(luaL_checkstring(L, 1), nullptr, 10)));
+  if (it == store.units.end() || it->second->gone) {
+    lua_pushnil(L);
+    return 1;
+  }
+  const auto& v = it->second->view;
+  lua_newtable(L);
+  lua_pushstring(L, "blueprint");
+  lua_pushstring(L, v.blueprint.c_str());
+  lua_rawset(L, -3);
+  lua_pushstring(L, "fraction");
+  lua_pushnumber(L, v.fractionComplete);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "beingBuilt");
+  lua_pushboolean(L, v.beingBuilt);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "mesh");
+  lua_pushstring(L, v.mesh.c_str());
+  lua_rawset(L, -3);
+  lua_pushstring(L, "dead");
+  lua_pushboolean(L, v.dead);
+  lua_rawset(L, -3);
+  return 1;
+}
+
 // AddSelectUnits(units) (FA exe 0x8bdc30): these units join the selection.
 int l_AddSelectUnits(lua_State* L) {
   std::vector<UserUnit*> now = Store(L).selection;
@@ -1395,6 +1425,7 @@ void NoteIssued(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssu
     add.insertBefore = static_cast<uint32_t>(d.insertBefore);
     store.queueChanges.push_back(add);
   }
+  store.orderedTick = 0xffffffffu;  // (the ordered buildings' ghosts again from the changed copies: SelectionForWorld)
   // (The original then marks its order lines to be made again, CWldSession::DirtyCommandGraph 0x8b05a5 -> 0x895f70:
   // the graph's byte +0; where that byte is read, and so whether a waypoint hovered between the two clicks of a
   // double click already sees the first click's order, is not traced. The lines here are made again with the next
@@ -2839,6 +2870,15 @@ void ApplyQueueChanges(lua_State* L, const UserUnit* u, UnitStateView* out) {
   }
 }
 
+// Whether the interface's copy of the unit's own queue has changes the simulation's queue does not show yet (an order
+// sent since the last sync: its queue may be empty there still).
+bool QueueChangesFor(lua_State* L, uint32_t unit) {
+  const uint64_t sync = UserState::From(L)->syncCount;
+  for (const UnitStore::QueueChange& c : Store(L).queueChanges)
+    if (c.unit == unit && !c.factory && c.firstSync > sync) return true;
+  return false;
+}
+
 // An order a Shift+Ctrl right click has taken out of the unit's queue is not in it from then on, as the original's
 // copy of the queue drops it at once (UnitStore::removals; 0x8b6ee0, further down "a waypoint under the mouse").
 void DropRemovedOrders(lua_State* L, const UserUnit* u, UnitStateView* out) {
@@ -4096,9 +4136,10 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   for (UserUnit* u : store.selection) {
     if (u->gone || u->view.dead) continue;
     ids->push_back(u->view.id);
-    if (!queued || !queueShown || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0 || ++shown > 60) continue;
+    if (!queued || !queueShown || u->view.army != sim->focusArmy + 1) continue;
+    if ((u->view.queueLength == 0 && !QueueChangesFor(L, u->view.id)) || ++shown > 60) continue;
     UnitStateView s;
-    if (!UnitStateOf(*sim, u->view.id, &s)) continue;
+    if (!StateOf(L, u, &s)) continue;  // ([placeflash] the interface's copy of the queue, as below)
     for (const CommandView& c : s.queue) {
       if (!c.hasPosition) continue;
       if (static_cast<CommandType>(c.type) == CommandType::BuildMobile && !c.blueprint.empty() && queued->size() < 400) {
@@ -4112,7 +4153,13 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
   // A building ordered and not begun shows where it will stand, whether its builder is selected
   // or not (Chris, 2026-10-13: as the original game shows them; the original's own rule is not
   // read). The one being built is there itself: the first order of a unit that has something it
-  // works on. Worked out once a beat, over all of the player's units that have orders.
+  // works on. Worked out once a beat, over all of the player's units that have orders, and again when an order is
+  // given or taken out (NoteIssued, the removals).
+  // [placeflash] From the interface's copy of each queue (StateOf: the simulation's as last synced with the orders sent
+  // since applied), as the original's copy takes an order at once (ISSUE_Command 0x8b0577, see UnitStore::queueChanges):
+  // a building placed without Shift has its ghost from the click's frame, not from the next beat's sync (the cursor's
+  // ghost there is gone with the build mode; ours showed nothing there for up to a beat). An order the simulation has
+  // not seen yet is never begun, whatever the unit works on now.
   if (!ghosts) return;
   if (store.orderedTick != sim->tick()) {
     store.orderedTick = sim->tick();
@@ -4120,13 +4167,16 @@ void SelectionForWorld(lua_State* L, std::vector<uint32_t>* ids, std::vector<Wor
     store.orderedBy.clear();
     for (auto& entry : store.units) {
       const UserUnit* u = entry.second.get();
-      if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1 || u->view.queueLength == 0) continue;
+      if (u->gone || u->view.dead || u->view.army != sim->focusArmy + 1) continue;
+      if (u->view.queueLength == 0 && !QueueChangesFor(L, u->view.id)) continue;
       UnitStateView s;
-      if (!UnitStateOf(*sim, u->view.id, &s)) continue;
+      if (!StateOf(L, u, &s)) continue;
       bool first = true;
       for (const CommandView& c : s.queue) {
         if (!c.hasPosition) continue;
-        const bool begun = first && s.focus != 0xffffffffu;
+        bool synced = false;  // (in the simulation's queue as last synced: StateOf keeps that copy)
+        for (const CommandView& o : u->stateCopy.queue) synced = synced || o.id == c.id;
+        const bool begun = first && s.focus != 0xffffffffu && synced;
         first = false;
         if (static_cast<CommandType>(c.type) != CommandType::BuildMobile || c.blueprint.empty() || begun || store.ordered.size() >= 400) continue;
         bool there = false;
@@ -5369,6 +5419,7 @@ void RemoveSelectionsLastOrders(lua_State* L) {
     UnitStore::Removal r;
     r.unit = u->view.id, r.command = last, r.sync = user->syncCount;
     store.removals.push_back(r);
+    store.orderedTick = 0xffffffffu;  // (a building's ghost goes with its order: SelectionForWorld)
     if (sent != store.lastSent.end() && sent->second.command == last) store.lastSent.erase(sent);
     Logf(LogLevel::Debug, "moho64ui: a double click's attack: the last order %u of unit %u taken out", last, u->view.id);
   }
@@ -5631,6 +5682,7 @@ bool RemoveHoveredWaypointOrder(lua_State* L, bool shift, bool ctrl) {
     r.unit = unit, r.command = command, r.sync = user->syncCount;
     store.removals.push_back(r);
   }
+  store.orderedTick = 0xffffffffu;  // (a building's ghost goes with its order: SelectionForWorld)
   store.graph.builtSync = ~0ull;  // (worked out again without it. INFERRED: at once; what marks the original's graph to
                                   // be worked out again is not read)
   Logf(LogLevel::Debug, "moho64ui: Shift+Ctrl right click on the waypoint of order %u: RemoveCommandFromQueue for %zu unit(s)", command,
@@ -5849,6 +5901,7 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetGlobal(L, "UISelectAndZoomTo", l_UISelectAndZoomTo);
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   SetGlobal(L, "GetUnitById", l_GetUnitById);
+  lua_register(L, "moho64ui_UnitBuilt", l_UnitBuiltForTests);
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
   lua_register(L, "moho64ui_ReclaimableAt", l_ReclaimableAtForTests);
   lua_register(L, "moho64ui_OrderGraph", l_OrderGraphForTests);

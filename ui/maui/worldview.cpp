@@ -1057,6 +1057,10 @@ class WorldView : public Control {
   // The build orders' sites outlined in blue while a building is being placed, as the scene was last made (for tests:
   // moho64ui_BuildGhosts' second answer).
   std::vector<WorldGhost> skirtSites_;
+  // Every building ghost handed to the picture with the scene as it was last made, and the frame it was made in (for
+  // tests: moho64ui_HandedGhosts).
+  std::vector<WorldGhost> handedGhosts_;
+  uint32_t handedFrame_ = 0;
 
   // The camera's farthest zoom and its field of view go by the shape of the view that shows it.
   void TakeAspect(Camera* c) {
@@ -1309,6 +1313,7 @@ class WorldView : public Control {
     std::copy(UserState::From(L)->playableRect, UserState::From(L)->playableRect + 4, scene.playableRect);
     if (Camera* jumped = GetCameraObject(L, cameraName)) scene.cameraCut = jumped->cut, jumped->cut = false;
     lap("(the picture's scene: meshes)");
+    handedGhosts_ = scene.ghosts, handedFrame_ = user->frame();  // (for tests: moho64ui_HandedGhosts)
     source->SetScene(scene);
     lap("(the picture's scene: SetScene)");
     pixels_ = source->Draw(cam, drawW, drawH);
@@ -3158,6 +3163,39 @@ int l_BuildGhostsForTests(lua_State* L) {
   }
   return 2;
 }
+// moho64ui_HandedGhosts(): not an engine function of the original. The host's own for tests: every building ghost the
+// main view handed to the picture with its scene as last made (WorldScene::ghosts: the cursor's and the ordered sites'),
+// {{blueprint =, x =, y =, z =, free =, placing =}, ...}; and second the frame that scene was made in.
+int l_HandedGhostsForTests(lua_State* L) {
+  WorldView* v = MainView(UserState::From(L)->ui().GetFrame(0));
+  lua_newtable(L);
+  if (!v) {
+    lua_pushnumber(L, 0);
+    return 2;
+  }
+  int n = 0;
+  for (const WorldGhost& g : v->handedGhosts_) {
+    lua_newtable(L);
+    lua_pushstring(L, "blueprint");
+    lua_pushstring(L, g.blueprint.c_str());
+    lua_rawset(L, -3);
+    const char* axes[] = {"x", "y", "z"};
+    for (int i = 0; i < 3; ++i) {
+      lua_pushstring(L, axes[i]);
+      lua_pushnumber(L, g.position[i]);
+      lua_rawset(L, -3);
+    }
+    lua_pushstring(L, "free");
+    lua_pushboolean(L, g.free);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "placing");
+    lua_pushboolean(L, g.placing);
+    lua_rawset(L, -3);
+    lua_rawseti(L, -2, ++n);
+  }
+  lua_pushnumber(L, v->handedFrame_);
+  return 2;
+}
 // moho64ui_MapBorders() -> the list as it stands (for tests)
 int l_MapBorders(lua_State* L) {
   lua_newtable(L);
@@ -4233,6 +4271,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   SetGlobal(L, "MapBorderClear", l_MapBorderClear);
   lua_register(L, "moho64ui_MapBorders", l_MapBorders);
   lua_register(L, "moho64ui_BuildGhosts", l_BuildGhostsForTests);
+  lua_register(L, "moho64ui_HandedGhosts", l_HandedGhostsForTests);
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
   lua_register(L, "moho64ui_CameraLodScale", l_CameraLodScaleForTests);
