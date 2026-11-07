@@ -232,7 +232,7 @@ float4 PS(VOut i) : SV_Target {
     float3 stars = Stars(s, 70, 0.10, 9) + Stars(s, 170, 0.11, 3) + Stars(s, 420, 0.06 + 0.22 * band * (1 - 0.6 * lanes), 0.9);
     // the air dims what stands low
     float low = saturate(d.y * 3.5);
-    c += (stars * 0.16 + glow) * (night * low * low);
+    c += (stars * 0.16 + glow) * (night * low * low * (1 - sunSky.w));  // ([stormcells] behind a storm's grey: no stars)
   }
 
   // the sun: a disc of 0.6 degrees
@@ -249,7 +249,7 @@ float4 PS(VOut i) : SV_Target {
     float plains = smoothstep(0.42, 0.60, Cloudy(face * 2.1 + 5.2));
     float rough = Cloudy(face * 9 + 1.7);
     float3 ground = float3(0.95, 0.93, 0.88) * (0.55 - 0.26 * plains + 0.22 * (rough - 0.5));
-    float disc = saturate((1 - sqrt(r2)) * 0.0227 / rayRight.w + 0.5);
+    float disc = saturate((1 - sqrt(r2)) * 0.0227 / rayRight.w + 0.5) * (1 - sunSky.w);  // ([stormcells] hidden by a storm)
     float3 shown = ground * (lit * 0.9 + 0.012) * disc * overHorizon;
     c = c * (1 - disc * overHorizon * 0.9) + shown;
   }
