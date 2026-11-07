@@ -70,6 +70,7 @@ cbuffer Fall : register(b1) {
   float4 velocity;  // xyz: how it falls, world units a second; w: a drop's length in seconds of fall (0: a flake)
   float4 shape;     // x: half its width in pixels; y: world units per pixel at distance 1; z: how see-through; w: how much it sways
   float4 tint;      // its colour, linear
+  float4 under;     // [rainunder] x: how much the fall keeps under the clouds (0: everywhere, as before; 1: none in their gaps)
 #if LIT
   float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`); y 1: the
                     // layer near the ground, seen only where the small lights light it; z: that layer's height
@@ -124,6 +125,9 @@ VOut VS(uint id : SV_VertexID) {
   // nothing at the box's sides, so that no drop is seen coming in or going out
   float3 edge = abs(local - 0.5) * 2;
   o.fade = saturate((1 - max(edge.x, max(edge.y, edge.z))) * 6) * (0.5 + 0.5 * Hash1(n + 5.5));
+  // [rainunder] (Chris, through visuals' section 99/100: rain that follows the storm's cells) where the clouds' shadow
+  // says the sky above is open, less of it: the storm's rain falls from its cover, its pockets of sun dry
+  [branch] if (under.x > 0) o.fade *= lerp(1, saturate((1 - CloudShadow(p)) * 1.8), under.x);
 #if LIT
   float3 small;
   float3 sun = DropLight(p, toEye, small);
@@ -264,6 +268,7 @@ struct SplashConstants {
 
 struct FallConstants {
   float box[4], velocity[4], shape[4], tint[4];
+  float under[4];  // [rainunder]
   float lit[4];  // (the lit shader's only)
 };
 
@@ -600,6 +605,7 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.tint[1] = light[1] * bright;
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
+    f.under[0] = std::clamp(underClouds, 0.0f, 1.0f);  // [rainunder]
     // how much of the light on it goes on to the eye (snow is white); near the ground three times that, as a glint: a
     // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris, 2026-10-17:
     // the sparkle is fine as it is)

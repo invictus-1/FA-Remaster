@@ -79,6 +79,9 @@ class Precipitation {
   // window's), and the picture shows `pictureShare` of the window's view (a tile: part of it; the splashes, so many to
   // the window's view, go by it). 1 and 1 in the game's own frames: as before.
   float pixelScale = 1, pictureShare = 1;
+  // [rainunder] how much of the fall keeps to under the clouds (the world sets it: a storm's, World::stormCells): none
+  // where the clouds' shadow (view.h, CloudShadow) shows open sky above; 0: everywhere, as before
+  float underClouds = 0;
 
  private:
   gfx::Pipeline Make(bool lit, std::string* error);

@@ -4452,6 +4452,7 @@ void World::Render() {
     return c;
   }();
   falling.pixelScale = photoPixel;  // (photofix: in a photo's frame as the window shows it; else 1, 1)
+  falling.underClouds = stormSunNow_;  // [rainunder] a storm's rain from under its cover (its pockets of sun dry)
   falling.pictureShare = photoShare;
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
   if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
