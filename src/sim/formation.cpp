@@ -1060,7 +1060,22 @@ void FormationSetCentre(UnitCommand& c, float x, float z) {
 
 bool FormationGoal(Sim& sim, UnitCommand& c, Unit* u, Vec3* out) {
   (void)sim;
-  if (!c.form || c.units.size() == 1 || !Contains(*c.form, u, true)) return false;
+  if (!c.form || c.units.size() == 1) return false;
+  // CUnitCommand::GetPosition 0x6e8a30 asks the formation (vt+0x1c, GetFormationPosition 0x569cb0) whenever the
+  // command holds more than one unit, without asking whether the unit is in it; and 0x569cb0 looks the unit up in its
+  // position cache (+0x2b0, 0x56b7b0) BEFORE its membership test (vt+0x40 at 0x569d6a): a unit that left the formation
+  // (FormRemoveUnit 0x6e8d70 at a patrol leg's end, 0x598ff8) still gets the place it had while the cache holds it.
+  // Seen: FAF 3840 pro replay 6v6_4, army 2's aircraft 0x200015 on three formation Moves made Patrols (1508): its
+  // leg toward 0x0200000f at 1644 has the goal (539, 465), its old formation cell, in the original; ours, out of the
+  // formation since the first leg ended (1600), took the order's own cell (543, 463).
+  if (!Contains(*c.form, u, true)) {
+    Formation& F = *c.form;
+    if (F.dirty) return false;  // (0x569cbe: a dirty formation is rebuilt first, and the cache with it)
+    auto it = F.adjusted.find(u->id);
+    if (it == F.adjusted.end()) return false;
+    *out = CellCentre(*F.sim, u, it->second.first, it->second.second);
+    return true;
+  }
   *out = FormationCell(*c.form, u, nullptr);
   return true;
 }
