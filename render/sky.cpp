@@ -37,6 +37,7 @@ cbuffer SkyPicture : register(b1) {
   float4 moonPlace;   // toward the moon
   float4 starAxis;    // what the stars turn about; w: 1 = a cinematic camera (cinecam): the cloud layer in more steps
   float4 cloudLight;  // the falling light on the clouds; w: 1 = volumetric clouds (cloudPicture) in place of the layer
+  float4 nightLook;   // [starry] x: the starry night's share (0: the night sky as before)
 };
 Texture2D cloudPicture : register(t1);  // (clouds.h: rgb their light, a what comes through)
 
@@ -212,6 +213,13 @@ float4 PS(VOut i) : SV_Target {
   float overHorizon = saturate(d.y * 80 + 0.6);
 
   float night = skyHorizon.w;
+  // [starry] (Chris, 2026-11-07: "a proper night sky like starry night the moon and all that so its beautiful") the night's
+  // sky deep and blue, darkest overhead, a glow kept low over the horizon, so that the stars and the band stand out
+  [branch] if (nightLook.x > 0 && night > 0.01) {
+    float lum = dot(c, float3(0.3, 0.6, 0.1));
+    float3 deep = lerp(c, lum * float3(0.55, 0.68, 1.2), 0.55);
+    c = lerp(c, deep * lerp(0.6, 0.3, saturate(d.y * 2.2)), night * nightLook.x);
+  }
   c += float3(0.012, 0.016, 0.028) * sunDisc.w;  // the night's own faint light
   [branch] if (night > 0.01 && d.y > -0.02) {
     // among the stars: the sky turned back by the hours
@@ -230,6 +238,13 @@ float4 PS(VOut i) : SV_Target {
     float3 glow = float3(0.60, 0.66, 0.85) * (band * (0.35 + 1.3 * clouds * clouds) * (0.6 + 1.6 * heart * heart) * (1 - 0.8 * lanes)) * 0.026;
     // stars of three sizes of cell; more of the faint ones in the band
     float3 stars = Stars(s, 70, 0.10, 9) + Stars(s, 170, 0.11, 3) + Stars(s, 420, 0.06 + 0.22 * band * (1 - 0.6 * lanes), 0.9);
+    [branch] if (nightLook.x > 0) {  // [starry] many more stars, the faint dust of them thick in the band; the band brighter,
+                                     // warm at its heart, blue along its arms, its lanes darker
+      stars = stars * (1 + 0.8 * nightLook.x) +
+              (Stars(s, 900, 0.12, 0.5) + Stars(s, 1500, 0.32 * band * (1 - 0.75 * lanes), 0.35)) * nightLook.x;
+      float3 tint = lerp(float3(0.55, 0.62, 0.95), float3(1.0, 0.86, 0.68), heart * heart);
+      glow *= lerp(float3(1, 1, 1), tint / float3(0.60, 0.66, 0.85) * 2.6 * (1 - 0.5 * lanes), nightLook.x);
+    }
     // the air dims what stands low
     float low = saturate(d.y * 3.5);
     c += (stars * 0.16 + glow) * (night * low * low * (1 - sunSky.w));  // ([stormcells] behind a storm's grey: no stars)
@@ -250,9 +265,30 @@ float4 PS(VOut i) : SV_Target {
     float rough = Cloudy(face * 9 + 1.7);
     float3 ground = float3(0.95, 0.93, 0.88) * (0.55 - 0.26 * plains + 0.22 * (rough - 0.5));
     float disc = saturate((1 - sqrt(r2)) * 0.0227 / rayRight.w + 0.5) * (1 - sunSky.w);  // ([stormcells] hidden by a storm)
-    float3 shown = ground * (lit * 0.9 + 0.012) * disc * overHorizon;
+    float3 shown = ground * (lit * 0.9 + 0.012) * disc * overHorizon * (1 + 0.5 * nightLook.x);  // ([starry] it glows)
     c = c * (1 - disc * overHorizon * 0.9) + shown;
   }
+  // [starry] the moonlight in the air round the moon: a bright ring close about it, a wide soft glow further out
+  [branch] if (nightLook.x > 0 && night > 0.01 && moon.y > -0.05) {
+    float a = acos(saturate(dot(d, moon)));
+    float halo = 0.6 * exp(-a * 35) + 0.12 * exp(-a * 6);
+    c += float3(0.75, 0.82, 1.0) * (halo * 0.08 * night * nightLook.x * overHorizon * (1 - sunSky.w));
+  }
+  // [starry] now and then a shooting star: a streak of some 15 degrees in 0.7 s, its tail fading behind it
+  [branch] if (nightLook.x > 0 && night > 0.3 && d.y > 0.05) {
+    float slot = floor(time / 13), t = time - slot * 13;
+    [branch] if (t < 0.7 && Hash(float3(slot, 1.7, 3.1)) < 0.55) {
+      float3 from = normalize(float3(Hash(float3(slot, 2.3, 0)) * 2 - 1, 0.45 + 0.5 * Hash(float3(slot, 3.7, 0)), Hash(float3(slot, 4.1, 0)) * 2 - 1));
+      float3 across = normalize(cross(from, normalize(float3(Hash(float3(slot, 5.9, 0)) - 0.5, 0.15, Hash(float3(slot, 6.3, 0)) - 0.5))));
+      float3 way = cross(across, from);  // (the great circle through `from` along `way`)
+      float u = atan2(dot(d, way), dot(d, from)), head = t / 0.7 * 0.26;
+      float off = abs(dot(d, across)) / max(rayRight.w, 1e-5);
+      float tail = saturate(1 - (head - u) / 0.09) * step(0, u) * step(u, head);
+      c += float3(0.9, 0.95, 1.0) * (saturate(1.4 - off) * tail * saturate(1.3 - t / 0.7) * 0.35 * night * nightLook.x);
+    }
+  }
+  // [starry] a dither of a fraction of a level against bands in the night's dark gradient
+  [branch] if (nightLook.x > 0 && night > 0.01) c *= 1 + (Hash(float3(i.position.xy, frac(time * 7.3) * 64)) - 0.5) * 0.05 * night;
   // the clouds: a layer over the ground (the same that shadows it), bent down toward the horizon. It
   // has a thickness, and the view walks up through it in a few steps: a cloud is flat below and
   // heaped above (the more cloud the layer has at a place, the higher it reaches there), and each
@@ -292,7 +328,9 @@ float4 PS(VOut i) : SV_Target {
   c *= rayForward.w;
   [branch] if (air.x > 0.5) {  // light in the air (air.h): all of the volume lies before the sky
     float4 a = AirAt(cameraPosition + normalize(d) * (air.y * exp(air.z) * 0.999));
-    c = c * a.a + a.rgb;
+    // ([starry] at night the moonlit air over the sky a quarter, more so overhead: its light gathered over the volume's whole
+    // depth washed the night sky pale; the haze low over the horizon and over the ground as it was)
+    c = c * a.a + a.rgb * (1 - 0.75 * nightLook.x * night * saturate(d.y * 4));
   }
   // (sky) with the far sea (view.h, BeyondSea; the land far off on): below the horizon past the world beyond the edge, seen
   // from above, the sea through the air in place of that haze; the clouds the zoom put before it laid over it again
@@ -404,6 +442,7 @@ float MoleculePhase(float mu) { return 3.0 / (16.0 * kPi) * (1 + mu * mu); }
 
 struct PictureConstants {
   float forward[4], right[4], up[4], sunSky[4], moonSky[4], sunDisc[4], moonPlace[4], starAxis[4], cloudLight[4];
+  float nightLook[4];  // [starry]
 };
 
 float Smooth(float from, float to, float x) {
@@ -950,6 +989,8 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   four(pc.moonPlace, sky.moonPlace, sky.stormGrey);  // ([stormcells] w)
   four(pc.starAxis, axis, camera.cinematic ? 1.0f : 0.0f);  // (w: cinecam, the cloud layer seen from below: more steps)
   four(pc.cloudLight, sky.cloudLight, clouds ? 1.0f : 0.0f);
+  pc.nightLook[0] = std::clamp(starry, 0.0f, 1.0f);  // [starry]
+  pc.nightLook[1] = pc.nightLook[2] = pc.nightLook[3] = 0;
   // (the sky from tables when they were built this frame for a computed sky)
   const bool fromTables = tablesNow_ && view.constants.skyZenith[3] > 0.5f;
   tablesNow_ = false;

@@ -73,6 +73,9 @@ class Sky {
   // picture `mapSky` (a cube map; none: nothing is drawn, as before). `clouds`: volumetric clouds
   // (clouds.h, Clouds::Picture) laid over it in place of the layer of clouds the pass makes itself.
   void Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx::Texture mapSky = {}, gfx::Texture clouds = {});
+  // [starry] The starry night's share (World::starryNight): a deep night sky, many more stars, the band brighter and in
+  // colour, a halo of moonlight round the moon, now and then a shooting star (0: the night sky as before).
+  float starry = 1;
   // The sky from tables of the atmosphere (the lighting upgrade; World::skyTables), after E. Hillaire: before
   // the scene's passes (it dispatches), the sky's view from the eye this frame for `sky` (SkyAt with its
   // tables), which this frame's Draw then reads in place of working the air out for every pixel. The tables of
