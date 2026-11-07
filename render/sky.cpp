@@ -207,6 +207,8 @@ float4 PS(VOut i) : SV_Target {
   [branch] if (sun.y > -0.33) c += Scatter(d, sun, 1) * sunSky.rgb;
   [branch] if (moon.y > -0.1) c += Scatter(d, moon, moonSky.w) * moonSky.rgb;
 #endif
+  // [stormcells] a storm's sky: grey, as dark as sunSky.w's share of moonPlace.w says (0: as it was)
+  c = lerp(c, float3(0.92, 0.95, 1.0) * moonPlace.w, sunSky.w);
   float overHorizon = saturate(d.y * 80 + 0.6);
 
   float night = skyHorizon.w;
@@ -234,7 +236,7 @@ float4 PS(VOut i) : SV_Target {
   }
 
   // the sun: a disc of 0.6 degrees
-  c += sunDisc.rgb * (smoothstep(0.999935, 0.999955, dot(d, sun)) * overHorizon);
+  c += sunDisc.rgb * (smoothstep(0.999935, 0.999955, dot(d, sun)) * overHorizon * (1 - sunSky.w));  // ([stormcells] hidden)
 
   // the moon: a ball of 1.3 degrees, lit by the sun from where the sun stands, with dark plains
   float3 side = normalize(cross(float3(0, 1, 0), moon)), upward = cross(moon, side);
@@ -942,10 +944,10 @@ void Sky::Draw(const View& view, const Camera& camera, const SkyLight& sky, gfx:
   four(pc.forward, forward, shown);
   four(pc.right, right, pixel);
   four(pc.up, up, -sky.starTurn);
-  four(pc.sunSky, sky.sunSky, 0);
+  four(pc.sunSky, sky.sunSky, std::clamp(sky.storm, 0.0f, 1.0f));  // ([stormcells] w)
   four(pc.moonSky, sky.moonSky, kMoonHaze);
   four(pc.sunDisc, sky.sunDisc, sky.faint);
-  four(pc.moonPlace, sky.moonPlace, 0);
+  four(pc.moonPlace, sky.moonPlace, sky.stormGrey);  // ([stormcells] w)
   four(pc.starAxis, axis, camera.cinematic ? 1.0f : 0.0f);  // (w: cinecam, the cloud layer seen from below: more steps)
   four(pc.cloudLight, sky.cloudLight, clouds ? 1.0f : 0.0f);
   // (the sky from tables when they were built this frame for a computed sky)
