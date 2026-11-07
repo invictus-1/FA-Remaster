@@ -161,7 +161,10 @@ float4 Blur(VOut i) : SV_Target {
 
 // The temporal upscaler's reactive mask (Post::Reactive): where what came after the solid scene (smoke,
 // sparks, beams, the shimmer over heat) changed the picture, and by how much, as FSR's own automatic mask
-// takes it: both pictures brought into 0..1 first, the largest change of a channel, strong changes full.
+// takes it: both pictures brought into 0..1 first, the largest change of a channel; [lenstwinkle] as AMD's own
+// defaults (cutoff 0.2, then 0.9), nothing under the cutoff: the soft ramp below it (change x 2) took a lamp's faint beam
+// over its own lens as a third reactive, so FSR 3 kept little of the lens's past frames and the sub-pixel lens showed the
+// jitter's cycle (an SACU's lamp head dimmed every 22 frames at 0.59: Chris's re-test, 2026-11-06)
 const char kReactiveShader[] = R"hlsl(
 Texture2D opaque : register(t0);
 Texture2D finished : register(t1);
@@ -173,7 +176,7 @@ float3 Squeezed(float3 c) { return c / (1 + max(max(c.r, c.g), c.b)); }
 float PS(float4 position : SV_Position) : SV_Target {
   float3 a = Squeezed(opaque.Load(int3(position.xy, 0)).rgb * modern.z), b = Squeezed(finished.Load(int3(position.xy, 0)).rgb * modern.z);
   float change = max(max(abs(a.r - b.r), abs(a.g - b.g)), abs(a.b - b.b));
-  return change > 0.2 ? 0.9 : change * 2;
+  return change > 0.2 ? 0.9 : 0;
 }
 )hlsl";
 
@@ -335,7 +338,7 @@ void Post::KeepOpaque() {
   keptOpaque_ = true;
 }
 
-gfx::Texture Post::Reactive() {
+gfx::Texture Post::Reactive(const std::function<void()>& more) {
   if (!keptOpaque_ || !reactiveMask_) return {};
   if (!reactive_) {
     gfx::TargetDesc td;
@@ -354,6 +357,7 @@ gfx::Texture Post::Reactive() {
   device_->Draw(3);
   device_->SetTexture(0, {});
   device_->SetTexture(1, {});
+  if (more) more();
   keptOpaque_ = false;
   return reactive_;
 }

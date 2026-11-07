@@ -62,6 +62,10 @@ class Precipitation {
   // where it is, by the sun through its shadow and the clouds' and by the small lights (a lamp's beam through the
   // lamp's shadow), sent on mostly forward (a drop between the eye and a light shines), on top of the sky's light.
   void Draw(const View& view, const Camera& camera, float rain, float snow, bool lit = false);
+  // [rainreactive] Into the temporal upscaler's reactive mask (Post::Reactive's pass, R8): what the last Draw drew, each
+  // drop marking the mask by how much it covers, so that FSR 3 shows this frame's drops (it gathered them away: thin,
+  // faint and fast, under the mask's cutoff). Not the lit drops' layer near the ground. Once after each Draw.
+  void DrawReactive(const View& view);
   // Rain's splashes (World::rainSplashes): where rain meets what faces up and the picture shows it, small crowns that
   // rise and fade; found from `sceneDepth` (the scene's, read: a pass into the scene's colour alone).
   void DrawSplashes(const View& view, const Camera& camera, float rain, gfx::Texture sceneDepth);
@@ -78,12 +82,17 @@ class Precipitation {
 
  private:
   gfx::Pipeline Make(bool lit, std::string* error);
+  void Fall(const View& view, const Camera& camera, float rain, float snow, bool lit, bool reactive);
   gfx::Pipeline MakeSplashes(std::string* error);
   gfx::Device* device_;
   gfx::Pipeline pipeline_, litPipeline_;
   bool litTried_ = false;
   gfx::Pipeline splashPipeline_;
   bool splashTried_ = false;
+  gfx::Pipeline reactivePipeline_;  // [rainreactive]
+  bool reactiveTried_ = false, drawn_ = false;
+  Camera drawnCamera_;
+  float drawnRain_ = 0, drawnSnow_ = 0;
 };
 
 }  // namespace render
