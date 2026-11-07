@@ -299,3 +299,31 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     40.2 minutes against 37.7 and 42.2. In the 4v4 the engineers away on the water fell from 128 sightings to 36, and
     those nearer an enemy start from a mean of 12 to under 1.
 
+35. **What the army owns sets the plan, a gift included (Chris, 2026-11-06; refines 2 and 26).** Chris: a Fatboy given at
+    minute 1 should go stomp the enemy right away. A probe (the M28 duel, a Fatboy given to our AI at minute 1) found it
+    standing at our start for 6 minutes: under fog no enemy zone was known, so no attack had a target, however strong
+    the army; and our economy died beside it (1.2 mass a second at minutes 4-7 instead of ~35) for two reasons: the
+    Fatboy's shield asked 600 energy a second of an economy making 60, and its factory attachment counted as one of
+    our T3 land factories and built a T3 engineer from minute 1. Now: with no operation and no target known, an army of
+    at least twice what the enemy can have by this minute (the median of the five 1v1 pro replays' army curve, or the
+    enemy army known if more) goes to the nearest enemy start, fighting what it meets; shields our energy cannot carry
+    go off while energy is short and come back on, one at a time, when the spare income carries them; an experimental's
+    factory attachment is not one of our factories. The probe's Fatboy now walks out at once, pushes the enemy's army
+    and economy and kills 574-1,125 mass by minute 7 for none lost, and our economy runs beside it (73 mass a second at
+    minute 7, M28 43). In the duels nothing else moved: the 16 M28 games were identical beat for beat, and the one FAF
+    game where our AI built Fatboys traded better (lost per killed 0.49 against 0.68).
+
+36. **What did not help in the 2026-11-07 round (aicore4).** Each was judged on the 16 M28 seeds and dropped; the
+    patches are kept in the helper's notes. (1) Adjacency by a base layout: factory slots in columns with power strips
+    between them gave 7.7 power links per factory (ours had 0.0, M28 0.25-0.4), but the reserved block slowed the
+    opening (14 extractors at minute 5 against 17) and the duels ended 3 minutes earlier (23.6 against 26.6); two
+    placement rules before it blocked the factories' exits or took the next factory's place. At our economy's scale
+    the energy adjacency saves is smaller than what laying it out costs. (2) Combined arms as a march order (a front
+    of tanks at the aim, artillery behind at its reach, firing at structures on a base, an escort beside it): on a
+    scripted siege bench it lost more than the plain attack-move against every mix with M28's artillery in it (lost per
+    killed 1.2-3.8 against 0.7-1.0), with or without holding the front back for the artillery. (3) Coming back out
+    after a recall: our army sat at home in 272 of 424 status minutes while ahead, because one raider in a base zone
+    recalled it whenever M28's army could reach there; recalling only for the enemy actually in the zone made it go
+    out (17 attacks against 2) but those attacks traded worse (lost per killed 10.1 against 7.3) and the duels lasted
+    no longer. The army's own estimate of the fights it goes into is what decides here, not the rule that sends it.
+

@@ -1390,8 +1390,11 @@ AIBrain = Class(StandardBrain) {
         end
         ctx.fighters = enemyAir >= 300 and enemyAir >= 0.3 * (enemyAir + enemyGround)
         local R = self.Remaster
+        -- (2026-11-07, step 5: an experimental's factory attachment - EXTERNALFACTORYUNIT - is no factory of ours: a
+        -- gifted Fatboy's built T3 engineers from minute 1 and the economy never started)
+        local ext = categories.EXTERNALFACTORYUNIT
         for _, u in ipairs(self:GetListOfUnits(categories.FACTORY * categories.STRUCTURE, false)) do
-            if not u.Dead then
+            if not u.Dead and not (ext and EntityCategoryContains(ext, u)) then
                 -- (counted from the start of their building: no second factory for the same need)
                 if EntityCategoryContains(categories.AIR, u) then
                     ctx.airFactory = true
