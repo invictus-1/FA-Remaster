@@ -2857,6 +2857,11 @@ void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors)
   // [groundfix] where each kind of unit's paint glows, read ahead on the debris's own thread (Debris::Warm): the kinds
   // drawn from now on as AddFrame first makes their models, and those made already as the debris is switched on
   debris.files = vfs_;
+  // [bakeddebris] (a unit's baked set: its files, its model, the hot metal's time, the ground it lies on)
+  debris.baked.files = vfs_;
+  debris.baked.models = &models;
+  debris.baked.heat = &heat;
+  debris.baked.groundHeight = debris.groundHeight;
   if (!debrisWarm_) {
     debrisWarm_ = true;
     for (const KnownModel& k : unitModels_)
@@ -4039,6 +4044,10 @@ void World::Render() {
     if (!extraView)  // [views] (a view besides the first: the first's glows, their lights alone; the smoke is the first's)
       decals.ForEachHot(clock_, [&](Vec3 centre, float across, float age, float seconds, uint32_t id) {
         heat.Glowing((uint64_t{2} << 40) | id, centre, across * 0.25f, age, seconds, false);
+      });
+    if (!extraView && blastDebris)  // [bakeddebris] (a baked death's hot chunks: their light, as a wreck's; no smoke of their own)
+      debris.baked.ForEachHot([&](Vec3 centre, float radius, float age, float seconds, uint32_t id) {
+        heat.Glowing((uint64_t{3} << 40) | id, centre, radius, age, seconds, false);
       });
     heat.End(&lights, extraView ? nullptr : &particles, placing.target, lights.night);
   }

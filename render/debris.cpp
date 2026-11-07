@@ -128,6 +128,7 @@ void Debris::Clear() {
   dying_.clear();
   shells_.clear();
   shellKinds_.clear();
+  baked.Clear();  // [bakeddebris]
   clock_ = -1;
 }
 
@@ -599,7 +600,9 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     const bool now = d.air ? at.y - Ground(at.x, at.z) < 1.2f : !flashes || flashes->FlashedOn(u.id, d.died - 0.5) || clock - d.died > 4;
     if (!d.thrown && now) {
       d.thrown = true;
-      Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
+      // [bakeddebris] (a unit on the ground with a baked set of its own: its real parts instead, in the style its death calls for)
+      d.baked = !d.air && baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(d));
+      if (!d.baked) Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
     }
   }
   for (auto it = dying_.begin(); it != dying_.end();) {
@@ -618,6 +621,10 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     else ++it;
   }
 }
+
+// [bakeddebris] (debris.h) The one place a death's style is chosen: the engine's killing hit (its damage type and overkill) is
+// to be read here; until then every death breaks.
+std::string Debris::DebrisStyleFor(const Dying&) { return "break"; }
 
 void Debris::BeginShells() {
   ++shellStamp_;
@@ -657,7 +664,9 @@ bool Debris::Shell(uint32_t id, uint32_t blueprint, const std::string& path, Vec
       Chunk& c = s.piece;
       std::vector<Piece> own;
       if (from && from->model && fragments) own = fragments(from->unit, from->model);
-      if (!own.empty()) {  // (one of its own fragments, at its own size)
+      if (from && from->baked) {  // [bakeddebris] (its baked set is its debris: not drawn)
+        c.look = nullptr;
+      } else if (!own.empty()) {  // (one of its own fragments, at its own size)
         const Piece& p = own[std::min(static_cast<size_t>(Random() * static_cast<float>(own.size())), own.size() - 1)];
         c.look = p.model;
         c.scale = p.scale;
@@ -830,6 +839,10 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
       if (it->fading > clock && ++kept > mostChipRubble) it->fading = clock;
     chips_.erase(std::remove_if(chips_.begin(), chips_.end(), [clock](const Chunk& c) { return clock - c.fading > 3; }), chips_.end());
   }
+  // [bakeddebris] the baked deaths, on the same ground and clock
+  baked.groundHeight = groundHeight;
+  baked.hot = hot;
+  baked.Update(clock, eye, meshes);
   if (!meshes) return;
   // drawn as scenery (pressing no grass flat), those near enough to be more than a dot
   const bool before = meshes->addingScenery;

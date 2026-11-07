@@ -67,6 +67,10 @@ class MeshRenderer {
   // [machinery] The model just added is a factory whose belt has moved `amount` along its strip (Machinery::PoseUnit;
   // below 0: none). Not with a ghost's tint or treads.
   void Belt(float amount);
+  // [bakeddebris] The model just added (posed) reaches no farther than this sphere in the world (its middle, its radius): what
+  // its bones carry far from their rest (a baked death's chunks, thrown a unit's length and more) is culled by this one
+  // instead of the model's own bounds.
+  void Reach(Vec3 centre, float radius);
   // [glitches] The model just added (with a ghost's `tint`) is a building's ghost drawn see-through, as the original's
   // UnitPlace (World::ghostLook): only in the see-through pass (Draw's `glass`), every level of it that is not glass itself,
   // its nearest surface alone (its depth laid first), in its tint, lit by its shape and brighter along its outline, the
