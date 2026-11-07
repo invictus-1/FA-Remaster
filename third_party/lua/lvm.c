@@ -646,6 +646,7 @@ StkId luaV_execute (lua_State *L) {
             slot = cast(TObject *, luaH_getstr(h, tsvalue(rb)));
           if (slot && slot != &luaO_nilobject && (!ttisnil(slot) || h->metatable == NULL)) {
             h->flags = 0;
+            h->wstamp++;
             setobj2t(slot, RKC(i));
             luaC_barriert(L, h);
             vmbreak;

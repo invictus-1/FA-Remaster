@@ -28,10 +28,17 @@
 //
 // and the fix's own re-sum in EntityId order without destroyed props (FA Remastered, MIT).
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "script/fastlib.h"
+#include "script/script_handle.h"
 
 namespace moho {
 namespace {
@@ -101,7 +108,7 @@ bool ParseId(lua_State* L, int idx, uint64_t* id) {
 // Returns nothing (the caller runs its Lua code) when `reclaims` is not a table, a value is not a table, an id is not
 // one SortPadded takes, or a field is not nil / false / a number: those cases stay with the Lua code, which gives what
 // it always gave (or raises its error). Makes no Lua object and calls no function that collects.
-int l_ReclaimCellTotals(lua_State* L) {
+int FullCellTotals(lua_State* L) {
   if (lua_type(L, 1) != LUA_TTABLE) return 0;
   lua_settop(L, 1);
   lua_checkstack(L, 8);
@@ -134,6 +141,273 @@ int l_ReclaimCellTotals(lua_State* L) {
   lua_pushnumber(L, totalMass);
   lua_pushnumber(L, totalEnergy);
   return 3;
+}
+
+// ---- The cells' cache (e1d 2026-11-07) ----
+// A cell is updated (GridReclaim.UpdateCell) when one of its props was added, damaged, reclaimed or destroyed, and the
+// full re-sum above then reads every entry again: three fields and the handle of each prop, ~430 ns an entry (B1:
+// 15,461 updates of 527 entries on average, 99.3% of them the same as at the cell's last update; FullCellTotals' walk
+// 3.5 s of 3.7 s). Kept per cell (the `reclaims` table, by its address and serial): each entry's id, prop, the prop's
+// write stamp (lobject.h Table::wstamp: every store into a table bumps it) and its handle's box, and the three values
+// read. At the next update an entry whose key is the same string (its text compared), whose prop is the same table
+// (address and serial) with the same stamp, and whose three fields were the prop's own (found by a raw read: then
+// lua_gettable gives that value and calls no metamethod) is taken from the cache; anything else is read as the full
+// re-sum reads it, in lua_next's order. Liveness is read again for every entry (its box: IsDestroyed's test). The
+// totals are then summed as before (EntityId order, live entries), so they are the full re-sum's bit for bit.
+// MOHO64_VERIFY_RECLAIM=1: the full re-sum runs too at every call, and any difference stops the program.
+struct CachedEntry {
+  const void* key;   // the id string (its text kept in keyText to compare)
+  const void* prop;  // the value's table
+  unsigned propSerial = 0, propStamp = 0;
+  void** box = nullptr;  // its _c_object's payload (nullptr: no handle: destroyed for IsDestroyed)
+  bool cacheable = false;  // the three fields were the prop's own (raw) values
+  uint8_t keyLen = 0;
+  char keyText[12];
+  uint64_t id = 0;
+  lua_Number fraction = 0, mass = 0, energy = 0;
+};
+struct CellCache {
+  unsigned serial = 0;
+  std::vector<CachedEntry> entries;  // in the table's slot order at the last call (lua_gpg_tablepairs)
+  std::vector<uint32_t> order;       // entries' indices by id
+  std::vector<uint32_t> slots;       // a flat hash of the entries by key address (index + 1; 0 empty), power of 2
+  void Index() {
+    size_t cap = 16;
+    while (cap < 2 * entries.size()) cap <<= 1;
+    slots.assign(cap, 0);
+    for (size_t i = 0; i < entries.size(); ++i) {
+      size_t h = Hash(entries[i].key) & (cap - 1);
+      while (slots[h]) h = (h + 1) & (cap - 1);
+      slots[h] = static_cast<uint32_t>(i + 1);
+    }
+  }
+  int32_t Find(const void* key) const {
+    if (slots.empty()) return -1;
+    const size_t m = slots.size() - 1;
+    for (size_t h = Hash(key) & m;; h = (h + 1) & m) {
+      const uint32_t v = slots[h];
+      if (!v) return -1;
+      if (entries[v - 1].key == key) return static_cast<int32_t>(v - 1);
+    }
+  }
+  static size_t Hash(const void* p) { return static_cast<size_t>((reinterpret_cast<uintptr_t>(p) >> 4) * 0x9E3779B97F4A7C15ull >> 20); }
+};
+std::mutex g_cellsMutex;  // (two sims in one process: one lock, the tables' addresses are distinct)
+std::unordered_map<const void*, CellCache> g_cells;
+
+// The box of the handle the value at idx carries (IsDestroyedValue's reads, without the collector's check: the full
+// re-sum calls it with checkGc false). nullptr: no handle.
+void** HandleBox(lua_State* L, int idx) {
+  void** box = nullptr;
+  if (lua_istable(L, idx)) lua_rawgetcobject(L, idx);
+  else lua_pushvalue(L, idx);
+  if (lua_type(L, -1) == LUA_TUSERDATA && lua_getmetatable(L, -1)) {
+    if (IsObjectHandleMeta(L, -1)) box = static_cast<void**>(lua_touserdata(L, -2));
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  return box;
+}
+
+// An entry read as the full re-sum reads it (ReadReclaim, IsDestroyedValue's box), the value at `v`, its key at `k`.
+// False: the full re-sum would leave this cell to the Lua (an id or a field it does not take).
+bool ReadEntry(lua_State* L, int k, int v, int keys, CachedEntry* e) {
+  if (lua_type(L, v) != LUA_TTABLE || !ParseId(L, k, &e->id)) return false;
+  if (!ReadReclaim(L, v, keys, &e->fraction, &e->mass, &e->energy)) return false;
+  bool own = true;
+  for (int i = 0; i < 3 && own; ++i) {
+    lua_pushvalue(L, keys + i);
+    lua_rawget(L, v);
+    own = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+  }
+  e->cacheable = own;
+  e->box = HandleBox(L, v);
+  e->prop = lua_topointer(L, v);
+  lua_gpg_tablestamp(e->prop, &e->propSerial, &e->propStamp);
+  size_t len = 0;
+  const char* text = lua_tostring(L, k);
+  len = lua_strlen(L, k);
+  e->keyLen = static_cast<uint8_t>(len);
+  std::memcpy(e->keyText, text, len);  // (ParseId took it: 1..12 digits)
+  return true;
+}
+
+bool SameKey(const CachedEntry& c, const void* key) {
+  size_t len = 0;
+  const char* text = lua_gpg_strptr(key, &len);
+  return len == c.keyLen && !std::memcmp(text, c.keyText, len);
+}
+
+// MOHO64_DEBUG_RECLAIM=1 (statistics only): calls, entries, how many were taken from the cache, the time, at exit
+struct CacheStats {
+  bool on = std::getenv("MOHO64_DEBUG_RECLAIM") != nullptr;
+  uint64_t calls = 0, entries = 0, reused = 0;
+  double ms = 0;
+  ~CacheStats() {
+    if (on)
+      std::fprintf(stderr, "moho64 reclaim totals (cached): %llu calls, %llu entries, %llu taken from the cache, %.1f ms\n",
+                   static_cast<unsigned long long>(calls), static_cast<unsigned long long>(entries),
+                   static_cast<unsigned long long>(reused), ms);
+  }
+};
+CacheStats g_cacheStats;
+double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+int CachedCellTotalsImpl(lua_State* L);
+int CachedCellTotals(lua_State* L) {
+  if (!g_cacheStats.on) return CachedCellTotalsImpl(L);
+  const double t0 = NowMs();
+  const int r = CachedCellTotalsImpl(L);
+  g_cacheStats.ms += NowMs() - t0;
+  ++g_cacheStats.calls;
+  return r;
+}
+
+int CachedCellTotalsImpl(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TTABLE) return 0;
+  lua_settop(L, 1);
+  static thread_local std::vector<lua_GpgPair> pairs;
+  if (pairs.size() < 64) pairs.resize(64);
+  int n = lua_gpg_tablepairs(L, 1, pairs.data(), static_cast<int>(pairs.size()));
+  if (n > static_cast<int>(pairs.size())) {
+    pairs.resize(static_cast<size_t>(n));
+    n = lua_gpg_tablepairs(L, 1, pairs.data(), n);
+  }
+  for (int i = 0; i < n; ++i)
+    if (pairs[i].kt != LUA_TSTRING || pairs[i].vt != LUA_TTABLE) return FullCellTotals(L);
+  const void* cell = lua_topointer(L, 1);
+  unsigned cellSerial = 0, cellStamp = 0;
+  lua_gpg_tablestamp(cell, &cellSerial, &cellStamp);
+  std::lock_guard<std::mutex> lock(g_cellsMutex);
+  CellCache& cache = g_cells[cell];
+  if (cache.serial != cellSerial) {
+    cache = CellCache{};
+    cache.serial = cellSerial;
+  }
+  const std::vector<CachedEntry>& old = cache.entries;
+  // which cached entry each slot's pair may be: the same slot's first (the table's slots move only when it grows or a
+  // key is added in a colliding place), else by the key's address
+  static thread_local std::vector<int32_t> match;
+  match.resize(static_cast<size_t>(n));
+  bool sameSlots = n == static_cast<int>(old.size());
+  for (int i = 0; i < n; ++i) {
+    int32_t j = -1;
+    if (i < static_cast<int>(old.size()) && old[static_cast<size_t>(i)].key == pairs[i].k) j = i;
+    else {
+      j = cache.Find(pairs[i].k);
+      sameSlots = false;
+    }
+    if (j >= 0 && old[static_cast<size_t>(j)].prop != pairs[i].v) j = -1;
+    match[static_cast<size_t>(i)] = j;
+  }
+  constexpr int kAhead = 8;  // (each entry's prop, key and box fetched this many entries ahead)
+  auto fetch = [&](int i) {
+    const int32_t j = match[static_cast<size_t>(i)];
+    if (j < 0) return;
+    __builtin_prefetch(pairs[i].v);
+    __builtin_prefetch(static_cast<const char*>(pairs[i].v) + 56);
+    __builtin_prefetch(pairs[i].k);
+    if (void** b = old[static_cast<size_t>(j)].box) __builtin_prefetch(b);
+  };
+  for (int i = 0; i < n && i < kAhead; ++i) fetch(i);
+  static thread_local std::vector<CachedEntry> cur;
+  cur.resize(static_cast<size_t>(n));
+  lua_pushstring(L, "ReclaimLeft");       // 2
+  lua_pushstring(L, "MaxMassReclaim");    // 3
+  lua_pushstring(L, "MaxEnergyReclaim");  // 4
+  for (int i = 0; i < n; ++i) {
+    if (i + kAhead < n) fetch(i + kAhead);
+    const int32_t j = match[static_cast<size_t>(i)];
+    CachedEntry& e = cur[static_cast<size_t>(i)];
+    if (j >= 0) {
+      const CachedEntry& c = old[static_cast<size_t>(j)];
+      unsigned serial = 0, stamp = 0;
+      lua_gpg_tablestamp(pairs[i].v, &serial, &stamp);
+      if (c.cacheable && serial == c.propSerial && stamp == c.propStamp && SameKey(c, pairs[i].k)) {
+        e = c;
+        ++g_cacheStats.reused;
+        continue;
+      }
+    }
+    lua_gpg_pushgc(L, pairs[i].k, LUA_TSTRING);  // 5
+    lua_gpg_pushgc(L, pairs[i].v, LUA_TTABLE);   // 6
+    const bool ok = ReadEntry(L, 5, 6, 2, &e);
+    lua_settop(L, 4);
+    e.key = pairs[i].k;
+    if (!ok) {
+      cache = CellCache{};
+      cache.serial = cellSerial;
+      lua_settop(L, 1);
+      return FullCellTotals(L);
+    }
+    // (the order holds while each slot keeps its id: an entry read again in its slot may carry another string, if the
+    // cached one was collected and a new one made at its address)
+    if (j < 0 || e.id != old[static_cast<size_t>(j)].id) sameSlots = false;
+  }
+  // the order by id: kept while every slot holds the key it held (the same keys, so the same ids), else sorted again
+  if (!sameSlots || cache.order.size() != static_cast<size_t>(n)) {
+    cache.order.resize(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) cache.order[static_cast<size_t>(i)] = static_cast<uint32_t>(i);
+    std::sort(cache.order.begin(), cache.order.end(),
+              [](uint32_t a, uint32_t b) { return cur[a].id < cur[b].id; });
+  }
+  g_cacheStats.entries += static_cast<uint64_t>(n);
+  lua_Number count = 0, totalMass = 0, totalEnergy = 0;
+  for (int i = 0; i < n; ++i) count = count + 1;
+  for (const uint32_t k : cache.order) {
+    const CachedEntry& c = cur[k];
+    if (!c.box || !*c.box) continue;  // (IsDestroyed)
+    totalMass = totalMass + c.fraction * c.mass;
+    totalEnergy = totalEnergy + c.fraction * c.energy;
+  }
+  cache.entries.swap(cur);
+  if (!sameSlots) cache.Index();
+  lua_settop(L, 0);
+  lua_pushnumber(L, count);
+  lua_pushnumber(L, totalMass);
+  lua_pushnumber(L, totalEnergy);
+  return 3;
+}
+
+struct VerifyCounts {
+  uint64_t calls = 0, left = 0;
+  ~VerifyCounts() {
+    if (calls) std::fprintf(stderr, "moho64 verify reclaim totals: %llu calls, all equal to the full re-sum (%llu left to the Lua)\n",
+                            static_cast<unsigned long long>(calls), static_cast<unsigned long long>(left));
+  }
+};
+VerifyCounts g_verify;
+
+// Remastered.ReclaimCellTotals(reclaims): FullCellTotals' results, from the cells' cache.
+int l_ReclaimCellTotals(lua_State* L) {
+  static const bool verify = std::getenv("MOHO64_VERIFY_RECLAIM") != nullptr;
+  if (!verify) return CachedCellTotals(L);
+  // the full re-sum first, then the cached one on the same table (pushed again by its address: the caller still holds
+  // it; nothing is made, so the collector's counts stay as without the switch); both must agree in every bit
+  lua_settop(L, 1);
+  const bool isTable = lua_type(L, 1) == LUA_TTABLE;
+  const void* arg = isTable ? lua_topointer(L, 1) : nullptr;
+  const int nf = FullCellTotals(L);  // (leaves only its results)
+  lua_Number f[3] = {0, 0, 0};
+  for (int i = 0; i < nf; ++i) f[i] = lua_tonumber(L, -nf + i);
+  lua_settop(L, 0);
+  if (isTable) lua_gpg_pushgc(L, arg, LUA_TTABLE);
+  else lua_pushnil(L);
+  const int nc = CachedCellTotals(L);
+  ++g_verify.calls;
+  if (!nf) ++g_verify.left;
+  bool same = nf == nc;
+  for (int i = 0; i < nc && same; ++i) {
+    const lua_Number c = lua_tonumber(L, -nc + i);
+    same = !std::memcmp(&c, &f[i], sizeof c);
+  }
+  if (!same) {
+    std::fprintf(stderr, "moho64 verify reclaim totals: call %llu: the cache gives %d results, the full re-sum %d (%g %g %g)\n",
+                 static_cast<unsigned long long>(g_verify.calls), nc, nf, f[0], f[1], f[2]);
+    std::abort();
+  }
+  return nc;
 }
 
 // FAF's SortLambda(a, b), `return a.TotalMass > b.TotalMass`, as table.sort's comparison for the values at a and b:

@@ -258,6 +258,19 @@ typedef void (*lua_GpgTask) (void *ctx, size_t lo, size_t hi);
 typedef void (*lua_GpgParFor) (void *host, const char *stage, size_t n, size_t grain, lua_GpgTask task, void *ctx);
 LUA_API void  lua_gpg_setparfor (lua_State *L, lua_GpgParFor f, void *host, size_t minweak);
 LUA_API void  lua_gpg_gcstep (lua_State *L, int point);
+/* moho64: reading a table without a call per entry (the engine's helpers, script/fastlib_reclaim.cpp).
+** lua_gpg_tablepairs: the table at idx's entries with a non-nil value (array part, then the hash part, each in slot
+** order: lua_next's), up to cap of them into out (an object's address in k / v when collectable, else NULL; kt / vt
+** its type); returns how many there are (more than cap: call again with room). Writes nothing.
+** lua_gpg_tablestamp: the serial and the write stamp (lobject.h Table::wstamp) of a table given by its address
+** (lua_topointer, or a v of lua_gpg_tablepairs); the table must be alive. Equal serial and stamp: the same table with
+** the same contents. lua_gpg_strptr: a live string's text and length by its address (a k of lua_gpg_tablepairs).
+** lua_gpg_pushgc: pushes the live table or string at that address (LUA_TTABLE / LUA_TSTRING). */
+typedef struct lua_GpgPair { const void *k, *v; int kt, vt; } lua_GpgPair;
+LUA_API int   lua_gpg_tablepairs (lua_State *L, int idx, lua_GpgPair *out, int cap);
+LUA_API void  lua_gpg_tablestamp (const void *t, unsigned *serial, unsigned *stamp);
+LUA_API const char *lua_gpg_strptr (const void *s, size_t *len);
+LUA_API void  lua_gpg_pushgc (lua_State *L, const void *p, int type);
 /* moho64: the incremental collector's counts (all 0 in a classic state). Units: objects traversed or swept. */
 typedef struct lua_GCStats {
   int incremental, state;
