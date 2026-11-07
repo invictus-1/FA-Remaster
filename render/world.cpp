@@ -3063,6 +3063,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       const Model* body = u.Seen() && !dying.empty() && !OutsidePlayable(u.position[0], u.position[2])
                               ? Known(unitModels_, u.blueprint, frame.blueprints->size(), [&] { return models.Unit(dying); })
                               : nullptr;
+      // [debrishull] (a ship whose baked parts were thrown: its hull without them, posed by its sinking as the ship)
+      if (body && body->ok)
+        if (const Model* hull = debris.HullFor(u.id)) body = hull;
       if (body && body->ok) {
         Pose pose;
         pose.now = frame.bones.data() + u.firstBone;

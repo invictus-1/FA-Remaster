@@ -580,6 +580,65 @@ const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std:
   return made;
 }
 
+const Model* ModelCache::DebrisHull(const std::string& blueprintId, const std::string& meshPath) {  // [debrishull]
+  const std::string id = Lower(blueprintId);
+  const std::string name = "debrishull:" + id + ":" + moho::Vfs::Normalize(meshPath);
+  auto it = models_.find(name);
+  if (it != models_.end()) return it->second.get();
+  models_.emplace(name, nullptr);  // (none until made: asked once)
+  const Model* unit = Unit(id);
+  if (!unit || !unit->ok || unit->lods.empty() || !unit->lods[0].labPbr) {
+    fprintf(stderr, "render: %s: its hull %s is not used: the unit is not drawn remastered\n", id.c_str(), meshPath.c_str());
+    return nullptr;
+  }
+  std::optional<std::string> file = vfs_->ReadFile(meshPath);
+  if (!file) return nullptr;
+  auto m = std::make_unique<Model>();
+  // (on the unit's skeleton as drawn - the game's, which the remastered meshes are mapped onto by their bones' names, as
+  // LoadScm does for every level - so that the game's sinking poses it as the ship; each of the file's bones must be there)
+  std::vector<ModelBone> own;
+  ReadScmBones(*file, &own);
+  for (const ModelBone& b : own) {
+    bool found = false;
+    for (const ModelBone& s : unit->bones) found = found || s.name == b.name;
+    if (!found) {
+      fprintf(stderr, "render: %s: its hull %s is not used: its bone %s is not the unit's\n", id.c_str(), meshPath.c_str(), b.name.c_str());
+      return nullptr;
+    }
+  }
+  m->bones = unit->bones;
+  ModelLod lod;
+  lod.serial = NextLodSerial();
+  std::string error;
+  if (!LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes)) {
+    fprintf(stderr, "render: %s: %s\n", meshPath.c_str(), error.c_str());
+    return nullptr;
+  }
+  const ModelLod& like = unit->lods[0];
+  lod.albedo = like.albedo;
+  lod.normals = like.normals;
+  lod.specular = like.specular;
+  lod.secondary = like.secondary;
+  lod.wearMasks = like.wearMasks;
+  lod.labPbr = like.labPbr;
+  lod.plainMaterial = like.plainMaterial;
+  lod.teamMask = like.teamMask;
+  lod.faction = like.faction;
+  lod.shaderName = like.shaderName;
+  lod.cutoff = like.cutoff;
+  m->lods.push_back(std::move(lod));
+  m->scale = unit->scale;
+  m->deckHeight = unit->deckHeight;
+  m->hitShape = unit->hitShape;
+  m->paintSpots = unit->paintSpots;
+  m->paintMaterial = unit->paintMaterial;
+  m->ok = true;
+  Model* made = m.get();
+  models_[name] = std::move(m);
+  printf("render: %s: its hull without the thrown parts, %u triangles (%s)\n", id.c_str(), made->lods[0].indexCount / 3, meshPath.c_str());
+  return made;
+}
+
 bool ModelCache::Remastered(const std::string& blueprintId) const {
   const std::string id = Lower(blueprintId);
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
