@@ -1108,7 +1108,8 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
       return float4(tint * (0.4 + 0.9 * rim + 0.4 * shimmer), saturate(0.25 * rim * (0.6 + 0.4 * shimmer) + 0.04 * shimmer));
     }
     // ([ghostfaint] Chris, 2026-11-06: a queued building's ghost "should be more transparent": 0.22 + 0.5 at the edge before)
-    return float4(tint * (sunOn * 0.9 + edge * 0.9), saturate(0.12 + 0.4 * edge));
+    // ([ghostfaint] its outline softer: a bright rim on thin edges shimmered from frame to frame, Chris's re-test 2026-11-06)
+    return float4(tint * (sunOn * 0.9 + edge * 0.35), saturate(0.12 + 0.15 * edge));
   }
   // [machinery] a belt's strip of the texture slid along its axis, wrapped within it
   [branch] if (i.belt >= 0) {

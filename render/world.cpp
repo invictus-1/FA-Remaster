@@ -1384,6 +1384,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (temporalNow_) Fsr3::Jitter(temporalFrame_++, sceneWidth, width, &jx, &jy);
     motion.Begin(&view, jx, jy, temporalNow_ && temporalCut_);
   }
+  air.unjittered = moving && temporalNow_ ? &motion.Now() : nullptr;  // [airjitter] (the air's history without the jitter)
   // the light: the map's sun, in the chosen look
   ViewConstants& c = view.constants;
   const Vec3 sunDirection = haveMap_ ? Normalize(map.lighting.sunDirection) : Normalize(Vec3{0.4f, 0.8f, 0.45f});
