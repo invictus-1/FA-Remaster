@@ -67,7 +67,7 @@ float CloudNear(float3 p, float h, bool frayed, float erode, float keep) {
   float cover = CoverNear(p.xz);
   if (cover <= 0.002) return 0;
   float3 wind = float3(skyClouds.y, skyClouds.w * 40, skyClouds.z);
-  float4 s = shapeNoise.SampleLevel(samplerLinear, (p + wind) * cloudLook.z, 0);
+  float4 s = CloudShape(p, wind, 0);  // ([cloudmix] not here: seen from above, the big heaps outlasted the thinning, a veil)
   float3 e = detailNoise.SampleLevel(samplerLinear, (p + wind * 1.4) * cloudLook.w, 0).rgb;
   // (1 in the middle of a lump, its cells from about 150 world units across down to 25)
   float lumps = s.b * 0.35 + s.a * 0.3 + e.r * 0.2 + e.g * 0.15;
@@ -201,7 +201,7 @@ Clouds::Zoom CloudZoom::For(const Camera& camera, const Clouds& clouds, bool on)
   Clouds::Zoom z;
   z.on = on && !camera.cinematic;
   if (!z.on) return z;
-  const float eye = camera.Eye().y, under = clouds.base, top = clouds.base + std::max(clouds.thickness, 1.0f);
+  const float eye = camera.Eye().y, under = clouds.base, top = clouds.base + clouds.Thick();  // ([stormcells])
   // seen from close (crisper, finer): coming in as the eye comes up to the layer, from where the march goes over to
   // the zoom's (40 under it), so that the sky's clouds do not change at once
   const float close = Smooth((eye - (under - 40)) / 40);

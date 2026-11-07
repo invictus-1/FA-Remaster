@@ -2090,6 +2090,7 @@ const std::vector<Unit*>& Sim::ArmyStageOrder() {
   return armyOrder_;
 }
 void Sim::ResumeCommandThread(Unit* u) {
+  if (u == resumeHeld) return;  // (re-linked already by its queue's clear event: see resumeHeld)
   u->cmdSeq = ++cmdSeqNext_;
   cmdOrderDirty_ = true;
   // MOHO64_DEBUG_RESUME=<unit id> (or -2: every unit): a command thread re-linked at the end, and who did it
