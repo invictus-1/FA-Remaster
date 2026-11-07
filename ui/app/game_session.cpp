@@ -2131,15 +2131,14 @@ void GameSession::ServeLoad() {
   if (net_) net_->exchange->Service();  // (a network game: the others keep hearing from this program while it loads)
   NoteLoadProgress();
   // (aheadInLoad: the loading thread waits for this one before its beats, HandOverLoad. The map opening behind is given
-  // the session only once those beats are through, as below when the thread is: the renderer keys what its world made
-  // for the session's first beat by its blueprints' places in that beat (World::iconKinds_, unitModels_ by
-  // FrameUnit::blueprint), and its own first beat after the swap must find the same units. Read at tick 0, with the
-  // first beat after the swap at tick 29, a commander was drawn with another unit's model and icon (SETONS_R, seen at
-  // tick 70). INFERRED, the renderer's code not followed through: its places differ when the units do, and on SETONS_R
-  // the map's 43 wreckage units of army 10 are gone by tick 29.)
+  // the session at that hand-over, at tick 0, while the thread is parked (no beat running: the renderer's rule 1, ui
+  // REQUESTS 46), so that the map opens WHILE the beats run; its first beat after the swap takes beats 1..29's hits,
+  // health and props. Until render 8ba6be79 (ui REQUESTS 47) the renderer numbered its world's lists by the blueprints'
+  // places in tick 0 and its main frames afresh at tick 29, and a commander was drawn with another unit's model and
+  // icon (SETONS_R, tick 70); it now keeps the numbering across AdoptArmies.)
   const bool parked = LoadParked();
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (load_ == Load::Running && !loadPrepared_ && !BeatRunning() && loadOk_ && loadSim_ && windowPicture_ &&
+  if (load_ == Load::Running && !loadPrepared_ && (!BeatRunning() || parked) && loadOk_ && loadSim_ && windowPicture_ &&
       windowPicture_->pending == WindowPicture::Kind::Game) {
     loadPrepared_ = true;
     // (and the camera the game will first be seen by, the whole map from above for its first second, for the warm
@@ -2196,7 +2195,7 @@ bool GameSession::LoadParked() const {
 // This thread's part of the hand-over (ServeLoad): the game's record and replay file opened now, so that the loading
 // thread writes each beat's advance and fingerprint line as it runs (no orders in those beats: the same bytes
 // RunFirstBeat and RunAhead write); the beats' sounds start from no running sound (End stopped the world's). Then it
-// goes on. (The map opening behind gets the session after the beats: ServeLoad.)
+// goes on. (The map opening behind gets the session just before this, at tick 0: ServeLoad.)
 void GameSession::HandOverLoad() {
   LoadAhead& a = *loadAhead_;
   OpenRecords(*loadSession_, *loadSim_);
