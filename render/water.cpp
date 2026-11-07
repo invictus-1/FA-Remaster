@@ -1096,7 +1096,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   [branch] if (oceanMore.z > 0) {  // [sparkle] the steepest faces looked down on catch the sky (Ocean::nearSparkle)
     float steep = saturate((1 - N.y) * 8);
     float down = saturate(-toPixel.y * 1.6 - 0.4);
-    fresnel = max(fresnel, oceanMore.z * down * steep * steep * steep);
+    fresnel = max(fresnel, oceanMore.z * down * pow(steep, 6));  // ([sparkle] only the very steepest: a rough sea stays a sea)
   }
 #endif
 #if WINTER

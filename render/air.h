@@ -51,6 +51,10 @@ class Air {
   // The look, all changeable between frames.
   int across = 160, deep = 64;         // the volume's cells across the picture and along the depth
   float nearest = 1, farthest = 4000;  // world units from the eye the volume holds
+  // [airjitter] The view's matrix without the temporal upscaler's jitter (World: Motion::Now() while FSR 3 brings the frame
+  // up; null: the view's own). The cells are laid out without the jitter, so last frame's are found without it too (read
+  // through the jittered matrix, each frame's history was shifted by a new part of a pixel; measured, it changed little).
+  const Mat4* unjittered = nullptr;
   float dust = 0.00015f;               // the air's own thickness at the ground (per world unit): lamps' beams show in clear air
   float thinsOver = 300;               // the haze and the dust thin to 1/e over this height above the floor
   // How much of each light the air throws toward the eye. The lamps' strengthens their light on the clear
@@ -61,6 +65,11 @@ class Air {
   float lampGlowInAir = 0.25f;  // of a beam's glow to all sides near its lamp (lights.h), what the air shows (all of it made halos)
   float sunForward = 0.6f, lampForward = 0.35f;      // how much of it goes on forward (0: alike to all sides)
   float keep = 0.9f;                   // how much of last frame's a cell keeps
+  // [airjitter] at most this much while FSR 3 brings the frame up (`unjittered` set): the upscaler gathers the frames
+  // itself, and on the air's own 0.9 it held the air's brighter frames of a camera move for some seconds after (the
+  // picture dimmed by about 1% over 3 to 4 s after each zoom at night, Chris's re-test 2026-11-06); at 0.5 that is
+  // 0.4 of it, and the picture is steadier than without FSR 3 (at 0 it no longer dims but flickers)
+  float keepUpscaled = 0.5f;
   // [glitches] ... less while the camera moves (Chris's big test, "arcing when zooming in and out"): last frame's cells, read
   // where each cell's middle was then, are not quite what the cell holds now in motion (the cell where a column meets the
   // ground lies elsewhere along it, the mist in it is spread otherwise), and kept at 0.9 a frame their error was carried

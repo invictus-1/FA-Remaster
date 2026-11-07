@@ -553,7 +553,7 @@ class Ocean {
   // they are the sky mirrored on the wave faces, strong at a low angle and weak looking down. Of three trials, 2026-11-06,
   // he chose this one at 1.0) The steepest wave faces looked down on catch the sky as at a lower angle: a scattering of
   // small glints where the camera looks. 0: as before (viewer --ocean-sparkle 0).
-  float nearSparkle = 1.0f;
+  float nearSparkle = 0;  // ([sparkle] off by default, Chris 2026-11-06: "the ocean without sparkle seems to be better"; 0.3 when a player turns it on)
   // How much steeper the slopes are drawn than they are (seen from above twice that again: there the slopes are all that
   // shows of the waves).
   float tilt = 1.5f;

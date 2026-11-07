@@ -833,8 +833,8 @@ void SetSky(const SkyLight& s, ViewConstants* c) {
   // fast ... bolting across the screen") a quarter of the speed before: some 1.4 world units a second (a world unit is
   // about 20 m on Seton's: a strong wind aloft, still seen to move), their shapes changing at half the rate
   c->skyClouds[0] = s.cover;
-  c->skyClouds[1] = 1.25f * c->time;
-  c->skyClouds[2] = 0.55f * c->time;
+  c->skyClouds[1] = 0.5f * c->time;   // ([cloudpace] Chris's re-test: "still fast": 0.55 units a second now)
+  c->skyClouds[2] = 0.22f * c->time;
   c->skyClouds[3] = 0.006f * c->time;
 }
 
