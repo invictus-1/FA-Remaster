@@ -318,7 +318,9 @@
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
 //           (snow, mud, sand, grass, dirt, hard, or two with a plus: "soil=mud"; may be given several times; before
 //           the map opens), as remap.json's "ground" would say it; the map's mud material (remap.json) is drawn in the
-//           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]
+//           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]; [dents] shell holes where shots
+//           strike the ground (a bowl, a raised lip, the earth thrown round it; deep in snow and mud, shallow in dirt, sand
+//           and grass, none in rock; filled by falling snow, softened by rain), the picture only
 // --ground-parallax  [parallax] the ground's relief close by (World::groundParallax, Terrain::parallax; modern look, a
 //           remastered map): its stones stand up and its hollows sink as the eye passes, a low sun shades the hollows;
 //           --ground-parallax-tune depth[,reach[,shadows]]: the relief that many times the scans' real one (1), full
@@ -591,6 +593,9 @@
 // --fx-shot <projectile>  fires that projectile (an id such as TDFGauss01, or its blueprint) from --fx-from
 //           x,z,height to --fx-to x,z[,height] (else across where the camera looks, away from it), with the
 //           trails and the hit its script class gives it; --fx-hit land|unit|water|underwater|prop|shield|air|none
+//           ([dents] with --deep-tracks its hit on land dents the ground --fx-dent units across (1; 0 none: as the scorch
+//           the game lays, a small gun's 0.2, an artillery shell's 1 to 3), each shot landing somewhere within
+//           --fx-scatter units of --fx-to (0): a shelled patch)
 // --fx-compare  the remastered effects on the left, the original's on the right (--fx-spacing apart, 8)
 // --fx-entity <effect entity>  an effect entity (UEFNukeEffectController01, or its blueprint's path) made at
 //           --fx-at as a nuke's impact makes it, its own scripts run (fx_entities.h), every --fx-repeat seconds
@@ -1600,6 +1605,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-shot") o->fx.shot = v;
     else if (a == "--fx-hit") o->fx.hit = v;
+    else if (a == "--fx-dent") o->fx.dent = std::max(0.0f, static_cast<float>(atof(v)));        // [dents]
+    else if (a == "--fx-scatter") o->fx.scatter = std::max(0.0f, static_cast<float>(atof(v)));  // [dents]
     else if (a == "--fx-repeat") {
       o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
       o->fxRepeat = o->fx.repeatGiven = true;

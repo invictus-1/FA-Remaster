@@ -19,6 +19,7 @@
 #include "ground.h"
 #include "snow_ground.h"  // [snow ground]
 #include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
+#include "bp_reader.h"  // [dents]
 
 namespace render {
 
@@ -3553,7 +3554,28 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         else if (b.water && (!combat_.impactsKept || b.size >= 1.5f))
           water.AddRipple(b.at.x, b.at.z, std::clamp(b.size * 0.5f, 0.4f, 3.0f), std::clamp(b.size * 0.6f, 0.5f, 4.0f));
       }
+    // [dents] where the simulation does not say where its shots struck (the effects stand; a host without its impacts),
+    // the blasts on the ground dent it, by their scorch (a flash alone: its own size)
+    if (deepNow_ && !extraView && !combat_.impactsKept)
+      for (const Blasts::Blast& b : fresh)
+        if (!b.water && !b.splash) DentGround(b.at, b.scorch > 0 ? b.scorch : b.size);
   }
+  // [dents] shell holes where the simulation's shots struck the ground (seen only: a hole must not give away a shot the army
+  // did not see), by their weapon's numbers; an aircraft crashing on land by its size and speed. Not where a shot met a unit
+  // or anything else, nor a beam's.
+  if (deepNow_ && !extraView && combat_.impactsKept)
+    for (const FrameImpact& m : combat_.impacts) {
+      if (!m.seen || m.type != "Terrain") continue;
+      float size = 0;
+      if (m.kind == FrameImpact::Projectile) {
+        size = ShotDentSize(m.weapon);
+      } else if (m.kind == FrameImpact::Crash) {
+        const Model* body = m.projectile.empty() ? nullptr : models.Unit(m.projectile);
+        const Vec3 half = body && body->ok ? (body->boundsMax - body->boundsMin) * (0.5f * body->scale) : Vec3{1, 1, 1};
+        size = std::clamp(std::max(half.x, half.z) * 1.6f, 0.4f, 8.0f) * std::clamp(m.speed / 15, 0.35f, 1.0f);
+      }
+      if (size > 0) DentGround({m.position[0], m.position[1], m.position[2]}, size);
+    }
   // ripples from what met the water (seen only): a shell's splash by its size, a torpedo going off below by its depth
   // (none deeper than 4), a crashing aircraft's by its size and speed, a beam's a little one. (The strengths are
   // judged by eye, not measured against anything of the game's.)
@@ -3878,6 +3900,45 @@ void World::PressGround(const Frame& frame) {
     PressUnit(u, frame, blueprint, blueprint.empty() ? nullptr : models.Unit(blueprint), {u.position[0], u.position[1], u.position[2]},
               Quat{u.orientation[0], u.orientation[1], u.orientation[2], u.orientation[3]});
   }
+}
+
+void World::DentGround(Vec3 at, float size) {
+  if (!deepNow_ || !haveMap_ || !(size >= 0.1f)) return;
+  const float ground = map.Height(at.x, at.z);
+  if (map.water.present && ground < map.water.elevation - 0.05f) return;  // (under the water: the water's ripples)
+  if (std::fabs(at.y - ground) > 0.5f + 0.5f * size) return;              // (in the air: an air burst, a dying aircraft)
+  trackField.PressCrater({at.x, ground, at.z}, size);
+}
+
+// (as the game sizes the scorch it lays for a shot's impact, Blasts::FromImpact: 0.75 to 0.95 of the weapon's DamageRadius
+// across, less below 100 damage; a direct hit's by its damage, at most 0.6. A weapon not known: a middling shell's.)
+float World::ShotDentSize(const std::string& weapon) {
+  auto found = dentSizes_.find(weapon);
+  if (found != dentSizes_.end()) return found->second;
+  float size = 0.3f;
+  const size_t dash = weapon.find('-');
+  if (dash != std::string::npos && dash > 0) {
+    const std::string id = weapon.substr(0, dash);
+    const int index = std::atoi(weapon.c_str() + dash + 1);  // (1-based, as FAF's weapon ids count)
+    const size_t second = weapon.find('-', dash + 1);
+    const std::string label = second == std::string::npos ? std::string() : weapon.substr(second + 1);
+    BpValue bp;
+    auto file = textures.ReadFile(models.UnitBlueprintPath(id));
+    if (file && ReadBlueprintFile(*file, &bp)) {
+      const std::vector<BpValue>& weapons = bp["Weapon"].items;
+      const BpValue* w = index >= 1 && static_cast<size_t>(index) <= weapons.size() ? &weapons[static_cast<size_t>(index) - 1] : nullptr;
+      if (!w || (!label.empty() && (*w)["Label"].StringOr(label) != label))  // (by its label, where the count does not match)
+        for (const BpValue& v : weapons)
+          if (v["Label"].StringOr(std::string()) == label) w = &v;
+      if (w) {
+        const float radius = static_cast<float>((*w)["DamageRadius"].NumberOr(0)), damage = static_cast<float>((*w)["Damage"].NumberOr(100));
+        size = radius > 0 ? 0.85f * radius * std::clamp(0.01f * damage, 0.25f, 1.0f) : std::min(0.15f + damage / 800, 0.6f);
+      }
+    }
+  }
+  if (dentSizes_.size() > 4096) dentSizes_.clear();
+  dentSizes_[weapon] = size;
+  return size;
 }
 
 void World::Render() {
