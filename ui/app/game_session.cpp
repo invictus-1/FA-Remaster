@@ -88,6 +88,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.waterRipples = looks.waterRipples;  // (Water Ripples: the renderer's World::waterRipples)
   // (Battle Effects: the renderer's bundle as agreed on 2026-10-18; Energy Shields: its own)
   w.blastWaves = w.blastDust = w.blastDebris = looks.battleEffects;
+  w.rockHits = looks.battleEffects;  // (rocks that react to fire: chips, dust, scorch; render 1fb738a2, request 59)
   w.litSmoke = w.smokeShadows = w.heatShimmer = looks.battleEffects;
   w.unitScars = looks.battleEffects;
   // (render e8a4d56: wrecks and craters that glow and cool; dust, spray and contrails; explosions as lit volumes
