@@ -1691,7 +1691,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
     }
     c.mistMore[3] = look == Look::Modern ? std::clamp(unitDetail, 0.0f, 2.0f) : 0.0f;  // [detail]
-    SetSky(skyLight, &c);
+    {  // [stormcells] (section 99: sun pockets that show) in a storm the sun 1.4 times as strong where it gets through the
+       // cover (the cover's shadows, made 0.9 of it below, keep it off the rest: the storm as dark overall)
+      const float t = stormCells && volumetricClouds ? std::clamp((rain - 0.6f) / 0.35f, 0.0f, 1.0f) : 0.0f;
+      stormSunNow_ = t * t * (3 - 2 * t);
+      SkyLight lit = skyLight;
+      lit.color = lit.color * (1 + 0.4f * stormSunNow_);
+      SetSky(lit, &c);
+    }
     if (skyTables && look == Look::Modern) {  // the sky from tables: what reads the computed sky reads its view (view.h, ComputedSky)
       c.skyTable[0] = 1;
       c.skyTable[1] = skyLight.greyShare;
@@ -1737,6 +1744,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
                    lowFog && mistPatches ? 0.25f * fog : fog,
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
                    map.water.present ? map.water.elevation : -1e9f);
+    if (stormSunNow_ > 0 && c.cloudDrift[0] > 0.5f)  // ([stormcells] the cover's shadows take more of the sun in a storm)
+      c.cloudDrift[1] = c.cloudDrift[1] + (std::max(c.cloudDrift[1], 0.9f) - c.cloudDrift[1]) * stormSunNow_;
   }
   if (!sidePicture && !photo && !extraView) {  // (airfix) a weather cut (World::weatherCut): the moment or the weather jumped since the window's last frame
     const bool lit = timeOfDay >= 0 && look == Look::Modern;

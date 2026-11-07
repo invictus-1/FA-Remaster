@@ -111,6 +111,17 @@ float StormDeckCover(float2 xz) {
   return smoothstep(0.44, 0.62, n);
 }
 
+// [stormcells] (visuals' section 99, Chris: "think of it as dough ... spread it out with a roller cause during a real storm
+// clouds blanket the sky with small pockets of sun that come through") The cells rolled out: a cover over most of the sky,
+// thickest where the cells were, with small gaps (some 200 to 500 units), 0..1 at a place (world x, z).
+float StormBlanket(float2 xz) {
+  float2 p = (xz + skyClouds.yz) * 0.004;
+  float2 turned = float2(p.x * 0.6 + p.y * 0.8, p.y * 0.6 - p.x * 0.8);
+  float n = CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)) * 0.55 +
+            CloudNoise(float3(turned.yx * 1.1 + 13.7, skyClouds.w * 0.5 + 2.9)) * 0.45;
+  return smoothstep(0.26, 0.46, n);
+}
+
 [numthreads(8, 8, 1)] void Coverage(uint3 id : SV_DispatchThreadID) {
   uint w, h;
   coverOut.GetDimensions(w, h);
@@ -145,7 +156,7 @@ float StormDeckCover(float2 xz) {
       float2 tu = float2(pu.x * 0.6 + pu.y * 0.8, pu.y * 0.6 - pu.x * 0.8);
       float upwind = smoothstep(0.25, 0.85, CloudNoise(float3(tu * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3))) *
                      smoothstep(0.55, 0.78, CloudNoise(float3(tu * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));
-      cover = max(cover * (1 - cloudLight.w), cloudLight.w * max(max(cell, upwind), StormDeckCover(q)));
+      cover = max(cover * (1 - cloudLight.w), cloudLight.w * max(max(max(cell, upwind), StormDeckCover(q)), StormBlanket(q)));
     }
     coverOut[id.xy] = cover;
     return;
@@ -203,12 +214,17 @@ float4 CloudShape(float3 p, float3 wind, float mix, float bigAtLeast = 0) {
 // base for every cell; a column that widens upward (a place belongs to it once its strength passes a bar that falls with
 // height), bulging where the big shapes heap (`bulge`); its top the higher the stronger the heart (domes); and on the
 // strongest cells an anvil: the top flattened and spread wide, thinner. 0..1.
-float StormCell(float strength, float h, float bulge, float big) {
+float StormCell(float strength, float blanket, float h, float bulge, float big) {
   float c = strength + bulge;
   float bar = lerp(0.62, 0.3, saturate(h / 0.75));                       // (narrow at the base, wider up)
   float top = 0.35 + 0.6 * smoothstep(0.3, 0.95, strength);              // (the heart rises highest)
   top = lerp(top, 0.9, big * smoothstep(0.3, 0.8, strength));            // (the strongest up to where their anvil spreads)
-  return saturate((c - bar) * 2.5) * saturate((top - h + bulge * 0.4) * 5) * saturate(h * 40);
+  float tower = saturate((c - bar) * 2.5) * saturate((top - h + bulge * 0.4) * 5) * saturate(h * 40);
+  // [stormcells] (section 99) rolled out: the blanket, its flat base level with the cells', its top heaving with the lumps
+  // and higher where a cell was (some heft left, not a flat sheet); the towers only where the cells were strongest
+  float roof = 0.22 + 0.2 * strength + bulge * 0.5;
+  float sheet = saturate((blanket + bulge * 0.4 - 0.1) * 1.6) * saturate((roof - h) * 6) * saturate(h * 40);
+  return max(sheet, tower * smoothstep(0.75, 0.95, strength));
 }
 // [stormcells] (visuals' section 97, Chris: "Spread them from the tops") A strong cell's anvil: from its column's top (some
 // 0.8 of the layer up) to the ceiling, the top flattening and spreading out, the higher the farther downwind (the place is
@@ -226,13 +242,15 @@ float StormAnvil(float3 p, float h) {
   // (wider than the column: the cell's field read lower; thinner toward its far edge and its top)
   float reach = smoothstep(0.15, 0.55, CloudNoise(float3(tu * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
   float sheet = smoothstep(0.8, 0.84, h) * (1 - smoothstep(0.93, 0.99, h));
-  return big * reach * sheet * lerp(0.7, 0.3, t);
+  return big * reach * sheet * lerp(1.0, 0.5, t);  // ([stormcells] section 99: dense enough to be grey underneath)
 }
 // The broken upper deck as a sheet in the anvils' height, thin and lighter (StormDeckCover)
 float StormDeck(float3 p, float h) {
   float sheet = smoothstep(0.8, 0.85, h) * (1 - smoothstep(0.92, 0.98, h));
   [branch] if (sheet <= 0) return 0;
-  return StormDeckCover(p.xz) * sheet * 0.35;
+  // ([stormcells] section 99: grey underneath, not lighter than the sky; only over the blanket, so that its gaps are gaps all
+  // the way up and the sun comes through them)
+  return StormDeckCover(p.xz) * StormBlanket(p.xz) * sheet * 0.65;
 }
 
 // How much cloud there is at a place, `h` its height in the layer (0 underside .. 1 top). `frayed`: with
@@ -256,10 +274,11 @@ float Cloud(float3 p, float h, bool frayed) {
     float2 pp = (p.xz + skyClouds.yz) * 0.004;
     float2 turned = float2(pp.x * 0.6 + pp.y * 0.8, pp.y * 0.6 - pp.x * 0.8);
     float strength = smoothstep(0.42, 0.85, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
+    float blanket = StormBlanket(p.xz);  // ([stormcells] section 99: the cells rolled out)
     float big = smoothstep(0.62, 0.8, CloudNoise(float3(turned * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));  // (the big cells)
     // (cauliflower: the big shapes' heaps and their Worley lumps, the finer the higher)
     float lumps = (s.r - 0.5) * 0.35 + (low - 0.5) * 0.5;
-    float body = StormCell(strength, h, lumps, big), high = max(StormAnvil(p, h), StormDeck(p, h));
+    float body = StormCell(strength, blanket, h, lumps, big), high = 0;  // (section 99: the blanket is the cover now; the thin deck and the anvils over it showed as ribbons)
     d = lerp(d, max(body, high), storm);
     wisp = storm * saturate((high - body) * 60);  // (where the high sheet is what there is, its thin edges too)
   }
@@ -302,7 +321,7 @@ float Cloud(float3 p, float h, bool frayed) {
   if (id.x >= w || id.y >= h) return;
   float bottom = coverAt.z, thick = cloudUp.w;
   float3 sun = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
-  sun.y = max(sun.y, 0.2);
+  sun.y = max(sun.y, lerp(0.2, 0.85, cloudLight.w));  // ([stormcells] section 99: in a storm under the cover's own gaps, sun pockets)
   sun = normalize(sun);
   float3 p = float3(coverAt.x, bottom, coverAt.y) + float3(((id.xy + 0.5) / float2(w, h) - 0.5) / cloudSize.z, 0).xzy;
   float span = thick / sun.y, step = span / 8, through = 0;
@@ -587,9 +606,12 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   k.size[1] = static_cast<float>(height_);
   k.size[3] = haveLast_ ? std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 0.97f) : 0.0f;
   k.lastViewProj = lastViewProj_;
-  k.light[0] = sky.cloudSun.x;
-  k.light[1] = sky.cloudSun.y;
-  k.light[2] = sky.cloudSun.z;
+  {  // ([stormcells] section 99: in a storm two thirds of the sun on the clouds: the thin edges at the gaps glared white)
+    const float sunOn = 1 - 0.35f * std::clamp(storm, 0.0f, 1.0f);
+    k.light[0] = sky.cloudSun.x * sunOn;
+    k.light[1] = sky.cloudSun.y * sunOn;
+    k.light[2] = sky.cloudSun.z * sunOn;
+  }
   if (boltLight.x + boltLight.y + boltLight.z > 0) {  // a lightning's flash: in the layer, little of the frame before kept (it flickers)
     k.bolt[0] = boltAt.x;
     k.bolt[1] = boltAt.y;
