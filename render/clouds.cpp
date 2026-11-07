@@ -110,7 +110,19 @@ RWTexture2D<float> coverOut : register(u0);
   // have (view.h, CloudShadow: about the cover's share of the land under them), full in their middles, thinning over their
   // last few units (the broken field varies less than the field: CloudFrom's thresholds would leave few clouds)
   [branch] if (cloudDrift.x > 0.5) {
-    coverOut[id.xy] = saturate((CloudFieldBroken(q) - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);
+    // [cloudmix] (coverAt.w) less of the field's two finest sizes (some 50 and 20 units: the tiny puffs), more of the heaps
+    // and the wide patches, the weights still summing to 1 (the same share of the sky covered)
+    float field = CloudFieldBroken(q);
+    [branch] if (coverAt.w > 0) {
+      float2 p = (q + skyClouds.yz) * 0.004;
+      float t = skyClouds.w;
+      float2 turned = float2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
+      float2 again = float2(p.x * 0.28 + p.y * 0.96, p.y * 0.28 - p.x * 0.96);
+      float mixed = CloudNoise(float3(p * 0.45 + 17.3, t * 0.45 + 17.3)) * 0.36 + CloudNoise(float3(turned * 2.1 + 7.1, t + 7.1)) * 0.46 +
+                    CloudNoise(float3(again * 4.7 + 3.3, t * 1.2 + 3.3)) * 0.12 + CloudNoise(float3(turned.yx * 11.3 + 1.7, t * 1.5 + 1.7)) * 0.06;
+      field = lerp(field, mixed, saturate(coverAt.w));
+    }
+    coverOut[id.xy] = saturate((field - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);
     return;
   }
   coverOut[id.xy] = CloudFrom(CloudField(q));
@@ -138,6 +150,26 @@ float Phase(float c, float g) {
   return (1 - g2) / pow(max(1 + g2 - 2 * g * c, 1e-4), 1.5);
 }
 
+// [cloudmix] The shapes as the layer has them (Chris, 2026-11-06, after visuals' sheet of the weathers: "make the cloud
+// placement random vs lined up like troops and more varying in sizes"; coverAt.w, Clouds::mix): the shapes' noise turned
+// off the world's axes and shifted a little from place to place (its cube repeats every shapeSize, square and on the axes:
+// its heaps stood in rows toward the horizon), and in wide patches the same noise larger (bigger heaps among the small
+// ones), more of them the more the sky is clouded. coverAt.w 0: as before. Also the zoom's march (cloud_zoom.cpp).
+float4 CloudShape(float3 p, float3 wind, float mix) {
+  float3 q = (p + wind) * cloudLook.z;
+  [branch] if (mix <= 0) return shapeNoise.SampleLevel(samplerLinear, q, 0);
+  float4 region = shapeNoise.SampleLevel(samplerLinear, float3(q.x * 0.09 + 0.31, 0.47, q.z * 0.09 + 0.71), 0);
+  float2 warp = (region.gb - 0.5) * 0.5;
+  float2 xz = float2(q.x * 0.82 - q.z * 0.57, q.x * 0.57 + q.z * 0.82) / 1.2 + warp;  // (the heaps 1.2 times larger)
+  float4 s = shapeNoise.SampleLevel(samplerLinear, float3(xz.x, q.y / 1.2, xz.y), 0);
+  float big = smoothstep(0.2, 0.6, region.r) * saturate(0.35 + skyClouds.x) * mix;
+  [branch] if (big > 0.01) {
+    float2 bz = float2(q.x * 0.57 + q.z * 0.82, q.z * 0.57 - q.x * 0.82) / 3.0 + warp * 0.5 + 0.37;  // (three times)
+    s = lerp(s, shapeNoise.SampleLevel(samplerLinear, float3(bz.x, q.y / 3.0 + 0.19, bz.y), 0), saturate(big));
+  }
+  return s;
+}
+
 #ifdef RING
 #define Cloud CloudBeforeRing
 #endif
@@ -151,7 +183,7 @@ float Cloud(float3 p, float h, bool frayed) {
   // flat underneath, rounded at the top: the more cloud a place has, the higher it heaps
   float profile = saturate(h * 12) * saturate(Remap(h, 0.15 + 0.75 * cover, 1, 1, 0));
   float3 wind = float3(skyClouds.y, skyClouds.w * 40, skyClouds.z);
-  float4 s = shapeNoise.SampleLevel(samplerLinear, (p + wind) * cloudLook.z, 0);
+  float4 s = CloudShape(p, wind, coverAt.w);  // ([cloudmix])
   float low = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
   float shape = Remap(s.r, low - 1, 1, 0, 1) * profile;
   // (coverage only lets the shapes through: where they are low, a hole; their heaps make the outline)
@@ -530,6 +562,7 @@ static void FillConstants(void* to, const View& view, const Camera& camera, cons
   k.coverAt[0] = coverAt[0];
   k.coverAt[1] = coverAt[1];
   k.coverAt[2] = under;
+  k.coverAt[3] = std::max(clouds.mix, 0.0f);  // [cloudmix]
   k.ring[0] = clouds.ringX;  // (volume explosions: a nuke's ring, read by the ring's shaders only)
   k.ring[1] = clouds.ringZ;
   k.ring[2] = clouds.ringRadius;

@@ -149,6 +149,8 @@
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
+// --clouds-mix n  [cloudmix] the 3D clouds' heaps placed at random and of mixed sizes (1, the default; 0: in rows and of
+//           one size, as before; above 1 more big ones)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
 //           camera rises through the cloud layer as it zooms out, the clouds then lie below it, thinning the higher it is;
 //           --cloud-zoom-look name=value,... tunes it (CloudZoom's numbers, cloud_zoom.h: band, erode, keep, partErode,
@@ -989,6 +991,7 @@ struct Options {
   std::string plantLod;                // [plantlod] --plant-lod
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
+  float cloudsMix = -1;                 // [cloudmix] --clouds-mix
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   bool cloudZoom = false;               // --cloud-zoom (cloudzoom)
   std::string cloudZoomLook;             // --cloud-zoom-look
@@ -1373,6 +1376,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--movement-dust-test") o->movementDustTest = v;
     else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
     else if (a == "--timings-csv") o->timingsCsv = v, o->timings = true;  // [rbench]
+    else if (a == "--clouds-mix") o->cloudsMix = static_cast<float>(atof(v));  // [cloudmix]
     else if (a == "--fight-scan") o->fightScan = std::max(0, atoi(v));    // [rbench]
     else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
     else if (a == "--fx-blast") o->fx.blast = std::max(0.0f, static_cast<float>(atof(v)));
@@ -2326,6 +2330,7 @@ int main(int argc, char** argv) {
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
+  if (opt.cloudsMix >= 0) world.clouds.mix = opt.cloudsMix;  // [cloudmix]
   if (opt.photoLook) {  // (photolook)
     std::string why;
     world.photoLook.on = true;
