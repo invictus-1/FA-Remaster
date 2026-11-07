@@ -295,6 +295,8 @@
 //           at them close and to time many
 // --debris-show <unit>  the debris's library of shapes (debris_shapes.h) laid out in two rows over where the camera starts,
 //           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
+// --debris-dir <folder>  [bakeddebris] with --debris: units' baked death debris from a trial folder (baked_debris.h): its
+//           <ID>_debris.scm and <ID>_debris_<style>.json take the place of those beside the unit's remastered export
 // --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
 //           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
 //           a puff of rock dust; the rock darkens with soot and cracks as the hits add up (with --fx-shot, --fx-hit prop and
@@ -907,6 +909,7 @@ struct Options {
   int debrisMost = -1;                  // --debris-most
   bool rockHits = false;                // [rockhits] --rock-hits
   std::string debrisTest, debrisShow;   // --debris-test, --debris-show
+  std::string debrisDir;                // [bakeddebris] --debris-dir
   float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
   bool movementDust = false;            // --movement-dust
@@ -1389,6 +1392,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--exhaust-tune") sscanf(v, "%f,%f,%f", &o->exhaustTune[0], &o->exhaustTune[1], &o->exhaustTune[2]);
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
     else if (a == "--debris-show") o->debrisShow = v;
+    else if (a == "--debris-dir") o->debrisDir = v;  // [bakeddebris]
     else if (a == "--debris-test") {
       const std::string all = v;
       const size_t comma = all.find(',');
@@ -1842,6 +1846,9 @@ void MountGameFiles(const Options& o, moho::Vfs* vfs) {
     if (eq == std::string::npos || !vfs->Mount(p.substr(eq + 1), "/wear-art/" + id))
       fprintf(stderr, "render: --wear-art %s: expected <unit id>=<existing folder>\n", p.c_str());
   }
+  // [bakeddebris] --debris-dir <folder>: units' baked death debris from a trial folder (BakedDebris looks there first)
+  if (!o.debrisDir.empty() && !vfs->Mount(o.debrisDir, "/debris-trial"))
+    fprintf(stderr, "render: --debris-dir %s: expected an existing folder\n", o.debrisDir.c_str());
 }
 
 void DrawTestScene(DebugDraw& draw) {
@@ -4780,6 +4787,9 @@ int main(int argc, char** argv) {
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
                world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
+      if (world.blastDebris && world.debris.baked.played + world.debris.baked.refused > 0)  // [bakeddebris]
+        printf("; baked debris: %d deaths played, %d left to the chunks (too many in flight), %d sets lying", world.debris.baked.played,
+               world.debris.baked.refused, world.debris.baked.Sets());
       if (world.rockHits)  // [rockhits]
         printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
                world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());

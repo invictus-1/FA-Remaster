@@ -146,6 +146,9 @@ struct ModelLod {
   // that pass reads for the ribbon's shape.
   int stream = 0;
   std::string streamMesh;
+  // [bakeddebris] A unit's baked death debris (ModelCache::DebrisChunks, baked_debris.h): its second texture coordinates' u is
+  // its heat mask (where its metal is cut or molten, 0..1), and its normal map lies on its first, as its other textures do.
+  bool heatMask = false;
 };
 
 struct HitShape;  // (unit_wear.h)
@@ -307,6 +310,11 @@ class ModelCache {
   // unit's files): drawn as painted - its own colours, no team colour, no glow, no lamps, not swaying - at the scale
   // whoever places it gives (a dead unit's wreck: its prop's). Null where the unit has none (then Wreck's burnt look).
   const Model* RemasteredWreck(const std::string& blueprintId);
+  // [bakeddebris] A unit's baked death debris (baked_debris.h): the visuals track's chunks of the unit's real parts, the mesh
+  // file `meshPath` (one bone a chunk), worn in the unit's own remastered textures (the chunks keep its finest level's
+  // texture places), drawn at the unit's scale, its heat mask lit (ModelLod::heatMask). Made once; null where the file
+  // cannot be read or the unit is not drawn remastered (its textures would not fit).
+  const Model* DebrisChunks(const std::string& blueprintId, const std::string& meshPath);
   // A unit's own look for its personal shield (from its blueprint file, read once; see PersonalShieldLook).
   const PersonalShieldLook& PersonalShield(const std::string& blueprintId);
   // [wakes] Whose a unit is, for the faction's own effects in the remastered look (effect_files.h): by its id where

@@ -499,6 +499,52 @@ const Model* ModelCache::RemasteredWreck(const std::string& blueprintId) {
   return m;
 }
 
+// [bakeddebris] (models.h) One level: the chunks' mesh on its own bones (one a chunk, every vertex on its chunk's), each bone's
+// box at rest kept (Model::boneBoxes: how far a chunk reaches from its middle), the unit's finest level's textures and material.
+const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std::string& meshPath) {
+  const std::string id = Lower(blueprintId);
+  const std::string name = "debris:" + id + ":" + moho::Vfs::Normalize(meshPath);
+  auto it = models_.find(name);
+  if (it != models_.end()) return it->second.get();
+  models_.emplace(name, nullptr);  // (none until made: asked once)
+  const Model* unit = Unit(id);
+  if (!unit || !unit->ok || unit->lods.empty() || !unit->lods[0].labPbr) {
+    fprintf(stderr, "render: %s: its baked debris %s is not used: the unit is not drawn remastered\n", id.c_str(), meshPath.c_str());
+    return nullptr;
+  }
+  std::optional<std::string> file = vfs_->ReadFile(meshPath);
+  if (!file) return nullptr;
+  auto m = std::make_unique<Model>();
+  ReadScmBones(*file, &m->bones);
+  ModelLod lod;
+  lod.serial = NextLodSerial();
+  std::string error;
+  if (m->bones.empty() || !LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes)) {
+    fprintf(stderr, "render: %s: %s\n", meshPath.c_str(), m->bones.empty() ? "no bones (one a chunk is needed)" : error.c_str());
+    return nullptr;
+  }
+  const ModelLod& like = unit->lods[0];
+  lod.albedo = like.albedo;
+  lod.normals = like.normals;
+  lod.specular = like.specular;
+  lod.secondary = like.secondary;
+  lod.wearMasks = like.wearMasks;
+  lod.labPbr = like.labPbr;
+  lod.plainMaterial = like.plainMaterial;
+  lod.teamMask = like.teamMask;
+  lod.faction = like.faction;
+  lod.shaderName = like.shaderName;
+  lod.cutoff = like.cutoff;
+  lod.heatMask = true;
+  m->lods.push_back(std::move(lod));
+  m->scale = unit->scale;
+  m->ok = true;
+  Model* made = m.get();
+  models_[name] = std::move(m);
+  printf("render: %s: baked debris, %zu chunks, %u triangles (%s)\n", id.c_str(), made->bones.size(), made->lods[0].indexCount / 3, meshPath.c_str());
+  return made;
+}
+
 bool ModelCache::Remastered(const std::string& blueprintId) const {
   const std::string id = Lower(blueprintId);
   return vfs_->Exists("/preview/" + id + "/" + id + "_lod0.scm") || vfs_->Exists("/mods/labvisuals/textures/" + id + "/" + id + "_lab_albedo.dds");
