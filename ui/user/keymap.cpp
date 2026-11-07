@@ -316,7 +316,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour", "remaster_scorch",
         "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
-        "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds"};
+        "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -388,17 +388,17 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[31] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+  const char* names[32] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
                            "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
                            "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour", "softScorch",
                            "oceanGlitter", "shoreSoak", "remasteredGate", "ghostLook", "guideOverGrass", "cloakLook", "stealthLook",
-                           "seaSparkle", "unitDetail", "cloudMix", "stormCells"};
-  const bool values[31] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                           "seaSparkle", "unitDetail", "cloudMix", "stormCells", "starryNight"};
+  const bool values[32] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
                            looks.softScorch, looks.oceanGlitter, looks.shoreSoak, looks.remasteredGate, looks.ghostLook,
-                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudMix, looks.stormCells};
+                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudMix, looks.stormCells, looks.starryNight};
   lua_pushstring(L, "shieldBend");
   lua_pushnumber(L, looks.shieldBend);
   lua_rawset(L, -3);
@@ -1455,7 +1455,8 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         key == "REMASTER_OCEAN_GLITTER" || key == "REMASTER_SHORE_SOAK" || key == "REMASTER_GATEWAY" ||
         key == "REMASTER_GHOST_LOOK" || key == "REMASTER_GUIDE" || key == "REMASTER_CLOAK_LOOK" ||
         key == "REMASTER_STEALTH_VEIL" || key == "REMASTER_SEA_SPARKLE" || key == "REMASTER_UNIT_DETAIL" ||
-        key == "REMASTER_CLOUD_LAYOUT" || key == "REMASTER_STORM_CLOUDS") {  // (the renderer's switches: 0 off, 1 on)
+        key == "REMASTER_CLOUD_LAYOUT" || key == "REMASTER_STORM_CLOUDS" ||
+        key == "REMASTER_NIGHT_SKY") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
                  : key == "REMASTER_RAY_TRACING"      ? looks.rayTracing
@@ -1477,6 +1478,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_UNIT_DETAIL"      ? looks.unitDetail
                  : key == "REMASTER_CLOUD_LAYOUT"     ? looks.cloudMix
                  : key == "REMASTER_STORM_CLOUDS"     ? looks.stormCells
+                 : key == "REMASTER_NIGHT_SKY"        ? looks.starryNight
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
