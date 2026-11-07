@@ -737,9 +737,10 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       packed = deepTrack.x * thick * 0.85;
       occlusion *= 1 - 0.45 * deepTrack.x * deepTrack.z * lying;
       trackTilt = (-deepSlope.xy + 0.8 * deepSlope.zw) * (0.13 * lying * deepTrack.z);  // ([dents] the snow holds them deeper: 0.1 before)
-      // [dents] a shell's hole (deepDent: its slope as the snow holds it, how much is a hole, how much earth was thrown
-      // over the snow): much of the snow blown out of its bowl, its relief the snow's own
-      lying = saturate(lying * (1 - 0.85 * deepDent.z));
+      // [dents] a shell's hole (deepDent: its slope as the snow holds it, how much is a hole, how much soil was thrown out
+      // round it): the snow blown out of its bowl down to the earth, a few clumps of it left; its relief the snow's own
+      float clumps = smoothstep(0.62, 0.8, CloudNoise(float3(world.xz * 3.1, 7.3)));
+      lying = saturate(lying * (1 - deepDent.z * (1 - 0.55 * clumps)));
       trackTilt += deepDent.xy * lying;
     }
 #endif
@@ -755,7 +756,17 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
 #endif
     if (any(trackTilt != 0)) N = normalize(N - float3(trackTilt.x, 0, trackTilt.y));
     if (packed > 0) albedo = lerp(albedo, SNOW_PACKED, packed * lying);
-    if (deepDent.w > 0) albedo = lerp(albedo, albedo * float3(0.42, 0.36, 0.3), deepDent.w * lying);  // [dents] (the earth a hole threw over the snow)
+    // [dents] (a hole's bowl in lying snow: dark churned earth, a little wet, where the snow was blown out of it; round its
+    // lip the thrown soil over the snow, dark specks thinning outward, a faint dirtying between them. As falling snow fills
+    // the hole, its earth and soil go under the snow with it.)
+    [branch] if (deepDent.z + deepDent.w > 0.002) {
+      float3 earth = float3(0.075, 0.055, 0.04) * (0.75 + 0.5 * CloudNoise(float3(world.xz * 1.7, 2.2)));
+      float bare = deepDent.z * (1 - lying);
+      albedo = lerp(albedo, earth, saturate(bare * 1.3));
+      roughness = lerp(roughness, 0.55, bare);
+      float specks = smoothstep(1 - 0.5 * deepDent.w, 1.06 - 0.5 * deepDent.w, CloudNoise(float3(world.xz * 6.3, 3.9)) * 0.7 + CloudNoise(float3(world.xz * 17, 5.1)) * 0.3);
+      albedo = lerp(albedo, earth * 1.4, saturate(specks * 0.85 + 0.12 * deepDent.w) * lying);
+    }
 #endif
     metallic *= 1 - lying;
     roughness = lerp(roughness, SNOW_ROUGH, lying);

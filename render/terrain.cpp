@@ -407,7 +407,8 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
         float climb = -here * 1.4 * j / 5;
         most = max(most, TrackTap(lv, xz + toSun * climb).z * lit - (here + climb));
       }
-      deepShade = lerp(1, saturate(1 - most / (0.2 * -here + 0.01)), seen);
+      // (on a snowy day a quarter of the sun kept: the light off the walls round it; the blue of the sky's a tint)
+      deepShade = lerp(1, saturate(1 - most / (0.2 * -here + 0.01)), lerp(1, 0.75, saturate(weather.y * 2)) * seen);
     }
   }
   // pressed smooth: its colour and small shapes toward the average and the ground's own slope
@@ -447,10 +448,10 @@ void DeepTracksOn(float2 xz, float2 stepX, float2 stepY, float4 low, float4 high
     MudInRuts(xz, stepX, stepY, base, saturate(kA.y), max(t, pit), q, wet, g, dark, darkened, worn, open, albedo, N, roughness, creases);
   deepTrack = float4(t, q, relief, 1);
   deepSlope = slope * relief;
-  // [dents] for the lying snow (lighting.h): the holes' slope as the snow holds them, how much is a hole, how much of the
-  // earth thrown out darkens it
-  float pitRaw = smoothstep(0, 0.3, -holeRaw), heapRaw = saturate(holeRaw / 0.05);
-  deepDent = float4(dent.yz * seen, pitRaw, 0.7 * pitRaw + 0.35 * heapRaw);
+  // [dents] for the lying snow (lighting.h): the holes' slope as the snow holds them, how much is a hole, how much soil was
+  // thrown out over it
+  float pitRaw = smoothstep(0, 0.1, -holeRaw), heapRaw = saturate(holeRaw / 0.05);
+  deepDent = float4(dent.yz * seen, pitRaw, heapRaw);
   if (tracksInfo.w > 1.5) albedo = float3(t + pitRaw, q + heapRaw, relief * 0.5);  // (MOHO64_DEBUG_TRACKS=3; [dents] the holes red, their lips green)
 }
 #endif
