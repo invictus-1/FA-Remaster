@@ -1553,8 +1553,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const float top = foot.y + 150, wide = std::max(0.3f, placing.distance * 0.009f);
       Vec3 from{foot.x + (WeatherDraw(weatherSeed, stroke, 79) - 0.5f) * 40, top, foot.z + (WeatherDraw(weatherSeed, stroke, 83) - 0.5f) * 40};
       // (the volumetric clouds lit from within where the bolt leaves them, a little up in the layer)
-      clouds.boltAt = Vec3{from.x, clouds.Underside(camera.Eye().y) + clouds.thickness * 0.3f, from.z};  // (cloudzoom: where the march has the layer)
-      clouds.boltReach = clouds.thickness * 0.9f;
+      clouds.boltAt = Vec3{from.x, clouds.Underside(camera.Eye().y) + clouds.Thick() * 0.3f, from.z};  // (cloudzoom: where the march has the layer)
+      clouds.boltReach = clouds.Thick() * 0.9f;
       clouds.boltLight = Vec3{0.8f, 0.86f, 1.0f} * (flash * 8 / skyLight.exposure);
       const int pieces = 18;
       for (int k = 1; k <= pieces; ++k) {
@@ -1597,7 +1597,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       Vec3 at, glow;
       float reach = 0;
       if (clouds.boltLight.x + clouds.boltLight.y + clouds.boltLight.z <= 0 && volumes.CloudFlash(clock, &at, &reach, &glow)) {
-        clouds.boltAt = Vec3{at.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.thickness * 0.15f, at.z};
+        clouds.boltAt = Vec3{at.x, std::max(clouds.base, camera.Eye().y + 40) + clouds.Thick() * 0.15f, at.z};
         clouds.boltReach = reach;
         clouds.boltLight = glow * (1 / skyLight.exposure);
       }
@@ -4004,6 +4004,10 @@ void World::Render() {
   // (sky) and with it on, the layer lifted by the map's size (CloudZoom::Place)
   cloudZoomDraw.Place(&clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_, static_cast<float>(map.width), static_cast<float>(map.height));
   clouds.zoom = cloudZoomDraw.For(camera, clouds, cloudZoom && volumetricClouds && look == Look::Modern && haveMap_);
+  {  // [stormcells] the storm the clouds show: rain over 0.6 (a rain spell's is 0.5, a storm's 1)
+    const float s = std::clamp((rain - 0.6f) / 0.35f, 0.0f, 1.0f);
+    clouds.storm = stormCells ? s * s * (3 - 2 * s) : 0.0f;
+  }
   if (sidePicture) clouds.Skip(&view);  // (a frame for something else: the game's frames before kept)
   else clouds.Prepare(&view, camera, volumetricClouds && look == Look::Modern && haveMap_);
   // [sunlight] the drifting cloud shadows' picture (sunlight.h), in the clouds' own shadows' place from here on

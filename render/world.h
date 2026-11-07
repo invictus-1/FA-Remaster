@@ -1361,6 +1361,7 @@ class World {
   // to the scene's brightness, a film-like colour grade (named: film, warm, coldwar, plain) and lens touches (vignette,
   // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
   PhotoLook photoLook;
+  bool stormCells = true;  // [stormcells] a storm's clouds in towering cells (clouds.h, Clouds::storm); off: as before
   PhotoFinish photoFinish;
   // [horizon] The weather on the horizon (horizon.h; Chris, 2026-10-18, "beyond the map's edge, part 2"): on the sea
   // beyond the map's edge, winter ice while snow lies (floes thickening into pack ice, a few icebergs far out), low

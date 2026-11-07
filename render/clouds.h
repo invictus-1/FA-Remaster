@@ -66,6 +66,11 @@ class Clouds {
   // [cloudmix] the heaps placed at random and of mixed sizes (clouds.cpp, CloudShape; Chris 2026-11-06); 0: in rows, of
   // one size, as before; above 1 more of the big ones
   float mix = 1;
+  // [stormcells] how much of a storm there is (0..1; the world sets it from the rain: World::rain over 0.6): a few wide,
+  // towering cells with dark flat bases, fewer heaps between (visuals' section 94, Chris 2026-11-06); the layer up to 4
+  // times as thick (Thick) and 1.6 times as dense
+  float storm = 0;
+  float Thick() const { return std::max(thickness, 1.0f) * (1 + 3.0f * std::clamp(storm, 0.0f, 1.0f)); }
   // A storm's lightning, set by the world each frame: where its flash is in the layer (where the bolt leaves the
   // clouds), how far its light spreads through them, and its light (0: no flash). It lights them from within.
   Vec3 boltAt{0, 0, 0};

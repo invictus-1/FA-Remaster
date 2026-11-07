@@ -151,6 +151,7 @@
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
 // --clouds-mix n  [cloudmix] the 3D clouds' heaps placed at random and of mixed sizes (1, the default; 0: in rows and of
 //           one size, as before; above 1 more big ones)
+// --no-storm-cells  [stormcells] a storm's 3D clouds as before (not in a few towering cells with dark bases)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
 //           camera rises through the cloud layer as it zooms out, the clouds then lie below it, thinning the higher it is;
 //           --cloud-zoom-look name=value,... tunes it (CloudZoom's numbers, cloud_zoom.h: band, erode, keep, partErode,
@@ -992,6 +993,7 @@ struct Options {
   float sunSize = -1;                   // (its size, when given)
   bool clouds3d = false;                // --clouds-3d
   float cloudsMix = -1;                 // [cloudmix] --clouds-mix
+  bool stormCells = true;               // [stormcells] --no-storm-cells
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   bool cloudZoom = false;               // --cloud-zoom (cloudzoom)
   std::string cloudZoomLook;             // --cloud-zoom-look
@@ -1270,6 +1272,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
+    else if (a == "--no-storm-cells") o->stormCells = false;  // [stormcells]
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
@@ -2331,6 +2334,7 @@ int main(int argc, char** argv) {
   world.volumetricClouds = opt.clouds3d;
   if (opt.cloudsFull) world.clouds.shrink = 1;
   if (opt.cloudsMix >= 0) world.clouds.mix = opt.cloudsMix;  // [cloudmix]
+  world.stormCells = opt.stormCells;  // [stormcells]
   if (opt.photoLook) {  // (photolook)
     std::string why;
     world.photoLook.on = true;
