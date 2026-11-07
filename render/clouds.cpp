@@ -130,7 +130,12 @@ RWTexture2D<float> coverOut : register(u0);
       float2 turned = float2(p.x * 0.6 + p.y * 0.8, p.y * 0.6 - p.x * 0.8);
       // (where a cell or its anvil may be, StormCell; nothing between the cells: no scraps)
       float cell = smoothstep(0.25, 0.85, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
-      cover = max(cover * (1 - cloudLight.w), cloudLight.w * cell);
+      float2 up = q - float2(0.915, 0.403) * 700;  // (an anvil reaches downwind of its cell: StormAnvil)
+      float2 pu = (up + skyClouds.yz) * 0.004;
+      float2 tu = float2(pu.x * 0.6 + pu.y * 0.8, pu.y * 0.6 - pu.x * 0.8);
+      float upwind = smoothstep(0.25, 0.85, CloudNoise(float3(tu * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3))) *
+                     smoothstep(0.62, 0.8, CloudNoise(float3(tu * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));
+      cover = max(cover * (1 - cloudLight.w), cloudLight.w * max(cell, upwind));
     }
     coverOut[id.xy] = cover;
     return;
@@ -188,16 +193,30 @@ float4 CloudShape(float3 p, float3 wind, float mix, float bigAtLeast = 0) {
 // base for every cell; a column that widens upward (a place belongs to it once its strength passes a bar that falls with
 // height), bulging where the big shapes heap (`bulge`); its top the higher the stronger the heart (domes); and on the
 // strongest cells an anvil: the top flattened and spread wide, thinner. 0..1.
-float StormCell(float strength, float h, float bulge, float wide) {
+float StormCell(float strength, float h, float bulge, float big) {
   float c = strength + bulge;
   float bar = lerp(0.62, 0.3, saturate(h / 0.75));                       // (narrow at the base, wider up)
   float top = 0.35 + 0.6 * smoothstep(0.3, 0.95, strength);              // (the heart rises highest)
-  float body = saturate((c - bar) * 2.5) * saturate((top - h + bulge * 0.4) * 5) * saturate(h * 40);
-  // the anvil: a sheet just under the top of a strong cell's column, out to some 1.6 times its width
-  float anvilAt = 0.62 + 0.3 * wide;
-  float sheet = smoothstep(anvilAt - 0.1, anvilAt - 0.03, h) * (1 - smoothstep(anvilAt + 0.02, anvilAt + 0.07, h));
-  float anvil = sheet * smoothstep(0.66, 0.82, wide) * saturate((strength + bulge * 0.5 - 0.2) * 4) * 0.45;
-  return max(body, anvil);
+  top = lerp(top, 0.9, big * smoothstep(0.3, 0.8, strength));            // (the strongest up to where their anvil spreads)
+  return saturate((c - bar) * 2.5) * saturate((top - h + bulge * 0.4) * 5) * saturate(h * 40);
+}
+// [stormcells] (visuals' section 97, Chris: "Spread them from the tops") A strong cell's anvil: from its column's top (some
+// 0.8 of the layer up) to the ceiling, the top flattening and spreading out, the higher the farther downwind (the place is
+// read kStormAnvilReach x how high upwind: a wedge leaning with the wind), thin and lighter, fading at its far edge.
+static const float2 kStormDownwind = float2(0.915, 0.403);  // (the clouds' drift: skyClouds' y and z rates)
+static const float kStormAnvilReach = 700;
+float StormAnvil(float3 p, float h, float bulge) {
+  float t = saturate((h - 0.8) / 0.17);
+  [branch] if (t <= 0) return 0;
+  float2 up = p.xz - kStormDownwind * (kStormAnvilReach * t);
+  float2 pu = (up + skyClouds.yz) * 0.004;
+  float2 tu = float2(pu.x * 0.6 + pu.y * 0.8, pu.y * 0.6 - pu.x * 0.8);
+  float big = smoothstep(0.62, 0.8, CloudNoise(float3(tu * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));
+  [branch] if (big <= 0) return 0;
+  // (wider than the column: the cell's field read lower; thinner toward its far edge and its top)
+  float reach = smoothstep(0.25, 0.6, CloudNoise(float3(tu * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)) + bulge * 0.2);
+  float sheet = smoothstep(0.8, 0.84, h) * (1 - smoothstep(0.93, 0.99, h));
+  return big * reach * sheet * lerp(0.7, 0.3, t);
 }
 
 // How much cloud there is at a place, `h` its height in the layer (0 underside .. 1 top). `frayed`: with
@@ -221,10 +240,10 @@ float Cloud(float3 p, float h, bool frayed) {
     float2 pp = (p.xz + skyClouds.yz) * 0.004;
     float2 turned = float2(pp.x * 0.6 + pp.y * 0.8, pp.y * 0.6 - pp.x * 0.8);
     float strength = smoothstep(0.42, 0.85, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
-    float wide = CloudNoise(float3(turned * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1));  // (which cells are the big ones)
+    float big = smoothstep(0.62, 0.8, CloudNoise(float3(turned * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));  // (the big cells)
     // (cauliflower: the big shapes' heaps and their Worley lumps, the finer the higher)
     float lumps = (s.r - 0.5) * 0.35 + (low - 0.5) * 0.5;
-    d = lerp(d, StormCell(strength, h, lumps, wide), storm);
+    d = lerp(d, max(StormCell(strength, h, lumps, big), StormAnvil(p, h, lumps)), storm);
   }
   if (!frayed || d <= 0) return d;
   float3 e = detailNoise.SampleLevel(samplerLinear, (p + wind * 1.4) * cloudLook.w, 0).rgb;
