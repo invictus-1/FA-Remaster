@@ -384,7 +384,9 @@ class WorldPicture {
   // The cinematics' and the score screen's switches (gamemain.lua, NIS mode), each on at first:
   // the strategic icons (UI_NisRenderIcons; the minimap keeps its own), the selection's and the
   // mouse's brackets (ren_SelectBoxes), and the world itself (ren_Oblivion: off = Draw and
-  // DrawToWindow show black under the interface; the game goes on underneath, its effects too).
+  // DrawToWindow show black under the interface; the game goes on underneath). [heldworld] (the interface's request 45
+  // R2) Off, nothing of the world is made ready to draw (15-30 ms a frame on a 4v4 before): of what the game says
+  // meanwhile only what lasts is kept (scenery knocked down, ground laid flat); effects and hits of the moment are let go.
   void SetStrategicIcons(bool on);
   void SetSelectionMarks(bool on);
   void SetWorldShown(bool on);
