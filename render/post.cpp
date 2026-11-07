@@ -338,7 +338,7 @@ void Post::KeepOpaque() {
   keptOpaque_ = true;
 }
 
-gfx::Texture Post::Reactive() {
+gfx::Texture Post::Reactive(const std::function<void()>& more) {
   if (!keptOpaque_ || !reactiveMask_) return {};
   if (!reactive_) {
     gfx::TargetDesc td;
@@ -357,6 +357,7 @@ gfx::Texture Post::Reactive() {
   device_->Draw(3);
   device_->SetTexture(0, {});
   device_->SetTexture(1, {});
+  if (more) more();
   keptOpaque_ = false;
   return reactive_;
 }

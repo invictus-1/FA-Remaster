@@ -4447,7 +4447,7 @@ void World::Render() {
     outlines.Masks(&meshes, screenView_, post.Depth(), view.width, view.height, camera.zNear, temporalNow_);
   }
   Stage("finishing (exposure, bloom)");
-  post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive() : motion.Check(motionView, view, post.Color());
+  post.shown = !meshes.motion ? gfx::Texture{} : motionView == 5 ? post.Reactive([&] { falling.DrawReactive(view); }) : motion.Check(motionView, view, post.Color());
   if (rayView && rays.Available() && !post.shown) {  // the ray tracing scene's check view (RaysReady above)
     Stage("ray tracing check view");
     lights.Bind();
@@ -4457,7 +4457,7 @@ void World::Render() {
     Stage("temporal upscale (FSR 3)");
     Fsr3::Inputs in;
     in.motion = motion.Texture();
-    in.reactive = post.Reactive();
+    in.reactive = post.Reactive([&] { falling.DrawReactive(view); });  // ([rainreactive])
     in.jitterX = motion.jitterX;
     in.jitterY = motion.jitterY;
     in.exposure = view.constants.look > 0.5f ? view.constants.modern[2] : 1.0f;

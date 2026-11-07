@@ -44,7 +44,7 @@ class Post {
   // all of it is drawn, makes the mask of where what came after (smoke, sparks, beams: what has no motion
   // of its own) changed the picture, and how much (R8, the scene's size; none without KeepOpaque).
   void KeepOpaque();
-  gfx::Texture Reactive();
+  gfx::Texture Reactive(const std::function<void()>& more = {});  // ([rainreactive] `more`: drawn into the mask after it)
   // Begins a pass into what KeepOpaque kept, keeping what is there (false: nothing kept): for what darkens
   // the picture where it stands still (the fog of war), drawn there too, so that the reactive mask does not
   // take it for something that moves. ContinueScene afterwards.

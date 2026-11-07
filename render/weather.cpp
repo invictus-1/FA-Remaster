@@ -138,14 +138,22 @@ VOut VS(uint id : SV_VertexID) {
   return o;
 }
 
+float Soft(VOut i) {
+  return velocity.w > 0 ? (1 - abs(i.across.x)) * saturate(i.across.y * 4) * saturate((1 - i.across.y) * 1.5)
+                        : saturate(1 - length(float2(i.across.x, i.across.y * 2 - 1)));
+}
 float4 PS(VOut i) : SV_Target {
-  float soft = velocity.w > 0 ? (1 - abs(i.across.x)) * saturate(i.across.y * 4) * saturate((1 - i.across.y) * 1.5)
-                              : saturate(1 - length(float2(i.across.x, i.across.y * 2 - 1)));
+  float soft = Soft(i);
 #if LIT
   return float4(i.light, tint.a * shape.z * i.fade * soft * i.cover);
 #else
   return float4(tint.rgb, tint.a * shape.z * i.fade * soft);
 #endif
+}
+// [rainreactive] into the temporal upscaler's reactive mask (Post::Reactive): toward 0.9 by how much the drop covers, four
+// times its own cover (a drop is faint: 0.2 at most), so that FSR 3 takes the drop from this frame
+float4 ReactivePS(VOut i) : SV_Target {
+  return float4(0.9, 0, 0, saturate(tint.a * shape.z * i.fade * Soft(i) * 4));
 }
 )hlsl";
 
@@ -521,6 +529,38 @@ bool Precipitation::Init(std::string* error) {
 }
 
 void Precipitation::Draw(const View& view, const Camera& camera, float rain, float snow, bool lit) {
+  // ([rainreactive] what DrawReactive draws again)
+  drawn_ = (rain > 0 || snow > 0) && view.height > 0;
+  drawnCamera_ = camera;
+  drawnRain_ = rain;
+  drawnSnow_ = snow;
+  Fall(view, camera, rain, snow, lit, false);
+}
+
+void Precipitation::DrawReactive(const View& view) {
+  if (!drawn_) return;
+  drawn_ = false;
+  if (!reactiveTried_) {
+    reactiveTried_ = true;
+    gfx::PipelineDesc pd;
+    std::string source = std::string(kViewShaderBlock) + kShader;
+    pd.name = "precipitation, into the reactive mask";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.pixelEntry = "ReactivePS";
+    pd.cull = gfx::Cull::None;
+    pd.depthTest = pd.depthWrite = false;
+    pd.blend = gfx::Blend::Alpha;
+    pd.colorFormat = gfx::Format::R8;
+    pd.samples = 1;
+    pd.alphaWrite = false;
+    std::string why;
+    reactivePipeline_ = device_->CreatePipeline(pd, &why);
+    if (!reactivePipeline_) fprintf(stderr, "render: rain and snow cannot mark the upscaler's reactive mask (%s)\n", why.c_str());
+  }
+  if (reactivePipeline_) Fall(view, drawnCamera_, drawnRain_, drawnSnow_, false, true);
+}
+
+void Precipitation::Fall(const View& view, const Camera& camera, float rain, float snow, bool lit, bool reactive) {
   if ((rain <= 0 && snow <= 0) || view.height <= 0) return;
   if (lit && !litTried_) {  // (the lit shader the first time it is wanted; where it cannot be made, unlit as before)
     litTried_ = true;
@@ -535,7 +575,7 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
                           c.skyZenith[2] * 0.6f + c.skyHorizon[2] * 0.6f};
   const float edge = std::clamp(camera.distance * 1.6f, 30.0f, 900.0f);
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height) * pixelScale;  // (photofix: the window's pixel)
-  device_->SetPipeline(lit ? litPipeline_ : pipeline_);
+  device_->SetPipeline(reactive ? reactivePipeline_ : lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
   // `low`: the lit drops' layer near the ground (seen only where the small lights light it)
   auto draw = [&](float amount, bool flakes, bool low) {
