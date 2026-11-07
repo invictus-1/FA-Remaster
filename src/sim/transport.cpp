@@ -626,14 +626,17 @@ void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic) {
   } else {
     m.needSnap = true;
   }
-  // (an aircraft takes the Air layer in its own motion step of this beat, CUnitMotion::MotionTick 0x6ba128: until
-  // then it is still in its dock's layer, and what asks for its velocity before that gets the motion's own
-  // vector, zero. Seen: UEF drones let go by their commander through IssueClearCommands: the AbortMove that
-  // follows in the same script call aims exactly where they are, while their flight step later in the beat reads
-  // the dock's last swing as their speed (Missiles 440, Upgrades 3214).)
+  // NotifyDetached 0x6b96ca..0x6b9718 (read): without skipBallistic every unit, a flier too, takes the Air layer at once
+  // (unit+0x120 = 0x10) and OnLayerChange runs then (0x67f450 with 0xe2747c). Seen: 4v4_4 (FAF 3840) 4211, army 7's UEF
+  // drone 0x700034 let go by the stream's Guard with clear (its pod task torn down): the original records layer Air in
+  // that beat, ours one beat later (it waited for the drone's motion step). What asks a just-released flier for its
+  // velocity before its own motion step still gets the motion's own vector, zero (airLayerPending, PredictAhead): the
+  // AbortMove that follows IssueClearCommands in the same script call aims exactly where it is, while its flight step
+  // later in the beat reads the dock's last swing as its speed (Missiles 440, Upgrades 3214). (Inferred, not read: how
+  // the original's Unit::GetVelocity 0x6a9c90, (pos - prev) x +0xdc in the Air layer, comes out zero there.)
   if (!skipBallistic) {
     if (CanFly(child)) child->motion.airLayerPending = true;
-    else SetUnitLayer(sim, child, "Air");
+    SetUnitLayer(sim, child, "Air");
   }
   AirNotifyDetached(sim, child);
   if (CanFly(child)) AirWarp(sim, child);

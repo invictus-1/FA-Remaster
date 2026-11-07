@@ -515,14 +515,88 @@ local function Posts(R, K, units, ownEconomy, ratio, armyMass)
     return rest
 end
 
+-- HUNT (2026-11-07, step 5: plan by what the army owns). The enemy army mass a player can have by a minute: the median of
+-- the five 1v1 pro replays (procurve: 0 at 2, 819 at 5, 4,230 at 10, 10,084 at 15, 25,654 at 20 minutes; +3,000 a
+-- minute after). With no operation and no target known, an army of at least kHuntShare x that (or of the enemy army
+-- known, if more) goes to the nearest enemy start: a Fatboy given at minute 1 stood at home for 6 minutes before.
+local kHuntShare = 2
+local kProCurve = { { 2, 0 }, { 5, 819 }, { 10, 4230 }, { 15, 10084 }, { 20, 25654 } }
+local function ExpectedArmy(minutes)
+    if minutes <= kProCurve[1][1] then return 0 end
+    for i = 2, table.getn(kProCurve) do
+        local a, b = kProCurve[i - 1], kProCurve[i]
+        if minutes <= b[1] then return a[2] + (b[2] - a[2]) * (minutes - a[1]) / (b[1] - a[1]) end
+    end
+    local last = kProCurve[table.getn(kProCurve)]
+    return last[2] + 3000 * (minutes - last[1])
+end
+
+-- SHIELD UPKEEP (2026-11-07, step 5): shields our energy cannot carry go off, and come back on when it can
+local kShieldOff = 0.1
+local kShieldOn = 0.6
+local function ShieldUpkeep(brain, R)
+    local list = {}
+    for _, u in ipairs(brain:GetListOfUnits(categories.MOBILE, false)) do
+        if not u.Dead and u:GetFractionComplete() >= 1 then
+            local bp = u:GetBlueprint()
+            local up = bp.Economy and bp.Economy.MaintenanceConsumptionPerSecondEnergy or 0
+            if up > 0 and u:TestToggleCaps('RULEUTC_ShieldToggle') then
+                table.insert(list, { u = u, up = up, on = u:GetScriptBit('RULEUTC_ShieldToggle') })
+            end
+        end
+    end
+    if not list[1] then return end
+    local stored = brain:GetEconomyStoredRatio('ENERGY')
+    local income, asked = brain:GetEconomyIncome('ENERGY') * 10, brain:GetEconomyRequested('ENERGY') * 10
+    if stored < kShieldOff and asked > income then
+        local n = 0
+        for _, e in ipairs(list) do
+            if e.on then
+                e.u:SetScriptBit('RULEUTC_ShieldToggle', false)
+                n = n + 1
+            end
+        end
+        if n > 0 then
+            LOG(string.format('aishield %d %d %d shields off (energy %.0f%%, income %.0f, asked %.0f)', R.army, R.tick, n,
+                100 * stored, income, asked))
+        end
+    elseif stored > kShieldOn then
+        local best
+        for _, e in ipairs(list) do
+            if not e.on and e.up <= income - asked and (not best or e.up < best.up) then best = e end
+        end
+        if best then
+            best.u:SetScriptBit('RULEUTC_ShieldToggle', true)
+            LOG(string.format('aishield %d %d a shield on (%s, upkeep %.0f; energy %.0f%%, income %.0f, asked %.0f)', R.army,
+                R.tick, best.u:GetUnitId(), best.up, 100 * stored, income, asked))
+        end
+    end
+end
+
+-- the nearest enemy start (land travel from ours; army order on ties) of an enemy still in the game, or nil
+local function HuntZone(R)
+    local best, bestD
+    for i, b in ipairs(ArmyBrains) do
+        if i ~= R.army and IsEnemy(R.army, i) and not ArmyIsOutOfGame(i) then
+            local x, z = b:GetArmyStartPos()
+            local zone = x and Remastered.AIZoneAt(x, z, 'land') or 0
+            local d = zone > 0 and Remastered.AIZoneDistance(R.startZone, zone, 'land') or -1
+            if d >= 0 and (not bestD or d < bestD) then best, bestD = zone, d end
+        end
+    end
+    return best
+end
+
 -- (Lua 5.0 allows a function 32 upvalues: Think reaches the helpers of 2026-11-03 through this one table)
 local X = { Order = Order, AimPoint = AimPoint, ArmyZone = ArmyZone, Pos3 = Pos3, gatherPerUnit = kGatherPerUnit,
-    gatherExtend = kGatherExtend, allyReach = kAllyReach, UnknownMass = UnknownMass }
+    gatherExtend = kGatherExtend, allyReach = kAllyReach, UnknownMass = UnknownMass, ExpectedArmy = ExpectedArmy,
+    HuntZone = HuntZone, huntShare = kHuntShare, ShieldUpkeep = ShieldUpkeep }
 
 function Think(brain)
     local R = brain.Remaster
     if not R or R.startZone <= 0 then return end
     R.op = R.op or nil
+    X.ShieldUpkeep(brain, R)  -- (2026-11-07, step 5)
     local units = CombatUnits(brain)
     local armyMass = 0
     for _, u in ipairs(units) do armyMass = armyMass + MassOf(R, u) end
@@ -871,6 +945,28 @@ function Think(brain)
         elseif bestZone and bestZone > 0 and R.tick - (R.lastWait or 0) >= 300 then
             Log(R, 'wait', bestZone, margin, ratio, 'ahead overall, but no target the estimate favours yet')
             R.lastWait = R.tick
+        end
+    end
+
+    -- HUNT (2026-11-07, step 5): no operation, and no target the attack took above; an army far stronger than what the
+    -- enemy can have by now goes to the nearest enemy start (attack-move: it fights what it meets on the way)
+    if not R.op and units[1] then
+        local known = 0
+        for _, e in ipairs(enemyZones) do known = known + e.army end
+        local want = X.huntShare * math.max(X.ExpectedArmy(R.tick / 600), known)
+        local free = 0
+        for _, u in ipairs(units) do free = free + MassOf(R, u) end
+        if free >= want and free > 0 then
+            local hz = X.HuntZone(R)
+            if hz then
+                if R.tick - (R.huntLogged or -10000) >= 300 then
+                    Log(R, 'hunt', hz, 0, ratio, string.format('no target known; our free army %.0f mass >= %.0f (%gx what the enemy can have by now): to the nearest enemy start',
+                        free, want, X.huntShare))
+                    R.huntLogged = R.tick
+                end
+                X.Order(R, units, true, (ZonePos(hz)), 'h' .. hz, 30)
+                return
+            end
         end
     end
 

@@ -1200,7 +1200,17 @@ void Execute(Sim& sim, Unit* u, LandNav& n) {
 
 }  // namespace
 
-bool LandCellFits(Sim& sim, const Unit* u, int x, int z) { return Fits(sim, u, PathCell{x, z}); }
+// FindSlotFor 0x59aa20 asks OCCUPY_FootprintFits 0x7209e0 with caps -1 (0x59ab10 through 0x720aa0, 0x59acca..0x59ace1):
+// a footprint of size 1 goes to OCCUPY_Filter 0x720920, whose terrain caps are the one cell's own (0x564df0: its terrain
+// type and its four vertices' heights), not OCCUPY_MobileCheck 0x564ab0's, which also refuses a blocking terrain type on
+// any of the cell's four vertices. Seen (probe v3840_2v2_3_slots): 2v2_3 (FAF 3840) 3669, army 3's ten-unit formation
+// Move: the original's 0x300013 takes its slot's cell (833,551), whose vertex (834,552) is of type 9 (blocking) while the
+// cell itself is type 8; ours refused it and every member after it shifted one cell.
+bool LandCellFits(Sim& sim, const Unit* u, int x, int z) {
+  const NamedFootprint& fp = Fp(u);
+  Navigation& nav = sim.navigation();
+  return nav.FootprintFits(nav.CellCaps(fp, x, z, true), fp, x, z) != 0;
+}
 
 bool LandNavFollowingSlot(const Unit* u) {
   const LandNav* n = u->motion.nav.get();
