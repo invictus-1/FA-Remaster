@@ -1597,7 +1597,13 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 // with its idle engineer 0x200008 at x 863.667 (box out to 864.02): the original starts the next unit at 698,
 // 649 + 49 (return 50), and makes it 0x20000d; the unit rolling off with its Move (0x20000a) does not count.
 // TryToBuild sends nobody there: 0x200008 hovers, its y moved by one float step from 647 to 648, so it "moved".
-// (Units attached to a parent are let through as before: the carrier test builder+0x55c vt+0x70 is not modelled.)
+// A unit attached to the factory counts too: 0x62da50 has no attachment test; a mobile unit lets the factory through
+// only when the builder has a transport object (+0x55c) whose vt+0x70 takes the unit (0x62dca7..0x62dcc6: a carrier
+// and what it carries; ours: the unit carried by or attached to that builder). Seen: FAF 3840 pro replay 6v6_2, army
+// 9's land factory 0x90001d, its repeat queue on, has the unit it is building (0x900031) cancelled by the stream's
+// DecreaseCommandCount at 2480: FactoryUnit.OnStopBuild destroys it (queued) and its MoveOffFactory is refused (being
+// built), so at 2481 the next order finds it still attached in the rect and waits 50 (the original starts the next unit
+// at 2530); ours let it through and began 0x900034 at 2481.
 bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F, int fr[4]) {
   const NamedFootprint& fp = Footprint(*F->blueprint);
   fr[0] = RoundEven(F->position.x - fp.sizeX * 0.5f);
@@ -1611,7 +1617,10 @@ bool FactorySiteBlocked(Sim& sim, lua_State* L, Unit* F, int fr[4]) {
     // original's new factory waits (return 50) under the old one, ours started its first unit at once.)
     if (e == F || e->dead || !e->blueprint) continue;
     if (!e->commands.empty()) continue;  // flag 1: 0x62dbca
-    if (e->parentId || e->unitStates.Has(US("Attached")) || e->layer == "Air") continue;
+    if (e->layer == "Air") continue;  // (0x62dbff: the Air layer)
+    if (e->motion.bp && e->motion.bp->mobile() && F->transport &&
+        (e->transportedBy == EntityRef(F) || e->parentId == EntityRef(F)))
+      continue;  // (0x62dcb2..0x62dcc6: the builder's transport takes it)
     if (!(e->motion.bp && e->motion.bp->mobile())) {
       const FRect r = SkirtRect(*e->blueprint, GetUnitBpData(L, *e->blueprint), e->position.x, e->position.z);
       const float qx0 = static_cast<float>(fr[0]), qz0 = static_cast<float>(fr[1]);
@@ -2768,8 +2777,13 @@ bool CaptureCosts(Sim& sim, lua_State* L, Unit* u, Unit* T, float out[3]) {
 constexpr int kCaptureAgain = 2;
 
 int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  // TaskTick 0x6043e0..0x60445b: the target's weak pointer (task+0x44) and, for a unit, its capturable attribute
+  // (+0x69); nothing asks whether the target is queued for destruction, and the weak pointer empties only when the
+  // entity is destroyed in the beat's destroy step. Seen: FAF 3840 pro replay 6v6_1, 2377: four of army 2's engineers
+  // capture one structure; the one that completes it (0x200006) runs FAF's ChangeUnitArmy, which destroys the old unit;
+  // the original's other three (0x200002, 0x200008, 0x200009), later in the command stage, keep Capture through 2377
+  // and end at 2378; ours ended them at once.
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
-  if (e && e->destroyQueued) e = nullptr;
   Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   if (!e || (T && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
     PushObject(L, u);

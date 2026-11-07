@@ -62,6 +62,7 @@ class Air {
   // and the game's lamps are meant to be seen.
   float sunInAir = 1, skyInAir = 1, lampsInAir = 150;
   float storm = 0;  // [stormcells] set by the world: in a storm the sun's light in the air is 0.75 (shafts through the deck's gaps)
+  float moonShare = 1;  // [starry] set by the world: the moon's light in the air with the starry night (its glow, Chris: "not as strong")
   float pointsInAir = 15;       // the same for the other small lights (flashes of explosions, glows): a battle is not to be a white cloud
   float lampGlowInAir = 0.25f;  // of a beam's glow to all sides near its lamp (lights.h), what the air shows (all of it made halos)
   float sunForward = 0.6f, lampForward = 0.35f;      // how much of it goes on forward (0: alike to all sides)

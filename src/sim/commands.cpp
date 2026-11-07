@@ -2501,6 +2501,18 @@ int l_IssueBuildMobile(lua_State* L) {
   CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f5bfb)
   Vec3 targetAt{};
   const bool hasTarget = PosArg(L, 2, &targetAt);
+  // cfunc_IssueBuildMobileL 0x6f5b60 looks for the nearest unit of the list that can build the blueprint
+  // (0x6f5d80..0x6f5eb6: Unit::CanBuild 0x6a9e50 for each) and issues nothing when there is none (0x6f5ebc -> 0x6f5fe0):
+  // no command, no engine id. Seen: FAF 3840 pro replay 2v2_3, 866: FAF's CopyOrders (copy-queue.lua 79) gives army
+  // 1's commander 0x100000 the nine BuildMobile orders of its engineer 0x100004, one of them a blueprint the
+  // commander cannot build: the original's queue holds 8, ours took 9 and dropped that one at its dispatch (867).
+  if (lua_isstring(L, 3)) {
+    const BlueprintInfo* bp = S(L)->blueprints().Find(lua_tostring(L, 3));
+    bool any = false;
+    for (Unit* u : units)
+      if (bp && UnitCanBuild(u, *bp)) any = true;
+    if (!any) return 0;
+  }
   auto c = Issue(L, units, CommandType::BuildMobile, hasTarget ? &targetAt : nullptr);
   c->hasPos = PosArg(L, 2, &c->pos);
   if (lua_isstring(L, 3)) c->blueprintId = lua_tostring(L, 3);
