@@ -2313,7 +2313,7 @@ void TakePendingGoal(Sim& sim, Unit* u) {
   a.goal = a.pendingGoal;
   a.curTarget = a.goal;
   a.steering = true;
-  if (a.pendingPre) {  // the rally Move's first SetGoal, to the order's own cell (AirSetFirstGoal)
+  if (a.pendingPre) {  // NewMoveTask's first SetGoal, to the order's own cell (AirSetFirstGoal)
     a.pendingPre = false;
     SetTarget(sim, u, a.pendingPreGoal, Vec3{}, a.pendingLayer ? a.pendingLayer : kAir);
   }

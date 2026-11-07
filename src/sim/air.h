@@ -120,7 +120,7 @@ struct AirMotion {
   Vec3 pendingGoal;
   int pendingLayer = 0;   // the goal's layer (0: Air; 1: a landing move)
   Vec3 pendingFacing;     // SetFacing while a goal is pending
-  bool pendingPre = false; // a factory rally Move's first goal (the order's own cell) before its free spot
+  bool pendingPre = false; // NewMoveTask's first goal (the order's own cell) before the move task's free spot
   Vec3 pendingPreGoal;
   Vec3 goal;              // navigator +0x7c
   Vec3 curTarget;         // navigator +0x70: what SetGoal or the formation update last handed to the motion (0 at first)
@@ -163,7 +163,8 @@ void AirTerrainChanged(const Sim& sim, const TerrainMap* map, int x0, int z0, in
 // Unit::PrepareMove: a free landing spot near *pos (false: none found), its cell outside `excl` (x0, z0, x1, z1;
 // null or empty = none), rings `spacing` cells apart (0 = 2 x the squared footprint).
 bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl = nullptr, int spacing = 0);
-// A factory rally Move's first navigator goal, the order's own cell, given before the free spot (RunPathSearch).
+// NewMoveTask's first navigator goal, the order's own cell, given before the move task's free spot (a factory rally
+// Move, RunPathSearch; a transport's landing move, LandingMove).
 void AirSetFirstGoal(Sim& sim, Unit* u, Vec3 raw);
 // Unit::PrepareMove for a ground unit (its own footprint): a free spot near *pos whose cell does
 // not overlap `excl` (x0, z0, x1, z1; empty = none). false: none found.

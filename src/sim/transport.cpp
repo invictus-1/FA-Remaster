@@ -1283,9 +1283,19 @@ namespace {
 
 const UnitCommand* Current(const Unit* u) { return u->commands.empty() ? nullptr : u->commands.front().get(); }
 
-// The landing move of a transport (NewMoveTask with goal layer Land).
-void LandingMove(Sim& sim, Unit* t, Vec3 p) {
+// The landing move of a transport (NewMoveTask with goal layer Land). NewMoveTask 0x6190a0 gives the navigator the
+// task's own goal first (0x6190c9: navigator vt+8 SetGoal with the goal passed in: the unload task's +0x30, set from
+// the order's position, 0x6264fa; the load's pickup goal, 0x625bea) and only then makes the CUnitMoveTask, whose ctor
+// puts a landing move through PrepareMove and sets the goal again at the free spot. The first SetGoal's SetTarget
+// 0x6b85e0 already turns the desired facing toward the order's own cell when that is farther than
+// StartTurnDistance, and the second keeps it when the spot is near (as for a factory's rally Move, AirSetFirstGoal).
+// Seen: FAF 3840 pro replay 6v6_3 2014, army 8's transport 0x800011 told to unload at (590.58, 382.38) while it
+// hovers at (600.7, 373.1); its landing spot is (598.5, 374), 2.4 away; the original turns toward the order's cell
+// (13.9 away) as it comes down from 2015, ours kept its heading. `newTask` false: the move task's command listener
+// 0x618c40 (RetargetUnloadMoves) sets only the spot.
+void LandingMove(Sim& sim, Unit* t, Vec3 p, bool newTask = true) {
   AirSetGoal(sim, t, p, sim.tick(), 1 /*Land*/);
+  if (newTask) AirSetFirstGoal(sim, t, p);
 }
 
 enum { kLoad = 1, kCall = 2, kUnload = 3 };
@@ -3880,7 +3890,7 @@ void RetargetUnloadMoves(Sim& sim, UnitCommand& c) {
     if (d.kind != kUnload || u->task->state != 3 || !d.moving || !CanFly(u) || !u->motion.hasGoal) continue;
     const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
     const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
-    LandingMove(sim, u, p);
+    LandingMove(sim, u, p, false);
     // (the listener's SetGoal 0x618d74 -> the air navigator's SetGoal 0x5a4c60 -> SetMotionTarget 0x5a4a90 ->
     // CUnitMotion::SetTarget 0x6b85e0, at once: the new target, MovingUp / MovingDown cleared, so the beat's record
     // shows the transport not coming down until its next motion step lands it again. Seen: MP1 10588, army 2's

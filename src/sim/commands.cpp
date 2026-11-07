@@ -351,7 +351,12 @@ uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) 
 // again from the commander's place; ours drove on to the old path's waypoint. MP1 804, the rally Move of army 5's
 // 0x500008 is dragged to (331.77, 854.30): cell (331, 854), taken; the original's goal is (333, 856), the ring two
 // footprints out (ours, from the rounded target, looked around (332, 854)).
-// The listeners are told in the command's listener order; ours goes by unit id (inferred: the same for one unit).
+// The listeners are told in the command's listener order, the oldest linked first (0x6e94cf; the move task's ctor
+// links it, 0x6182f6..0x618315), not by unit id, and with the PrepareMove variant the first takes the free cell.
+// Seen: FAF 3840 pro replay 2v2_1, army 3's factory rally Move 0x03000036 held by 0x30002a (on it since before 2085)
+// and 0x30000b (its move task made at 2085) is dragged to (331.99, 289.15) at 2137: in the original 0x30002a takes
+// the cell (331, 289) and 0x30000b the ring's (333, 287), which its spline aims at when it reaches the path's end at
+// 2284 (heading 139.77 degrees); ours went by id, 0x30000b took (331, 289) and aimed 0.14 degrees off.
 // A command with a formation: CUnitCommand::SetTarget 0x6e8820 has moved the formation's centre to the new target
 // first (0x6e887d..0x6e88bf, the stream handler: FormationSetCentre), and each unit's task takes its cell in the
 // moved formation: the move task's listener asks GetPosition 0x6e8a30 (the formation cell while the command holds
@@ -361,7 +366,9 @@ uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) 
 // by the new centre; ours left the formation where it was and kept (150, 196).
 void RetargetMoveTasks(Sim& sim, UnitCommand& c) {
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
-  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) {
+    return a->moveTaskSeq != b->moveTaskSeq ? a->moveTaskSeq < b->moveTaskSeq : a->id < b->id;
+  });
   for (Unit* u : holders) {
     if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
     if (u->headState != kRunning || u->task || !u->motion.bp || !u->motion.bp->mobile()) continue;
@@ -401,6 +408,7 @@ namespace {
 
 void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   if (u->commands.empty()) return;
+  u->moveTaskSeq = ++sim.walkSeqNext;  // (the move task's ctor links its listener into the command's list)
   UnitCommand& c = *u->commands.front();
   Vec3 goal = TargetPos(sim, c, u);
   // CUnitMoveTask's constructor 0x6180e0 (the test 0x618a00, then 0x618344): a Move that came from a factory (a
@@ -1627,6 +1635,17 @@ bool RefusesMoveOrder(Sim& sim, const Unit* u, bool hasTarget, const Vec3* point
   return !hasTarget;
 }
 
+// ProcessUnitCommand, the Attack case (0x6f0024: Attack 10 and FormAttack 11, index 3 of the jump table 0x6f1240 by
+// the byte table 0x6f128c, read): a unit that has no motion (IsMobile 0x6a4a10, vt+0x30: unit+0x4b0) and no attacker
+// (unit+0x544, which the Unit ctor makes when the blueprint has a weapon that is no DummyWeapon, 0x6a5fb6..0x6a5fd7;
+// KillCleanup deletes it, 0x6a87dc) does not take the order (0x6efe44). (It goes on to refuse a target entity whose
+// army is an ally, IArmy::IsAlly 0x5bd630 at 0x6f0060: not modelled here.) Seen: FAF 3840 pro replay 2v2_5 2483, army
+// 3's player gives an Attack to a group with its naval factory 0x300020 still being built (a FACTORY, so the
+// being-built rule lets it through): the original's queue stays empty; ours took the Attack and held it.
+bool RefusesAttackOrder(const Unit* u) {
+  return !(u->motion.bp && u->motion.bp->mobile()) && (u->weapons.empty() || u->combatGone);
+}
+
 // ProcessUnitCommand, the Repair case (0x6f075e: type 20, index 8 of the type switch 0x6efdc2). The unit does not take
 // the order (0x6efe44)
 // - without a target (0x6f0760);
@@ -1672,6 +1691,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
     if (MoveCaseType(static_cast<int>(type)) && RefusesMoveOrder(*sim, u, target || targetEntity, target)) continue;
+    if ((type == CommandType::Attack || type == CommandType::FormAttack) && RefusesAttackOrder(u)) continue;
     if (upgradeTo && RefusesUpgradeAgain(*sim, u, *upgradeTo)) continue;
     // IssueToUnits 0x6f12c0 makes the command for the first unit that takes it (0x6f13ca..0x6f13fb): an order no
     // unit takes uses no id of the command database's pool (CommandIdPool)
@@ -1953,6 +1973,9 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
     if (MoveCaseType(d.type) && RefusesMoveOrder(sim, u, d.target.type != 0, &d.target.pos)) continue;
+    if ((d.type == static_cast<int>(CommandType::Attack) || d.type == static_cast<int>(CommandType::FormAttack)) &&
+        RefusesAttackOrder(u))
+      continue;
     if (d.type == static_cast<int>(CommandType::Upgrade) && RefusesUpgradeAgain(sim, u, d.blueprint)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
     if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))

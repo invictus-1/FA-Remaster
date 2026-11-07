@@ -310,6 +310,9 @@ class Unit : public Entity {
   bool walkPrepared = false;
   // when its last task walk (a CUnitMoveTask: its listener linked into the head command's list) was made (Sim::walkSeqNext)
   uint64_t walkSeq = 0;
+  // when its head order's own CUnitMoveTask was made (RunPathSearch: the ctor 0x6180e0 links its listener into the
+  // command's list, 0x6182f6..0x618315), on the same counter (Sim::walkSeqNext)
+  uint64_t moveTaskSeq = 0;
   bool isFactoryBuilder = false;
   uint32_t creatorId = 0;              // unit+0x4b8: the factory, engineer or upgrading unit that built it       // builder.IsFactory (a builder in category FACTORY)       // unit+0x4f8: the units guarding this one, ascending id
   std::vector<uint64_t> buildAllowed;  // per-unit build restrictions removed from "all"

@@ -2811,14 +2811,22 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         // Seen: MP3 7921, army 0's engineer 0xb9 is ordered to capture the blip of army 1's radar 0x100122 at
         // (221.5, 230.5): the original's PrepareMove takes (220,231) (probe mp3_7789: SetGoal (220,231,221,232),
         // the batch target (220.5, 231.5)); ours kept the 2x2 skirt free and took (219,232).
-        float excl[4] = {0, 0, 0, 0};
-        if (T && !t.targetViaBlip) SkirtRect(T, excl);
+        // A unit in category AIR (unit+0x68b, 0x604650) skips the spot search and the reservation (0x60465d ->
+        // 0x604743): its goal is the cell of the target's own position. Seen: FAF 3840 pro replay 4v4_4 2999, army 7's
+        // UEF commander drone 0x700017 (hovering) told to capture the blip of a structure at (105.5, 691.5): the
+        // original flies to that cell (at (105.53, 691.47) by 3050); ours took the free spot (106.5, 692.5).
         Vec3 a = e->position;
-        PrepareMoveFor(sim, u, &a, excl, 1);
+        if (!Cat(sim, u, "AIR")) {
+          float excl[4] = {0, 0, 0, 0};
+          if (T && !t.targetViaBlip) SkirtRect(T, excl);
+          PrepareMoveFor(sim, u, &a, excl, 1);
+        }
         int x0 = static_cast<int>(std::nearbyint(a.x - uf.sizeX * 0.5f));
         int z0 = static_cast<int>(std::nearbyint(a.z - uf.sizeZ * 0.5f));
-        int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
-        GroundReserveRect(sim, u, rr);
+        if (!Cat(sim, u, "AIR")) {
+          int rr[4] = {x0, z0, x0 + uf.sizeX, z0 + uf.sizeZ};
+          GroundReserveRect(sim, u, rr);
+        }
         MoveTaskWalk(sim, u, Vec3{x0 + uf.sizeX * 0.5f, a.y, z0 + uf.sizeZ * 0.5f});  // NewMoveTask 0x60477d
         u->unitStates.Insert(US("Moving"));
         t.moving = true;
@@ -3243,8 +3251,27 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
   for (Unit* h : holders) {
     if (h == self || !Alive(h) || h->commands.empty() || h->commands.front().get() != &c) continue;
     BuildTask* gt = h->task;
-    if (!gt || !gt->gdata || !gt->gdata->child || gt->gdata->child->type != CommandType::Repair) continue;
+    if (!gt || !gt->gdata || !gt->gdata->child) continue;
     BuildTask& ch = *gt->gdata->child;
+    if (ch.type == CommandType::BuildMobile && !ch.pdata && !ch.gdata && !ch.adata && !ch.tdata) {
+      // A guard's mobile build child (GuardBuildBp: the guarded engineer's structure) listens to the Guard order as
+      // well: the CUnitMobileBuildTask ctor links its listener into the unit's first command, whatever that is
+      // (0x5f664e..0x5f66ae: unit+0x4b4's first command -> task+0x84, the listener task+0x34 into cmd+0x34). Its
+      // OnEvent 0x5f80c0 (MobileBuildCommandEvent) lets the structure go, takes the site from the command's target
+      // (the guarded unit's point) and wakes the thread, and the walk's own listener re-goals the navigator first; the
+      // woken thread then ends the walk (TickMobileBuild state 0), as RetargetMobileBuildTasks does for a BuildMobile
+      // order. Seen: FAF 3840 pro replay 4v4_5 2937, the stream sets the target of army 2's Guard 0x02000000 again (the
+      // same engineer 0x200028, building): the original's guard 0x200024 is out of Moving at 2938; ours walked on.
+      const bool asleep = TaskThreadAsleepOnMove(h, &ch);
+      MobileBuildCommandEvent(sim, h, ch, c);
+      gt->gdata->childFrom = 0;
+      if (asleep && Alive(h)) {
+        TaskWalkCommandEvent(sim, c, h);
+        sim.ResumeCommandThread(h);
+      }
+      continue;
+    }
+    if (ch.type != CommandType::Repair) continue;
     const bool asleep = TaskThreadAsleepOnMove(h, &ch);  // (asked before the event changes the child)
     RepairTaskCommandEvent(sim, h, ch, c);
     gt->gdata->childFrom = 0;  // (woken: counter 0)
@@ -3443,6 +3470,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         g.anchor = {};
         GuardAbort(U);
         child = NewChild(sim, CommandType::BuildMobile, "MobileBuild");
+        child->linkSeq = ++sim.walkSeqNext;  // (its ctor links its listener into the head command's list, 0x5f6674..)
         child->bp = bp;
         child->site = SnapStructurePosition(sim, *bp, site);  // DispatchMobileBuildTask 0x6139de, the ctor 0x5f6749
         break;
