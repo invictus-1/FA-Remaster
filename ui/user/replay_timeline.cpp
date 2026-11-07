@@ -122,14 +122,11 @@ int l_ReplaySetBookmarks(lua_State* L) {
   return 1;
 }
 
-// moho64ui_ReplayMoments([first]) -> the moments from the first-th on (1 ..): {tick, kind, army (1-based, as the
-// scripts count armies; 0 none), position {x, y, z}, unit (a blueprint id), entity (the unit's or the missile's
-// entity id, as GetUnitById takes it; nil for none)}.
-int l_ReplayMoments(lua_State* L) {
-  ReplayTimelineSource* source = Source(L);
-  if (!source) return 0;
+// The moments from the first-th on as the scripts get them: a list of {tick, kind, army (1-based, as the scripts count
+// armies; 0 none), position {x, y, z}, unit (a blueprint id), entity (nil for none)}.
+void PushMoments(lua_State* L, ReplayTimelineSource* source, size_t first) {
   std::vector<ReplayTimelineSource::Moment> moments;
-  source->MomentsFrom(FirstIndex(L, 1), &moments);
+  source->MomentsFrom(first, &moments);
   lua_newtable(L);
   for (size_t i = 0; i < moments.size(); ++i) {
     const ReplayTimelineSource::Moment& m = moments[i];
@@ -148,16 +145,12 @@ int l_ReplayMoments(lua_State* L) {
     if (m.entity != 0xffffffffu) SetNumber(L, "entity", m.entity);
     lua_rawseti(L, -2, static_cast<int>(i + 1));
   }
-  return 1;
 }
 
-// moho64ui_ReplayFight([first]) -> the fighting from the first-th 5 s on (1 ..), every army's summed: {tick (the
-// first beat of the 5 s), damage, hits, deaths}.
-int l_ReplayFight(lua_State* L) {
-  ReplayTimelineSource* source = Source(L);
-  if (!source) return 0;
+// The fighting from the first-th 5 s on: a list of {tick (the first beat of the 5 s), damage, hits, deaths}.
+void PushFight(lua_State* L, ReplayTimelineSource* source, size_t first) {
   std::vector<ReplayTimelineSource::Fight> fight;
-  source->FightFrom(FirstIndex(L, 1), &fight);
+  source->FightFrom(first, &fight);
   lua_newtable(L);
   for (size_t i = 0; i < fight.size(); ++i) {
     lua_newtable(L);
@@ -167,7 +160,58 @@ int l_ReplayFight(lua_State* L) {
     SetNumber(L, "deaths", fight[i].deaths);
     lua_rawseti(L, -2, static_cast<int>(i + 1));
   }
+}
+
+// moho64ui_ReplayMoments([first]) -> the moments from the first-th on (1 ..): {tick, kind, army (1-based, as the
+// scripts count armies; 0 none), position {x, y, z}, unit (a blueprint id), entity (the unit's or the missile's
+// entity id, as GetUnitById takes it; nil for none)}.
+int l_ReplayMoments(lua_State* L) {
+  ReplayTimelineSource* source = Source(L);
+  if (!source) return 0;
+  PushMoments(L, source, FirstIndex(L, 1));
   return 1;
+}
+
+// moho64ui_ReplayFight([first]) -> the fighting from the first-th 5 s on (1 ..), every army's summed: {tick (the
+// first beat of the 5 s), damage, hits, deaths}.
+int l_ReplayFight(lua_State* L) {
+  ReplayTimelineSource* source = Source(L);
+  if (!source) return 0;
+  PushFight(L, source, FirstIndex(L, 1));
+  return 1;
+}
+
+// moho64ui_GameMoments([start]) -> the game's moments for its score screen (ours: the score screen's graphs mark them,
+// /lua/ui/dialogs/hotstats.lua's hook): {ticks (the game's length in game ticks, as far as it is known), scanning
+// (still being looked for), scanned (the game tick the look has got to), moments = {...} (as moho64ui_ReplayMoments),
+// fight = {...} (as moho64ui_ReplayFight)}. A replay's are its timeline's; a game played's are looked for in its own
+// replay once the game is over (or now, with `start`: the score screen opened while the game goes on).
+// GameSession::GameMoments. nil: none (no replay of the game: a campaign operation; or not begun).
+int l_GameMoments(lua_State* L) {
+  const auto& ask = UserState::From(L)->config().gameMoments;
+  ReplayTimelineSource* source = ask ? ask(lua_toboolean(L, 1) != 0) : nullptr;
+  if (!source) return 0;
+  const ReplayTimelineSource::State s = source->Now();
+  lua_newtable(L);
+  SetNumber(L, "ticks", s.ticks);
+  SetBool(L, "scanning", s.scanning);
+  SetNumber(L, "scanned", s.scanned);
+  lua_pushstring(L, "moments");
+  PushMoments(L, source, 0);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "fight");
+  PushFight(L, source, 0);
+  lua_rawset(L, -3);
+  return 1;
+}
+
+// moho64ui_GameMomentsCaptureForTests(path): the next frame the window shows saved as a PNG at `path` while there are
+// game moments (the score screen's pictures for Chris; the host's --window-capture way, nothing without a window).
+int l_GameMomentsCaptureForTests(lua_State* L) {
+  const auto& ask = UserState::From(L)->config().gameMoments;
+  ReplayTimelineSource* source = ask ? ask(false) : nullptr;
+  if (source && lua_isstring(L, 1)) source->CaptureForTests(lua_tostring(L, 1));
+  return 0;
 }
 
 // moho64ui_ReplaySeek(tick [, keep]) -> true, or false and the reason: the replay jumps to that beat (forward it runs
@@ -401,6 +445,8 @@ void RegisterTimelineBindings(lua_State* L) {
   lua_register(L, "moho64ui_ReplayWatchForTests", l_ReplayWatchForTests);
   lua_register(L, "moho64ui_ReplayWatchedForTests", l_ReplayWatchedForTests);
   lua_register(L, "moho64ui_ReplayCaptureForTests", l_ReplayCaptureForTests);
+  lua_register(L, "moho64ui_GameMoments", l_GameMoments);
+  lua_register(L, "moho64ui_GameMomentsCaptureForTests", l_GameMomentsCaptureForTests);
 }
 
 // remaster_timeline [on|off]: the bar's Toggle (no word) or Show / Hide (/moho64ui/lua/timeline.lua). Only while a

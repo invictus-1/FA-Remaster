@@ -102,7 +102,8 @@ bool SaveReplayBookmarks(const std::string& replay, const std::string& digest, c
 // moho64ui_ReplayTimeline, moho64ui_ReplayMoments, moho64ui_ReplayFight, moho64ui_ReplaySeek, moho64ui_ReplayTakeKept,
 // moho64ui_ReplayBookmarks, moho64ui_ReplaySetBookmarks, moho64ui_ReplayWatchForTests, moho64ui_ReplayWatchedForTests,
 // moho64ui_ReplayCaptureForTests (replay_timeline.cpp): nil where the state has no replay timeline
-// (UserState::Config::timeline).
+// (UserState::Config::timeline). moho64ui_GameMoments, moho64ui_GameMomentsCaptureForTests: the game's moments for its
+// score screen, a replay's or a game played's (UserState::Config::gameMoments).
 void RegisterTimelineBindings(lua_State* L);
 // The console's remaster_timeline [on|off] (the key "Replay timeline", Ctrl-T at first): the bar shown or hidden
 // while a replay plays.

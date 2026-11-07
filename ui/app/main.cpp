@@ -849,6 +849,12 @@ int main(int argc, char** argv) {
     gameCfg.multiplayer = session.networkGame();
     gameCfg.net = session.netLink();
   };
+  // An Aheadable game's first beats before its screen (GameSession::RunAhead, aheadInLoad): in a window only.
+  // (MOHO64UI_AHEAD=0: no beats behind the loading screen; =1: those beats also without a window, for tests)
+  auto aheadWanted = [&]() {
+    static const char* aheadMode = std::getenv("MOHO64UI_AHEAD");
+    return session.Aheadable() && (aheadMode ? std::string(aheadMode) != "0" && (windowed || std::string(aheadMode) == "1") : windowed);
+  };
   auto startGameInterface = [&]() {
     if (game) return;
     // A launch loads the original's way (its session states, WLD_Frame 0x88cae0): the
@@ -909,6 +915,13 @@ int main(int argc, char** argv) {
       } else {
         session.prepareInterface = nullptr;
       }
+      // Those beats on the loading thread, while the map still opens (GameSession::aheadInLoad; Chris, 2026-11-07: the
+      // start held past the load no more). MOHO64UI_AHEAD_IN_LOAD=0: after the load, as before (RunAhead below).
+      static const bool aheadAfterLoad = [] {
+        const char* v = std::getenv("MOHO64UI_AHEAD_IN_LOAD");
+        return v && std::string(v) == "0";
+      }();
+      session.aheadInLoad = !held && !aheadAfterLoad && aheadWanted();
       session.BeginLoad();
       loadingDrawn = 0, loadingSince = std::chrono::steady_clock::now();
       if (!windowed) session.WaitForWorker();
@@ -973,6 +986,7 @@ int main(int argc, char** argv) {
     gameCfg.world = session.world();
     gameCfg.pace = &session.pace;
     gameCfg.timeline = session.timeline();  // (a replay's timeline; nullptr in a game played)
+    gameCfg.gameMoments = [&session](bool start) { return session.GameMoments(start); };  // (the score screen's)
     if (prepared.state) {  // (made on the loading thread: given the session's links)
       Logf(LogLevel::Info,
            "moho64ui: the game's state was made on the loading thread: the state %.0f ms, its rules %.0f ms, %s %.0f ms (then %d "
@@ -1001,9 +1015,8 @@ int main(int argc, char** argv) {
       for (const std::string& sync : setup) starting->DeliverSync(sync);
     }
     static const bool oneFrame = std::getenv("MOHO64UI_START_ONE_FRAME") != nullptr;
-    // (MOHO64UI_AHEAD=0: no beats behind the loading screen; =1: those beats also without a window, for tests)
-    static const char* aheadMode = std::getenv("MOHO64UI_AHEAD");
-    const bool ahead = session.Aheadable() && (aheadMode ? std::string(aheadMode) != "0" && (windowed || std::string(aheadMode) == "1") : windowed);
+    // (not when they ran in the load: the session's tick is theirs already, AheadRanTo)
+    const bool ahead = aheadWanted() && !session.AheadRanTo();
     if ((windowed && !oneFrame) || ahead) {  // (the game's screen in the next frame: see `starting')
       session.StartFirstBeat();
       lap("(start: the setup's sync, the first beat begun)");
@@ -1055,6 +1068,10 @@ int main(int argc, char** argv) {
       game->DropPrecompiledScripts();
       for (const std::string& sync : session.TakePendingSync()) game->DeliverSync(sync);
       lap("(start: the first beat's sync)");
+      // (the start's times: how long from the launch call to the game's screen, and how much of it came after the load)
+      if (!session.Rewinding())
+        Logf(LogLevel::Info, "moho64ui: the game's screen comes %.2f s after the launch call: the load %.2f s, then %.2f s more (at tick %u)",
+             session.LaunchToLoadEnd() + session.SinceLoadEnd(), session.LaunchToLoadEnd(), session.SinceLoadEnd(), session.tick());
       if (!gameLuaFile.empty()) {  // a Lua file of your own, run in the game's state (tests, looking around)
         if (auto code = hostfs::ReadFile(gameLuaFile)) game->RunString(*code, "@" + gameLuaFile);
         else Logf(LogLevel::Error, "cannot read %s", gameLuaFile.c_str());

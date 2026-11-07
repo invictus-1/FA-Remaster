@@ -1,6 +1,7 @@
 -- A game whose first beats ran behind the loading screen (Chris, 2026-10-28: "move M28's work into the load";
 -- ui/app/game_session.h Aheadable): the game's screen comes at tick 29, and the opening (gamemain's StartupSequence, ours for this case) still glides to the commander and selects it once
--- it has warped in. Needs MOHO64UI_AHEAD=1 without a window (the suite's ahead_game).
+-- it has warped in. Needs MOHO64UI_AHEAD=1 without a window (the suite's ahead_game). The beats run in the load itself
+-- (GameSession::aheadInLoad, 2026-11-07); with MOHO64UI_AHEAD_IN_LOAD=0 after it, as before (the suite's ahead_after).
 --   MOHO64UI_AHEAD=1 moho64ui --init <init.lua> --stage setup --session session_ai.lua --seed 7 \
 --     --game-lua ui/tests/ahead_start.lua --frames 900 --log out.log
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".

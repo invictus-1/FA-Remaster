@@ -373,6 +373,22 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   select it until tick 50) is ours for such a game (`ui/data/hook/lua/ui/game/gamemain.lua`, keyed on
   `moho64ui_aheadTick`, set by the host): the glide at once, ending as the warp-in begins, the tries until 50 ticks
   after the screen came.
+  Since 2026-11-07 (Chris: nothing held past the load; the engine's m28s proposal) those beats, 1..29, run on the
+  LOADING THREAD (`GameSession::aheadInLoad`): right after the simulation's start and the game's interface state, once
+  the main thread has opened the game's record (the hand-over, `ServeLoad`), so each beat's advance and fingerprint
+  line are written as it runs. They run while the map still opens; the map is given the session (the renderer's
+  `PrepareSession`) once they are through, and `LoadDone` waits for both, so the start is held past the load by
+  nothing but the two frames of the screen's making. Their syncs wait for the screen as before, their sounds and
+  camera shakes come at the load's end, and the picture's per-beat effects and props' changes wait in the simulation
+  for `PrepareSession`, which keeps them for the first `Beat` after `SwapMap` (the renderer's rules,
+  `docs/render-answers.md` request 46: no `GameStarted` or `Beat` before `SwapMap`); the hits, impacts and health
+  changes of those beats it reads into its own first beat (on SETONS_R: 100 health changes; INFERRED: the map's
+  wreckage units going). WHY AFTER THE BEATS (the cause INFERRED): the renderer keys what it made for the session by
+  the blueprints' places in its first beat, and its first beat after the swap must find the same units; given the
+  session at tick 0 and its first beat at tick 29 (SETONS_R's 43 wreckage units of army 10 gone by then), a Seraphim
+  commander was drawn with another unit's model and icon (seen at tick 70; the renderer's lists keep it). The same
+  beats, no orders in them: the record, the replay and every fingerprint line are those of the run-ahead after the
+  load. `MOHO64UI_AHEAD_IN_LOAD=0`: after the load, as before.
 - `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
   on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
@@ -1289,6 +1305,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   gameresult.lua calls it; and both commanders destroyed in the same beat, which the rules do not
   call a draw: both armies defeated, "You have been defeated!" (`ui/tests/draw.lua`,
   `-- /drawcase together`; the commanders killed in the simulation by `ui/tests/draw_sim.lua`).
+  The post-game report (ours, Chris 2026-11-07; the Interface option "Score Screen Extras", on at first, Off is FAF's
+  screen as it is; `ui/data/hook/lua/ui/dialogs/hotstats.lua`): FAF's graphs already show every army's mass and energy,
+  units alive, built, killed and lost over the game; ours adds the game's moments on them (the replay timeline's
+  markers along the top, a line down through the graph at each one's time, its text under the mouse; a strip of the
+  fighting per 5 s along the bottom), "Army Value (Mass)" in the list (built less lost mass, INFERRED: the score keeps
+  no value of what stands), and the Kill Stats chart's ACU column counting kills (FAF's table names the commanders
+  built there). The moments are the host's (`moho64ui_GameMoments`, `GameSession::GameMoments`): a replay's are its
+  timeline's; a game played is scanned from its own replay (LastGame) by the engine's `ScanReplayMoments` from the
+  moment it is over, so in a long game they come in while the screen is up ("Finding the game's moments 40%"). Test:
+  `ui/tests/postgame.lua` (an experimental and then the commander killed, the moments found where and when they were,
+  the markers, the strip, six graphs of the list with a line per army, Dual, Kill Stats, the option off).
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

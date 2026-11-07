@@ -5,6 +5,37 @@ commit, hardware, scenario, numbers). Newest first.
 
 **Hardware (all rows):** AMD Ryzen 9 9950X3D, NVIDIA RTX 4090, the screen at 240 Hz, vertical sync on.
 
+## 2026-11-07: a skirmish's first beats inside the load (helper "startfreeze", on adf1c5d4 + its patch)
+
+Chris's start as he plays it, measured in a window: SETONS_R, his game 18's table (his mods: Antares, Wyvern, our
+reworks, our M28 variant) with its seven AIs made M28AI cheat, seed 7, 1920x1080, `--session`. The program pinned to
+CPUs 16-31 (the half without the big cache: about 40% slower than Chris's), two other helpers' programs running
+meanwhile; BASE and the patch one after the other, four pairs (the shader caches warm). Seconds from the launch call;
+the hold and the screen from the long-frame log's stamps for BASE, the host's own line for the patch.
+
+| | BASE (beats 2..29 after the load) | Patch (beats 1..29 in the load) |
+|---|---|---|
+| The load (the launch call to the load's end) | 19.01 / 11.72 / 12.79 / 11.81 | 13.74 / 12.41 / 12.00 / 10.64 |
+| Held past the load (loading screen) | 4.60 / 3.50 / 3.00 / 2.80 | 0.07 / 0.07 / 0.09 / 0.06 (the screen's two frames) |
+| The launch call to the game's screen | 23.61 / 15.22 / 15.79 / 14.61 | 13.81 / 12.48 / 12.09 / 10.70 |
+| Beats 1..29 | 2.7-4.3 s behind the loading screen, after the load | 3.4-4.0 s on the loading thread, through 3.0-5.9 s before the map was ready |
+| M28's start (beats 10, 21, 17, 16) | 0.96-1.44, 0.66-1.11, 0.36-0.60, 0.29-0.50 s | the same beats, inside the load |
+| Longest frame, first 10 s of play | 183 / 136 / 120 / 111 ms | 214 (*) / 161 / 137 / 132 ms |
+| Longest beat, ticks 30-130 | 94 / 74 / 103 / 75 ms | 77 / 83 / 87 / 67 ms |
+
+The first pair's BASE was slow throughout (its loading thread 5.5 s against 3.6-3.9 s). The longest frame of the first
+seconds is the first frame after the screen in both, the renderer's first-sight work (the next tier's models made
+ahead, a commander's wreck, the compute pipelines' first use: 110-180 ms of "the world's picture"); with no hold after
+the load it now comes 3-4 s sooner. (*) That run's first frame was 141 ms; its 214 and 180 ms frames came 8-9 s into
+play, the picture's showing with nothing named. No freeze in the first 10 s of play either way.
+
+Exactness (the patch's MOHO64UI_AHEAD_IN_LOAD=0 is BASE's way): the same session headless with the beats in the load,
+after it (patch and BASE) and the in-load game's own replay played back: 1,201 fingerprint lines identical in every
+part, the records byte for byte; two window games (BASE / patch, the world's picture on): 142 lines identical, the
+records the same. The first picture after the load (held still by a pause): the same as BASE's but for what moves by
+the clock (the surf, the pause button's pulse); before the map was given the session after the beats, a Seraphim
+commander was drawn with another unit's model and icon (ui/README.md).
+
 ## 2026-11-06 evening: the held jump back without opening the map again (helper "rewind_r1", on 862b603 + its patch)
 The held jump back (below) now begins the new session on the map the window shows (WorldPicture::RestartMap, render
 c28c5ec: 6-11 ms) instead of opening the same map again behind. `MOHO64UI_REWIND_REOPEN=1` keeps the map opened again,
