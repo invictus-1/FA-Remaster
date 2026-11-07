@@ -88,6 +88,9 @@ class BakedDebris {
   // they lie and sink away as a death's without a wreck; the biggest `mostTrails` of those flying trail the debris's smoke
   float strayBeyond = 1.3f;
   int mostTrails = 8;
+  // [debrisairsea] the water's level (none: very low; the debris's), and where a chunk meets it (a splash; may be empty)
+  float waterLevel = -1e9f;
+  std::function<void(Vec3 at, float size)> splash;
   Particles* smoke = nullptr;  // (set by the debris: where the trails go, and which)
   std::string trail;
 
@@ -96,7 +99,15 @@ class BakedDebris {
   // A unit dies now (`clock`, the game's): plays that style of its set at `at` (its place), turned with `turn`'s heading, in
   // its army's `color`. False where it has no set (of that style; else the break style), or too many play already: the
   // caller throws the generic debris then. `unit`: its model as drawn (its scale).
-  bool Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style = "break");
+  // [debrisairsea] A set's class (its JSON's "class": land, air, naval). AIR: played where the aircraft came down, `fall` its
+  // velocity then: turned to the way it was going (not its nose) and its throw stretched along it by its speed over the
+  // bake's ("impact": {"speed"}, kept between half and one and a half). NAVAL: played on the water's surface where the ship
+  // died (the bake's y 0 is the water), its hull the game's own sinking ship. Either on water (an aircraft coming down at
+  // sea, a ship): each chunk follows its keys until it meets the water (a naval set's keys end there; an air set's where
+  // its chunk first touches its ground), splashes, then sinks at the JSON's "sink" units a second (0.6), slowly tilting,
+  // to the sea bed, where it lies and later sinks into the bed as the land's do. A land set on water plays nothing.
+  bool Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style = "break",
+            Vec3 fall = {});
   // Moves every death on to `clock` and adds those within sight of `eye` to `meshes` (between its Begin and Prepare; null: moved
   // only).
   void Update(double clock, Vec3 eye, MeshRenderer* meshes);
@@ -131,6 +142,7 @@ class BakedDebris {
     // thrown, trailing smoke while it flies
     float rests = 0;
     bool stray = false, smokes = false;
+    uint32_t touches = 0;  // [debrisairsea] the key where it first meets the bake's ground (y 0; a naval set's: its last)
   };
   struct Style {
     float fps = 30;
@@ -141,6 +153,9 @@ class BakedDebris {
     // its far-thrown chunks are debris rather than wreck, with smoke (vaporise); whether its hot parts sag (melt)
     const Model* model = nullptr;
     bool strays = false, melts = false;
+    // [debrisairsea] land 0, air 1, naval 2; an air set's arriving speed (0: not given); how fast its chunks sink in water
+    int cls = 0;
+    float impactSpeed = 0, sink = 0.6f;
   };
   struct Set {
     std::unordered_map<std::string, std::unique_ptr<Style>> styles;  // by name ("break"); a missing one null (asked once)
@@ -167,6 +182,11 @@ class BakedDebris {
     bool unseen = false;
     double heatFrom = 0;
     std::vector<uint32_t> trails;  // [debrispile] (its chunks' smoke trails, by track; 0: none)
+    // [debrisairsea] on water (its place at the surface); an air set's stretch along its way; when all of it is down (the
+    // style's, or later for what sinks); which chunks have splashed
+    bool sea = false;
+    float stretch = 1, settled = 0;
+    std::vector<uint8_t> splashed;
     std::vector<FrameBone> bones;  // (this frame's pose: its chunks', where the model renderer reads them)
     Vec3 centre;                   // (this frame's: the middle of its chunks, how far they reach)
     float reach = 0;

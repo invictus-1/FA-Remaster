@@ -137,6 +137,11 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
   style->melts = name == "melt";
   style->fps = static_cast<float>(std::max(1.0, json["fps"].NumberOr(30)));
   style->seconds = static_cast<float>(json["seconds"].NumberOr(0));
+  // [debrisairsea] its class, an air set's arriving speed, how fast its chunks sink in water
+  const std::string cls = Lower(json["class"].StringOr("land"));
+  style->cls = cls == "air" ? 1 : cls == "naval" ? 2 : 0;
+  style->impactSpeed = static_cast<float>(json["impact"]["speed"].NumberOr(0));
+  style->sink = static_cast<float>(std::clamp(json["sink"].NumberOr(0.6), 0.05, 20.0));
   int flyingOn = 0;
   for (const JsonValue& c : json["chunks"].items) {
     const std::string bone = Lower(c["bone"].StringOr(std::string()));
@@ -167,9 +172,22 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
       for (const Vec3& p : points) low = std::min(low, Rotate(turn, p).y);
       return points.empty() ? at.y : at.y + low;
     };
-    // flown on: a chunk still moving at the bake's end and off its ground
+    // [debrisairsea] where it first meets its ground (a naval set's keys end at the water: its last)
+    {
+      const size_t keys = t.keys.size() / 7;
+      t.touches = static_cast<uint32_t>(keys - 1);
+      if (style->cls != 2)
+        for (size_t k = 1; k < keys; ++k) {
+          const float* a = &t.keys[k * 7];
+          if (bottom(Vec3{a[0], a[1], a[2]}, Quat{a[3], a[4], a[5], a[6]}) <= 0.03f) {
+            t.touches = static_cast<uint32_t>(k);
+            break;
+          }
+        }
+    }
+    // flown on: a chunk still moving at the bake's end and off its ground (not a naval set's: its keys end at the water)
     const size_t n = t.keys.size() / 7;
-    if (n >= 2) {
+    if (n >= 2 && style->cls != 2) {
       const float* a = &t.keys[(n - 2) * 7];
       const float* b = &t.keys[(n - 1) * 7];
       Vec3 at{b[0], b[1], b[2]};
@@ -230,13 +248,18 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
   return style;
 }
 
-bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style) {
+bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style,
+                       Vec3 fall) {
   if (!unit || !unit->ok) return false;
   Set* set = SetOf(unitId);
   if (!set) return false;
   const Style* s = StyleOf(*set, unitId, style);
   if (!s && style != "break") s = StyleOf(*set, unitId, "break");
   if (!s) return false;
+  // [debrisairsea] (on water: a naval set, or an aircraft's coming down at sea; a land set plays nothing there)
+  const float bed = groundHeight ? groundHeight(at.x, at.z) : at.y;
+  const bool sea = waterLevel > bed + 0.05f;
+  if (sea && s->cls == 0) return false;
   if (Playing() >= mostPlaying) {
     ++refused;
     return false;
@@ -253,11 +276,28 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
   auto d = std::make_unique<Death>();
   d->set = set;
   d->style = s;
-  d->at = {at.x, groundHeight ? groundHeight(at.x, at.z) : at.y, at.z};
-  const Vec3 forward = Rotate(turn, Vec3{0, 0, 1});
+  d->at = {at.x, sea ? waterLevel : bed, at.z};
+  d->sea = sea;
+  Vec3 forward = Rotate(turn, Vec3{0, 0, 1});
+  // [debrisairsea] (an aircraft: the way it was going, and its throw stretched by its speed over the bake's)
+  const float across = std::hypot(fall.x, fall.z);
+  if (s->cls == 1 && across > 1) {
+    forward = Vec3{fall.x, 0, fall.z};
+    if (s->impactSpeed > 0) d->stretch = std::clamp(across / s->impactSpeed, 0.5f, 1.5f);
+  }
   const float yaw = std::atan2(forward.x, forward.z);
   d->heading = Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)};
   d->scale = unit->scale;
+  d->settled = s->settled;
+  if (sea) {  // (each chunk down to the bed at its sinking speed from where it meets the water)
+    d->splashed.assign(s->tracks.size(), 0);
+    for (const Track& t : s->tracks) {
+      const float* k = &t.keys[std::min<size_t>(t.touches, t.keys.size() / 7 - 1) * 7];
+      const Vec3 flat = Rotate(d->heading, Vec3{k[0], 0, k[2] * d->stretch} * d->scale);
+      const float depth = waterLevel - (groundHeight ? groundHeight(d->at.x + flat.x, d->at.z + flat.z) : bed);
+      d->settled = std::max(d->settled, static_cast<float>(t.touches) / s->fps + 0.3f + std::max(depth, 0.0f) / s->sink + 0.5f);
+    }
+  }
   const Vec3 extent = (unit->boundsMax - unit->boundsMin) * unit->scale;
   d->radius = 0.5f * std::max({extent.x, extent.y, extent.z, 0.2f});
   d->color = color * paint;
@@ -274,7 +314,7 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
 
 int BakedDebris::Playing() const {
   int n = 0;
-  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < d->style->settled ? 1 : 0;
+  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < std::max(d->settled, d->style->settled) ? 1 : 0;
   return n;
 }
 
@@ -293,7 +333,7 @@ bool BakedDebris::HasPile(const std::string& unitId) {
 
 const BakedDebris::Style* BakedDebris::PileStyle(Set& set, const std::string& unitId) {
   for (const char* style : {"break", "melt", "vaporise"})
-    if (const Style* s = StyleOf(set, unitId, style)) return s;
+    if (const Style* s = StyleOf(set, unitId, style)) return s->cls == 2 ? nullptr : s;  // ([debrisairsea] a ship's wreck: its own)
   return nullptr;
 }
 
@@ -420,7 +460,8 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     // lying still after the last chunk is down, then sinking away (each by its own height); sooner past the most lying.
     // [debrispile] Drawn as a wreck: lying for as long as the wreck stands (MatchWrecks takes it away with it)
     const bool wreck = d.prop != 0;
-    const double sinkFrom = d.sinkFrom >= 0 ? d.sinkFrom : d.born + s.settled + lieSeconds;
+    const float settled = std::max(d.settled, s.settled);  // [debrisairsea] (later for what sinks in water)
+    const double sinkFrom = d.sinkFrom >= 0 ? d.sinkFrom : d.born + settled + lieSeconds;
     const float sinkFor = d.sinkFrom >= 0 ? 8.0f : sinkSeconds;
     const float sunk = wreck ? 0.0f : std::clamp(static_cast<float>(clock - sinkFrom) / sinkFor, 0.0f, 1.0f);
     if (!wreck && clock - sinkFrom >= sinkFor) {
@@ -441,12 +482,42 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
       const float f = i + 1 < n ? frame - static_cast<float>(i) : 0.0f;
       const float* a = &t.keys[i * 7];
       const float* b = &t.keys[std::min(i + 1, n - 1) * 7];
-      const Vec3 p = Lerp(Vec3{a[0], a[1], a[2]}, Vec3{b[0], b[1], b[2]}, f) * d.scale;
-      const Quat q = Nlerp(Quat{a[3], a[4], a[5], a[6]}, Quat{b[3], b[4], b[5], b[6]}, f);
-      const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
+      Vec3 p = Lerp(Vec3{a[0], a[1], a[2]}, Vec3{b[0], b[1], b[2]}, f);
+      p.z *= d.stretch;  // [debrisairsea] (an aircraft's throw along its way, by its speed)
+      p = p * d.scale;
+      Quat q = Nlerp(Quat{a[3], a[4], a[5], a[6]}, Quat{b[3], b[4], b[5], b[6]}, f);
       // ([debrispile] VAPORISE: a chunk thrown beyond the wreck lies and sinks away as a death's without one, and is gone)
-      const float own = wreck && t.stray ? std::clamp(static_cast<float>(clock - (d.born + s.settled + lieSeconds)) / sinkSeconds, 0.0f, 1.0f) : sunk;
-      const float lift = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y - own * (p.y + t.reach * d.scale);
+      const float own = wreck && t.stray ? std::clamp(static_cast<float>(clock - (d.born + settled + lieSeconds)) / sinkSeconds, 0.0f, 1.0f) : sunk;
+      float lift = 0;
+      if (!d.sea) {
+        const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
+        lift = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y - own * (p.y + t.reach * d.scale);
+      } else {
+        // [debrisairsea] on water (its place the surface): its keys until it meets the water, then a splash, and it sinks,
+        // drifting on a little as it slows, tilting, down to the bed, where it lies (and later sinks into it)
+        const size_t cut = std::min<size_t>(t.touches, n - 1);
+        if (frame > static_cast<float>(cut)) {
+          const float tau = (frame - static_cast<float>(cut)) / s.fps;
+          const float* k = &t.keys[cut * 7];
+          const float* j = &t.keys[(cut > 0 ? cut - 1 : 0) * 7];
+          Vec3 drift = (Vec3{k[0], 0, k[2] * d.stretch} - Vec3{j[0], 0, j[2] * d.stretch}) * (s.fps * d.scale);
+          p = Vec3{k[0], k[1], k[2] * d.stretch} * d.scale + drift * ((1 - std::exp(-tau * 1.5f)) / 1.5f);
+          p.y -= s.sink * std::max(tau - 0.3f, 0.0f);
+          const float h = std::fmod(static_cast<float>(c) * 0.6180339f + static_cast<float>(d.id) * 0.137f, 1.0f);
+          const float tilt = std::min(tau * 0.25f, 1.1f) * (h > 0.5f ? 1.0f : -1.0f) * 0.5f;
+          const float around = h * 12.566371f;
+          const Quat r{std::cos(around) * std::sin(tilt), 0, std::sin(around) * std::sin(tilt), std::cos(tilt)};
+          q = Normalized(Mul(r, Quat{k[3], k[4], k[5], k[6]}));
+        }
+        if (frame >= static_cast<float>(cut) && c < d.splashed.size() && !d.splashed[c]) {
+          d.splashed[c] = 1;
+          const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
+          if (splash && !d.unseen && age < settled) splash(Vec3{d.at.x + flat.x, d.at.y, d.at.z + flat.z}, std::max(t.reach * d.scale * 2, 0.2f));
+        }
+        const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
+        const float floor = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y + t.reach * d.scale * 0.35f;
+        lift = (p.y < floor ? floor - p.y : 0.0f) - own * t.reach * d.scale * 1.2f;
+      }
       const Vec3 placed{p.x, p.y + lift, p.z};
       FrameBone& bone = d.bones[c];
       bone.bone = t.bone;
@@ -477,8 +548,9 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     // (hot: its age and how long it glows, as a wreck's; the shader lights the heat mask by them. [debrispile] And how far it
     // has cooled into its wreck's textures, in the tint's x: all of it by the time its chunks rest, eased in and out)
     const float heated = static_cast<float>(clock - d.heatFrom);
-    const float seconds = heat ? heat->WreckSeconds(d.radius) : 55.0f;
-    const float cooled = d.unseen ? 1.0f : std::clamp(age / std::max(s.settled, 0.1f), 0.0f, 1.0f);
+    // ([debrisairsea] on water its chunks are quenched as they go in: no glow past the first seconds)
+    const float seconds = std::min(heat ? heat->WreckSeconds(d.radius) : 55.0f, d.sea ? 2.5f : 1e9f);
+    const float cooled = d.unseen ? 1.0f : std::clamp(age / std::max(settled, 0.1f), 0.0f, 1.0f);
     const bool glows = hot && heated >= 0 && heated < seconds;
     // ([debrispile] MELT: how far its hot parts have sagged, eased over meltSeconds and then held; 101 times that in hundredths
     // over the burn's hundredths: the vertex shader)
@@ -496,7 +568,8 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
 void BakedDebris::ForEachHot(const std::function<void(Vec3, float, float, float, uint32_t)>& f) const {
   if (!hot || clock_ < 0) return;
   for (const auto& d : deaths_) {
-    const float age = static_cast<float>(clock_ - d->heatFrom), seconds = heat ? heat->WreckSeconds(d->radius) : 55.0f;  // ([debrispile] heatFrom)
+    const float age = static_cast<float>(clock_ - d->heatFrom);  // ([debrispile] heatFrom)
+    const float seconds = std::min(heat ? heat->WreckSeconds(d->radius) : 55.0f, d->sea ? 2.5f : 1e9f);  // ([debrisairsea])
     if (age >= 0 && age < seconds) f(d->centre, d->radius, age, seconds, d->id);
   }
 }

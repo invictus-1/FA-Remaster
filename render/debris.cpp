@@ -576,10 +576,12 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
       d.at = at;
       d.seen = d.died = clock;
       d.air = (u.layer & 0x10) != 0;
-      // (none from what dies on or in the water: it goes down; the game's shells are its debris)
-      d.thrown = (u.layer & (2 | 4 | 8)) != 0;
       // (what the game's debris shells thrown near it are pieces of: Shell)
       d.unit = (*frame.blueprints)[u.blueprint];
+      // (none from what dies on or in the water: it goes down; the game's shells are its debris. [debrisairsea] Unless it has a
+      // baked set: a ship's torn-off parts, thrown and sinking)
+      d.water = (u.layer & (2 | 4 | 8)) != 0;
+      d.thrown = d.water && !baked.Has(d.unit);
       d.model = model(d.unit);
       d.color = color(d.army);
       if (d.model && d.model->ok) {
@@ -602,8 +604,9 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     if (!d.thrown && now) {
       d.thrown = true;
       // [bakeddebris] (a unit on the ground with a baked set of its own: its real parts instead, in the style its death calls for)
-      d.baked = !d.air && baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(u.id, d));
-      if (!d.baked) Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
+      // ([debrisairsea] an aircraft's set where it came down, with the velocity it came down with)
+      d.baked = baked.Play(d.unit, d.model, at, d.turn, d.color, clock, DebrisStyleFor(u.id, d), d.air ? d.velocity : Vec3{});
+      if (!d.baked && !d.water) Throw(d.unit, d.model, at, d.turn, d.color, d.air ? d.velocity : Vec3{}, u.id);
     }
   }
   for (auto it = dying_.begin(); it != dying_.end();) {
@@ -616,8 +619,8 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     if (!d.thrown && clock - d.seen < 2 && d.at.y - Ground(d.at.x, d.at.z) < 4) {
       d.thrown = true;
       // [debrispile] (a unit on the ground with a baked set: its set, as above; its wreck waits for it, BakedDebris::coming)
-      d.baked = !d.air && baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(it->first, d));
-      if (!d.baked) Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
+      d.baked = baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(it->first, d), d.air ? d.velocity : Vec3{});
+      if (!d.baked && !d.water) Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
     }
     // (kept a while: a frame may leave a unit out for a moment)
     if (clock - d.seen > 5 || clock < d.seen - 1) it = dying_.erase(it);
@@ -875,12 +878,16 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
   // [bakeddebris] the baked deaths, on the same ground and clock
   baked.groundHeight = groundHeight;
   baked.hot = hot;
+  baked.waterLevel = waterLevel;  // [debrisairsea]
+  baked.splash = [splashes, clock](Vec3 at, float size) {
+    if (splashes) splashes->Add(at, size, clock, true);
+  };
   baked.smoke = smoke;  // [debrispile] (a vaporised unit's thrown chunks trail the same smoke)
   baked.trail = kTrail;
   // [debrispile] (a wreck waits for its death while a unit of its kind dying near it is still to be thrown)
   baked.coming = [this](const std::string& unitId, Vec3 at) {
     for (const auto& [id, d] : dying_) {
-      if (d.thrown || d.air || d.unit.size() != unitId.size() || std::hypot(d.at.x - at.x, d.at.z - at.z) > d.radius * 1.5f + 2.0f) continue;
+      if (d.thrown || d.unit.size() != unitId.size() || std::hypot(d.at.x - at.x, d.at.z - at.z) > d.radius * 1.5f + 2.0f) continue;
       bool same = true;
       for (size_t i = 0; i < unitId.size() && same; ++i)
         same = std::tolower(static_cast<unsigned char>(d.unit[i])) == std::tolower(static_cast<unsigned char>(unitId[i]));
