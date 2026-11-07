@@ -64,7 +64,9 @@ float CoverNear(float2 xz) {
 // Then thinned: the outer parts eaten by `erode` (the edges go first: the clouds break up and shrink rather than turn
 // to glass), the rest kept by `keep`.
 float CloudNear(float3 p, float h, bool frayed, float erode, float keep) {
-  float cover = CoverNear(p.xz);
+  // ([stormcells] seen from above a storm's blanket is thinned as the old storm's cover was: from the game's farthest zoom
+  // the map stays as readable as before)
+  float cover = CoverNear(p.xz) * (1 - 0.6 * cloudLight.w);
   if (cover <= 0.002) return 0;
   float3 wind = float3(skyClouds.y, skyClouds.w * 40, skyClouds.z);
   float4 s = CloudShape(p, wind, 0);  // ([cloudmix] not here: seen from above, the big heaps outlasted the thinning, a veil)
