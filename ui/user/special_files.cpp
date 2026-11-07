@@ -22,6 +22,7 @@
 #include "core/log.h"
 #include "script/lua.hpp"
 #include "user/bindings.h"
+#include "user/replay_timeline.h"
 #include "user/user_state.h"
 
 #ifdef _WIN32
@@ -225,6 +226,9 @@ int l_RemoveSpecialFile(lua_State* L) {
   const std::string file = FileOf(L, 1);
   if (!hostfs::IsFile(file)) return 0;
   Recycle(file, "RemoveSpecialFile");
+  // (ours: a replay's bookmarks beside it go with it, user/replay_timeline.h ReplayBookmarksFile)
+  const std::string bookmarks = ReplayBookmarksFile(file);
+  if (hostfs::IsFile(bookmarks)) Recycle(bookmarks, "RemoveSpecialFile");
   return 0;
 }
 
@@ -265,8 +269,18 @@ int l_CopyCurrentReplay(lua_State* L) {
   }
   std::error_code ec;
   fs::create_directories(PathOf(to).parent_path(), ec);
-  if (!hostfs::WriteFile(to, *data)) Logf(LogLevel::Warning, "moho64ui: CopyCurrentReplay: cannot write %s", to.c_str());
-  else Logf(LogLevel::Info, "moho64ui: the replay is kept as %s", to.c_str());
+  if (!hostfs::WriteFile(to, *data)) {
+    Logf(LogLevel::Warning, "moho64ui: CopyCurrentReplay: cannot write %s", to.c_str());
+    return 0;
+  }
+  Logf(LogLevel::Info, "moho64ui: the replay is kept as %s", to.c_str());
+  // (ours: the player's bookmarks of that replay go with it, when the file beside it is that replay's:
+  // user/replay_timeline.h ReplayBookmarksFile)
+  const std::string digest = ReplayDigest(*data);
+  std::vector<ReplayBookmark> bookmarks;
+  std::string why;
+  if (LoadReplayBookmarks(from, digest, &bookmarks, &why) && !bookmarks.empty() && !SaveReplayBookmarks(to, digest, bookmarks, &why))
+    Logf(LogLevel::Warning, "moho64ui: CopyCurrentReplay: the bookmarks: %s", why.c_str());
   return 0;
 }
 

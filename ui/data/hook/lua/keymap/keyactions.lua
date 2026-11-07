@@ -33,6 +33,21 @@ keyActions['remaster_timeline'] = {
     action = 'remaster_timeline',
     category = 'ui',
 }
+-- The player's own bookmarks on the replay timeline (Chris, 2026-11-07; /moho64ui/lua/timeline.lua, kept with the
+-- replay in a file beside it): one where the replay is now, a jump to the next one and to the one before; only while
+-- a replay plays.
+keyActions['remaster_bookmark_add'] = {
+    action = 'UI_Lua import("/moho64ui/lua/timeline.lua").AddBookmarkHere()',
+    category = 'ui',
+}
+keyActions['remaster_bookmark_next'] = {
+    action = 'UI_Lua import("/moho64ui/lua/timeline.lua").NextBookmark()',
+    category = 'ui',
+}
+keyActions['remaster_bookmark_previous'] = {
+    action = 'UI_Lua import("/moho64ui/lua/timeline.lua").PreviousBookmark()',
+    category = 'ui',
+}
 -- The follow camera, open or closed (its frame /moho64ui/lua/followcam.lua, its camera ui/maui/worldview.cpp): a small
 -- picture in a corner that follows the first selected unit; a left click on it jumps the main camera there.
 keyActions['remaster_follow_cam'] = {

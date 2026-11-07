@@ -901,6 +901,11 @@ struct GameSession::Timeline : ReplayTimelineSource {
   int limit = 0;  // (the scan's ScanArgs::ticks: 0 the whole replay)
   uint32_t jumpsBack = 0, backLoadingScreens = 0;  // (State's: kept across the jumps back, as the timeline is)
   double lastBackSeconds = 0;
+  // The player's bookmarks of the replay (user/replay_timeline.h ReplayBookmark): read from the file beside it when
+  // it opened (StartMomentScan), written there at each change, kept across the jumps back. `file`: the replay's own
+  // path; `digest`: which replay it is (ReplayDigest of its bytes).
+  std::string file, digest;
+  std::vector<ReplayBookmark> bookmarks;
 
   ~Timeline() { Stop(); }
   void Stop() {
@@ -1013,6 +1018,17 @@ struct GameSession::Timeline : ReplayTimelineSource {
     return true;
   }
   std::string TakeKept() override { return std::move(kept); }
+  std::vector<ReplayBookmark> Bookmarks() const override { return bookmarks; }
+  bool SetBookmarks(const std::vector<ReplayBookmark>& list, std::string* why) override {
+    bookmarks = CleanBookmarks(list, ticks);
+    if (!SaveReplayBookmarks(file, digest, bookmarks, why)) {
+      Logf(LogLevel::Warning, "moho64ui: the replay's bookmarks are kept for this run only: %s", why->c_str());
+      return false;
+    }
+    Logf(LogLevel::Info, "moho64ui: the replay's bookmarks: %zu, in %s", bookmarks.size(), hostfs::DisplayPath(BookmarksFile()).c_str());
+    return true;
+  }
+  std::string BookmarksFile() const override { return ReplayBookmarksFile(file); }
   void CaptureForTests(const std::string& path) override { session->CaptureWindow(path); }
   void Watch(const std::vector<uint32_t>& ticks) override {
     GameSession& g = *session;
@@ -1042,6 +1058,14 @@ void GameSession::StartMomentScan(const ReplayHeader& header, const std::string&
   t.ticks = ReplayBeats(playData_, header.streamOffset);
   Logf(LogLevel::Info, "moho64ui: the replay is %u beats long (%u:%02u); its moments are looked for", t.ticks, t.ticks / 600,
        (t.ticks / 10) % 60);
+  // the player's bookmarks of it, from the file beside it (one of another replay's, as an earlier LastGame's, is left)
+  t.file = file;
+  t.digest = ReplayDigest(playData_);
+  std::string why;
+  if (!LoadReplayBookmarks(file, t.digest, &t.bookmarks, &why))
+    Logf(LogLevel::Warning, "moho64ui: the bookmarks in %s are not used: %s", hostfs::DisplayPath(ReplayBookmarksFile(file)).c_str(), why.c_str());
+  else if (!t.bookmarks.empty())
+    Logf(LogLevel::Info, "moho64ui: the replay's bookmarks: %zu, from %s", t.bookmarks.size(), hostfs::DisplayPath(ReplayBookmarksFile(file)).c_str());
   moho::ScanArgs args;
   args.init = scanInit;
   args.folders = scanFolders;

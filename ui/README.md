@@ -174,13 +174,33 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   option, its title lit for a moment. Nothing typed: the entries run last. Tests: `ui/tests/palette.lua`.
   The program's own key actions in every key map (Chris, 2026-10-23; `ui/data/hook/lua/keymap/keymapper.lua`, a hook):
   each with its key (Ctrl-Alt-S statistics, Ctrl-Alt-C cinematic camera, Ctrl-Alt-F12 photo, Alt-P photo mode,
-  Ctrl-Shift-P command palette) comes into FAF's three presets (default, hotbuild, alternative) and into the player's
+  Ctrl-Shift-P command palette, Ctrl-T replay timeline, Ctrl-Alt-V follow camera, Y radial ping, Ctrl-Shift-B /
+  Ctrl-Shift-. / Ctrl-Shift-, replay bookmarks, and FAF's own camera spots 1..9: Ctrl-Alt-1..9 save, Alt-1..9 go
+  there) comes into FAF's three presets (default, hotbuild, alternative) and into the player's
   saved key map wherever that key is free there (not bound, and not the Shift / Alt version of a hotbuild key, which
   the hotbuild modifiers take in a game); a taken key is left alone and the action stays unbound in that map. Added
   where the map is read (GetDefaultKeyMap, GetUserKeyMap), never written by itself: the key binding screen saves the
   map with them when it saves anyway, and then notes the own actions that map has seen (`UserKeyMapRemasterActions`
   in the profile), so one the player unbound stays unbound and only a newer action comes in by itself. Tests:
   `ui/tests/ownkeys.lua`.
+  Replay bookmarks (ours: Chris, 2026-11-07): the player's own named marks on the replay timeline
+  (`ui/data/lua/timeline.lua`), each a thin pole with a small pink flag down through the fighting strip, beside the
+  game's moments above the track. Added where the replay is by the key "Replay bookmark: add one at this moment"
+  (Ctrl-Shift-B at first) or the flag button under the bar's X, or at the moment under the mouse by a right click on
+  the track (its name typed at once: Enter keeps it, Escape leaves it); named by their time ("12:40") until named.
+  Hover: name and time; a click jumps there (forward, or the held jump back); a right click renames or removes it;
+  Ctrl-Shift-. and Ctrl-Shift-, jump to the next one and the one before. Kept WITH THE REPLAY in a small text file
+  beside it, `<replay>.bookmarks.txt` (one a line: the game tick, a tab, the name; a `replay <size> <FNV-1a 64>` line
+  says which replay they belong to, so an earlier game's bookmarks beside a LastGame written anew are not taken), read
+  when that replay is opened again; the replay itself is never written. The game's Save Replay takes them along with
+  the copy, its delete sends them to the recycle bin with the replay. The host keeps them across jumps back
+  (`moho64ui_ReplayBookmarks`, `moho64ui_ReplaySetBookmarks`, `user/replay_timeline.cpp`). Tests: `ui/tests/bookmarks.lua`.
+  Camera spots per map (Chris, 2026-11-07): FAF's own camera spots (`/lua/usercamera.lua` SaveCameraPosition /
+  RestoreCameraPosition, which FAF's presets leave without keys) get keys (Ctrl-Alt-1..9 save, Alt-1..9 go there; 1..9
+  with Ctrl, Shift or both stay FAF's control groups) and names in the key map, and each spot saved is kept in the
+  profile by map (`moho64ui_camera_spots`, under the map's .scmap file; `ui/data/hook/lua/usercamera.lua`, a hook):
+  a later game or replay on the same map finds them. FAF's list of camera positions (add / next / remove) is as it was.
+  Tests: `ui/tests/camera_spots.lua` (and the spot in a replay: `bookmarks.lua`).
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).
