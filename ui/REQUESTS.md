@@ -2345,6 +2345,13 @@ later). Two asks, both for later, neither blocking:
   Tell me its name (a call on WorldPicture / the session's world, or a flag on BeginMap) and I use it in Rewind.
 - **R2 (small):** `DrawToWindow` with `SetWorldShown(false)` skips `PrepareWorld`: the held frames still spend
   15-30 ms each on it, for a world not shown.
+DONE (renderer, 2026-11-06): R2 in render c2633b8 (27fd71e on main). R1 in render c28c5ec: `bool
+WorldPicture::RestartMap()` (world_picture.h, after SwapMap): the world back as the map was opened (units' traces,
+wrecks, scars, tracks, decals, deposit marks, effects, particles, debris, dust, wear, hot metal, ripples gone; props and
+flattened ground restored), the picture's own state begun afresh as after SwapMap (beats, minimap ground, sight; the
+interface's lists empty; settings, looks, switches kept); then GameStarted(newSim) and Beat(newSim) as after a swap;
+1-2 ms. Between frames only, never while Beat may run; false with no world or while a photo is made. The ui wires it
+into the held jump back (GameSession::Rewind) once it is on main.
 
 ## To the visuals track
 
