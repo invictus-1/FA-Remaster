@@ -4371,6 +4371,7 @@ void World::Render() {
       lights.Bind();
     }
     Stage("sky");
+    skyDraw.starry = starryNight ? 1.0f : 0.0f;  // [starry]
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{}, clouds.Picture());  // where nothing solid is
     if (streamNow_) {  // [stream] the streams as water (stream_water.h): over what is solid, under the sea, seeing through to a copy
       Stage("stream water");
@@ -4450,6 +4451,7 @@ void World::Render() {
     }
   } else {
     draw.Flush(view);
+    skyDraw.starry = starryNight ? 1.0f : 0.0f;  // [starry]
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{});
   }
   // motion: from the depth of everything solid and the water, and the models that moved of themselves

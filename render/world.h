@@ -1378,6 +1378,7 @@ class World {
   // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
   PhotoLook photoLook;
   bool stormCells = true;  // [stormcells] a storm's clouds in towering cells (clouds.h, Clouds::storm); off: as before
+  bool starryNight = true;  // [starry] the night sky deep, starry, the band and the moon's halo (sky.h, Sky::starry); off: as before
   float stormSunNow_ = 0;  // [stormcells] this frame's storm, for the sun pockets (World::Begin)
   PhotoFinish photoFinish;
   // [horizon] The weather on the horizon (horizon.h; Chris, 2026-10-18, "beyond the map's edge, part 2"): on the sea
