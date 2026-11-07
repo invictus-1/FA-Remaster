@@ -98,8 +98,7 @@ int RockHits::Hit(Vec3 at, float size, double clock, std::vector<Touched>* out, 
         t.model = r.model;
         t.at = {w.x, w.y, w.z};
         // out: from where it was struck toward the hit (a blast beside it), else back against the shot's way, else out from its
-        // middle; and up, never down into
-        // the ground
+        // middle; and up, never down into the ground
         Vec3 o = at - t.at;
         if (Length(o) < 0.05f) o = Length(way) > 0.5f ? way * -1.0f : t.at - r.centre;
         if (Length(o) < 1e-3f) o = {0, 1, 0};
@@ -124,6 +123,10 @@ int RockHits::Hit(Vec3 at, float size, double clock, std::vector<Touched>* out, 
           s.worst = std::max(s.worst, s.soot);
           s.crack = std::min(1.0f, s.crack + 0.1f * k2 + 0.01f);
           s.dust = std::max(s.dust, 0.45f + 0.55f * t.strength);
+          // (the side it was struck on, in its own frame: the hits' ways out, each by its weight)
+          const Vec4 m = r.toModel * Vec4{t.out.x, t.out.y, t.out.z, 0};
+          const Vec3 side{m.x, m.y, m.z};
+          if (Length(side) > 1e-6f) s.side += Normalize(side) * k2;
         }
         ++touched;
         ++n;
@@ -165,9 +168,15 @@ void RockHits::Update(double clock) {
 
 Vec3 RockHits::Tint(uint32_t prop) const {
   const auto s = scars_.find(prop);
-  if (s == scars_.end()) return {-0.35f, 0, -0.001f};
-  return {-0.35f - 0.1f * std::clamp(s->second.dust, 0.0f, 1.0f), -0.49f * std::clamp(s->second.soot, 0.0f, 1.0f),
-          -0.001f - std::clamp(s->second.crack, 0.0f, 1.0f)};
+  if (s == scars_.end()) return {-0.35f, 0, -1.0f / 65536};
+  auto byte = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255)); };
+  // (its struck side's way about the upright, 0..255 for a whole turn, and how far up, 0..255 for -1..1)
+  Vec3 side = Length(s->second.side) > 1e-6f ? Normalize(s->second.side) : Vec3{0, 1, 0};
+  const float around = std::atan2(side.z, side.x) * (1 / 6.2831853f);
+  const int turn = static_cast<int>(std::lround((around - std::floor(around)) * 256)) & 255;
+  return {-0.35f - 0.1f * std::clamp(s->second.dust, 0.0f, 1.0f),
+          -0.49f * static_cast<float>(byte(s->second.soot) * 256 + byte(s->second.crack)) / 65535,
+          -static_cast<float>(1 + turn * 256 + byte(side.y * 0.5f + 0.5f)) / 65536};
 }
 
 }  // namespace render

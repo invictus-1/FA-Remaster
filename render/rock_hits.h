@@ -3,14 +3,17 @@
 // the game has them; a rock the game takes away, reclaimed, is gone from the picture as before).
 //
 // What a hit on a rock does (a shot that lands on or beside one, within its size, or a blast that reaches it):
-//  - Chips: a burst of small pieces of rock flies off where it was struck, out from the rock and up, tumbles and falls
-//    (debris.h, Debris::Chip: lumps wearing patches of the rock's own texture, its fresh fractures paler stone). Some stay
+//  - Chips: a burst of small, dark pieces of rock flies off where it was struck in quick low arcs, out from the rock,
+//    tumbles and falls (debris.h, Debris::Chip: lumps wearing patches of the rock's own texture, darkened). Some stay
 //    lying round its foot as rubble (a budget of them, `Debris::mostChipRubble`), sinking away after some minutes; the
 //    rest sink into the ground within seconds.
 //  - Dust: a puff of rock dust where it was struck (the game's own rocky ground's impact dust: its grey "tti_rocky11"
 //    emitters, small or medium by the hit's size), settling.
-//  - Scars: the rock keeps how much it has been hit. Soot darkens it in patches, the more the darker; cracks open over it
-//    as the hits add up (they stay); a fresh hit leaves a coat of pale rock dust on it that fades within half a minute.
+//  - Scars: the rock keeps how much it has been hit, and on which side. Soot darkens it in patches, more on the side it
+//    was struck on and on top, in streaks running out from there; at its darkest to about half the rock's own colour,
+//    whose grain always shows through. A few fine fractures spread from the struck side as the hits add up (they stay),
+//    branching, thinner toward their ends, never a net over all of it. A fresh hit leaves a coat of pale rock dust on it
+//    that fades within half a minute.
 //    The soot eases back slowly, to about half of what it was at its worst, over some minutes (rain and wind), never
 //    all the way.
 // Sized by the hit: a shell's direct hit throws a few small chips and blackens a rock a little; a blast as large as an
@@ -95,8 +98,9 @@ class RockHits {
   const std::vector<uint32_t>& HeldList() const { return heldList_; }
   // Its scars as the model shader reads them, in the instance's tint (a ghost's colour, which is never negative): x -0.35
   // less its fresh dust's share times 0.1 (so between -0.35 and -0.45: above -0.5, which the vertex shader takes for a
-  // tank's treads or a factory's belt, and no hot wreck's -0.25: hot_metal.h), y its soot times -0.49, z -0.001 less its
-  // cracks (0..1).
+  // tank's treads or a factory's belt, and no hot wreck's -0.25: hot_metal.h); y -0.49 times (its soot, 0..255, times 256
+  // and its cracks, 0..255) / 65535; z -(1 + the way about the upright to the side it was struck on, 0..255 a whole turn
+  // from +x toward +z, times 256 + how far up that side is, 0..255 for -1..1) / 65536, in the model's own frame.
   Vec3 Tint(uint32_t prop) const;
 
   int hits = 0, touched = 0;  // hits told and rocks they touched, since the map was opened
@@ -112,6 +116,7 @@ class RockHits {
   };
   struct Scar {
     float soot = 0, worst = 0, crack = 0, dust = 0;
+    Vec3 side;  // the side it was struck on (its own frame, not unit length: the hits' ways summed by their weight)
   };
   std::vector<Rock> rocks_;
   std::vector<std::vector<uint32_t>> cells_;  // rocks (indices into rocks_) by squares of kCell, each listed where its sphere reaches

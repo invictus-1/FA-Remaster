@@ -2767,9 +2767,9 @@ void World::RockHit(Vec3 at, float size, Vec3 way) {
   for (const RockHits::Touched& t : touched) {
     if (t.prop >= props_.size() || !props_[t.prop].model || props_[t.prop].cell < 0) continue;  // (gone, or under a structure)
     if (t.fresh) propCells_[static_cast<size_t>(props_[t.prop].cell)].changed = true;  // (its group filled anew without it)
-    // chips: more and larger for a larger hit, none larger than a quarter of a small rock
+    // chips: more and larger for a larger hit, small, none larger than a sixth of a small rock
     const int chips = rocks.TakeChips(std::min(static_cast<int>(std::lround((2 + 4 * std::sqrt(s)) * t.strength)), 12), clock_);
-    if (chips > 0) debris.Chip(t.model, t.at, t.out, chips, std::min(0.07f + 0.07f * std::sqrt(s), t.across * 0.25f), t.strength);
+    if (chips > 0) debris.Chip(t.model, t.at, t.out, chips, std::min(0.04f + 0.04f * std::sqrt(s), t.across * 0.15f), t.strength);
     // a puff of rock dust where it was struck
     if (rocks.TakeDust(clock_))
       particles.Start(size < 0.8f ? rocks.dustSmall : rocks.dustLarge, t.at, Quat{}, std::clamp(0.6f + 0.5f * s, 0.6f, 2.2f) * (0.6f + 0.4f * t.strength));

@@ -95,8 +95,8 @@ class Debris {
   // moving. Its own fragments where `fragments` has some, else a handful from the library, from its lower body.
   void Throw(const std::string& unitId, const Model* model, Vec3 position, const Quat& turn, Vec3 color, Vec3 velocity, uint32_t seed);
   // [rockhits] Chips off a rock under fire (rock_hits.h, World::rockHits): `count` small lumps wearing patches of the rock's
-  // own texture (`rock`, its model as drawn; their fresh fractures paler stone, the lumps' broken concrete), thrown from
-  // `at` (where it was struck, on its surface) out along `out` (unit length) and up, as fast as `strength` (0..1) says;
+  // own texture (`rock`, its model as drawn), skin and fractures alike darkened (never pale flakes), thrown from `at`
+  // (where it was struck, on its surface) out along `out` (unit length) in quick low arcs, as fast as `strength` says;
   // `size` across at the most. A share of them (`chipsKept`) stay lying as rubble at the rock's foot for `chipRubbleLasts`
   // (at most `mostChipRubble`, the oldest sinking away first); the rest sink into the ground within seconds of landing.
   // None past `mostChipsFlying` in the air at once. Kept apart from the deaths' rubble and its most.

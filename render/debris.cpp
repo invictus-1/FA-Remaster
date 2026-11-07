@@ -521,6 +521,7 @@ void Debris::Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, f
   seed_ ^= static_cast<uint32_t>(at.x * 977.0f) * 2654435761u ^ static_cast<uint32_t>(at.z * 613.0f);
   if (!seed_) seed_ = 1;
   // (a frame out of `out`: two ways across it, for the cone)
+  out = Normalize(Vec3{out.x, std::min(out.y, 0.35f), out.z});  // (low: quick flat arcs, not a fountain)
   const Vec3 side = Length(Cross(out, Vec3{0, 1, 0})) > 0.1f ? Normalize(Cross(out, Vec3{0, 1, 0})) : Vec3{1, 0, 0};
   const Vec3 upish = Normalize(Cross(side, out));
   const float push = 1.0f + 2.0f * std::clamp(strength, 0.0f, 1.0f);
@@ -528,7 +529,7 @@ void Debris::Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, f
     if (chipsFlying_ >= mostChipsFlying || flying_.size() >= 800) break;
     Chunk c;
     const float big = Random();
-    c.size = c.scale = std::clamp(size * (0.3f + 0.4f * Random() + 0.3f * big * big * big), 0.025f, 0.35f);
+    c.size = c.scale = std::clamp(size * (0.3f + 0.4f * Random() + 0.3f * big * big * big), 0.02f, 0.2f);
     c.at = at + out * (c.size * 0.6f);
     const Vec3 tilt = Normalize(Vec3{Random() - 0.5f, Random() - 0.5f, Random() - 0.5f});
     const float half = Random() * 3.14159265f, s = std::sin(half);
@@ -537,7 +538,7 @@ void Debris::Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, f
     const float a = Random() * 6.2831853f, spread = 0.85f * std::sqrt(Random());
     const Vec3 way = Normalize(out + (side * std::cos(a) + upish * std::sin(a)) * spread);
     const float fast = Random();
-    c.velocity = way * (push * (0.2f + 1.1f * fast * fast) * std::clamp(0.12f / std::max(c.size, 0.03f), 0.7f, 1.6f)) + Vec3{0, 0.6f + 1.8f * Random(), 0};
+    c.velocity = way * (push * (0.3f + 1.1f * fast * fast) * std::clamp(0.08f / std::max(c.size, 0.02f), 0.7f, 1.6f)) + Vec3{0, 0.3f + 0.9f * Random(), 0};
     c.spin = Normalize(Vec3{Random() - 0.5f, Random() - 0.5f, Random() - 0.5f}) * ((8 + 14 * Random()) * std::min(1.0f, 0.1f / std::max(c.size, 0.01f)));
     const Looks& looks = LooksOf(rock, 'r');
     const int k = looks.picks[std::min(static_cast<size_t>(Random() * static_cast<float>(looks.picks.size())), looks.picks.size() - 1)];
@@ -545,7 +546,7 @@ void Debris::Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, f
     c.torn = shape_[k].torn.get();
     c.solid = true;
     c.chip = true;
-    c.color = {1, 1, 1};  // (the rock's own colours: a rock's colour multiplies its texture)
+    c.color = {0.55f, 0.55f, 0.55f};  // (the rock's own colours, darkened: what multiplies its texture; its fractures' too, Draw)
     c.born = clock_ >= 0 ? clock_ : 0;
     c.key = 0x40000000u | (nextKey_++ & 0x1fffffffu);
     flying_.push_back(c);
@@ -901,7 +902,7 @@ void Debris::Draw(MeshRenderer* meshes, const Chunk& c, const Mat4& world, const
     heat = HotMetal::Tint(age, hotSeconds);
     tint = &heat;
   }
-  meshes->Add(c.torn, world, {1, 1, 1}, 1, nullptr, tint, nullptr, c.key | 0x20000000u);
+  meshes->Add(c.torn, world, c.chip ? c.color : Vec3{1, 1, 1}, 1, nullptr, tint, nullptr, c.key | 0x20000000u);  // ([rockhits] a chip's darkened)
 }
 
 }  // namespace render
