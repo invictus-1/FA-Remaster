@@ -4,6 +4,39 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 46: beats 2-29 run while the map is still opening (2026-11-07)
+
+Confirmed, and nothing needs changing in the renderer: the simulation keeps each per-beat list until it is taken, and
+the picture takes them only in Beat. Props' events (moho::PropEvents), effect events (moho::EffectEvents, which also
+moves each one to its entity's place at the moment it is taken), hits, impacts and health (Sim::TakeHits / TakeImpacts /
+TakeHealth) all pile up over beats 2-29 and the first Beat after SwapMap takes them together. The picture gets the same
+events as 28 separate Beats would have given it. The only difference is that they all carry beat 29's tick: an effect made
+at beat 5 starts its particles at 29, and one made and ended within those beats arrives as Create plus Destroy in the same
+beat, so it is never seen. Before beat 30, FAF hides the commander and nothing moves, so the first picture is the same in
+practice. One more small difference: the picture knows a single beat when it first draws, so its first frame shows beat 29
+as it stands (today it shows 28 to 29). Nothing moves there.
+
+What must not be done before SwapMap:
+- GameStarted and Beat: they go to the world shown (the menu's), and SwapMap starts the beats afresh, so what they took
+  would be lost (and the menu's world would show the game's units for a moment). Same for RestartMap.
+- Taking the lists any other way: GameSession::NotePictureBeat, with no picture, calls TakeHits / TakeImpacts /
+  TakeHealth and drops them. Skip that branch during the run-ahead and leave the lists to the first Beat.
+
+What to call, and when:
+1. The simulation is loaded, then PrepareSession(sim), with no beat running. It reads everything it needs on the calling
+   thread and keeps no reference to the simulation. The map's loading thread, its model thread and its warm frames never
+   read the simulation afterwards. So the run-ahead may start on the loading thread as soon as PrepareSession returns,
+   while the map goes on opening.
+2. SetLoadCamera and SetLoadDayAndWeather: any time before MapReady, as today.
+3. Once both the run-ahead (beat 29) and MapReady are done (your LoadDone): SwapMap, with no beat running (as
+   OpenPictureIfDue waits today). Then DressGamePicture as today: GameStarted, SetFocusArmy, SetDayAndWeather, then
+   Beat. That Beat takes beats 2-29's events.
+4. Beat after every Tick from beat 30 on, as now. GameStarted, Beat, SwapMap and PrepareSession never run while a beat
+   is running.
+
+If the map fails (MapFailed), CancelMap and keep the old path: the lists keep piling up until a picture's first Beat.
+After 28 beats that is small; do not let a long run (thousands of beats) go without a Beat.
+
 ## To visuals, section 101: death debris from a unit's real parts, three styles (2026-11-07)
 
 How the renderer would play your baked chunks (the Striker pilot first). Nothing of this changes the game: its wreck and
