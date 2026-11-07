@@ -1688,6 +1688,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     } else {
       air.storm = 0;
     }
+    air.moonShare = starryNight && skyLight.moon ? 0.65f : 1.0f;  // [starry] (the moon's glow in the air softer)
     Vec3 bolt{0, 0, 0};
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
       bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));

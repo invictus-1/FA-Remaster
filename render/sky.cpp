@@ -218,7 +218,7 @@ float4 PS(VOut i) : SV_Target {
   [branch] if (nightLook.x > 0 && night > 0.01) {
     float lum = dot(c, float3(0.3, 0.6, 0.1));
     float3 deep = lerp(c, lum * float3(0.55, 0.68, 1.2), 0.55);
-    c = lerp(c, deep * lerp(0.6, 0.3, saturate(d.y * 2.2)), night * nightLook.x);
+    c = lerp(c, deep * lerp(0.5, 0.25, saturate(d.y * 2.2)), night * nightLook.x);  // (Chris, 2026-11-07: "a tad darker")
   }
   c += float3(0.012, 0.016, 0.028) * sunDisc.w;  // the night's own faint light
   [branch] if (night > 0.01 && d.y > -0.02) {
@@ -272,7 +272,7 @@ float4 PS(VOut i) : SV_Target {
   [branch] if (nightLook.x > 0 && night > 0.01 && moon.y > -0.05) {
     float a = acos(saturate(dot(d, moon)));
     float halo = 0.6 * exp(-a * 35) + 0.12 * exp(-a * 6);
-    c += float3(0.75, 0.82, 1.0) * (halo * 0.08 * night * nightLook.x * overHorizon * (1 - sunSky.w));
+    c += float3(0.75, 0.82, 1.0) * (halo * 0.04 * night * nightLook.x * overHorizon * (1 - sunSky.w));  // (Chris: "not as strong")
   }
   // [starry] now and then a shooting star: a streak of some 15 degrees in 0.7 s, its tail fading behind it
   [branch] if (nightLook.x > 0 && night > 0.3 && d.y > 0.05) {
@@ -330,7 +330,7 @@ float4 PS(VOut i) : SV_Target {
     float4 a = AirAt(cameraPosition + normalize(d) * (air.y * exp(air.z) * 0.999));
     // ([starry] at night the moonlit air over the sky a quarter, more so overhead: its light gathered over the volume's whole
     // depth washed the night sky pale; the haze low over the horizon and over the ground as it was)
-    c = c * a.a + a.rgb * (1 - 0.75 * nightLook.x * night * saturate(d.y * 4));
+    c = c * a.a + a.rgb * (1 - 0.8 * nightLook.x * night * saturate(d.y * 4));
   }
   // (sky) with the far sea (view.h, BeyondSea; the land far off on): below the horizon past the world beyond the edge, seen
   // from above, the sea through the air in place of that haze; the clouds the zoom put before it laid over it again
