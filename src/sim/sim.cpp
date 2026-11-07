@@ -479,6 +479,18 @@ int l_GetSurfaceHeight(lua_State* L) {
   return 1;
 }
 
+// Remastered.TerrainHeightWrites() (FA Remastered only, with the fixes: script/fastlib.h): how many height samples
+// the map has had written since it was loaded (TerrainMap::changes, FlattenMapRect's SetHeightAt), as two numbers
+// (the count mod 2^20, the count / 2^20, both exact as floats), so that a script can tell whether the ground is
+// still the one it read. 0, 0 with no map. Ours.
+int l_TerrainHeightWrites(lua_State* L) {
+  const TerrainMap* m = S(L)->map();
+  const uint64_t n = m ? m->changes() : 0;
+  lua_pushnumber(L, static_cast<lua_Number>(n & 0xFFFFFu));
+  lua_pushnumber(L, static_cast<lua_Number>(n >> 20));
+  return 2;
+}
+
 // CheatsEnabled() 0x74b6a0: Sim::CheatsEnabled, so the call counts as a cheat test ("Logs the cheat attempt no
 // matter what")
 int l_CheatsEnabled(lua_State* L) {
@@ -1433,7 +1445,17 @@ bool Sim::Start(const ReplayHeader& replay) {
   RegisterAiBuildBindings(L);
   // The engine's own generic helpers (script/fastlib.h), only with the fixes: a playback of the original's replays
   // keeps the original's globals.
-  if (fixes) RegisterRemasteredLib(L);
+  if (fixes) {
+    RegisterRemasteredLib(L);
+    lua_pushstring(L, "Remastered");
+    lua_rawget(L, LUA_GLOBALSINDEX);
+    if (lua_istable(L, -1)) {  // (absent with MOHO64_NO_REMASTERED=1)
+      lua_pushstring(L, "TerrainHeightWrites");
+      lua_pushcfunction(L, l_TerrainHeightWrites);
+      lua_rawset(L, -3);
+    }
+    lua_pop(L, 1);
+  }
   SetModsGlobal(*state_);
   // The user layer's language (prefs 'options_overrides.language', default '') - set by the engine.
   lua_pushstring(L, "");

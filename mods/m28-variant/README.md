@@ -93,6 +93,19 @@ the original M28AI v326 and with this variant in FA Remastered and comparing the
    through the VM's own indexing in the same order, stopping where the Lua `and` stops; anything that is not a table
    goes to the Lua function itself. `bVariantVerifyNativeUnitInfo` (a switch of that file: M28Utilities is not loaded
    yet when it runs) runs both and logs any difference.
+10. **The navigational mesh made while the game loads** (2026-11-07, new file `lua/AI/M28VariantNavAhead.lua`, one
+   line in `hook/lua/simInit.lua`). M28 asks for FAF's navigational mesh (Jip's `/lua/sim/navgenerator.lua`) when its
+   first brain records its start point, at 1 second of game time, and FAF's generator then took 0.8 s or more in one
+   beat: the first freeze of every game against M28. The mesh is now made at the end of BeginSession, while the game
+   still loads, in a second copy of FAF's module. FAF's own module is not touched until the mesh is first asked for;
+   that first `Generate` then takes the copy's mesh and does what Generate does after making it (the layer data for
+   the user layer, the debug module, its console lines), provided nothing the generator reads has changed (the map's
+   size, type and playable area, the water ratio, the ground's heights, the resource markers); otherwise FAF's own
+   Generate runs as before. The resource markers' labels it sets are put on only then. Only on FA Remastered (it needs
+   the engine's `Remastered.TerrainHeightWrites`) and with an M28 AI in the game. `bVariantVerifyNavAhead` (also on
+   with `M28Utilities.bVariantVerifyNative`) runs FAF's Generate anyway and compares the two meshes;
+   `bVariantNavAheadForceDrop` (a test switch) always drops the copy. M28's map setup at 1.6 to 2.1 s stays where it
+   was: it reads what the first beats made and is read by M28's other threads while it runs.
 
 Every change in the Lua files is marked with a comment that starts "FA Remastered variant".
 
