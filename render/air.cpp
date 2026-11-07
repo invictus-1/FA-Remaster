@@ -518,7 +518,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.light[1] = std::clamp(lampForward, -0.95f, 0.95f);
   // ([stormcells] in a storm most of the sun's light in the air back: the deck's and the cells' shadows keep it out but where
   // the deck breaks, pockets of sunlight: visuals' section 98)
-  k.light[2] = std::max(sunInAir, 0.0f) * (1 - 0.25f * std::clamp(storm, 0.0f, 1.0f));
+  k.light[2] = std::max(sunInAir, 0.0f) * (1 - 0.25f * std::clamp(storm, 0.0f, 1.0f)) * std::clamp(moonShare, 0.0f, 1.0f);
   k.light[3] = std::max(skyInAir, 0.0f);
 
   const gfx::Texture last = cells_[1 - now_], gathered = cells_[now_];
