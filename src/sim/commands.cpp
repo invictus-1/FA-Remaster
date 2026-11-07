@@ -1729,12 +1729,17 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
     // in the same message batch; the Move it replaced kept its move (CUnitMoveTask dtor, a Move for a Move): the
     // original's ships drive on at full speed, speed-through 1, an empty queue; ours stopped them (braking from 15138).
     const bool undispatched = u->headState == kNotStarted && !u->task;
+    // The event re-links a suspended thread first and interrupts the tasks after (0x599050..0x599083, then 0x408d70):
+    // a thread the teardown wakes (a cargo whose walk the load's dtor aborts) goes after this one.
+    if (asleep) sim.ResumeCommandThread(u);
+    sim.resumeHeld = u;
     EndMoveTaskRect(u);
     if (u->engageId) ClearEngagement(sim, u);
     if (u->task) {
       EndBuildTask(sim, u, *u->task, false);
       u->task = nullptr;
     }
+    sim.resumeHeld = nullptr;
     q.pop_front();
     ReleaseCommandImpl(u, c);
     u->headState = kNotStarted;
@@ -1752,7 +1757,7 @@ bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
     // engineers' OnStartBuild forks (cconstructionunit.lua:94) come before the being-built effects of 0x50003c's new
     // structure 0x50005d (effectutilitiesuef.lua:163): their target-point draws and Lua Random before its
     // projectiles'. Ours kept 0x50003c where it was linked at 3436 (the random stream went apart at draw 240733).
-    if (asleep) sim.ResumeCommandThread(u);
+    // (The re-link is made above, before the teardown.)
   } else {
     q.erase(q.begin() + static_cast<long>(i));
     ReleaseCommandImpl(u, c);
@@ -1998,7 +2003,17 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // point in the message and the second in the beat's steering, two steps at once.
       const bool undispatched = hadCommands && u->headState == kNotStarted;
       const bool patrolSelf = PatrolTaskDecidesAbort(u);
+      // ClearCommandQueue's event 2 re-links a suspended thread before the tasks are torn down (OnEvent 0x599030:
+      // 0x599050..0x599083, then TaskInterruptSubtasks 0x408d70), so a thread the teardown wakes runs after this one.
+      // Seen (pro replay Seton's 2, FAF 3839): at 2128 the stream gives army 2's transport 0x200012, asleep on its
+      // descent, a new load with clear; its old load's dtor 0x624cc0 aborts the walk of its cargo 0x20001a (navigator
+      // vt+0x10 at 0x624dc4), which wakes that thread. In the original the transport's thread is re-linked first, so
+      // at 2129 its new load (ctor 0x624b70: TransportLoading) runs before the cargo's call, whose test 0x5ffcd7..
+      // 0x5ffcf5 (the transport TransportLoading) passes; ours re-linked the cargo first and its call failed.
+      if (asleep) sim.ResumeCommandThread(u);
+      sim.resumeHeld = u;
       ForgetUnitCommands(u);
+      sim.resumeHeld = nullptr;
       u->clearKeepsMove = false;
       // CUnitMoveTask's destructor takes the unit out of state Moving FIRST (0x6187bd: bit 2 of unit+0x4a0) and
       // aborts the move after it (0x618884). The abort's CheckCollisions therefore sees this unit as standing:
@@ -2007,7 +2022,6 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep || formTask) SetMoving(u, false);
       if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf) MotionStop(u);
-      if (asleep) sim.ResumeCommandThread(u);
       SetMoving(u, false);
       at = -1;
     }
@@ -2143,12 +2157,15 @@ void IssueClearCommandsTo(Sim& sim, Unit* u, bool stopAttacker) {
   // and place were off from there (58 Skirmish ww lines).
   const bool callSelf = !u->commands.empty() && u->headState == kRunning && TransportCallTask(u);
   const uint32_t stops = u->motion.stopCount;
+  // (ClearCommandQueue's event: the re-link first, then the teardown; as the stream's clear)
+  if (moveAsleep) sim.ResumeCommandThread(u);
+  sim.resumeHeld = u;
   ForgetUnitCommands(u);
+  sim.resumeHeld = nullptr;
   if (!stopped && !idle && !undispatched && !loadMove && !loadWaits && !guardSelf && !patrolSelf && !buildSelf &&
       !callSelf && u->motion.stopCount == stops)
     MotionStop(u);
   SetMoving(u, false);
-  if (moveAsleep) sim.ResumeCommandThread(u);
   if (stopAttacker) AttackerStop(sim, u);
 }
 
@@ -2190,6 +2207,14 @@ std::shared_ptr<UnitCommand> IssueAutoAttack(Sim& sim, Unit* u, Entity* target, 
 
 std::shared_ptr<UnitCommand> IssuePodAssist(Sim& sim, Unit* u) {
   if (!u || u->dead) return nullptr;  // (a destroy-queued pod too: Unit::MotionTick 0x6a921a)
+  // The order goes through UNIT_IssueCommand 0x6f12c0 -> ValidateIssue 0x6ef9e0 (0x6f1392) before the command is made
+  // (0x6f13d2), so a pod being built takes it only when it is FACTORY or CQUEMOV (RefusesOrderWhileBuilt), and a
+  // refused one makes no command (no engine id). Seen (oracle probe v3840_s3_hive, FAF 3839 pro replay Seton's 3):
+  // army 3's Cybran Hives. The T2s (xrb0204, CQUEMOV) 0x30006b / 0x30006c made at 5896 run MotionTick being built
+  // (Unit+0xa0 = 1) with an empty queue, ValidateIssue is called and they hold AssistCommander from 5897; the T3s
+  // (xrb0304, no CQUEMOV) 0x30007a (6074) and 0x30004e (6209) are asked every beat while built and their queues stay
+  // empty until finished. Ours gave the T3s AssistCommander at once.
+  if (RefusesOrderWhileBuilt(sim, u)) return nullptr;
   auto c = std::make_shared<UnitCommand>();
   AssignEngineCommandId(sim, c);
   c->type = CommandType::AssistCommander;

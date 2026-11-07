@@ -494,6 +494,11 @@ class Sim {
   const std::vector<Unit*>& DirtyOrder();
   void MarkDirty(Unit* u);
   void ResumeCommandThread(Unit* u);
+  // A queue clear's event re-links the unit's thread BEFORE its tasks are torn down (IAiCommandDispatchImpl::OnEvent
+  // 0x599030: 0x599050..0x599083, then TaskInterruptSubtasks 0x408d70). The thread is then no longer suspended
+  // (+0x18 = 0), so a resume of the same unit from inside that teardown (its walk's navigator event) re-links nothing:
+  // ResumeCommandThread skips the unit held here while it is torn down.
+  Unit* resumeHeld = nullptr;
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
   // The stamp of a unit that takes a new parent (Unit::attachSeq). The original keeps a parent's children in a list
   // (entity+0x17c): Entity::AttachTo 0x679550 appends the child (0x6795d5..0x67961c), Entity::DetachFrom 0x6796f0
