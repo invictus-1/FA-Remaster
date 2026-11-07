@@ -34,6 +34,16 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 58. To the INTERFACE track: a player option for the starry night (2026-11-07, Chris's ask: "a proper night sky like starry night ... so its beautiful"; not blocking)
+
+**What:** render acf9384 gives the night a starry sky by default (a deep night sky, many more stars, the Milky Way bright and
+in colour, the moon glowing with a halo, now and then a shooting star). Per Chris's rule (new looks are options, the old
+way included), please add it next to the cloud options, e.g. "Night Sky: Starry (default) / Plain". World side:
+`world.starryNight` (bool; true = Starry, the default; false = the night sky as before). Viewer flag: `--plain-night`.
+Changeable between frames.
+
+**Answer:** (none yet)
+
 ## 57. To the INTERFACE track: a player option for storm cells (2026-11-06, Chris approved the storm look: "Yes, keep it"; not blocking) - DONE
 
 **What:** storms (rain over 0.6) now draw the 3D clouds as a dark blanket rolled out from storm cells, with a dark storm sky,
