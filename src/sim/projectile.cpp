@@ -815,7 +815,13 @@ void Impact(Sim& sim, Projectile* p) {
   if (credit) sim.impactShot = shotBefore;
   // 0x69e084: after the script, the weapon that fired it hears how the shot went (its acquire task listens:
   // CAiAttackerImpl::TransmitProjectileImpactEvent 0x5d7800 hooked it up when the shell was made)
-  if (UnitWeapon* w = p->weapon) {
+  // 0x69df7a..0x69df8d (read): only while the shell's target (+0x2ec) still has its entity (the weak pointer +0x2f0
+  // set: the entity not yet freed; a ground target has none) does the listener part run; else it jumps past it
+  // (0x69e114). Seen (probe v3840_6v6_2_impact): 6v6_2, army 3's PD 0x300057 (adfgraviton01, ReTargetOnMiss): its shells
+  // whose target had been destroyed land on the terrain at 5101, 5105, 5124, 5155, 5158 with the listener set and no
+  // event; ours counted those misses and drew a new aim spot (5197, the first difference).
+  const Entity* shellTarget = p->target.type == 1 && p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
+  if (UnitWeapon* w = shellTarget ? p->weapon : nullptr) {
     const Unit* lu = p->launcher && p->launcher->kind == Entity::Kind::Unit ? static_cast<const Unit*>(p->launcher) : nullptr;
     if (lu && !lu->destroyQueued && !lu->combatGone &&
         std::find(lu->weapons.begin(), lu->weapons.end(), w) != lu->weapons.end())
