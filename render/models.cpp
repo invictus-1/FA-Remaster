@@ -1455,6 +1455,11 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     auto text = vfs_->Exists(file) ? vfs_->ReadFile(file) : std::nullopt;
     BpValue list;
     if (text && !ReadBlueprintFile(*text, &list)) fprintf(stderr, "render: %s: the list of lights cannot be read\n", file.c_str());
+    // [lightbones] (visuals, 2026-11-07: the Jericho's lamps on its new barrels) a lamp on a bone the remastered mesh has but
+    // the game's skeleton does not (a mount the remaster added): it rides the nearest of that bone's parents the skeleton
+    // has, where the lamp is; the mesh's own bones read once, when such a lamp is found
+    std::vector<ModelBone> ownBones;
+    bool ownRead = false;
     for (const BpValue& entry : list.items) {
       if (m->lights.size() >= 16) break;
       auto three = [&](const char* name, Vec3 fallback) {
@@ -1472,6 +1477,27 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
           light.place = Rotate(Conjugate(m->bones[b].rotation), at - m->bones[b].position);
           break;
         }
+      if (!bone.empty() && light.bone < 0 && previewed && !sources.empty()) {  // ([lightbones])
+        if (!ownRead) {
+          ownRead = true;
+          if (std::optional<std::string> finest = textures_->ReadFile(sources[0].mesh)) ReadScmBones(*finest, &ownBones);
+        }
+        int own = -1;
+        for (size_t o = 0; o < ownBones.size(); ++o)
+          if (Lower(ownBones[o].name) == bone) {
+            own = static_cast<int>(o);
+            break;
+          }
+        for (int up = own >= 0 ? ownBones[own].parent : -1, guard = 0; up >= 0 && light.bone < 0 && guard < 256; up = ownBones[up].parent, ++guard) {
+          const std::string name = Lower(ownBones[up].name);
+          for (size_t b = 0; b < m->bones.size(); ++b)
+            if (Lower(m->bones[b].name) == name) {
+              light.bone = static_cast<int>(b);
+              light.place = Rotate(Conjugate(m->bones[b].rotation), at - m->bones[b].position);
+              break;
+            }
+        }
+      }
       if (!bone.empty() && light.bone < 0) fprintf(stderr, "render: %s: no bone named %s (the light rides on the unit itself)\n", file.c_str(), bone.c_str());
       light.color = three("Color", {1, 1, 1});
       light.radius = static_cast<float>(entry["Radius"].NumberOr(1.5));
