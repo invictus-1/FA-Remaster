@@ -3193,6 +3193,23 @@ void RefreshGuardTasks(Sim& sim, UnitCommand& c) {
 // one Guard; when the upgrade is done another engineer's guard retargets the command, and 0x700019's repair walk ends
 // at once (CUnitMoveTask::OnEvent 0x618c40, its dtor's AbortMove 0x618886); the repair task runs state 0 on the
 // finished unit and ends, and the guard, with more Guards queued, ends as well (3 -> 2). Ours walked on.
+// CUnitRepairTask::OnEvent 0x5f9d60 (ids_repair_placement.md 2.4): the work target dropped with OnStopBuild(true),
+// the target := the command's target unit (none for a command at a place: the task then ends at its next tick, the
+// prologue's null test 0x5f939d..0x5f93a5), noMove = 0, state 0. The caller wakes the thread.
+void RepairTaskCommandEvent(Sim& sim, Unit* h, BuildTask& ch, const UnitCommand& c) {
+  lua_State* L = sim.L();
+  if (ch.workId) {
+    if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.Erase(US("NoReclaim"));
+    h->workProgress = 0;
+    if (ch.started) StopBuild(sim, L, h, ch, true);
+    ch.workId = 0;
+  }
+  Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  ch.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
+  ch.noMove = false;
+  ch.state = 0;
+}
+
 void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
   if (c.type != CommandType::Guard) return;
   lua_State* L = sim.L();
@@ -3215,16 +3232,7 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
     if (!gt || !gt->gdata || !gt->gdata->child || gt->gdata->child->type != CommandType::Repair) continue;
     BuildTask& ch = *gt->gdata->child;
     const bool asleep = TaskThreadAsleepOnMove(h, &ch);  // (asked before the event changes the child)
-    if (ch.workId) {
-      if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.Erase(US("NoReclaim"));
-      h->workProgress = 0;
-      if (ch.started) StopBuild(sim, L, h, ch, true);
-      ch.workId = 0;
-    }
-    Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
-    ch.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
-    ch.noMove = false;
-    ch.state = 0;
+    RepairTaskCommandEvent(sim, h, ch, c);
     gt->gdata->childFrom = 0;  // (woken: counter 0)
     // the listener's tail 0x5f9e03..0x5f9e37: the thread's frame count 0 and, when it is suspended (the walking
     // child's move task suspended it), re-linked at the stage's end, as the reclaim task's listener does

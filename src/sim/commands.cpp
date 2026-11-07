@@ -408,8 +408,11 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   // has its target rounded to whole numbers and put through PrepareMove (0x62b780, spacing 0, no exclusion). So
   // the second unit out of a factory does not head for the cell the first one stands on: it gets the nearest free
   // spot of the ring two footprints out.
+  bool airFirst = false;
+  Vec3 rawGoal = goal;
   if (c.type == CommandType::Move && c.factoryIssued && u->commands.size() == 1 && u->motion.bp &&
       !u->unitStates.Has(US("TransportLoading")) && !u->unitStates.Has(US("Teleporting")) && !u->unitStates.Has(US("Guarding"))) {
+    airFirst = u->motion.bp->motionType == kMotionAir;  // (NewMoveTask's own SetGoal came first: AirSetFirstGoal)
     Vec3 p{std::nearbyint(goal.x), goal.y, std::nearbyint(goal.z)};
     if (p.x != 0.0f || p.y != 0.0f || p.z != 0.0f) {
       const float none[4] = {0, 0, 0, 0};
@@ -440,6 +443,7 @@ void RunPathSearch(Sim& sim, Unit* u, bool /*continuing*/) {
   uint32_t drive = sim.tick();
   bool through = NextIsMove(u) && MoveLike(c.type);
   MotionSetGoal(sim, u, path, through, drive);
+  if (airFirst) AirSetFirstGoal(sim, u, rawGoal);
   u->headState = kRunning;
 }
 
@@ -872,6 +876,18 @@ void RetargetPatrolTasks(Sim& sim, UnitCommand& c) {
       ReclaimTaskCommandEvent(sim, u, *ch, c);
       p.childFrom = 0;  // (the listener wakes the thread: counter 0)
       if (asleep) walkers.push_back(u);
+    } else if (ch && ch->type == CommandType::Repair && !ch->pdata && !ch->gdata && !ch->adata) {
+      // The patrol's repair child listens to the command too (CUnitRepairTask::OnEvent 0x5f9d60, as a guard's repair
+      // child: RepairTaskCommandEvent): its target becomes the command's (none for a patrol point), so it ends at its
+      // next tick, which the wake brings now, and the patrol runs on in that tick toward its new goal. Seen (oracle
+      // probe v3840_1v1_5_patrol, FAF 3840 pro replay 1v1_5): army 1's engineer 0x10000b, its patrol's repair child of
+      // 0x10002e made at 2119; the stream drags the AggressiveMove 0x01000004 at 2122; at 2123 the repair task ticks
+      // with no target (+0x88 null), ends, and the patrol's TaskTick sets the navigator's goal (849, 567) (SetGoal from
+      // 0x61c3b2): the original moves from 2125 with only Patrolling. Ours walked the repair from 2125 (Moving).
+      const bool asleep = TaskThreadAsleepOnMove(u, ch);
+      RepairTaskCommandEvent(sim, u, *ch, c);
+      p.childFrom = 0;
+      if (asleep) walkers.push_back(u);
     }
   }
   // The walk's own listener (linked after the reclaim task's): its navigator takes the command's new position at once.
@@ -907,6 +923,17 @@ void RetargetMobileBuildTasks(Sim& sim, UnitCommand& c) {
     if (u->headState != kRunning || !u->task || u->task->type != CommandType::BuildMobile) continue;
     const bool asleep = TaskThreadAsleepOnMove(u, u->task);  // (asked before the event changes the task)
     MobileBuildCommandEvent(sim, u, *u->task, c);
+    // The reclaim child clearing the site (TickMobileBuild's sub, a CUnitReclaimTask) listens to the same command:
+    // its listener 0x620160 takes the command's target (none for a BuildMobile at a place: the task reclaims "at a
+    // point", which is in sight, so it ends) and wakes the thread; its walk ends with the wake, and the build task's
+    // state 0 looks for a site prop again in the same pass and makes a new child (its walk the next beat). Seen (FAF
+    // 3840 pro replay 2v2_2): at 546 the stream sets the target of army 2's BuildMobile 0x02000013 again, to the same
+    // place, while engineer 0x200002 walks to a site prop: the original's 0x200002 is out of Moving at 547 (braking)
+    // and walks again from 548; ours walked on.
+    if (BuildTask* s = IsAlive(u) && u->task ? u->task->sub : nullptr; s && s->type == CommandType::Reclaim) {
+      ReclaimTaskCommandEvent(sim, u, *s, c);
+      u->task->subFrom = 0;  // (the listener wakes the thread: counter 0)
+    }
     if (asleep) walkers.push_back(u);
   }
   std::stable_sort(walkers.begin(), walkers.end(), [](const Unit* a, const Unit* b) { return a->walkSeq < b->walkSeq; });

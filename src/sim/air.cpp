@@ -2151,6 +2151,7 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   const AirBp& b = *a.bp;
   a.pendingLayer = layer;
   a.pendingFacing = {};
+  a.pendingPre = false;
   // COORDS_ToWorldPos 0x50b0f0: a goal cell's world position has the height of the ground there, or of the
   // water above it unless the footprint may stand on the seabed (OccupancyCaps bit 2): the height that came
   // with the order is not used
@@ -2276,6 +2277,30 @@ bool AirPrepareMove(Sim& sim, Unit* u, Vec3* pos, const float* excl, int spacing
   return PrepareMove(sim, u, pos, excl, spacing);
 }
 
+// NewMoveTask 0x6190a0 sets the navigator's goal first (SetGoal 0x5a4c60: the goal cell, SetMotionTarget 0x5a4a90 ->
+// CUnitMotion::SetTarget 0x6b85e0 at once, no direction) and only then makes the CUnitMoveTask, whose ctor puts a
+// factory rally Move through PrepareMove and sets the goal again at the free spot (RunPathSearch, commands.cpp). For an
+// aircraft each SetTarget leaves its desired facing toward the target when that is farther than StartTurnDistance, so
+// the first one, at the rally point's own cell, turns it toward the rally point even when the spot is near. Seen (oracle
+// probe v3840_6v6_3_facing, FAF 3840 pro replay 6v6_3): army 3's Seraphim transport 0x300011 (xsa0107, StartTurnDistance
+// 10) out of its air factory: its stored facing at 1458 is (-0.152113, 0, -0.988363), the direction from where it stood
+// (850.5, 467.4951) to the rally cell (848.5, 454.5), 13.15 away, while its target is the spot (855.5, 461.5), 7.81
+// away; ours kept (0, 0, 1) and did not turn.
+void AirSetFirstGoal(Sim& sim, Unit* u, Vec3 raw) {
+  if (!u->motion.air) return;
+  AirMotion& a = A(u);
+  const AirBp& b = *a.bp;
+  const int cx = static_cast<int>(std::nearbyint(raw.x - b.footprintX * 0.5f));
+  const int cz = static_cast<int>(std::nearbyint(raw.z - b.footprintZ * 0.5f));
+  a.pendingPreGoal = {cx + b.footprintX * 0.5f, 0.0f, cz + b.footprintZ * 0.5f};
+  if (const TerrainMap* map = sim.map()) {
+    float h = Elevation(map, a.pendingPreGoal.x, a.pendingPreGoal.z);
+    if (map->hasWater && map->waterElevation > h) h = map->waterElevation;
+    a.pendingPreGoal.y = h;
+  }
+  a.pendingPre = true;
+}
+
 void AirStopHere(Sim& sim, Unit* u) {
   if (u->motion.air) Stop(sim, u, nullptr);
 }
@@ -2288,6 +2313,10 @@ void TakePendingGoal(Sim& sim, Unit* u) {
   a.goal = a.pendingGoal;
   a.curTarget = a.goal;
   a.steering = true;
+  if (a.pendingPre) {  // the rally Move's first SetGoal, to the order's own cell (AirSetFirstGoal)
+    a.pendingPre = false;
+    SetTarget(sim, u, a.pendingPreGoal, Vec3{}, a.pendingLayer ? a.pendingLayer : kAir);
+  }
   SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
   a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
   if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
