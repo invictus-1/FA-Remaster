@@ -122,7 +122,17 @@ RWTexture2D<float> coverOut : register(u0);
                     CloudNoise(float3(again * 4.7 + 3.3, t * 1.2 + 3.3)) * 0.12 + CloudNoise(float3(turned.yx * 11.3 + 1.7, t * 1.5 + 1.7)) * 0.06;
       field = lerp(field, mixed, saturate(coverAt.w));
     }
-    coverOut[id.xy] = saturate((field - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);
+    float cover = saturate((field - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);
+    // [stormcells] (cloudLight.w: the storm, Clouds::storm; visuals' section 94, Chris: "storm cells") a few wide cells
+    // (some 1.5 to 2 km) at full cover, the heaps between them fewer and thinner
+    [branch] if (cloudLight.w > 0) {
+      float2 p = (q + skyClouds.yz) * 0.004;
+      float2 turned = float2(p.x * 0.6 + p.y * 0.8, p.y * 0.6 - p.x * 0.8);
+      float cell = smoothstep(0.44, 0.6, CloudNoise(float3(turned * 0.3 + 23.1, skyClouds.w * 0.3 + 5.3)));
+      float between = saturate((field - lerp(0.63, 0.37, skyClouds.x) - 0.03 * cloudLight.w) * 6 + 0.6) * (1 - 0.15 * cloudLight.w);
+      cover = max(lerp(cover, between, cloudLight.w), cloudLight.w * cell);
+    }
+    coverOut[id.xy] = cover;
     return;
   }
   coverOut[id.xy] = CloudFrom(CloudField(q));
@@ -155,14 +165,14 @@ float Phase(float c, float g) {
 // off the world's axes and shifted a little from place to place (its cube repeats every shapeSize, square and on the axes:
 // its heaps stood in rows toward the horizon), and in wide patches the same noise larger (bigger heaps among the small
 // ones), more of them the more the sky is clouded. coverAt.w 0: as before. Also the zoom's march (cloud_zoom.cpp).
-float4 CloudShape(float3 p, float3 wind, float mix) {
+float4 CloudShape(float3 p, float3 wind, float mix, float bigAtLeast = 0) {
   float3 q = (p + wind) * cloudLook.z;
-  [branch] if (mix <= 0) return shapeNoise.SampleLevel(samplerLinear, q, 0);
+  [branch] if (mix <= 0 && bigAtLeast <= 0) return shapeNoise.SampleLevel(samplerLinear, q, 0);
   float4 region = shapeNoise.SampleLevel(samplerLinear, float3(q.x * 0.09 + 0.31, 0.47, q.z * 0.09 + 0.71), 0);
   float2 warp = (region.gb - 0.5) * 0.5;
   float2 xz = float2(q.x * 0.82 - q.z * 0.57, q.x * 0.57 + q.z * 0.82) / 1.2 + warp;  // (the heaps 1.2 times larger)
   float4 s = shapeNoise.SampleLevel(samplerLinear, float3(xz.x, q.y / 1.2, xz.y), 0);
-  float big = smoothstep(0.2, 0.6, region.r) * saturate(0.35 + skyClouds.x) * mix;
+  float big = max(smoothstep(0.2, 0.6, region.r) * saturate(0.35 + skyClouds.x) * mix, bigAtLeast);
   [branch] if (big > 0.01) {
     float2 bz = float2(q.x * 0.57 + q.z * 0.82, q.z * 0.57 - q.x * 0.82) / 3.0 + warp * 0.5 + 0.37;  // (three times)
     s = lerp(s, shapeNoise.SampleLevel(samplerLinear, float3(bz.x, q.y / 3.0 + 0.19, bz.y), 0), saturate(big));
@@ -183,7 +193,7 @@ float Cloud(float3 p, float h, bool frayed) {
   // flat underneath, rounded at the top: the more cloud a place has, the higher it heaps
   float profile = saturate(h * 12) * saturate(Remap(h, 0.15 + 0.75 * cover, 1, 1, 0));
   float3 wind = float3(skyClouds.y, skyClouds.w * 40, skyClouds.z);
-  float4 s = CloudShape(p, wind, coverAt.w);  // ([cloudmix])
+  float4 s = CloudShape(p, wind, coverAt.w, cloudLight.w * saturate(cover * 2 - 1));  // ([cloudmix]; [stormcells] a cell's big)
   float low = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
   float shape = Remap(s.r, low - 1, 1, 0, 1) * profile;
   // (coverage only lets the shapes through: where they are low, a hole; their heaps make the outline)
@@ -550,12 +560,13 @@ static void FillConstants(void* to, const View& view, const Camera& camera, cons
   camera.Axes(&right, &up, &back);
   const float t = std::tan(camera.fovY * 0.5f), aspect = static_cast<float>(view.width) / static_cast<float>(std::max(view.height, 1));
   const Vec3 r = right * (t * aspect), u = up * t, a = back * -1.0f;
-  const float r4[4] = {r.x, r.y, r.z, clouds.base}, u4[4] = {u.x, u.y, u.z, std::max(clouds.thickness, 1.0f)}, a4[4] = {a.x, a.y, a.z, 0};
+  const float r4[4] = {r.x, r.y, r.z, clouds.base}, u4[4] = {u.x, u.y, u.z, clouds.Thick()}, a4[4] = {a.x, a.y, a.z, 0};
   std::memcpy(k.right, r4, sizeof k.right);
   std::memcpy(k.up, u4, sizeof k.up);
   std::memcpy(k.ahead, a4, sizeof k.ahead);
   k.size[2] = 1 / kCoverReach;
-  k.look[0] = std::max(clouds.density, 0.0f);
+  k.look[0] = std::max(clouds.density, 0.0f) * (1 + 0.6f * std::clamp(clouds.storm, 0.0f, 1.0f));  // ([stormcells] dark bases)
+  k.light[3] = std::clamp(clouds.storm, 0.0f, 1.0f);  // [stormcells]
   k.look[1] = static_cast<float>(std::clamp(clouds.steps, 4, 256));
   k.look[2] = 1 / std::max(clouds.shapeSize, 1.0f);
   k.look[3] = 1 / std::max(clouds.detailSize, 1.0f);

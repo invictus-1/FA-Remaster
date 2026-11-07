@@ -201,7 +201,7 @@ Clouds::Zoom CloudZoom::For(const Camera& camera, const Clouds& clouds, bool on)
   Clouds::Zoom z;
   z.on = on && !camera.cinematic;
   if (!z.on) return z;
-  const float eye = camera.Eye().y, under = clouds.base, top = clouds.base + std::max(clouds.thickness, 1.0f);
+  const float eye = camera.Eye().y, under = clouds.base, top = clouds.base + clouds.Thick();  // ([stormcells])
   // seen from close (crisper, finer): coming in as the eye comes up to the layer, from where the march goes over to
   // the zoom's (40 under it), so that the sky's clouds do not change at once
   const float close = Smooth((eye - (under - 40)) / 40);
