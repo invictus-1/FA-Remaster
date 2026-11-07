@@ -3317,6 +3317,13 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
   AiTarget a;
   a.type = 1;
   a.entityId = c.targetId;
+  // An order on a jammer's FAKE blip holds the fake itself (cmd+0x11c): GetTargetPosGun gives ReconBlip::GetTargetPoint
+  // 0x5bf5f0, its unit's target point moved by the fake's offset (+0x27c, 0x5bf628..0x5bf658), as the tasks' copies
+  // of the target do (TargetPos with fakeId). Seen (oracle probe v3840_4v4_3_blip, FAF 3840 pro replay 4v4_3): at 2911
+  // army 2's six units get a formation Attack on 0x308000d4, a fake blip of army 8's 0x80002f (502.5, 512.5) at offset
+  // (-36.11, -13.29); the original's formation is centred on the fake ((466.39, 499.21): 0x20001f's goal (450, 491)..
+  // (480, 521) at 2912), ours on the unit (0x20001f's goal (486, 505)..(516, 535)).
+  a.fakeId = c.targetViaBlip ? c.targetFakeId : 0;
   if (e->kind == Entity::Kind::Unit) {
     const CombatBpData& cb = CB(static_cast<Unit*>(e));
     if (c.targetPoint >= 0 && c.targetPoint < static_cast<int>(cb.targetBones.size()) && e->skeleton)
