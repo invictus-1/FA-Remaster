@@ -285,3 +285,17 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     against a defender. Against M28 the duels lasted about as long and traded better (lost per killed 9.0 -> 5.7), the
     FAF veteran games 5-9 minutes longer.
 
+34. **Engineers reclaim only in controlled space (Chris's re-test, 2026-11-06; refines 23).** Chris saw the engineers of
+    every army scattered over the sea and in enemy bases, "a crap ton just going across the ocean to I guess reclaim".
+    A probe of the all-AI 4v4 found up to 38 of our engineers on the water at once, most of them on reclaim trips, and
+    up to 57 nearer an enemy start than their own: the reclaim map checked only that a field was reachable by land and
+    had no enemy known in it now. His rule: reclaim only where we hold the ground. So a zone is a reclaim target only
+    while nothing hostile was seen within 120 of it for a minute and it lies away from every enemy start; the trip must
+    pay for the walk (more mass the farther it is), take at most 3 engineers to a zone, and go by land (no shortcut over
+    the sea); engineers whose zone stops being safe fall back at once. Asking also for a force of our own there (3-6
+    T1 tanks) cut the duels' reclaim by up to 30% and they ended earlier, so the force is not asked. Against M28 the
+    duels lasted as long (26.6 minutes against 27.5) and traded better (lost per killed 7.3 against 10.1), with 20%
+    fewer engineers lost (42% in the first 15 minutes) for 3-11% less reclaim; the FAF veteran games lasted 53.3 and
+    40.2 minutes against 37.7 and 42.2. In the 4v4 the engineers away on the water fell from 128 sightings to 36, and
+    those nearer an enemy start from a mean of 12 to under 1.
+

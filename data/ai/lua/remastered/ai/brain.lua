@@ -23,6 +23,22 @@ local kReclaimField = 100                     -- a cell with this much reclaim i
 local kReclaimPerWorker = 300                 -- a field takes one engineer per this much mass (plus one)
 local kReclaimWorkerTicks = 450               -- an engineer sent to a field counts there this long
 local kReclaimNear = 350                      -- world units from the start: the reclaim that adds engineers
+-- (2026-11-06, Chris's re-test: engineers of every army scattered over the sea and in enemy bases "to I guess reclaim".
+-- His rule: reclaim only in controlled space - ReclaimControl and ReclaimField)
+local kCtrlRadius = 120       -- world units around a zone's centre: the area whose force and enemies count for it
+local kCtrlOn = 0             -- our and allied land force there, in T1 tanks' ratings, that makes a zone controlled
+local kCtrlOff = 0            -- ... and under which a controlled zone loses the flag (hysteresis). (Both 0: a force
+                              -- asked of 6 / 3 and of 3 / 1.5 tanks cut the duels' reclaim by up to 30% and the duels
+                              -- ended earlier; no hostile sight nearby and no enemy start near are what keep them safe)
+local kCtrlSeen = 600         -- ticks: an enemy seen in the area this recently keeps the zone uncontrolled
+local kCtrlBase = 350         -- world units of land travel from the start (kReclaimNear): zones that need no force
+local kCtrlStep = 50          -- ticks between two looks at the flags
+local kCtrlEnemyBase = 220    -- world units around an enemy start that are never controlled (seen or not)
+local kTripFree = 150         -- world units of a reclaim trip that need no more than kReclaimField
+local kTripPerUnit = 1.0      -- mass a cell must hold more per world unit of the trip beyond kTripFree
+local kTripDetour = 1.4       -- a trip whose land travel is more than this x the straight line (+ kTripSlack) is a
+local kTripSlack = 60         -- ... sea shortcut for an amphibious or hover engineer: not taken
+local kTripZoneMax = 3        -- engineers on reclaim trips in one zone at most
 -- (the economy's knobs of phases 11-13 live in personality.lua's kEconomy, with ranges: read once here)
 local kTuning = import("/lua/remastered/ai/personality.lua").Tuning()
 local kReclaimPush = kTuning.reclaimPush       -- reclaim near the start per engineer built and reclaiming (phase 13)
@@ -594,6 +610,98 @@ AIBrain = Class(StandardBrain) {
         g.nearMass = near
     end,
 
+    -- CONTROLLED SPACE (2026-11-06, Chris: "reclaim only in controlled space"). A zone is controlled when the land
+    -- force of ours and our allies within kCtrlRadius of its centre reaches kCtrlOn T1 tanks' ratings (against
+    -- ground; it keeps the flag down to kCtrlOff) and no enemy was seen within kCtrlRadius in the last kCtrlSeen
+    -- ticks (R.enemySeen, the army's own sight); the base's zones (within kCtrlBase of land travel) need no force;
+    -- a zone within kCtrlEnemyBase of an enemy start is never controlled, seen or not. Engineers on a reclaim trip
+    -- whose zone loses the flag fall back at once: to the centre of the controlled zone nearest them, else home
+    -- (entity id order). The sea probe (the all-AI 4v4 on SETONS_R, 17 looks over minutes 6-38): our engineers on
+    -- the water away from their base 128 sightings -> 36, those reclaiming there 90 -> 14, engineers nearer an
+    -- enemy start than their own a mean 12.2 -> 0.5 (at most 57 -> 5).
+    ReclaimControl = function(self)
+        local R = self.Remaster
+        if R.startZone <= 0 or R.tick - (R.ctrlTick or -10000) < kCtrlStep then return end
+        R.ctrlTick = R.tick
+        local info = Remastered.AIMapInfo()
+        if not R.ctrlNear then
+            R.ctrlNear, R.ctrlBase = {}, {}
+            for z = 1, info.zones do
+                local a = Remastered.AIZone(z)
+                local list = {}
+                for n = 1, info.zones do
+                    local b = Remastered.AIZone(n)
+                    local dx, dz = a.x - b.x, a.z - b.z
+                    if dx * dx + dz * dz <= kCtrlRadius * kCtrlRadius then table.insert(list, n) end
+                end
+                R.ctrlNear[z] = list
+                local d = Remastered.AIZoneDistance(R.startZone, z, 'land')
+                R.ctrlBase[z] = d >= 0 and d <= kCtrlBase
+            end
+            local r = Remastered.AIUnitRating(self:Bp('l0201'))
+            R.ctrlRef = math.max(1e-6, r and r.rating and r.rating.ground or 1)
+            -- (the zones within kCtrlEnemyBase of an enemy start: never controlled)
+            R.ctrlEnemy = {}
+            for j, b in ipairs(ArmyBrains) do
+                if j ~= R.army and IsEnemy(R.army, j) and not ArmyIsCivilian(j) then
+                    local ex, ez = b:GetArmyStartPos()
+                    if ex then
+                        for z = 1, info.zones do
+                            local c = Remastered.AIZone(z)
+                            local dx, dz = c.x - ex, c.z - ez
+                            if dx * dx + dz * dz <= kCtrlEnemyBase * kCtrlEnemyBase then R.ctrlEnemy[z] = true end
+                        end
+                    end
+                end
+            end
+        end
+        local S = Remastered.AIZoneSummary(R.army)
+        local seen = R.enemySeen or {}
+        R.ctrl = R.ctrl or {}
+        local on = 0
+        for z = 1, info.zones do
+            local force, hostile = 0, false
+            for _, n in ipairs(R.ctrlNear[z]) do
+                force = force + S.ownLandGround[n] + S.allyLandGround[n]
+                if seen[n] and R.tick - seen[n] < kCtrlSeen then hostile = true end
+            end
+            force = force / R.ctrlRef
+            if hostile or R.ctrlEnemy[z] then R.ctrl[z] = false
+            elseif R.ctrlBase[z] then R.ctrl[z] = true
+            elseif R.ctrl[z] then R.ctrl[z] = force >= kCtrlOff
+            else R.ctrl[z] = force >= kCtrlOn end
+            if R.ctrl[z] then on = on + 1 end
+        end
+        R.ctrlCount = on
+        local g = R.reclaim
+        if not g or not R.reclaimers then return end
+        local ids = {}
+        for id, w in pairs(R.reclaimers) do  -- (sorted below: the orders go in entity id order)
+            local z = g.zone[w.cell] or 0
+            if not R.ctrl[z] then table.insert(ids, id) end
+        end
+        table.sort(ids, function(a, b) return (tonumber(a) or 0) < (tonumber(b) or 0) end)
+        for _, id in ipairs(ids) do
+            local u = R.reclaimers[id].u
+            R.reclaimers[id] = nil
+            if u and not u.Dead then
+                local q = u:GetPosition()
+                local bx, bz, bd = R.startX, R.startZ
+                for z = 1, info.zones do
+                    if R.ctrl[z] then
+                        local c = Remastered.AIZone(z)
+                        local dx, dz = c.x - q[1], c.z - q[3]
+                        local d = dx * dx + dz * dz
+                        if not bd or d < bd then bx, bz, bd = c.x, c.z, d end
+                    end
+                end
+                IssueClearCommands({ u })
+                IssueMove({ u }, Pos(bx, bz))
+                R.fallBacks = (R.fallBacks or 0) + 1
+            end
+        end
+    end,
+
     -- A reclaim field for builder u (phase 6): the cell worth the most (its mass / (distance + 150)) among the cells
     -- of kReclaimField or more that our land units reach, with no enemy known in their zone (R.enemyAt) and fewer
     -- engineers sent there than its mass asks (one per kReclaimPerWorker, plus one); cell order on ties. The builder
@@ -611,6 +719,21 @@ AIBrain = Class(StandardBrain) {
         end
         R.reclaimers = keep
         local q = u:GetPosition()
+        -- (2026-11-06) THE TRIP: only into a controlled zone (ReclaimControl), and there only when (1) the cell's mass
+        -- pays for the walk: kReclaimField plus kTripPerUnit a world unit beyond kTripFree; (2) its zone has fewer
+        -- than kTripZoneMax of our engineers on trips; (3) the way is by land: the land travel from the engineer's
+        -- zone is at most kTripDetour x the straight line (+ kTripSlack) - else an amphibious or hover engineer cuts
+        -- over the sea. Each minute 'aireclaim' logs the trips given, the cells left out and the fall-backs.
+        local zoneWorkers = {}
+        for _, w in pairs(keep) do  -- (counts only)
+            local wz = g.zone[w.cell] or 0
+            zoneWorkers[wz] = (zoneWorkers[wz] or 0) + 1
+        end
+        R.tripStats = R.tripStats or { given = 0, ctrl = 0, value = 0, zone = 0, sea = 0 }
+        local st = R.tripStats
+        local uz = Remastered.AIZoneAt(q[1], q[3], 'land')
+        if uz <= 0 then uz = R.startZone end
+        local ctrl = R.ctrl or {}
         local best, bestScore
         for i = 1, g.cols * g.rows do
             local m = g.mass[i]
@@ -619,11 +742,28 @@ AIBrain = Class(StandardBrain) {
                 local cx = (math.mod(i - 1, g.cols) + 0.5) * kReclaimCell
                 local cz = (math.floor((i - 1) / g.cols) + 0.5) * kReclaimCell
                 local dx, dz = cx - q[1], cz - q[3]
-                local score = m / (math.sqrt(dx * dx + dz * dz) + 150)
-                if not bestScore or score > bestScore then best, bestScore = i, score end
+                local d = math.sqrt(dx * dx + dz * dz)
+                local score = m / (d + 150)
+                if not bestScore or score > bestScore then
+                    local why
+                    if not ctrl[z] then why = 'ctrl'
+                    elseif m < kReclaimField + kTripPerUnit * math.max(0, d - kTripFree) then why = 'value'
+                    elseif (zoneWorkers[z] or 0) >= kTripZoneMax then why = 'zone'
+                    else
+                        local ld = Remastered.AIZoneDistance(uz, z, 'land')
+                        if ld < 0 or ld > kTripDetour * d + kTripSlack then why = 'sea' end
+                    end
+                    if why then st[why] = st[why] + 1 else best, bestScore = i, score end
+                end
             end
         end
+        if R.tick - (R.tripLogged or -10000) >= 600 then
+            R.tripLogged = R.tick
+            LOG(string.format('aireclaim %d %d trips %d | left out: ctrl %d value %d zone %d sea %d | controlled zones %d, fall-backs %d',
+                R.army, R.tick, st.given, st.ctrl, st.value, st.zone, st.sea, R.ctrlCount or 0, R.fallBacks or 0))
+        end
         if not best then return false end
+        st.given = st.given + 1
         local x0 = math.mod(best - 1, g.cols) * kReclaimCell
         local z0 = math.floor((best - 1) / g.cols) * kReclaimCell
         local c = {}
@@ -646,7 +786,7 @@ AIBrain = Class(StandardBrain) {
         end)
         for i = 1, math.min(10, table.getn(c)) do IssueReclaim({ u }, c[i].v) end
         R.reclaimers = R.reclaimers or {}
-        R.reclaimers[u:GetEntityId()] = { cell = best, tick = R.tick }
+        R.reclaimers[u:GetEntityId()] = { cell = best, tick = R.tick, u = u }  -- (u: the fall-back, ReclaimControl)
         return true
     end,
 
@@ -1230,6 +1370,7 @@ AIBrain = Class(StandardBrain) {
 
     RemasterEconomy = function(self)
         self:ReclaimScan()
+        self:ReclaimControl()  -- (2026-11-06: controlled space and the reclaimers' fall-back)
         local factories, engineers, commander = {}, {}, nil
         local ctx = { minutes = GetGameTick() / 600, landFactories = 0, upgrading = {}, storages = 0, assistNext = 0,
             factoryUpgrades = 0, extractorUpgrades = 0, airFactories = 0, landTier = 0, powerCount = 0,
