@@ -50,5 +50,31 @@ ForkThread(function()
     check("with its preset", Prefs.GetFromCurrentProfile("UserKeyMapName"), "/lua/keymap/hotbuildKeyMap.lua")
     local mapping = KeyMapper.GetKeyMappings()["Ctrl-Q"]
     check("and the key does the action", mapping and mapping.action, "UI_Lua LOG('fixture action')")
+
+    -- Options > Interface > Key Bindings "Import from FAF..." (2026-11-06): a button of the Options dialog that opens
+    -- the Key Bindings dialog and asks the import's question at once
+    local entry
+    for _, item in import('/lua/options/options.lua').options.ui.items do
+        if item.key == 'remaster_import_faf_keys' then entry = item end
+    end
+    check("the Interface tab has Key Bindings: Import from FAF...", entry and (entry.type .. " " .. entry.custom.text), "button Import from FAF...")
+    local UIUtil, asked = import('/lua/ui/uiutil.lua'), nil
+    local realQuickDialog = UIUtil.QuickDialog
+    UIUtil.QuickDialog = function(parent, text, a, b, c, d, e, f, g, h)
+        asked = text
+        return realQuickDialog(parent, text, a, b, c, d, e, f, g, h)
+    end
+    if entry then entry.update(nil, 0) end
+    WaitFrames(3)
+    UIUtil.QuickDialog = realQuickDialog
+    popup = nil
+    for i = 1, 200 do
+        local n, v = debug.getupvalue(dialog.CloseUI, i)
+        if not n then break end
+        if n == 'popup' then popup = v end
+    end
+    check("which opens the Key Bindings dialog", popup and popup.remasterImportButton ~= nil, true)
+    check("and asks the import's question", asked and string.find(asked, "Replace all key bindings with the", 1, true) ~= nil, true)
+    if popup then dialog.CloseUI() end
     LOG("TEST done: " .. failed .. " failed")
 end)

@@ -44,6 +44,25 @@ do
         })
         popup.remasterImportButton = button
         button.OnClick = function(self, modifiers)
+            RemasterAskImport(popup)
+        end
+    end
+
+    -- Options > Interface > Key Bindings "Import from FAF..." (Chris, 2026-11-06: FAF opens this dialog only in game, F1
+    -- or the game's menu; he looked for it in Options): the dialog opened (closed first if it was up) and the import
+    -- asked at once, the same question as its own button
+    function RemasterOpenKeyBindingsAndImport()
+        local open = ModuleLocal('popup')
+        if open then CloseUI() end
+        CreateUI()
+        local popup = ModuleLocal('popup')
+        if popup and popup.remasterImportButton then RemasterAskImport(popup) end
+        return popup and popup.remasterImportButton ~= nil
+    end
+
+    function RemasterAskImport(popup)
+        local UIUtil = import('/lua/ui/uiutil.lua')
+        do
             local keys, why = moho64ui_OriginalKeyBindings()
             if not keys or not keys.UserKeyMap then
                 UIUtil.QuickDialog(popup, "There are no FAF key bindings to import" .. (why and (": " .. why) or "."),

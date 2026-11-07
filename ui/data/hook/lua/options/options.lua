@@ -842,6 +842,24 @@ table.insert(options.ui.items, {
     },
 })
 
+-- Key Bindings: Import from FAF (Chris, 2026-11-06: FAF opens the Key Bindings dialog only in game, F1 or the game's
+-- menu, and he looked for the import in Options). A button (the dialog's 'button' type: no value kept) that opens the
+-- Key Bindings dialog and asks its "Import from FAF" question at once (ui/data/hook/lua/ui/dialogs/keybindings.lua).
+table.insert(options.ui.items, {
+    title = "Key Bindings",
+    key = 'remaster_import_faf_keys',
+    tip = "Opens the Key Bindings window and offers to replace all key bindings with those of your current profile in FAF (Forged Alliance Forever). FAF's own file is only read. In a game the same window opens with F1.",
+    type = 'button',
+    default = 0,
+    update = function(control, value)
+        import('/lua/ui/dialogs/keybindings.lua').RemasterOpenKeyBindingsAndImport()
+    end,
+    set = function(key, value, startup) end,
+    custom = {
+        text = "Import from FAF...",
+    },
+})
+
 -- The game's own graphics settings drive the renderer (Fidelity, Shadow Fidelity, Anti-Aliasing,
 -- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The
