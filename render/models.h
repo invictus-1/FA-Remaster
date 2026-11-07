@@ -149,6 +149,10 @@ struct ModelLod {
   // [bakeddebris] A unit's baked death debris (ModelCache::DebrisChunks, baked_debris.h): its second texture coordinates' u is
   // its heat mask (where its metal is cut or molten, 0..1), and its normal map lies on its first, as its other textures do.
   bool heatMask = false;
+  // [debrispile] Its unit's remastered wreck's textures (<ID>_wreck_lab_albedo, _normal, _spec, _ao: the chunks keep the
+  // wreck's texture places too), which it takes on as it cools (BakedDebris: the instance's burn); none where the unit has
+  // no remastered wreck (then its own textures throughout).
+  gfx::Texture burntAlbedo, burntNormals, burntSpecular, burntSecondary;
 };
 
 struct HitShape;  // (unit_wear.h)

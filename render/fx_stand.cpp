@@ -822,7 +822,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     world.effects.Queue(std::move(events_));
     events_.clear();
     world.effects.Update(now * 10, entities_->Current());
-    world.WatchDeaths(entities_->Current(), {{0.2f, 0.45f, 1.0f}});  // (debris from the units it kills: the colour it draws them in)
+    if (!setup_.deathUnseen)  // ([debrispile] --fx-death-unseen: none)
+      world.WatchDeaths(entities_->Current(), {{0.2f, 0.45f, 1.0f}});  // (debris from the units it kills: the colour it draws them in)
     {  // (battle scars and snow on the stand's units: its target's hits told as they were, then the beat watched)
       std::vector<FxEntities::TargetHit> hits;
       entities_->TakeTargetHits(&hits);
@@ -853,8 +854,45 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       entities_->TakeWaterHits(&hits);
       for (const Vec4& h : hits) world.water.AddRipple(h.x, h.z, h.w, 1);
     }
+    // [debrispile] a wreck whose kind has a baked set: handed to the world as the game's wreck prop (World's made props, as a
+    // game's: drawn as its pile there with the debris on), not drawn here; those handed over that are gone (a new play) taken
+    // away again as the game takes a reclaimed one
+    {
+      std::vector<FramePropEvent> props;
+      std::vector<uint32_t> standing;
+      const uint32_t tick = static_cast<uint32_t>(std::max(now, 0.0) * 10);
+      for (const FxEntities::Body& b : entities_->Bodies()) {
+        if (!b.wreck || b.original || !world.blastDebris || !world.PileKind(b.unit)) continue;
+        standing.push_back(b.id);
+        if (std::find(wreckProps_.begin(), wreckProps_.end(), b.id) != wreckProps_.end()) continue;
+        std::string id = b.unit;
+        for (char& c : id) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        FramePropEvent e;
+        e.kind = FramePropEvent::Create;
+        e.tick = tick;
+        e.id = b.id;
+        e.blueprint = "/props/DefaultWreckage/DefaultWreckage_prop.bp";
+        e.mesh = "/units/" + id + "/" + id + "_mesh_wreck";
+        e.position[0] = b.position.x, e.position[1] = b.position.y, e.position[2] = b.position.z;
+        e.orientation[0] = b.turn.x, e.orientation[1] = b.turn.y, e.orientation[2] = b.turn.z, e.orientation[3] = b.turn.w;
+        const float scale = world.models.RemasteredWreck(b.unit) ? b.scale : 1.0f;  // (as the stand draws it, below)
+        e.scale[0] = e.scale[1] = e.scale[2] = scale;
+        props.push_back(e);
+      }
+      for (uint32_t id : wreckProps_)
+        if (std::find(standing.begin(), standing.end(), id) == standing.end()) {
+          FramePropEvent e;
+          e.kind = FramePropEvent::Destroy;
+          e.tick = tick;
+          e.id = id;
+          props.push_back(e);
+        }
+      wreckProps_ = std::move(standing);
+      if (!props.empty()) world.AddPropEvents(props);
+    }
     // the units and their wrecks, posed as their scripts pose them
     for (const FxEntities::Body& b : entities_->Bodies()) {
+      if (b.wreck && std::find(wreckProps_.begin(), wreckProps_.end(), b.id) != wreckProps_.end()) continue;  // ([debrispile] the world's)
       const Model* unit = world.models.Unit(b.unit, b.original);
       if (!unit || !unit->ok) continue;
       // (a wreck: the unit's own remastered one where it has one, as the game's props are drawn; else its burnt look)

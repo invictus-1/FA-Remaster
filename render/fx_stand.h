@@ -69,6 +69,9 @@ struct FxStandSetup {
   // kills it (OnKilled with that overkill ratio: above 1 no wreck, above 2 its chassis thrown too)
   std::string death;
   float killAt = 1.0f, overkill = 0.2f;
+  // [debrispile] its death not told to the world's debris (as a death the picture did not see: its wreck drawn as its pile at
+  // rest at once, baked_debris.h)
+  bool deathUnseen = false;
   // whose faction's effects play in the remastered look ("uef", "aeon", "cybran", "seraphim"); "": as
   // what they are made on is (a shot: its own, by its id; an effect at a spot: none)
   std::string faction;
@@ -198,6 +201,8 @@ class FxStand {
   float mapWidth_ = 0, mapHeight_ = 0;
   std::unique_ptr<FxEntities> entities_;
   std::vector<FrameEffectEvent> events_;
+  // [debrispile] the wrecks handed to the world as the game's wreck props (their kinds have baked sets), by their entities
+  std::vector<uint32_t> wreckProps_;
   std::vector<Side> sides_;
   double started_ = -1e9;
 };

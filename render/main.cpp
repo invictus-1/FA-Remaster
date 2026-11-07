@@ -611,7 +611,8 @@
 //           path --fx-kill-at seconds (1) into each play, every --fx-repeat seconds (12 unless given):
 //           its explosion, debris and wreck as the game's scripts make them, an aircraft falling (it
 //           flies in at its elevation and comes down at the spot), a ship sinking on water; --fx-overkill
-//           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck)
+//           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck); --fx-death-unseen: [debrispile] its death
+//           not told to the debris (a death the picture did not see: a wreck with a baked set drawn as its pile at rest at once)
 // --fx-faction uef|aeon|cybran|seraphim  the stand's effects are that faction's own in the remastered
 //           look (else the faction of what they are made on: a shot's by its id, a unit's)
 // --fx-move <unit>  that unit (UEL0203) made at --fx-at by its own script class and driven round a loop there
@@ -1183,6 +1184,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->hitchLog = atof(argv[++i]);
     }
     else if (a == "--fx-compare") o->fx.compare = true;
+    else if (a == "--fx-death-unseen") o->fx.deathUnseen = true;  // [debrispile]
     else if (a == "--vulkan") o->vulkan = true;
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
@@ -4787,9 +4789,10 @@ int main(int argc, char** argv) {
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
                world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
-      if (world.blastDebris && world.debris.baked.played + world.debris.baked.refused > 0)  // [bakeddebris]
-        printf("; baked debris: %d deaths played, %d left to the chunks (too many in flight), %d sets lying", world.debris.baked.played,
-               world.debris.baked.refused, world.debris.baked.Sets());
+      if (world.blastDebris && world.debris.baked.played + world.debris.baked.refused + world.debris.baked.Piles() > 0)  // [bakeddebris] ([debrispile] piles)
+        printf("; baked debris: %d deaths played, %d left to the chunks (too many in flight), %d sets lying; %d wrecks drawn as piles (%d matched to their deaths, %d not seen)",
+               world.debris.baked.played, world.debris.baked.refused, world.debris.baked.Sets(), world.debris.baked.Piles(), world.debris.baked.matched,
+               world.debris.baked.unseenPiles);  // ([debrispile] the piles)
       if (world.rockHits)  // [rockhits]
         printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
                world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());

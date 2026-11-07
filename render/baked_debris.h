@@ -23,6 +23,18 @@
 //
 // At most `mostPlaying` deaths in flight at once (more throw the debris's generic chunks, as before); at most `mostLying` sets
 // lying (past it the oldest sinks away at once).
+//
+// [debrispile] The pile is the wreck. A unit's wreck (the game's prop, World's made props: picked, reclaimed and taken away by
+// the game's rules as ever) whose kind has a set is drawn as that set's chunks instead of the wreck's model (World tells each
+// such wreck every frame: Wreck). Its death, seen, plays on; from where its chunks come to rest they lie at their last frame
+// on the ground, never sinking, for as long as the wreck stands, and go when it goes. A wreck is matched to its death by its
+// kind, its place (within the unit's size and some) and its time (the death played from ten seconds before the wreck
+// appeared to four after): while a death of its kind is still to be thrown near it (the debris's `coming`), it waits, drawn
+// by none; a wreck whose death was not seen (there from the start, a game played back from elsewhere, met later through the
+// fog) is drawn as the break style's last frame at once, the wreck's place and heading. Should its death be thrown a moment
+// later after all, the death takes it over. A death no wreck is matched to (the game left none) lies and sinks away as
+// before. The chunks cool into the wreck's own textures (ModelCache::DebrisChunks, the unit's <ID>_wreck_lab_*: the same
+// texture places), burnt through by the time they rest; a pile shown for an unseen death is burnt through.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -73,9 +85,19 @@ class BakedDebris {
   // The deaths whose chunks are still hot (hot metal on): the middle of their chunks, how far they reach, their age and how
   // long they glow, their own number; for the hot metal's few lights (HotMetal::Glowing).
   void ForEachHot(const std::function<void(Vec3 centre, float radius, float age, float seconds, uint32_t id)>& f) const;
+  // [debrispile] Whether a wreck of this kind is drawn as its pile (it has a set with the break style).
+  bool HasPile(const std::string& unitId);
+  // [debrispile] A wreck that stands now (told every frame, before Update; one not told since the last Update is gone, and its
+  // pile with it): its prop's number, its kind, where it stands (on the ground), its turn and size, when it appeared (game
+  // seconds).
+  void Wreck(uint32_t prop, const std::string& unitId, Vec3 at, const Quat& turn, float scale, double born);
+  // [debrispile] (set by the debris) whether a death of this kind near this place is still to be thrown
+  std::function<bool(const std::string& unitId, Vec3 at)> coming;
   void Clear();  // every death taken away (a map opened anew, a game played back from earlier)
   int Playing() const;  // deaths in flight
   int Sets() const { return static_cast<int>(deaths_.size()); }
+  int Piles() const;  // [debrispile] wrecks drawn as their piles
+  int matched = 0, unseenPiles = 0;  // [debrispile] wrecks matched to a death seen; drawn without one
   int played = 0;    // deaths played since the map was opened
   int refused = 0;   // deaths with a set that threw the generic debris (too many in flight)
 
@@ -113,6 +135,11 @@ class BakedDebris {
     double born = 0;
     double sinkFrom = -1;  // when it began to sink away early (past mostLying; -1: on its own time)
     uint32_t id = 0;
+    // [debrispile] the wreck it is drawn as (its prop's number; 0: none yet), whether it stands for a death not seen (at its
+    // style's last frame, burnt through), and when its heat began (its death; for one not seen its wreck's appearing)
+    uint32_t prop = 0;
+    bool unseen = false;
+    double heatFrom = 0;
     std::vector<FrameBone> bones;  // (this frame's pose: its chunks', where the model renderer reads them)
     Vec3 centre;                   // (this frame's: the middle of its chunks, how far they reach)
     float reach = 0;
@@ -121,6 +148,19 @@ class BakedDebris {
   std::unordered_map<std::string, std::unique_ptr<Set>> sets_;  // by unit id, lower case; null: none
   double clock_ = -1;
   uint32_t serial_ = 1;
+  // [debrispile] the wrecks told (Wreck), by their props' numbers
+  struct Standing {
+    std::string unit;
+    Set* set = nullptr;
+    Vec3 at;
+    Quat turn;
+    float scale = 1;
+    double born = 0, told = -1;  // when it appeared; when it was first told (the clock)
+    uint32_t frame = 0;          // the Update it was last told before
+  };
+  std::unordered_map<uint32_t, Standing> wrecks_;
+  uint32_t frame_ = 0;
+  void MatchWrecks(double clock);
 };
 
 }  // namespace render

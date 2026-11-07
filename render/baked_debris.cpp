@@ -201,10 +201,12 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
     ++refused;
     return false;
   }
-  // (past the most lying, the oldest that is not sinking already sinks away now)
-  if (static_cast<int>(deaths_.size()) >= mostLying)
+  // (past the most lying, the oldest that is not sinking already sinks away now; [debrispile] not one drawn as a wreck)
+  int lying = 0;
+  for (const auto& d : deaths_) lying += !d->prop && !d->unseen ? 1 : 0;
+  if (lying >= mostLying)
     for (auto& d : deaths_)
-      if (d->sinkFrom < 0) {
+      if (d->sinkFrom < 0 && !d->prop && !d->unseen) {
         d->sinkFrom = clock;
         break;
       }
@@ -219,7 +221,7 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
   const Vec3 extent = (unit->boundsMax - unit->boundsMin) * unit->scale;
   d->radius = 0.5f * std::max({extent.x, extent.y, extent.z, 0.2f});
   d->color = color * paint;
-  d->born = clock;
+  d->born = d->heatFrom = clock;
   d->id = serial_++;
   d->bones.resize(s->tracks.size());
   d->centre = d->at;
@@ -237,12 +239,114 @@ int BakedDebris::Playing() const {
 
 void BakedDebris::Clear() {
   deaths_.clear();
+  wrecks_.clear();  // [debrispile]
   clock_ = -1;
 }
 
+// [debrispile] (baked_debris.h)
+bool BakedDebris::HasPile(const std::string& unitId) {
+  Set* set = SetOf(unitId);
+  return set && StyleOf(*set, unitId, "break");
+}
+
+void BakedDebris::Wreck(uint32_t prop, const std::string& unitId, Vec3 at, const Quat& turn, float scale, double born) {
+  Standing& w = wrecks_[prop];
+  const std::string id = Lower(unitId);
+  if (w.unit != id) {  // (new, or the game gave its number to another)
+    w = Standing{};
+    w.unit = id;
+    w.set = SetOf(id);
+  }
+  w.at = at;
+  w.turn = turn;
+  w.scale = scale;
+  w.born = born;
+  w.frame = frame_;
+}
+
+int BakedDebris::Piles() const {
+  int n = 0;
+  for (const auto& d : deaths_) n += d->prop ? 1 : 0;
+  return n;
+}
+
+// [debrispile] The wrecks told since the last Update matched to their deaths (baked_debris.h); those not told any more gone, and
+// their piles with them.
+void BakedDebris::MatchWrecks(double clock) {
+  for (auto it = wrecks_.begin(); it != wrecks_.end();) it = it->second.frame != frame_ || !it->second.set ? wrecks_.erase(it) : std::next(it);
+  deaths_.erase(std::remove_if(deaths_.begin(), deaths_.end(), [&](const std::unique_ptr<Death>& d) { return d->prop && !wrecks_.count(d->prop); }),
+                deaths_.end());
+  if (wrecks_.empty()) return;
+  auto apart = [](Vec3 a, Vec3 b) { return std::hypot(a.x - b.x, a.z - b.z); };
+  auto reach = [](const Death& d) { return d.radius * 1.5f + 2.0f; };
+  // a death thrown just now where a wreck was drawn without one a moment ago (the wreck came a beat before its death was
+  // seen): the death takes the wreck over
+  for (size_t i = 0; i < deaths_.size(); ++i) {
+    Death& d = *deaths_[i];
+    if (d.prop || d.unseen || clock - d.born > 1.5) continue;
+    for (size_t k = 0; k < deaths_.size(); ++k) {
+      Death& u = *deaths_[k];
+      if (!u.unseen || u.set != d.set || clock - (u.born + u.style->settled + 1) > 3 || apart(u.at, d.at) > reach(d)) continue;
+      d.prop = u.prop;
+      --unseenPiles, ++matched;
+      deaths_.erase(deaths_.begin() + static_cast<std::ptrdiff_t>(k));
+      if (k < i) --i;
+      break;
+    }
+  }
+  std::unordered_map<uint32_t, bool> drawn;
+  for (const auto& d : deaths_)
+    if (d->prop) drawn[d->prop] = true;
+  for (auto& [prop, w] : wrecks_) {
+    if (drawn.count(prop)) continue;
+    if (w.told < 0) w.told = clock;
+    // its death, seen: of its kind, near it, played from ten seconds before it appeared to four after
+    Death* best = nullptr;
+    float nearest = 1e30f;
+    for (auto& d : deaths_) {
+      if (d->prop || d->unseen || d->set != w.set || d->born < w.born - 10 || d->born > w.born + 4) continue;
+      const float away = apart(d->at, w.at);
+      if (away <= reach(*d) && away < nearest) best = d.get(), nearest = away;
+    }
+    if (best) {
+      best->prop = prop;
+      best->sinkFrom = -1;
+      ++matched;
+      continue;
+    }
+    // (its death still to be thrown: it waits, a while at most)
+    if (coming && clock - w.told < 8 && coming(w.unit, w.at)) continue;
+    // no death seen: the break style's last frame, burnt through, at the wreck's place and heading
+    const Style* s = StyleOf(*w.set, w.unit, "break");
+    if (!s) continue;
+    auto d = std::make_unique<Death>();
+    d->set = w.set;
+    d->style = s;
+    d->at = {w.at.x, groundHeight ? groundHeight(w.at.x, w.at.z) : w.at.y, w.at.z};
+    const Vec3 forward = Rotate(w.turn, Vec3{0, 0, 1});
+    const float yaw = std::atan2(forward.x, forward.z);
+    d->heading = Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)};
+    d->scale = w.scale;
+    const Vec3 extent = (w.set->model->boundsMax - w.set->model->boundsMin) * w.scale;
+    d->radius = 0.5f * std::max({extent.x, extent.y, extent.z, 0.2f});
+    d->color = Vec3{1, 1, 1} * paint;
+    d->born = clock - s->settled - 1;  // (at rest from the first)
+    d->heatFrom = w.born;
+    d->id = serial_++;
+    d->bones.resize(s->tracks.size());
+    d->centre = d->at;
+    d->prop = prop;
+    d->unseen = true;
+    deaths_.push_back(std::move(d));
+    ++unseenPiles;
+  }
+}
+
 void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
-  if (clock_ >= 0 && clock < clock_ - 2) Clear();  // (a game started over, or played back from earlier)
+  if (clock_ >= 0 && clock < clock_ - 2) deaths_.clear();  // (a game started over, or played back from earlier: [debrispile] its wrecks told anew)
   clock_ = clock;
+  MatchWrecks(clock);  // [debrispile]
+  ++frame_;
   auto ground = [&](float x, float z) { return groundHeight ? groundHeight(x, z) : 0.0f; };
   const bool before = meshes ? meshes->addingScenery : false;
   if (meshes) meshes->addingScenery = true;  // (as the debris: scenery, pressing no grass flat)
@@ -250,11 +354,13 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     Death& d = *deaths_[k];
     const Style& s = *d.style;
     const float age = static_cast<float>(clock - d.born);
-    // lying still after the last chunk is down, then sinking away (each by its own height); sooner past the most lying
+    // lying still after the last chunk is down, then sinking away (each by its own height); sooner past the most lying.
+    // [debrispile] Drawn as a wreck: lying for as long as the wreck stands (MatchWrecks takes it away with it)
+    const bool wreck = d.prop != 0;
     const double sinkFrom = d.sinkFrom >= 0 ? d.sinkFrom : d.born + s.settled + lieSeconds;
     const float sinkFor = d.sinkFrom >= 0 ? 8.0f : sinkSeconds;
-    const float sunk = std::clamp(static_cast<float>(clock - sinkFrom) / sinkFor, 0.0f, 1.0f);
-    if (clock - sinkFrom >= sinkFor) {
+    const float sunk = wreck ? 0.0f : std::clamp(static_cast<float>(clock - sinkFrom) / sinkFor, 0.0f, 1.0f);
+    if (!wreck && clock - sinkFrom >= sinkFor) {
       deaths_.erase(deaths_.begin() + static_cast<std::ptrdiff_t>(k));
       continue;
     }
@@ -292,10 +398,14 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     Pose pose;
     pose.now = pose.next = d.bones.data();
     pose.nowCount = pose.nextCount = d.bones.size();
-    // (hot: its age and how long it glows, as a wreck's; the shader lights the heat mask by them)
+    // (hot: its age and how long it glows, as a wreck's; the shader lights the heat mask by them. [debrispile] And how far it
+    // has cooled into its wreck's textures, in the tint's x: all of it by the time its chunks rest, eased in and out)
+    const float heated = static_cast<float>(clock - d.heatFrom);
     const float seconds = heat ? heat->WreckSeconds(d.radius) : 55.0f;
-    const Vec3 tint{0, -age, -seconds};
-    meshes->Add(d.set->model, Mat4::FromTRS(d.at, d.heading, d.scale), d.color, 1, &pose, hot && age < seconds ? &tint : nullptr, nullptr,
+    const float cooled = d.unseen ? 1.0f : std::clamp(age / std::max(s.settled, 0.1f), 0.0f, 1.0f);
+    const bool glows = hot && heated >= 0 && heated < seconds;
+    const Vec3 tint{cooled * cooled * (3 - 2 * cooled), glows ? -heated : 0.0f, glows ? -seconds : 0.0f};
+    meshes->Add(d.set->model, Mat4::FromTRS(d.at, d.heading, d.scale), d.color, 1, &pose, tint.x > 0 || glows ? &tint : nullptr, nullptr,
                 0x70000000u | (d.id & 0x0fffffffu));
     meshes->Reach(d.centre, d.reach);
   }
@@ -305,7 +415,7 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
 void BakedDebris::ForEachHot(const std::function<void(Vec3, float, float, float, uint32_t)>& f) const {
   if (!hot || clock_ < 0) return;
   for (const auto& d : deaths_) {
-    const float age = static_cast<float>(clock_ - d->born), seconds = heat ? heat->WreckSeconds(d->radius) : 55.0f;
+    const float age = static_cast<float>(clock_ - d->heatFrom), seconds = heat ? heat->WreckSeconds(d->radius) : 55.0f;  // ([debrispile] heatFrom)
     if (age >= 0 && age < seconds) f(d->centre, d->radius, age, seconds, d->id);
   }
 }

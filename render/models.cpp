@@ -536,6 +536,17 @@ const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std:
   lod.shaderName = like.shaderName;
   lod.cutoff = like.cutoff;
   lod.heatMask = true;
+  // [debrispile] the unit's remastered wreck's textures (the same texture places), which the chunks take on as they cool
+  {
+    const std::string preview = "/preview/" + id + "/";
+    const std::string wreck = preview + (vfs_->Exists(preview + "textures/" + id + "_wreck_lab_albedo.dds") ? "textures/" : "") + id + "_wreck_lab_";
+    if (vfs_->Exists(wreck + "albedo.dds")) {
+      lod.burntAlbedo = textures_->Get(wreck + "albedo.dds", like.albedo);
+      lod.burntNormals = textures_->Get(wreck + "normal.dds", like.normals);
+      lod.burntSpecular = textures_->Get(wreck + "spec.dds", like.specular);
+      lod.burntSecondary = vfs_->Exists(wreck + "ao.dds") ? textures_->Get(wreck + "ao.dds", textures_->White()) : textures_->White();
+    }
+  }
   m->lods.push_back(std::move(lod));
   m->scale = unit->scale;
   m->ok = true;
