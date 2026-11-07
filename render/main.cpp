@@ -75,6 +75,9 @@
 //           once the game is where --tick asks, the world is drawn through it into that file, its
 //           answers about the screen are printed (and the life bars' anchors checked and marked in
 //           magenta, where custom names go), and the viewer ends
+// --picture-restart  [restart] with --picture: after its checks, the moment drawn, the map begun again in place
+//           (WorldPicture::RestartMap), the same game started again in a simulation of its own and run to that moment,
+//           drawn again; the pixels that differ printed, both pictures beside the --picture file
 // --views split|inset[:<unit id>]  [views] with --picture: several views in one picture (WorldPicture::SetViews, views.h;
 //           views_test.h): the window split in two halves (the right a second camera), or a follow camera behind a unit
 //           (480x270, every 2nd frame) over the game's; pictures beside the --picture file, the picking calls and the times
@@ -726,6 +729,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>  // [restart]
 #include <string>
 #include <thread>
 #include <vector>
@@ -1010,6 +1014,7 @@ struct Options {
   float sharpen = -1;                   // [glitches] --sharpen
   int gateLook = -1;                    // [glitches] --gate-look
   bool pictureWindow = false;           // --picture-window
+  bool pictureRestart = false;          // [restart] --picture-restart
   bool photoTest = false;               // (photomode) --photo-test
   std::string photoCases;               // (photofix) --photo-cases
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
@@ -1275,6 +1280,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-storm-cells") o->stormCells = false;  // [stormcells]
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
+    else if (a == "--picture-restart") o->pictureRestart = true;  // [restart]
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
@@ -1992,6 +1998,11 @@ int main(int argc, char** argv) {
   }
   WorldPicture picture;
   std::unique_ptr<Window> pictureWindow;  // --picture-window
+  // [restart] (--picture-restart) the game as it was set up, to start it again; and the beats of the first game handed to the
+  // picture under a lock, no longer once the picture has begun the game again
+  LiveSim::Setup liveSetup;
+  std::mutex pictureBeats;
+  bool pictureFed = true;
   LiveSim live;
   const bool haveLive = !opt.sim.empty() || !opt.session.empty();
   if (haveLive) {
@@ -2026,6 +2037,7 @@ int main(int argc, char** argv) {
     if (Season s; !opt.season.empty() && SeasonNamed(opt.season, &s)) picture.SetSeason(s);  // [seasons] (--season)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
+    liveSetup = setup;  // [restart]
     if (!live.Open(setup, &error)) {
       fprintf(stderr, "render: simulation: %s\n", error.c_str());
       return 1;
@@ -2065,7 +2077,10 @@ int main(int argc, char** argv) {
       }
       printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
-      live.onBeat = [&](const moho::Sim& sim) { picture.Beat(sim); };
+      live.onBeat = [&](const moho::Sim& sim) {
+        std::lock_guard<std::mutex> lock(pictureBeats);  // [restart]
+        if (pictureFed) picture.Beat(sim);
+      };
     }
     printf("render: simulation: %s %s on %s, loading ...\n", opt.session.empty() ? "the replay" : "a new game from",
            (opt.session.empty() ? opt.sim : opt.session).c_str(), live.MapPath().c_str());
@@ -3929,6 +3944,94 @@ int main(int argc, char** argv) {
                Length(game.Eye() - cineTest.pose.eye), cineTest.pose.pitch, game.pitch, !last.cinematic && Length(last.Eye() - game.Eye()) < 1e-3f ? "" : " (NOT the game's camera)");
         picture.SetLens(Lens{});
         picture.SetStrategicIcons(true);
+      }
+      if (opt.pictureRestart) {  // [restart] --picture-restart (the interface's request 45 R1)
+        // the moment drawn (nothing of the interface's in the world, a few frames to settle), the map begun again in place,
+        // the same game played again from its start in a simulation of its own to the beat the first had reached, the same
+        // moment drawn again: what differs is what the frames drawn before (the particles' emitters out of sight) left
+        const double moment = playTick + 1;
+        picture.SetSelection({});
+        picture.SetHover(0xffffffffu, 0);
+        picture.SetBuildPreviews({});
+        picture.SetShapes({}, {});
+        picture.SetUserDecals({});
+        picture.SetWorldMeshes({});
+        picture.SetLifeBars(false);
+        auto grab = [&](std::vector<uint32_t>* out) {
+          for (int i = 0; i < 4; ++i) picture.Draw(camera, w, h, moment);
+          *out = picture.Draw(camera, w, h, moment);
+        };
+        auto write = [&](const std::string& path, const std::vector<uint32_t>& px) {
+          std::vector<uint8_t> b(px.size() * 4, 255);
+          for (size_t i = 0; i < px.size(); ++i) {
+            b[i * 4] = static_cast<uint8_t>(px[i] >> 16);
+            b[i * 4 + 1] = static_cast<uint8_t>(px[i] >> 8);
+            b[i * 4 + 2] = static_cast<uint8_t>(px[i]);
+          }
+          return WritePng(path, b.data(), w, h) ? path : std::string("(could not be written)");
+        };
+        const std::string base = opt.picture.substr(0, opt.picture.rfind('.'));
+        std::vector<uint32_t> before, after;
+        grab(&before);
+        uint32_t reached = 0;
+        {
+          std::lock_guard<std::mutex> lock(pictureBeats);  // (no beat of the first game handed over now, nor later)
+          pictureFed = false;
+          reached = live.LastTick();
+        }
+        World* pw = picture.world();
+        const int madeBefore = pw ? pw->MadeProps() : 0, decalsBefore = pw ? pw->decals.Count() : 0;
+        const int particlesBefore = pw ? pw->particles.liveEmitters : 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool restarted = picture.RestartMap();
+        const double restartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        printf("render: --picture-restart: RestartMap %s in %.1f ms; props made in the game %d -> %d, decals %d -> %d, emitters %d -> %d\n",
+               restarted ? "done" : "REFUSED", restartMs, madeBefore, pw ? pw->MadeProps() : 0, decalsBefore, pw ? pw->decals.Count() : 0,
+               particlesBefore, pw ? static_cast<int>(pw->particles.liveEmitters) : 0);
+        auto again = std::make_unique<LiveSim>();
+        again->SetFocusArmy(opt.focus);
+        again->onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
+        again->onBeat = [&](const moho::Sim& sim) { picture.Beat(sim); };
+        std::string why;
+        bool there = false;
+        const auto t1 = std::chrono::steady_clock::now();
+        if (restarted && again->Open(liveSetup, &why)) {
+          again->Start();
+          for (int waited = 0; waited < 120000; ++waited) {  // (at most ten minutes)
+            const LiveSim::State s = again->GetState();
+            if (s == LiveSim::State::Failed || s == LiveSim::State::Ended) break;
+            if (s == LiveSim::State::Running) {
+              again->RunTo(reached);
+              if (again->LastTick() >= reached) {
+                there = true;
+                break;
+              }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+          if (!there) why = again->GetState() == LiveSim::State::Failed ? again->Problem() : "the beat was not reached";
+        }
+        const double playedS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+        if (!there) {
+          printf("render: --picture-restart: the game again FAILED: %s\n", why.c_str());
+        } else {
+          grab(&after);
+          size_t differ = 0;
+          int largest = 0;
+          double sum = 0;
+          for (size_t i = 0; i < before.size() && i < after.size(); ++i) {
+            int d = 0;
+            for (int k = 0; k < 24; k += 8)
+              d = std::max(d, std::abs(static_cast<int>((before[i] >> k) & 0xff) - static_cast<int>((after[i] >> k) & 0xff)));
+            differ += d > 0;
+            largest = std::max(largest, d);
+            sum += d;
+          }
+          printf("render: --picture-restart: the game again to beat %u in %.1f s, drawn at %.2f: differ %zu px (%.3f %%), largest %d, mean %.4f\n", reached,
+                 playedS, moment, differ, before.empty() ? 0.0 : 100.0 * static_cast<double>(differ) / static_cast<double>(before.size()), largest,
+                 before.empty() ? 0.0 : sum / static_cast<double>(before.size()));
+          printf("render: --picture-restart: %s, %s\n", write(base + "_restart_before.png", before).c_str(), write(base + "_restart_after.png", after).c_str());
+        }
       }
       break;
     }

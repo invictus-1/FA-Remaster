@@ -553,6 +553,19 @@ bool Decals::AddWater(const std::string& texture, Vec3 centre, float sizeX, floa
   return true;
 }
 
+// [restart] (decals.h)
+void Decals::ForgetGame(uint32_t lastOfMap, size_t depositsOfMap) {
+  decals_.erase(std::remove_if(decals_.begin(), decals_.end(), [lastOfMap](const Decal& d) { return d.id == 0 || d.id > lastOfMap; }), decals_.end());
+  if (deposits_.size() > depositsOfMap) deposits_.resize(depositsOfMap);
+  marks_.clear();
+  pads_.clear();
+  scars_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.scar; }));
+  waterDecals_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.water; }));
+  snowFallen_ = 2;
+  snowClock_ = -1;
+  settled_ = false;
+}
+
 void Decals::Remove(uint32_t id) {
   for (auto it = decals_.begin(); it != decals_.end(); ++it)
     if (it->id == id) {

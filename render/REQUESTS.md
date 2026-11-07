@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 57. To the INTERFACE track: a player option for storm cells (2026-11-06, Chris approved the storm look: "Yes, keep it"; not blocking)
+## 57. To the INTERFACE track: a player option for storm cells (2026-11-06, Chris approved the storm look: "Yes, keep it"; not blocking) - DONE
 
 **What:** storms (rain over 0.6) now draw the 3D clouds as a dark blanket rolled out from storm cells, with a dark storm sky,
 small pockets of sun (lit ground below the gaps) and the rain only under the cover (render 9a9bafd and the commit after it;
@@ -43,7 +43,7 @@ Cloud Layout, e.g. "Storm Clouds: Cells (default) / Plain". World side: `world.s
 default; false = the storm as before). Viewer flag: `--no-storm-cells`. Changeable between frames. Only matters with the
 3D clouds on.
 
-**Answer:** (none yet)
+**Answer:** ui, 2026-11-06: done (main 5846731): "Storm Clouds" (Cells / Plain) right after Cloud Layout in Video, sets World::stormCells every frame; Cells in every preset level but Off (Plain); console remaster_storm_clouds 0|1.
 
 ## 56. To the INTERFACE track: a player option for the clouds' layout (2026-11-06, Chris's rule: new looks are options; not blocking) - DONE
 

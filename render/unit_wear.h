@@ -231,6 +231,20 @@ class UnitWear {
     ground_.clear();
     groundMade_ = false;
   }
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: every unit, shot, hit told and
+  // puff let go of, and the beat watched (its entities' numbers and its blueprints' places in the frames are used again; its
+  // beats begin again near 0). The ground's kinds stay (they are the map's); the counts begin again.
+  void Forget() {
+    units_.clear();
+    shots_.clear();
+    kinds_.clear();
+    told_.clear();
+    puffs_.clear();
+    lastTick_ = 0;
+    haveTick_ = false;
+    dirtSwept_ = -1e9;
+    toldHits = shotHits = beamHits = blastHits = unseenHits = marksMade = heals = 0;
+  }
   bool HasGround() const { return groundMade_; }
   // The kinds there (shares as above; without a grid all dirt).
   void GroundAt(float x, float z, float out[6]) const;

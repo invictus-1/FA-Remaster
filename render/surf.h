@@ -374,6 +374,12 @@ class Surf {
 
   // The map whose shores it is (Water::Load); its field is worked out the first frame the option is on.
   void SetMap(const MapData* map);
+  // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: the spray in the air and the
+  // ships it knew let go of (the shores' field stays: SetMap would work it out again).
+  void Forget() {
+    puffs_.clear();
+    ships_.clear();
+  }
   // [groundfix] Its field begun on a thread of its own now (a map opened with the option on), not at the first frame
   // (Begin begins it then if not yet). Once for each map.
   void StartField();
