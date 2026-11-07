@@ -218,6 +218,14 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     tangent = mul(turn, tangent);
     binormal = mul(turn, binormal);
   }
+  // [debrispile] a baked death's chunks melting (BakedDebris::meltSag): their hot parts (the heat mask) sag down and toward the
+  // side the death came from (its front for now), by their height over their chunk's lowest point at rest (the second
+  // coordinates' v: ModelCache::DebrisChunks) and how far the melt has come (the instance's tint x over 101, in hundredths:
+  // up over its first seconds, then held where it ended)
+  [branch] if (kind13.w > 0.5 && n.bones.y > 100.5) {
+    float sag = floor((n.bones.y + 0.5) / 101) * 0.01 * saturate(i.uv.z) * max(i.uv.w, 0);
+    p.xyz += float3(0, -0.8, 0.6) * sag;
+  }
   VOut o;
 #ifdef PLANTS
   o.plants = 0;
@@ -323,11 +331,12 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   // [bakeddebris] a baked death's chunks (baked_debris.h): their normal map lies on the first texture coordinates as their other
   // textures do; the second's u is their heat mask, handed on in the tint's x as -1 - mask (no other tint lies there), the heat's
   // age and how long it glows staying in its y and z (BakedDebris: as a wreck's, HotMetal::Tint)
-  // [debrispile] and how far they have cooled into their wreck's textures (the instance's tint x, 0..1, in hundredths) laid
-  // under the mask, two a step: -1 - (mask + 2 * hundredths)
+  // [debrispile] and how far they have cooled into their wreck's textures (hundredths: the instance's tint x is that plus 101
+  // times the melt's sag in hundredths, above), laid under the mask, two a step: -1 - (mask + 2 * hundredths)
   [branch] if (kind13.w > 0.5) {
     o.uv.zw = i.uv.xy;
-    o.tint.x = -1 - (i.uv.z + 2 * round(saturate(n.bones.y) * 100));
+    float sagged = floor((n.bones.y + 0.5) / 101);  // ([debrispile] the melt's, below; the burn under it)
+    o.tint.x = -1 - (i.uv.z + 2 * round(n.bones.y - 101 * sagged));
   }
 #ifdef UNDER_SNOW
   // [undersnow] a low plant under lying snow (under_snow.h): sunk into it (the ground hides what goes under), pressed and

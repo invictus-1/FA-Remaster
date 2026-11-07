@@ -297,6 +297,11 @@
 //           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
 // --debris-dir <folder>  [bakeddebris] with --debris: units' baked death debris from a trial folder (baked_debris.h): its
 //           <ID>_debris.scm and <ID>_debris_<style>.json take the place of those beside the unit's remastered export
+//           ([debrispile] and <ID>_debris_<style>.scm, a style's own chunks' mesh)
+// --debris-style break|melt|vaporise  [debrispile] every baked death dies in that style of its set (else as Debris::
+//           DebrisStyleFor chooses: break until the killing hit is read)
+// --debris-sag <share>  [debrispile] how far a MELT death's hot parts sag in the vertex shader (BakedDebris::meltSag, 0.4;
+//           0: none, for a set whose melt is bent in its bake)
 // --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
 //           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
 //           a puff of rock dust; the rock darkens with soot and cracks as the hits add up (with --fx-shot, --fx-hit prop and
@@ -911,6 +916,8 @@ struct Options {
   bool rockHits = false;                // [rockhits] --rock-hits
   std::string debrisTest, debrisShow;   // --debris-test, --debris-show
   std::string debrisDir;                // [bakeddebris] --debris-dir
+  std::string debrisStyle;              // [debrispile] --debris-style
+  float debrisSag = -1;                 // [debrispile] --debris-sag
   float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
   bool movementDust = false;            // --movement-dust
@@ -1395,6 +1402,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
     else if (a == "--debris-show") o->debrisShow = v;
     else if (a == "--debris-dir") o->debrisDir = v;  // [bakeddebris]
+    else if (a == "--debris-style") o->debrisStyle = v;  // [debrispile]
+    else if (a == "--debris-sag") o->debrisSag = std::max(0.0f, static_cast<float>(atof(v)));  // [debrispile]
     else if (a == "--debris-test") {
       const std::string all = v;
       const size_t comma = all.find(',');
@@ -2289,6 +2298,8 @@ int main(int argc, char** argv) {
   world.movementDust = opt.movementDust;
   world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
+  world.debris.debrisStyle = opt.debrisStyle;                              // [debrispile]
+  if (opt.debrisSag >= 0) world.debris.baked.meltSag = std::min(opt.debrisSag, 1.0f);  // [debrispile]
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
   world.groundParallax = opt.groundParallax;  // [parallax]

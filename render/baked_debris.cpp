@@ -13,6 +13,7 @@
 #include "json.h"
 #include "mesh_renderer.h"
 #include "models.h"
+#include "particles.h"
 
 namespace render {
 namespace {
@@ -71,17 +72,16 @@ BakedDebris::Set* BakedDebris::SetOf(const std::string& unitId) {
   const auto t0 = std::chrono::steady_clock::now();
   std::unique_ptr<Set> set;
   if (files && models) {
-    const std::string trial = "/debris-trial/", folder = "/preview/" + id + "/", name = id + "_debris.scm";
-    const std::string mesh = files->Exists(trial + name) ? trial + name : files->Exists(folder + name) ? folder + name : std::string();
-    const Model* chunks = mesh.empty() ? nullptr : models->DebrisChunks(id, mesh);
-    std::optional<std::string> bytes = chunks ? files->ReadFile(mesh) : std::nullopt;
-    if (chunks && bytes) {
+    // ([debrispile] a set: its chunks' mesh, or a style's own, in the trial folder or beside the export; its styles read as asked)
+    const std::string trial = "/debris-trial/", folder = "/preview/" + id + "/";
+    bool any = false;
+    for (const char* name : {"_debris.scm", "_debris_break.scm", "_debris_melt.scm", "_debris_vaporise.scm"})
+      any = any || files->Exists(trial + id + name) || files->Exists(folder + id + name);
+    if (any) {
       set = std::make_unique<Set>();
-      set->model = chunks;
       set->folder = folder;
       set->trial = trial;
-      set->points = ChunkPoints(*bytes, chunks->bones);
-      printf("render: %s: its baked debris read and made in %.1f ms\n", id.c_str(),
+      printf("render: %s: has baked debris (looked for in %.1f ms)\n", id.c_str(),
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
   }
@@ -95,9 +95,16 @@ bool BakedDebris::Has(const std::string& unitId) { return SetOf(unitId) != nullp
 const BakedDebris::Style* BakedDebris::StyleOf(Set& set, const std::string& unitId, const std::string& style) {
   auto it = set.styles.find(style);
   if (it != set.styles.end()) return it->second.get();
-  const std::string name = Lower(unitId) + "_debris_" + style + ".json";
-  const std::string path = files->Exists(set.trial + name) ? set.trial + name : files->Exists(set.folder + name) ? set.folder + name : std::string();
-  std::unique_ptr<Style> read = path.empty() ? nullptr : ReadStyle(set, path);
+  const std::string id = Lower(unitId);
+  auto find = [&](const std::string& name) {
+    return files->Exists(set.trial + name) ? set.trial + name : files->Exists(set.folder + name) ? set.folder + name : std::string();
+  };
+  const std::string path = find(id + "_debris_" + style + ".json");
+  // [debrispile] its chunks: the style's own mesh where it has one (the same chunks, bent its own way), else the set's
+  std::string mesh = find(id + "_debris_" + style + ".scm");
+  if (mesh.empty()) mesh = find(id + "_debris.scm");
+  const Model* chunks = path.empty() || mesh.empty() ? nullptr : models->DebrisChunks(id, mesh);
+  std::unique_ptr<Style> read = chunks ? ReadStyle(*chunks, mesh, path, style) : nullptr;
   const Style* s = read.get();
   set.styles[style] = std::move(read);
   return s;
@@ -105,7 +112,8 @@ const BakedDebris::Style* BakedDebris::StyleOf(Set& set, const std::string& unit
 
 // A style's file: each chunk's keys by its bone's name, then what still flies at the bake's end flown on to its ground (its
 // last key's speed and spin, the bake's gravity, a key a frame), so that playing it is only reading keys.
-std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Set& set, const std::string& path) {
+std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, const std::string& mesh, const std::string& path,
+                                                          const std::string& name) {
   const auto t0 = std::chrono::steady_clock::now();
   std::optional<std::string> text = files->ReadFile(path);
   JsonValue json;
@@ -114,8 +122,12 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Set& set, const
     fprintf(stderr, "render: %s: cannot be read%s%s\n", path.c_str(), error.empty() ? "" : ": ", error.c_str());
     return nullptr;
   }
-  const Model& chunks = *set.model;
+  std::optional<std::string> bytes = files->ReadFile(mesh);
+  const std::vector<std::vector<Vec3>> chunkPoints = bytes ? ChunkPoints(*bytes, chunks.bones) : std::vector<std::vector<Vec3>>(chunks.bones.size());
   auto style = std::make_unique<Style>();
+  style->model = &chunks;  // [debrispile]
+  style->strays = name == "vaporise";
+  style->melts = name == "melt";
   style->fps = static_cast<float>(std::max(1.0, json["fps"].NumberOr(30)));
   style->seconds = static_cast<float>(json["seconds"].NumberOr(0));
   int flyingOn = 0;
@@ -138,7 +150,7 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Set& set, const
       t.keys.insert(t.keys.end(), {n[0], n[1], n[2], q.x, q.y, q.z, q.w});
     }
     if (t.keys.empty()) continue;
-    const std::vector<Vec3>& points = set.points[t.bone];
+    const std::vector<Vec3>& points = chunkPoints[t.bone];
     for (const Vec3& p : points) t.reach = std::max(t.reach, Length(p));
     // (where its lowest corner is, turned so: the bake's ground is y 0)
     const Quat rest = chunks.bones[t.bone].rotation;
@@ -185,6 +197,27 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Set& set, const
   }
   std::sort(style->tracks.begin(), style->tracks.end(), [](const Track& x, const Track& y) { return x.bone < y.bone; });
   style->settled = std::max(style->settled, style->seconds);
+  // [debrispile] when each chunk comes to rest (its last key that is not where it ends); VAPORISE: those that end beyond
+  // strayBeyond times the unit's box across (the chunks' at rest: the unit's own) are thrown debris, the biggest of those
+  // trailing smoke while they fly
+  const Vec3 middle = (chunks.boundsMin + chunks.boundsMax) * 0.5f, half = (chunks.boundsMax - chunks.boundsMin) * (0.5f * strayBeyond);
+  std::vector<Track*> thrown;
+  for (Track& t : style->tracks) {
+    const size_t n = t.keys.size() / 7;
+    const float* last = &t.keys[(n - 1) * 7];
+    size_t moving = 0;
+    for (size_t k = 0; k < n; ++k) {
+      const float* a = &t.keys[k * 7];
+      if (std::fabs(a[0] - last[0]) + std::fabs(a[1] - last[1]) + std::fabs(a[2] - last[2]) > 0.01f) moving = k + 1;
+    }
+    t.rests = static_cast<float>(moving) / style->fps;
+    t.stray = style->strays && (std::fabs(last[0] - middle.x) > half.x || std::fabs(last[2] - middle.z) > half.z);
+    if (t.stray) thrown.push_back(&t);
+  }
+  std::sort(thrown.begin(), thrown.end(), [](const Track* x, const Track* y) { return x->reach > y->reach; });
+  for (size_t k = 0; k < thrown.size() && static_cast<int>(k) < mostTrails; ++k) thrown[k]->smokes = true;
+  if (style->strays)
+    printf("render: %s: %zu of its chunks thrown beyond %.1f times the unit's box (debris, not the wreck)\n", path.c_str(), thrown.size(), strayBeyond);
   printf("render: %s: %zu chunks over %.2f s, %d flying on past it (all down at %.2f s); read in %.1f ms\n", path.c_str(), style->tracks.size(),
          style->seconds, flyingOn, style->settled, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
   return style;
@@ -224,6 +257,7 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
   d->born = d->heatFrom = clock;
   d->id = serial_++;
   d->bones.resize(s->tracks.size());
+  d->trails.assign(s->tracks.size(), 0);  // [debrispile]
   d->centre = d->at;
   if (played == 0) printf("render: %s: its baked debris (%s) first played at %.3f s\n", Lower(unitId).c_str(), style.c_str(), clock);
   deaths_.push_back(std::move(d));
@@ -238,6 +272,7 @@ int BakedDebris::Playing() const {
 }
 
 void BakedDebris::Clear() {
+  for (auto& d : deaths_) Drop(*d);  // [debrispile]
   deaths_.clear();
   wrecks_.clear();  // [debrispile]
   clock_ = -1;
@@ -246,7 +281,18 @@ void BakedDebris::Clear() {
 // [debrispile] (baked_debris.h)
 bool BakedDebris::HasPile(const std::string& unitId) {
   Set* set = SetOf(unitId);
-  return set && StyleOf(*set, unitId, "break");
+  return set && PileStyle(*set, unitId);
+}
+
+const BakedDebris::Style* BakedDebris::PileStyle(Set& set, const std::string& unitId) {
+  for (const char* style : {"break", "melt", "vaporise"})
+    if (const Style* s = StyleOf(set, unitId, style)) return s;
+  return nullptr;
+}
+
+void BakedDebris::Drop(Death& d) {
+  for (uint32_t& t : d.trails)
+    if (t && smoke) smoke->Stop(t), t = 0;
 }
 
 void BakedDebris::Wreck(uint32_t prop, const std::string& unitId, Vec3 at, const Quat& turn, float scale, double born) {
@@ -274,7 +320,12 @@ int BakedDebris::Piles() const {
 // their piles with them.
 void BakedDebris::MatchWrecks(double clock) {
   for (auto it = wrecks_.begin(); it != wrecks_.end();) it = it->second.frame != frame_ || !it->second.set ? wrecks_.erase(it) : std::next(it);
-  deaths_.erase(std::remove_if(deaths_.begin(), deaths_.end(), [&](const std::unique_ptr<Death>& d) { return d->prop && !wrecks_.count(d->prop); }),
+  deaths_.erase(std::remove_if(deaths_.begin(), deaths_.end(),
+                               [&](const std::unique_ptr<Death>& d) {
+                                 const bool gone = d->prop && !wrecks_.count(d->prop);
+                                 if (gone) Drop(*d);
+                                 return gone;
+                               }),
                 deaths_.end());
   if (wrecks_.empty()) return;
   auto apart = [](Vec3 a, Vec3 b) { return std::hypot(a.x - b.x, a.z - b.z); };
@@ -289,6 +340,7 @@ void BakedDebris::MatchWrecks(double clock) {
       if (!u.unseen || u.set != d.set || clock - (u.born + u.style->settled + 1) > 3 || apart(u.at, d.at) > reach(d)) continue;
       d.prop = u.prop;
       --unseenPiles, ++matched;
+      Drop(u);
       deaths_.erase(deaths_.begin() + static_cast<std::ptrdiff_t>(k));
       if (k < i) --i;
       break;
@@ -316,8 +368,8 @@ void BakedDebris::MatchWrecks(double clock) {
     }
     // (its death still to be thrown: it waits, a while at most)
     if (coming && clock - w.told < 8 && coming(w.unit, w.at)) continue;
-    // no death seen: the break style's last frame, burnt through, at the wreck's place and heading
-    const Style* s = StyleOf(*w.set, w.unit, "break");
+    // no death seen: the break style's last frame (or the style it has), burnt through, at the wreck's place and heading
+    const Style* s = PileStyle(*w.set, w.unit);
     if (!s) continue;
     auto d = std::make_unique<Death>();
     d->set = w.set;
@@ -327,13 +379,14 @@ void BakedDebris::MatchWrecks(double clock) {
     const float yaw = std::atan2(forward.x, forward.z);
     d->heading = Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)};
     d->scale = w.scale;
-    const Vec3 extent = (w.set->model->boundsMax - w.set->model->boundsMin) * w.scale;
+    const Vec3 extent = (s->model->boundsMax - s->model->boundsMin) * w.scale;
     d->radius = 0.5f * std::max({extent.x, extent.y, extent.z, 0.2f});
     d->color = Vec3{1, 1, 1} * paint;
     d->born = clock - s->settled - 1;  // (at rest from the first)
     d->heatFrom = w.born;
     d->id = serial_++;
     d->bones.resize(s->tracks.size());
+    d->trails.assign(s->tracks.size(), 0);
     d->centre = d->at;
     d->prop = prop;
     d->unseen = true;
@@ -343,7 +396,10 @@ void BakedDebris::MatchWrecks(double clock) {
 }
 
 void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
-  if (clock_ >= 0 && clock < clock_ - 2) deaths_.clear();  // (a game started over, or played back from earlier: [debrispile] its wrecks told anew)
+  if (clock_ >= 0 && clock < clock_ - 2) {  // (a game started over, or played back from earlier: [debrispile] its wrecks told anew)
+    for (auto& d : deaths_) Drop(*d);
+    deaths_.clear();
+  }
   clock_ = clock;
   MatchWrecks(clock);  // [debrispile]
   ++frame_;
@@ -361,6 +417,7 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     const float sinkFor = d.sinkFrom >= 0 ? 8.0f : sinkSeconds;
     const float sunk = wreck ? 0.0f : std::clamp(static_cast<float>(clock - sinkFrom) / sinkFor, 0.0f, 1.0f);
     if (!wreck && clock - sinkFrom >= sinkFor) {
+      Drop(d);
       deaths_.erase(deaths_.begin() + static_cast<std::ptrdiff_t>(k));
       continue;
     }
@@ -380,15 +437,27 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
       const Vec3 p = Lerp(Vec3{a[0], a[1], a[2]}, Vec3{b[0], b[1], b[2]}, f) * d.scale;
       const Quat q = Nlerp(Quat{a[3], a[4], a[5], a[6]}, Quat{b[3], b[4], b[5], b[6]}, f);
       const Vec3 flat = Rotate(d.heading, Vec3{p.x, 0, p.z});
-      const float lift = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y - sunk * (p.y + t.reach * d.scale);
-      const Vec3 own{p.x, p.y + lift, p.z};
+      // ([debrispile] VAPORISE: a chunk thrown beyond the wreck lies and sinks away as a death's without one, and is gone)
+      const float own = wreck && t.stray ? std::clamp(static_cast<float>(clock - (d.born + s.settled + lieSeconds)) / sinkSeconds, 0.0f, 1.0f) : sunk;
+      const float lift = ground(d.at.x + flat.x, d.at.z + flat.z) - d.at.y - own * (p.y + t.reach * d.scale);
+      const Vec3 placed{p.x, p.y + lift, p.z};
       FrameBone& bone = d.bones[c];
       bone.bone = t.bone;
-      bone.position[0] = own.x, bone.position[1] = own.y, bone.position[2] = own.z;
+      bone.position[0] = placed.x, bone.position[1] = placed.y, bone.position[2] = placed.z;
       bone.orientation[0] = q.x, bone.orientation[1] = q.y, bone.orientation[2] = q.z, bone.orientation[3] = q.w;
-      bone.hidden = false;
-      at[c] = d.at + Rotate(d.heading, own);
+      bone.hidden = own >= 1 || (d.unseen && t.stray);  // [debrispile]
+      at[c] = d.at + Rotate(d.heading, placed);
       sum += at[c];
+      // [debrispile] (VAPORISE: the biggest thrown trail the debris's smoke while they fly)
+      if (t.smokes && smoke && !trail.empty() && c < d.trails.size()) {
+        if (!d.unseen && age >= 0 && age < t.rests) {
+          if (!d.trails[c]) d.trails[c] = smoke->Start(trail, at[c], Quat{}, std::clamp(t.reach * d.scale / 0.15f, 0.5f, 1.5f), -1, true);
+          else smoke->Move(d.trails[c], at[c], Quat{});
+        } else if (d.trails[c]) {
+          smoke->Stop(d.trails[c]);
+          d.trails[c] = 0;
+        }
+      }
     }
     d.centre = sum * (1.0f / static_cast<float>(std::max<size_t>(at.size(), 1)));
     d.reach = 0;
@@ -404,8 +473,13 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
     const float seconds = heat ? heat->WreckSeconds(d.radius) : 55.0f;
     const float cooled = d.unseen ? 1.0f : std::clamp(age / std::max(s.settled, 0.1f), 0.0f, 1.0f);
     const bool glows = hot && heated >= 0 && heated < seconds;
-    const Vec3 tint{cooled * cooled * (3 - 2 * cooled), glows ? -heated : 0.0f, glows ? -seconds : 0.0f};
-    meshes->Add(d.set->model, Mat4::FromTRS(d.at, d.heading, d.scale), d.color, 1, &pose, tint.x > 0 || glows ? &tint : nullptr, nullptr,
+    // ([debrispile] MELT: how far its hot parts have sagged, eased over meltSeconds and then held; 101 times that in hundredths
+    // over the burn's hundredths: the vertex shader)
+    const float melted = s.melts && meltSag > 0 ? std::clamp(age / std::max(meltSeconds, 0.1f), 0.0f, 1.0f) : 0.0f;
+    const float sag = std::round(std::clamp(meltSag, 0.0f, 1.0f) * melted * (2 - melted) * 100);
+    const float burn = std::round(cooled * cooled * (3 - 2 * cooled) * 100);
+    const Vec3 tint{burn + 101 * sag, glows ? -heated : 0.0f, glows ? -seconds : 0.0f};
+    meshes->Add(s.model, Mat4::FromTRS(d.at, d.heading, d.scale), d.color, 1, &pose, tint.x > 0 || glows ? &tint : nullptr, nullptr,
                 0x70000000u | (d.id & 0x0fffffffu));
     meshes->Reach(d.centre, d.reach);
   }

@@ -625,8 +625,8 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
 }
 
 // [bakeddebris] (debris.h) The one place a death's style is chosen: the engine's killing hit (its damage type and overkill) is
-// to be read here; until then every death breaks.
-std::string Debris::DebrisStyleFor(const Dying&) { return "break"; }
+// to be read here; until then every death breaks ([debrispile] or dies in the style the viewer asks for: debrisStyle).
+std::string Debris::DebrisStyleFor(const Dying&) const { return debrisStyle.empty() ? "break" : debrisStyle; }
 
 void Debris::BeginShells() {
   ++shellStamp_;
@@ -844,6 +844,8 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
   // [bakeddebris] the baked deaths, on the same ground and clock
   baked.groundHeight = groundHeight;
   baked.hot = hot;
+  baked.smoke = smoke;  // [debrispile] (a vaporised unit's thrown chunks trail the same smoke)
+  baked.trail = kTrail;
   // [debrispile] (a wreck waits for its death while a unit of its kind dying near it is still to be thrown)
   baked.coming = [this](const std::string& unitId, Vec3 at) {
     for (const auto& [id, d] : dying_) {
