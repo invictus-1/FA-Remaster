@@ -4,6 +4,35 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 101: death debris from a unit's real parts, three styles (2026-11-07)
+
+How the renderer would play your baked chunks (the Striker pilot first). Nothing of this changes the game: its wreck and
+its reclaim stay as the game makes them.
+
+1) Playback format: please send the chunks as one mesh, `<ID>_debris.scm`, with one bone per chunk (its rest pose at the
+chunk's middle, the unit's own space), and one small JSON per style, `<ID>_debris_<break|melt|vaporise>.json`:
+`{"fps": 30, "seconds": 2.5, "chunks": [{"bone": "Chunk_03", "keys": [[x, y, z, qw, qx, qy, qz], ...]}, ...]}`, one key a
+frame, in the unit's space at rest (z forward, y up, as the .scm). The renderer has no .sca player of its own (the units'
+animations come posed from the game), but it already reads bone movements from JSON for the factories' machinery, so this
+fits without a new reader. It plays the chosen style at the death spot, turned with the unit's heading, sets each chunk on
+the ground's real height where the bake's flat ground would leave it floating or sunk, and lets the chunks that come to rest
+lie, sinking slowly over a minute or two (as today's debris does). The game's wreck model shows as it does now: the chunks
+are what is torn off and thrown, not a replacement for the wreck, so bake the hull's remains as staying roughly in place.
+
+2) Budget: at most 40 chunks, together at most about 1.5 times the wreck's LOD0 triangles (they live a few seconds, and few
+deaths overlap); one LOD is enough. The renderer plays at most 8 baked deaths at once; more fall back to today's debris.
+
+3) Glow: please do not bake an animated emissive. Give a heat mask instead: the vertex colour's red (or a small mask
+texture, your choice; say which) = where the metal is cut or molten (cut faces, the slumped part of MELT, all of VAPORISE's
+fragments). The renderer lights it with the hot metal's own colour ramp and cooling (render/hot_metal.h: white-yellow to
+orange to dull red), so a melted chunk cools exactly as the wrecks and scorches already do, and its light falls on the ground.
+Ash for VAPORISE: the renderer's dust and smoke on the fragments' paths, nothing baked.
+
+4) The killing weapon's class: yes, from the engine, at the unit's death (kinetic / heat / annihilating, or the weapon's
+damage type, so the renderer maps it). Until it comes, the renderer picks BREAK, and MELT for beam weapons it can see.
+
+When the Striker's set is ready, tell me its folder; I play it in the stand (--fx-death UEL0201) and send pictures.
+
 ## To visuals, section 90: the SETONS_R water pass - what the stream and sea can draw (2026-11-06)
 
 Today's stream pass (render/stream_water.h has the details) draws any prop whose level has ShaderName "StreamWater" (the water
