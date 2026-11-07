@@ -2378,7 +2378,9 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
   // Unit::GetVelocity 0x6a9c90: the last beat's displacement only while the unit is in the Air layer; in any
   // other layer it is the motion's own velocity vector (motion+0x38), which the flight code does not use: a
   // transport coming down on its landing spot (layer Land) is "not moving" for this
-  Vec3 v = SeenLayer(u) == "Air" ? (other ? u->motion.velCommitted : u->motion.lastMove) : SeenMotionVel(u);
+  // (a flier let go by its dock in this beat, before its own motion step: the motion's vector, NotifyDetachedMotion)
+  Vec3 v = SeenLayer(u) == "Air" && !u->motion.airLayerPending ? (other ? u->motion.velCommitted : u->motion.lastMove)
+                                                              : SeenMotionVel(u);
   float ang = w.y * 0.1f;
   float s = dmath::Sin(ang * 0.5f), c = dmath::Cos(ang * 0.5f);
   QuatW q{c, 0.0f * s, 1.0f * s, 0.0f * s};  // 0x570750: the axis (0, 1, 0) times the sine
@@ -2436,7 +2438,7 @@ void AirMotionTick(Sim& sim, Unit* u) {
       Logf(LogLevel::Info, "airenter %u unit %u lastMove %.5f %.5f %.5f layer %s", sim.tick(), u->id, m.lastMove.x,
            m.lastMove.y, m.lastMove.z, u->layer.c_str());
   }
-  if (m.airLayerPending) {  // let go by a transport this beat (DetachUnitFrom): the Air layer from its motion step
+  if (m.airLayerPending) {  // let go by a transport this beat (DetachUnitFrom): its own velocity from its motion step on
     m.airLayerPending = false;
     SetLayerBits(sim, u, kAir);
   }
