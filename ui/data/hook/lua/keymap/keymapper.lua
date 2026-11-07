@@ -19,7 +19,22 @@ RemasterOwnKeys = {
     { key = 'Ctrl-T', action = 'remaster_timeline' },  -- (the replay timeline, shown or hidden; only while a replay plays)
     { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },  -- (the follow camera; the hotbuild and alternative maps' debug key there)
     { key = 'Y', action = 'remaster_radial_ping' },  -- (the radial ping menu; Chris may pick another)
+    -- (the replay bookmarks, Chris 2026-11-07: B for bookmark; Ctrl-B is FAF's "select engineers"; < and > the one
+    -- before and the next; all three free in FAF's three presets)
+    { key = 'Ctrl-Shift-B', action = 'remaster_bookmark_add' },
+    { key = 'Ctrl-Shift-Period', action = 'remaster_bookmark_next' },
+    { key = 'Ctrl-Shift-Comma', action = 'remaster_bookmark_previous' },
 }
+-- FAF's own camera spots 1..9 (/lua/usercamera.lua SaveCameraPosition / RestoreCameraPosition, which FAF's presets leave
+-- without keys), remembered per map by this program (ui/data/hook/lua/usercamera.lua; Chris, 2026-11-07): Ctrl-Alt-1..9
+-- saves, Alt-1..9 goes there. 1..9 alone are FAF's control groups, Ctrl-1..9 set them, Shift-1..9 add to them,
+-- Ctrl-Shift-1..9 its factory groups; Alt and Ctrl-Alt with a digit are free in its three presets.
+for remasterSpot = 1, 9 do
+    table.insert(RemasterOwnKeys, { key = 'Ctrl-Alt-' .. remasterSpot, action = 'SaveCameraPosition' .. remasterSpot })
+end
+for remasterSpot = 1, 9 do
+    table.insert(RemasterOwnKeys, { key = 'Alt-' .. remasterSpot, action = 'RestoreCameraPosition' .. remasterSpot })
+end
 local remasterSeenKey = 'UserKeyMapRemasterActions'
 local remasterHotbuild = { hotbuilding = true, hotbuildingAlternative = true, hotbuildingExtra = true }
 

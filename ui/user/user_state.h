@@ -161,6 +161,10 @@ class UserState {
     // The replay timeline's host side while a replay plays (the host's: its length, the moments, the jumps;
     // user/replay_timeline.h); nullptr otherwise.
     ReplayTimelineSource* timeline = nullptr;
+    // The game's moments for its score screen (the host's GameSession::GameMoments: a replay's timeline, or a game
+    // played scanned from its own replay once it is over; `start`: begin that scan now if it is not); unset, or
+    // nullptr from it: none (user/replay_timeline.h, moho64ui_GameMoments).
+    std::function<ReplayTimelineSource*(bool start)> gameMoments;
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;

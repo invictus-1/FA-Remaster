@@ -858,6 +858,28 @@ class GameSession::BeatWorker {
 #endif
 };
 
+// (aheadInLoad, game_session.h) The loading thread's beats: where it stops for the hand-over (Parked, until this thread
+// says Go; Stop: the launch is dropped), and what the beats leave for FinishLoad. Written there, read here only through
+// the gate's lock or after the worker's wait.
+struct GameSession::LoadAhead {
+  enum class Gate { Working, Parked, Go, Stop };
+  std::mutex mutex;
+  std::condition_variable cv;
+  Gate gate = Gate::Working;
+  bool jobDone = false;            // (the loading thread's job is over, beats or not)
+  std::atomic<bool> stop{false};   // (StopLoadAhead: no further beat)
+  bool decideSounds = false;       // (a sound system there: each beat's sounds decided as the beats' thread does)
+  std::vector<std::string> setupSync;  // the setup's own sync (Start's "beat 0"), taken before beat 1
+  std::vector<std::string> syncs;      // each beat's, in order
+  std::vector<SoundAction> sounds;     // each beat's sounds, in order (played at the load's end)
+  std::vector<ShakeEvent> shakes;      // and camera shakes
+  uint32_t ranTo = 0;                  // the tick reached (0: none ran)
+  double parkedAt = -1, goAt = -1, doneAt = -1;  // (seconds from BeginLoad)
+  double beatsSeconds = 0, longestMs = 0;
+  uint32_t longestTick = 0;
+  size_t hits = 0, impacts = 0, health = 0;  // (the simulation's lists after them, for the picture: logged)
+};
+
 // --- the replay timeline (ours, not the original's: Chris's approval of 2026-10-23; user/replay_timeline.h) ---
 
 namespace {
@@ -901,6 +923,11 @@ struct GameSession::Timeline : ReplayTimelineSource {
   int limit = 0;  // (the scan's ScanArgs::ticks: 0 the whole replay)
   uint32_t jumpsBack = 0, backLoadingScreens = 0;  // (State's: kept across the jumps back, as the timeline is)
   double lastBackSeconds = 0;
+  // The player's bookmarks of the replay (user/replay_timeline.h ReplayBookmark): read from the file beside it when
+  // it opened (StartMomentScan), written there at each change, kept across the jumps back. `file`: the replay's own
+  // path; `digest`: which replay it is (ReplayDigest of its bytes).
+  std::string file, digest;
+  std::vector<ReplayBookmark> bookmarks;
 
   ~Timeline() { Stop(); }
   void Stop() {
@@ -1013,6 +1040,17 @@ struct GameSession::Timeline : ReplayTimelineSource {
     return true;
   }
   std::string TakeKept() override { return std::move(kept); }
+  std::vector<ReplayBookmark> Bookmarks() const override { return bookmarks; }
+  bool SetBookmarks(const std::vector<ReplayBookmark>& list, std::string* why) override {
+    bookmarks = CleanBookmarks(list, ticks);
+    if (!SaveReplayBookmarks(file, digest, bookmarks, why)) {
+      Logf(LogLevel::Warning, "moho64ui: the replay's bookmarks are kept for this run only: %s", why->c_str());
+      return false;
+    }
+    Logf(LogLevel::Info, "moho64ui: the replay's bookmarks: %zu, in %s", bookmarks.size(), hostfs::DisplayPath(BookmarksFile()).c_str());
+    return true;
+  }
+  std::string BookmarksFile() const override { return ReplayBookmarksFile(file); }
   void CaptureForTests(const std::string& path) override { session->CaptureWindow(path); }
   void Watch(const std::vector<uint32_t>& ticks) override {
     GameSession& g = *session;
@@ -1036,12 +1074,28 @@ ReplayTimelineSource* GameSession::timeline() { return play_ && timeline_ ? time
 // (tests).
 void GameSession::StartMomentScan(const ReplayHeader& header, const std::string& file, const std::vector<std::string>& uids) {
   StopMomentScan();
-  timeline_ = std::make_unique<Timeline>();
+  const uint32_t ticks = ReplayBeats(playData_, header.streamOffset);
+  Logf(LogLevel::Info, "moho64ui: the replay is %u beats long (%u:%02u); its moments are looked for", ticks, ticks / 600,
+       (ticks / 10) % 60);
+  timeline_ = NewScan(file, uids, ticks, scanTicks, "the replay's moments");
+  // the player's bookmarks of it, from the file beside it (one of another replay's, as an earlier LastGame's, is left;
+  // the scan's thread never reads these)
   Timeline& t = *timeline_;
+  t.file = file;
+  t.digest = ReplayDigest(playData_);
+  std::string why;
+  if (!LoadReplayBookmarks(file, t.digest, &t.bookmarks, &why))
+    Logf(LogLevel::Warning, "moho64ui: the bookmarks in %s are not used: %s", hostfs::DisplayPath(ReplayBookmarksFile(file)).c_str(), why.c_str());
+  else if (!t.bookmarks.empty())
+    Logf(LogLevel::Info, "moho64ui: the replay's bookmarks: %zu, from %s", t.bookmarks.size(), hostfs::DisplayPath(ReplayBookmarksFile(file)).c_str());
+}
+
+std::unique_ptr<GameSession::Timeline> GameSession::NewScan(const std::string& file, const std::vector<std::string>& uids,
+                                                            uint32_t ticks, int limit, const char* what) {
+  auto made = std::make_unique<Timeline>();
+  Timeline& t = *made;
   t.session = this;
-  t.ticks = ReplayBeats(playData_, header.streamOffset);
-  Logf(LogLevel::Info, "moho64ui: the replay is %u beats long (%u:%02u); its moments are looked for", t.ticks, t.ticks / 600,
-       (t.ticks / 10) % 60);
+  t.ticks = ticks;
   moho::ScanArgs args;
   args.init = scanInit;
   args.folders = scanFolders;
@@ -1051,10 +1105,11 @@ void GameSession::StartMomentScan(const ReplayHeader& header, const std::string&
   args.modUids = uids;
   args.replay = file;
   args.threads = 1;  // (the cores stay the watched game's)
-  args.ticks = scanTicks;
-  t.limit = scanTicks;
+  args.ticks = limit;
+  t.limit = limit;
   t.scanning = true;
-  t.scan = std::thread([&t, args] {
+  const std::string name = what;
+  t.scan = std::thread([&t, args, name] {
     const auto t0 = std::chrono::steady_clock::now();
     const bool through = moho::ScanReplayMoments(args, &t.found, &t.scanned, &t.cancel);
     size_t moments = 0;
@@ -1069,16 +1124,54 @@ void GameSession::StartMomentScan(const ReplayHeader& header, const std::string&
     t.scanning = false;
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!error.empty())
-      Logf(LogLevel::Warning, "moho64ui: the replay's moments could not be looked for: %s", error.c_str());
+      Logf(LogLevel::Warning, "moho64ui: %s could not be looked for: %s", name.c_str(), error.c_str());
     else
-      Logf(LogLevel::Info, "moho64ui: the replay's moments: %s at beat %d, %zu found in %.1f s (%.1f times the game's speed)",
+      Logf(LogLevel::Info, "moho64ui: %s: %s at beat %d, %zu found in %.1f s (%.1f times the game's speed)", name.c_str(),
            through ? "scanned" : "the scan stopped", last, moments, secs, secs > 0 ? last / 10.0 / secs : 0.0);
   });
+  return made;
 }
 
 void GameSession::StopMomentScan() {
   if (timeline_) timeline_->Stop();
   timeline_.reset();
+}
+
+// A scan let go of: told to stop, and kept until its thread is through (joined then, or with the session's host), so
+// that leaving the score screen does not wait for it: a scan still loading its copy of the game (the rules, the map:
+// seconds) stops only at its first beat.
+void GameSession::LetGoOfScan(std::unique_ptr<Timeline> scan) {
+  if (scan) {
+    scan->cancel = true;
+    stoppingScans_.push_back(std::move(scan));
+  }
+  for (size_t i = 0; i < stoppingScans_.size();) {
+    if (stoppingScans_[i]->scanning) {
+      ++i;
+      continue;
+    }
+    stoppingScans_[i]->Stop();
+    stoppingScans_.erase(stoppingScans_.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+}
+
+// A game played: its replay file as written so far (StartReplayFile, Record: every beat's orders flushed as they go)
+// scanned from its start, with the game's own mods, to the end of what it holds. The file is read once when the scan
+// begins (ScanReplayMoments), so the beats the game runs on after that are not in it.
+ReplayTimelineSource* GameSession::GameMoments(bool start) {
+  if (play_) return timeline();
+  if (!sim_ || currentReplay.empty() || !replay_ || BeatRunning()) return postgame_.get();  // (a beat on its thread: asked again later)
+  const uint32_t now = sim_->tick();
+  // (asked again once the game is over, after a scan that read the file while the game still ran: made again)
+  const bool stale = postgame_ && !postgame_->scanning && start && GameOver() && now > postgameAt_ + 1;
+  if ((!postgame_ && (start || GameOver())) || stale) {
+    LetGoOfScan(std::move(postgame_));
+    postgameAt_ = now;
+    Logf(LogLevel::Info, "moho64ui: the game's moments for its score screen: %s scanned to tick %u (%s)", currentReplay.c_str(), now,
+         GameOver() ? "the game is over" : "the score screen asked while the game runs");
+    postgame_ = NewScan(currentReplay, modUids_, now, 0, "the game's moments");
+  }
+  return postgame_.get();
 }
 
 void GameSession::SeekReached() {
@@ -1235,6 +1328,7 @@ void GameSession::DrawHeld(DrawTarget& target) const {
 
 GameSession::GameSession(Vfs* vfs, std::vector<std::string> hookDirs) : vfs_(vfs), hookDirs_(std::move(hookDirs)) {}
 GameSession::~GameSession() {
+  StopLoadAhead();
   if (worker_) worker_->Wait();
   StopMomentScan();
 }
@@ -1705,7 +1799,7 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
 // The replay file of a game being played (LastGame), the original's format (the header as the
 // engine's ReadReplayHeader reads it, sim/replay.cpp, then the command stream): so the game's
 // Replay dialog lists it and the original game could open it too.
-void GameSession::StartReplayFile(const SessionDescription& session) {
+void GameSession::StartReplayFile(const SessionDescription& session, const Sim& sim) {
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   if (!session.createReplay && !session.replay) currentReplay.clear();  // (a campaign's operation: none, as the original)
   if (session.replay || !session.createReplay || userDir.empty() || profile_.empty()) return;
@@ -1736,7 +1830,7 @@ void GameSession::StartReplayFile(const SessionDescription& session) {
   // The table is made in a scratch Lua state, never the sim's: an object made there outside the
   // game's own flow would shift the sim's object serials, and with them its pairs() order.)
   std::string scenario = h.scenario;
-  if (sim_ && sim_->fixes) {
+  if (sim.fixes) {
     lua_State* S = lua_open();
     const int top = lua_gettop(S);
     if (PushSerializedLua(S, h.scenario) && lua_istable(S, -1)) {
@@ -1780,7 +1874,10 @@ void GameSession::Record(const std::string& bytes) {
 }
 
 void GameSession::End() {
+  StopLoadAhead();  // (beats in the load: the loading thread stops at the hand-over or after its beat)
   if (worker_) worker_->Wait();  // (a beat on its thread ends first; its sounds and sync are dropped)
+  loadAhead_.reset();
+  recordsOpen_ = false;
   beatToFinish_ = false;
   aheadTo_ = 0, aheadRanTo_ = 0;
   load_ = Load::None;  // (a launch still loading is dropped)
@@ -1790,6 +1887,7 @@ void GameSession::End() {
   if (fp_) fp_->End(fpBeats_), fp_.reset();
   if (replay_) std::fclose(replay_), replay_ = nullptr;
   play_.reset();
+  LetGoOfScan(std::move(postgame_));  // (a played game's moments' scan stops: GameMoments)
   if (!relaunching_) {  // (the replay closes: its moments' scan stops, a jump under way with it)
     StopMomentScan();
     seekTo_ = 0;
@@ -1955,8 +2053,24 @@ void GameSession::BeginLoad() {
     lf.loading = lf.thresholdMs > 0;
   }
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
+  recordsOpen_ = false;
+  loadAhead_.reset();
+  if (aheadInLoad && aheadable_ && !net_ && !play_) {  // (only a local game's: Aheadable)
+    loadAhead_ = std::make_unique<LoadAhead>();
+    loadAhead_->decideSounds = sounds != nullptr;
+  }
   worker_->Start([this] {
     auto secs = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+    // (the job's end, whichever way it ends, for a wait at the hand-over: WaitForWorker)
+    struct Done {
+      LoadAhead* a;
+      ~Done() {
+        if (!a) return;
+        std::lock_guard<std::mutex> lock(a->mutex);
+        a->jobDone = true;
+        a->cv.notify_all();
+      }
+    } done{loadAhead_.get()};
     Sim* sim = loadSim_.get();
     const auto t0 = std::chrono::steady_clock::now();
     if (!sim->LoadRules()) {
@@ -1991,7 +2105,9 @@ void GameSession::BeginLoad() {
     if (prepareInterface) prepareInterface(sim, loadUids_, loadSession_->header.mods);
     const auto t3 = std::chrono::steady_clock::now();
     loadStateSeconds_ = secs(t2, t3);
-    loadThreadDone_ = secs(loadBegan_, t3);  // (read on the main thread once the worker is through: its release)
+    // Then, for an aheadInLoad game, its first beats (game_session.h): after the hand-over, while the map still opens.
+    if (loadAhead_) RunLoadAhead(sim);
+    loadThreadDone_ = secs(loadBegan_, std::chrono::steady_clock::now());  // (read on the main thread once the worker is through: its release)
   });
   // Meanwhile the game's map opens behind the window's picture (render request 37), the loading screen drawn over
   // what it shows; FinishLoad swaps it in.
@@ -2014,24 +2130,34 @@ std::string GameSession::LoadingMapFolder() const {
 void GameSession::ServeLoad() {
   if (net_) net_->exchange->Service();  // (a network game: the others keep hearing from this program while it loads)
   NoteLoadProgress();
+  // (aheadInLoad: the loading thread waits for this one before its beats, HandOverLoad. The map opening behind is given
+  // the session only once those beats are through, as below when the thread is: the renderer keys what its world made
+  // for the session's first beat by its blueprints' places in that beat (World::iconKinds_, unitModels_ by
+  // FrameUnit::blueprint), and its own first beat after the swap must find the same units. Read at tick 0, with the
+  // first beat after the swap at tick 29, a commander was drawn with another unit's model and icon (SETONS_R, seen at
+  // tick 70). INFERRED, the renderer's code not followed through: its places differ when the units do, and on SETONS_R
+  // the map's 43 wreckage units of army 10 are gone by tick 29.)
+  const bool parked = LoadParked();
 #ifdef MOHO64UI_WORLD_PICTURE
-  if (load_ != Load::Running || loadPrepared_ || BeatRunning() || !loadOk_ || !loadSim_) return;
-  if (!windowPicture_ || windowPicture_->pending != WindowPicture::Kind::Game) return;
-  loadPrepared_ = true;
-  // (and the camera the game will first be seen by, the whole map from above for its first second, for the warm
-  // frames: the renderer's own is a nearer one over the map's middle)
-  if (const TerrainMap* map = loadSim_->map()) {
-    const float mw = static_cast<float>(map->width()), mh = static_cast<float>(map->height());
-    const WindowPicture& wp = *windowPicture_;
-    const float aspect = wp.drawnH > 0 ? static_cast<float>(wp.drawnW) / static_cast<float>(wp.drawnH) : 16.0f / 9.0f;
-    const WorldCamera start = StartWorldCamera(mw, mh, loadSim_->playableRect, aspect, map->SurfaceHeight(mw * 0.5f, mh * 0.5f));
-    windowPicture_->picture.SetLoadCamera(Picture::ToRender(start));
-  }
-  if (windowPicture_->picture.PrepareSession(*loadSim_)) {
-    loadHandedAt_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
-    Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead (%.2f s into the load)", loadHandedAt_);
+  if (load_ == Load::Running && !loadPrepared_ && !BeatRunning() && loadOk_ && loadSim_ && windowPicture_ &&
+      windowPicture_->pending == WindowPicture::Kind::Game) {
+    loadPrepared_ = true;
+    // (and the camera the game will first be seen by, the whole map from above for its first second, for the warm
+    // frames: the renderer's own is a nearer one over the map's middle)
+    if (const TerrainMap* map = loadSim_->map()) {
+      const float mw = static_cast<float>(map->width()), mh = static_cast<float>(map->height());
+      const WindowPicture& wp = *windowPicture_;
+      const float aspect = wp.drawnH > 0 ? static_cast<float>(wp.drawnW) / static_cast<float>(wp.drawnH) : 16.0f / 9.0f;
+      const WorldCamera start = StartWorldCamera(mw, mh, loadSim_->playableRect, aspect, map->SurfaceHeight(mw * 0.5f, mh * 0.5f));
+      windowPicture_->picture.SetLoadCamera(Picture::ToRender(start));
+    }
+    if (windowPicture_->picture.PrepareSession(*loadSim_)) {
+      loadHandedAt_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
+      Logf(LogLevel::Info, "moho64ui: the game's map opening behind makes the simulation's models ahead (%.2f s into the load)", loadHandedAt_);
+    }
   }
 #endif
+  if (parked) HandOverLoad();
 }
 
 // (the load's parts as this thread's frames see them: the loading thread through, the map opening behind ready; while it
@@ -2058,6 +2184,122 @@ void GameSession::NoteLoadProgress() {
   Logf(LogLevel::Info, "moho64ui: loading for %.0f s: the loading thread (rules, the simulation's start, the game's state) %s; the map behind: %s",
        now, thread.c_str(), map.c_str());
 }
+
+// --- aheadInLoad: the first beats on the loading thread (game_session.h) ---
+
+bool GameSession::LoadParked() const {
+  if (!loadAhead_) return false;
+  std::lock_guard<std::mutex> lock(loadAhead_->mutex);
+  return loadAhead_->gate == LoadAhead::Gate::Parked;
+}
+
+// This thread's part of the hand-over (ServeLoad): the game's record and replay file opened now, so that the loading
+// thread writes each beat's advance and fingerprint line as it runs (no orders in those beats: the same bytes
+// RunFirstBeat and RunAhead write); the beats' sounds start from no running sound (End stopped the world's). Then it
+// goes on. (The map opening behind gets the session after the beats: ServeLoad.)
+void GameSession::HandOverLoad() {
+  LoadAhead& a = *loadAhead_;
+  OpenRecords(*loadSession_, *loadSim_);
+  loopEntities_.clear(), seekingAtBeat_ = false;
+  std::lock_guard<std::mutex> lock(a.mutex);
+  a.gate = LoadAhead::Gate::Go;
+  a.goAt = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
+  a.cv.notify_all();
+}
+
+void GameSession::StopLoadAhead() {
+  if (!loadAhead_) return;
+  LoadAhead& a = *loadAhead_;
+  a.stop.store(true, std::memory_order_release);
+  std::lock_guard<std::mutex> lock(a.mutex);
+  if (a.gate != LoadAhead::Gate::Go) a.gate = LoadAhead::Gate::Stop;
+  a.cv.notify_all();
+}
+
+// On the loading thread, right after the simulation's start and the interface's state: the setup's sync taken (it is
+// Start's own, "beat 0", which FinishLoad would take), then the wait for the hand-over, then beats 1..kAheadTicks one
+// after another, each as RunFirstBeat / StartBeatOnThread runs one without orders: the tick, its advance in the record,
+// its fingerprint line, its sync and prints kept, its sounds decided (DecideBeatSounds, as on the beats' thread) and its
+// camera shakes kept for the load's end. Nothing is given to the picture (the renderer's rules for request 46: no
+// GameStarted or Beat before SwapMap; the effects and props' changes are left in the simulation for PrepareSession,
+// after these beats, which keeps them for the first Beat after SwapMap; the hits, impacts and health are not dropped
+// here as NotePictureBeat does without a picture: how many there were is logged).
+void GameSession::RunLoadAhead(Sim* sim) {
+  LoadAhead& a = *loadAhead_;
+  using Clock = std::chrono::steady_clock;
+  auto since = [this] { return std::chrono::duration<double>(Clock::now() - loadBegan_).count(); };
+  a.setupSync = sim->TakeSync();
+  PostPrints(*sim);  // (the setup's lines, as FinishLoad posts them; the console's list is guarded)
+  {
+    std::unique_lock<std::mutex> lock(a.mutex);
+    if (a.gate == LoadAhead::Gate::Working) a.gate = LoadAhead::Gate::Parked;
+    a.parkedAt = since();
+    a.cv.notify_all();
+    a.cv.wait(lock, [&a] { return a.gate == LoadAhead::Gate::Go || a.gate == LoadAhead::Gate::Stop; });
+    if (a.gate == LoadAhead::Gate::Stop) return;
+  }
+  const auto t0 = Clock::now();
+  if (fp_) fp_->Beat(*sim, 0);  // (beat 0: the state Start left, as RunFirstBeat)
+  std::vector<SoundAction> beatSounds;
+  std::vector<ShakeEvent> shakes;
+  while (sim->tick() < kAheadTicks && !a.stop.load(std::memory_order_acquire)) {
+    const auto tb = Clock::now();
+    sim->Tick();
+    const double ms = std::chrono::duration<double, std::milli>(Clock::now() - tb).count();
+    if (ms > a.longestMs) a.longestMs = ms, a.longestTick = sim->tick();
+    g_crashTick = sim->tick();
+    Record(CommandWriter::AdvanceMessage(1));
+    if (fp_) fp_->Beat(*sim, ++fpBeats_);
+    for (std::string& sync : sim->TakeSync()) a.syncs.push_back(std::move(sync));
+    PostPrints(*sim);
+    if (a.decideSounds) {
+      DecideBeatSounds(*sim, &beatSounds);
+      // (the running sounds as the sound system will have them once these are played, for the next beat's decision:
+      // SoundSystem::SetLoop keeps a loop for a bank and cue, and lets it go for none)
+      for (const SoundAction& s : beatSounds) {
+        if (s.kind != SoundAction::Loop) continue;
+        auto it = std::lower_bound(loopEntities_.begin(), loopEntities_.end(), s.entity);
+        const bool has = it != loopEntities_.end() && *it == s.entity;
+        if (!s.bank.empty() && !s.cue.empty()) {
+          if (!has) loopEntities_.insert(it, s.entity);
+        } else if (has) {
+          loopEntities_.erase(it);
+        }
+      }
+      a.sounds.insert(a.sounds.end(), std::make_move_iterator(beatSounds.begin()), std::make_move_iterator(beatSounds.end()));
+    }
+    ShakeEvents(*sim, &shakes);
+    a.shakes.insert(a.shakes.end(), shakes.begin(), shakes.end());
+  }
+  a.ranTo = sim->tick();
+  a.hits = sim->hitEvents.size(), a.impacts = sim->impactEvents.size(), a.health = sim->healthEvents.size();
+  a.beatsSeconds = std::chrono::duration<double>(Clock::now() - t0).count();
+  a.doneAt = since();
+}
+
+// FinishLoad's part for those beats (the worker waited for): their syncs where the beats after the load would have
+// left them (the setup's apart, then each beat's in order, for the game's screen), their sounds played and their camera
+// shakes posted now, and the beats' early start learnt afresh (as RunAhead's end does).
+void GameSession::TakeLoadAhead() {
+  LoadAhead& a = *loadAhead_;
+  setupSync_ = std::move(a.setupSync);
+  pendingSync_ = std::move(a.syncs);
+  aheadRanTo_ = a.ranTo;
+  if (sounds) ApplyBeatSounds(a.sounds);
+  if (!seekTo_)
+    for (const ShakeEvent& e : a.shakes) PostCameraShake(e.position, e.radius, e.maxShakeEpicenter, e.minShakeAtRadius, e.interval);
+  leadBeats_ = 0, lead_ = 0;
+  Logf(LogLevel::Info,
+       "moho64ui: beats 1 to %u ran in the load (no prebuilt units: nothing to see or do yet): the loading thread waited for the "
+       "hand-over from %.2f to %.2f s, then %.2f s of beats (the longest, beat %u, %.0f ms), through at %.2f s; %zu syncs, %zu sounds and "
+       "%zu camera shakes kept for the game's screen; %zu hits, %zu impacts and %zu health changes in them",
+       a.ranTo, a.parkedAt, a.goAt, a.beatsSeconds, a.longestTick, a.longestMs, a.doneAt, pendingSync_.size(), a.sounds.size(),
+       a.shakes.size(), a.hits, a.impacts, a.health);
+  loadAhead_.reset();
+}
+
+double GameSession::LaunchToLoadEnd() const { return std::chrono::duration<double>(loadEndedAt_ - launchAt_).count(); }
+double GameSession::SinceLoadEnd() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - loadEndedAt_).count(); }
 
 bool GameSession::LoadDone() const {
   if (load_ != Load::Running || BeatRunning()) return false;
@@ -2100,13 +2342,18 @@ bool GameSession::FinishLoad(std::string* why) {
     const double end = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
     char map[160] = "no map opening behind";
     if (keepMap_) std::snprintf(map, sizeof map, "no map opening behind (a jump back: the map shown is started over)");
+    // (aheadInLoad: the loading thread's own work ended at the hand-over; its beats came after, while the map opened)
+    const double stateDone = loadAhead_ ? loadAhead_->parkedAt : loadThreadDone_;
     if (loadMapReadyAt_ >= 0)
       std::snprintf(map, sizeof map, "the session given to the map opening behind at %.2f s, that map ready at %.2f s (%.2f s after the loading thread)",
-                    loadHandedAt_, loadMapReadyAt_, loadMapReadyAt_ - loadThreadDone_);
+                    loadHandedAt_, loadMapReadyAt_, loadMapReadyAt_ - stateDone);
+    char beats[96] = "";
+    if (loadAhead_)
+      std::snprintf(beats, sizeof beats, "; its beats in the load from %.2f to %.2f s", loadAhead_->goAt, loadAhead_->doneAt);
     Logf(LogLevel::Info,
-         "moho64ui: the load's parts: the loading thread through at %.2f s (rules %.2f, the simulation's start %.2f, the game's state %.2f); %s; "
+         "moho64ui: the load's parts: the loading thread through at %.2f s (rules %.2f, the simulation's start %.2f, the game's state %.2f)%s; %s; "
          "finished at %.2f s",
-         loadThreadDone_, loadRulesSeconds_, loadStartSeconds_, loadStateSeconds_, map, end);
+         stateDone, loadRulesSeconds_, loadStartSeconds_, loadStateSeconds_, beats, map, end);
   }
   sim_ = std::move(loadSim_);
   const std::vector<std::string> uids = std::move(loadUids_);
@@ -2130,7 +2377,59 @@ bool GameSession::FinishLoad(std::string* why) {
   armies_ = h.armies.size();
   seed_ = h.seed;
   due_ = 0;
-  StartReplayFile(session);
+  if (!recordsOpen_) OpenRecords(session, *sim_);  // (aheadInLoad: opened at the hand-over, the beats in them)
+  recordsOpen_ = false;  // (the next game's are its own)
+  if (loadAhead_) TakeLoadAhead();
+  // A replay played back with MOHO64_FINGERPRINT set: its fingerprint there too, line for line as the recorded game's
+  // .fp (a measurement with the hashing's cost in it, and a check of the playback against the game; ours)
+  fpPlayback_ = false;
+  if (play_ && std::getenv("MOHO64_FINGERPRINT")) {
+    if (fp_) fp_->End(fpBeats_), fp_.reset();
+    fp_ = std::shared_ptr<Fingerprint>(Fingerprint::FromEnvironment().release());
+    fpBeats_ = 0;
+    fpPlayback_ = fp_ != nullptr;
+  }
+  pace.rate = pace.asked = session.gameSpeed;
+  pace.adjustable = session.adjustableSpeed;
+  // This program's maxSP afresh (the original's sim driver and client manager are made anew for each session): in a
+  // local game or a replay the local client's 50 until the first measure sent, or a test's value (MOHO64UI_FORCE_MAXSP,
+  // as if sent before the first beat).
+  measure_ = SpeedMeasure{};
+  pace.maxSP = 50;
+  pace.replay = play_ != nullptr;
+  if (const char* forced = std::getenv("MOHO64UI_FORCE_MAXSP"); forced && *forced && !net_) {
+    measure_.forced = true;
+    measure_.sent = pace.maxSP = std::atoi(forced);
+    Logf(LogLevel::Info, "moho64ui: our maxSP is %d (MOHO64UI_FORCE_MAXSP)", pace.maxSP);
+  }
+  if (!net_) pace.rate = pace.LocalRate();
+  pictureDue_ = false;
+  if (wantPicture) {
+    // (A window that is still to come: the picture opens on it in its first frame,
+    // OpenPictureIfDue.)
+    if (waitForWindow && !window) {
+      pictureDue_ = true;
+    } else {
+      const auto t0 = std::chrono::steady_clock::now();
+      OpenPicture();
+      LongFrames().Note("(start: the world's picture opened)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+  }
+  if (play_)
+    Logf(LogLevel::Info, "moho64ui: the replay is played %s",
+         sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
+  if (back_.to) back_.loaded = BackSeconds();  // (a jump back's clock: SeekReached's line)
+  loadEndedAt_ = std::chrono::steady_clock::now();
+  return true;
+}
+
+// The game's record (--replay-out: its stream, seed file, the table's copy and the fingerprint) and its replay file
+// (LastGame), opened as the game starts: in FinishLoad, or at the hand-over when the first beats run in the load
+// (aheadInLoad: each beat's advance and fingerprint line written by the loading thread as it runs).
+void GameSession::OpenRecords(const SessionDescription& session, const Sim& sim) {
+  recordsOpen_ = true;
+  const ReplayHeader& h = session.header;
+  StartReplayFile(session, sim);
   if (stream_) std::fclose(stream_), stream_ = nullptr;
   recordBase_.clear();
   if (!replayOut.empty()) {  // the game's record: see the header
@@ -2182,46 +2481,6 @@ bool GameSession::FinishLoad(std::string* why) {
     fpBeats_ = 0;
     }
   }
-  // A replay played back with MOHO64_FINGERPRINT set: its fingerprint there too, line for line as the recorded game's
-  // .fp (a measurement with the hashing's cost in it, and a check of the playback against the game; ours)
-  fpPlayback_ = false;
-  if (play_ && std::getenv("MOHO64_FINGERPRINT")) {
-    if (fp_) fp_->End(fpBeats_), fp_.reset();
-    fp_ = std::shared_ptr<Fingerprint>(Fingerprint::FromEnvironment().release());
-    fpBeats_ = 0;
-    fpPlayback_ = fp_ != nullptr;
-  }
-  pace.rate = pace.asked = session.gameSpeed;
-  pace.adjustable = session.adjustableSpeed;
-  // This program's maxSP afresh (the original's sim driver and client manager are made anew for each session): in a
-  // local game or a replay the local client's 50 until the first measure sent, or a test's value (MOHO64UI_FORCE_MAXSP,
-  // as if sent before the first beat).
-  measure_ = SpeedMeasure{};
-  pace.maxSP = 50;
-  pace.replay = play_ != nullptr;
-  if (const char* forced = std::getenv("MOHO64UI_FORCE_MAXSP"); forced && *forced && !net_) {
-    measure_.forced = true;
-    measure_.sent = pace.maxSP = std::atoi(forced);
-    Logf(LogLevel::Info, "moho64ui: our maxSP is %d (MOHO64UI_FORCE_MAXSP)", pace.maxSP);
-  }
-  if (!net_) pace.rate = pace.LocalRate();
-  pictureDue_ = false;
-  if (wantPicture) {
-    // (A window that is still to come: the picture opens on it in its first frame,
-    // OpenPictureIfDue.)
-    if (waitForWindow && !window) {
-      pictureDue_ = true;
-    } else {
-      const auto t0 = std::chrono::steady_clock::now();
-      OpenPicture();
-      LongFrames().Note("(start: the world's picture opened)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
-    }
-  }
-  if (play_)
-    Logf(LogLevel::Info, "moho64ui: the replay is played %s",
-         sim_->fixes ? "with the engine's script fixes, as it was played" : "without the engine's script fixes");
-  if (back_.to) back_.loaded = BackSeconds();  // (a jump back's clock: SeekReached's line)
-  return true;
 }
 
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -2883,6 +3142,17 @@ void GameSession::WaitForBeat() {
 }
 
 void GameSession::WaitForWorker() {
+  // (aheadInLoad: a wait for the loading thread serves its hand-over first, or it would wait for this one for ever)
+  if (loadAhead_ && load_ == Load::Running) {
+    LoadAhead& a = *loadAhead_;
+    bool parked = false;
+    {
+      std::unique_lock<std::mutex> lock(a.mutex);
+      a.cv.wait(lock, [&a] { return a.gate != LoadAhead::Gate::Working || a.jobDone; });
+      parked = a.gate == LoadAhead::Gate::Parked;
+    }
+    if (parked) ServeLoad();
+  }
   if (worker_) worker_->Wait();
 }
 
@@ -3570,6 +3840,7 @@ bool GameSession::RunningAhead() const { return aheadTo_ != 0; }
 
 void GameSession::Advance(double seconds) {
   if (!sim_) return;
+  if (!postgame_ && !play_ && GameOver()) GameMoments(false);  // (the game's moments looked for from its end on, for the score screen)
   if (net_) {  // (a network game's speed: the one its clients agreed on, held down by every client's maxSP)
     pace.asked = net_->exchange->Rate();
     pace.rate = net_->exchange->RunRate();
@@ -3685,7 +3956,7 @@ void GameSession::StartBeatOnThread() {
     workerFingerprintSeconds_ = std::chrono::duration<double>(ts2 - tf).count();
     // (and the beat's sounds decided: they read the simulation, ~6-7 ms a beat late in a big game, so they too stay
     // off the frames; played here at FinishBeat)
-    if (decideSounds) DecideBeatSounds(&beatSounds_), beatSoundsDecided_ = true;
+    if (decideSounds) DecideBeatSounds(*sim_, &beatSounds_), beatSoundsDecided_ = true;
     workerSoundSeconds_ = std::chrono::duration<double>(Clock::now() - ts2).count();
   });
 }
@@ -3854,15 +4125,15 @@ void GameSession::PlayBeatSounds() {
   loopEntities_ = sounds->LoopEntities();
   seekingAtBeat_ = seekTo_ != 0;
   std::vector<SoundAction> actions;
-  DecideBeatSounds(&actions);
+  DecideBeatSounds(*sim_, &actions);
   ApplyBeatSounds(actions);
 }
 
 // (the simulation is read, the sound system is not: on the beats' thread right after the beat, or here)
-void GameSession::DecideBeatSounds(std::vector<SoundAction>* out) {
+void GameSession::DecideBeatSounds(const Sim& sim, std::vector<SoundAction>* out) {
   out->clear();
   std::vector<SoundEvent> events;
-  SoundEvents(*sim_, &events);
+  SoundEvents(sim, &events);
   if (events.empty() && foreignLoops_.empty() && loopEntities_.empty()) return;
   auto act = [out](SoundAction::Kind kind, uint32_t entity, const std::string& bank, const std::string& cue, const float place[3]) {
     SoundAction a;
@@ -3871,9 +4142,9 @@ void GameSession::DecideBeatSounds(std::vector<SoundAction>* out) {
     out->push_back(std::move(a));
   };
   static const std::string none;
-  const int focus = sim_->focusArmy + 1;
+  const int focus = sim.focusArmy + 1;
   std::vector<bool> friendly;  // by army - 1
-  for (const ArmyView& a : ArmyViews(*sim_)) {
+  for (const ArmyView& a : ArmyViews(sim)) {
     if (a.index < 1) continue;
     if (friendly.size() < static_cast<size_t>(a.index)) friendly.resize(static_cast<size_t>(a.index), false);
     bool ally = focus >= 1 && focus <= static_cast<int>(a.alliance.size()) && a.alliance[static_cast<size_t>(focus - 1)] == 2;
@@ -3881,14 +4152,14 @@ void GameSession::DecideBeatSounds(std::vector<SoundAction>* out) {
   }
   auto isFriendly = [&](int army) { return army >= 1 && army <= static_cast<int>(friendly.size()) && friendly[static_cast<size_t>(army - 1)]; };
   std::vector<UnitView> units;  // in entity-id order
-  UnitViews(*sim_, &units);
+  UnitViews(sim, &units);
   auto isUnit = [&](uint32_t id) {
     auto it = std::lower_bound(units.begin(), units.end(), id, [](const UnitView& u, uint32_t v) { return u.id < v; });
     return it != units.end() && it->id == id;
   };
   auto seen = [&](uint32_t entity, const float place[3]) {
     if (focus < 1) return true;  // no army to ask for: an observer hears all
-    uint32_t recon = isUnit(entity) ? ReconOf(*sim_, focus, entity) : ReconAt(*sim_, focus, place);
+    uint32_t recon = isUnit(entity) ? ReconOf(sim, focus, entity) : ReconAt(sim, focus, place);
     return (recon & kReconSeenNow) != 0;
   };
   const bool log = std::getenv("MOHO64UI_SOUND_LOG") != nullptr;
@@ -3896,7 +4167,7 @@ void GameSession::DecideBeatSounds(std::vector<SoundAction>* out) {
   for (const SoundEvent& e : events) {
     bool ours = isFriendly(e.army);
     if (log)
-      Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s (%s)", static_cast<unsigned>(sim_->tick()),
+      Logf(LogLevel::Info, "moho64ui: sound: tick %u %s entity %u army %d at %.0f %.0f %.0f: %s/%s (%s)", static_cast<unsigned>(sim.tick()),
            e.kind == SoundEvent::Play ? "play" : "loop", static_cast<unsigned>(e.entity), e.army, e.position[0], e.position[1],
            e.position[2], e.bank.c_str(), e.cue.c_str(), ours ? "ours" : seen(e.entity, e.position) ? "seen" : "not seen");
     if (e.kind == SoundEvent::Play) {

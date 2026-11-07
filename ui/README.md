@@ -174,13 +174,33 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   option, its title lit for a moment. Nothing typed: the entries run last. Tests: `ui/tests/palette.lua`.
   The program's own key actions in every key map (Chris, 2026-10-23; `ui/data/hook/lua/keymap/keymapper.lua`, a hook):
   each with its key (Ctrl-Alt-S statistics, Ctrl-Alt-C cinematic camera, Ctrl-Alt-F12 photo, Alt-P photo mode,
-  Ctrl-Shift-P command palette) comes into FAF's three presets (default, hotbuild, alternative) and into the player's
+  Ctrl-Shift-P command palette, Ctrl-T replay timeline, Ctrl-Alt-V follow camera, Y radial ping, Ctrl-Shift-B /
+  Ctrl-Shift-. / Ctrl-Shift-, replay bookmarks, and FAF's own camera spots 1..9: Ctrl-Alt-1..9 save, Alt-1..9 go
+  there) comes into FAF's three presets (default, hotbuild, alternative) and into the player's
   saved key map wherever that key is free there (not bound, and not the Shift / Alt version of a hotbuild key, which
   the hotbuild modifiers take in a game); a taken key is left alone and the action stays unbound in that map. Added
   where the map is read (GetDefaultKeyMap, GetUserKeyMap), never written by itself: the key binding screen saves the
   map with them when it saves anyway, and then notes the own actions that map has seen (`UserKeyMapRemasterActions`
   in the profile), so one the player unbound stays unbound and only a newer action comes in by itself. Tests:
   `ui/tests/ownkeys.lua`.
+  Replay bookmarks (ours: Chris, 2026-11-07): the player's own named marks on the replay timeline
+  (`ui/data/lua/timeline.lua`), each a thin pole with a small pink flag down through the fighting strip, beside the
+  game's moments above the track. Added where the replay is by the key "Replay bookmark: add one at this moment"
+  (Ctrl-Shift-B at first) or the flag button under the bar's X, or at the moment under the mouse by a right click on
+  the track (its name typed at once: Enter keeps it, Escape leaves it); named by their time ("12:40") until named.
+  Hover: name and time; a click jumps there (forward, or the held jump back); a right click renames or removes it;
+  Ctrl-Shift-. and Ctrl-Shift-, jump to the next one and the one before. Kept WITH THE REPLAY in a small text file
+  beside it, `<replay>.bookmarks.txt` (one a line: the game tick, a tab, the name; a `replay <size> <FNV-1a 64>` line
+  says which replay they belong to, so an earlier game's bookmarks beside a LastGame written anew are not taken), read
+  when that replay is opened again; the replay itself is never written. The game's Save Replay takes them along with
+  the copy, its delete sends them to the recycle bin with the replay. The host keeps them across jumps back
+  (`moho64ui_ReplayBookmarks`, `moho64ui_ReplaySetBookmarks`, `user/replay_timeline.cpp`). Tests: `ui/tests/bookmarks.lua`.
+  Camera spots per map (Chris, 2026-11-07): FAF's own camera spots (`/lua/usercamera.lua` SaveCameraPosition /
+  RestoreCameraPosition, which FAF's presets leave without keys) get keys (Ctrl-Alt-1..9 save, Alt-1..9 go there; 1..9
+  with Ctrl, Shift or both stay FAF's control groups) and names in the key map, and each spot saved is kept in the
+  profile by map (`moho64ui_camera_spots`, under the map's .scmap file; `ui/data/hook/lua/usercamera.lua`, a hook):
+  a later game or replay on the same map finds them. FAF's list of camera positions (add / next / remove) is as it was.
+  Tests: `ui/tests/camera_spots.lua` (and the spot in a replay: `bookmarks.lua`).
   `--fast-forward N`: a game runs ahead to beat N as fast as it goes (for measurements; the
   window's frame times count from there), and the log gives the frame-to-frame times (middle,
   95%, 99%, longest).
@@ -353,6 +373,22 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   select it until tick 50) is ours for such a game (`ui/data/hook/lua/ui/game/gamemain.lua`, keyed on
   `moho64ui_aheadTick`, set by the host): the glide at once, ending as the warp-in begins, the tries until 50 ticks
   after the screen came.
+  Since 2026-11-07 (Chris: nothing held past the load; the engine's m28s proposal) those beats, 1..29, run on the
+  LOADING THREAD (`GameSession::aheadInLoad`): right after the simulation's start and the game's interface state, once
+  the main thread has opened the game's record (the hand-over, `ServeLoad`), so each beat's advance and fingerprint
+  line are written as it runs. They run while the map still opens; the map is given the session (the renderer's
+  `PrepareSession`) once they are through, and `LoadDone` waits for both, so the start is held past the load by
+  nothing but the two frames of the screen's making. Their syncs wait for the screen as before, their sounds and
+  camera shakes come at the load's end, and the picture's per-beat effects and props' changes wait in the simulation
+  for `PrepareSession`, which keeps them for the first `Beat` after `SwapMap` (the renderer's rules,
+  `docs/render-answers.md` request 46: no `GameStarted` or `Beat` before `SwapMap`); the hits, impacts and health
+  changes of those beats it reads into its own first beat (on SETONS_R: 100 health changes; INFERRED: the map's
+  wreckage units going). WHY AFTER THE BEATS (the cause INFERRED): the renderer keys what it made for the session by
+  the blueprints' places in its first beat, and its first beat after the swap must find the same units; given the
+  session at tick 0 and its first beat at tick 29 (SETONS_R's 43 wreckage units of army 10 gone by then), a Seraphim
+  commander was drawn with another unit's model and icon (seen at tick 70; the renderer's lists keep it). The same
+  beats, no orders in them: the record, the replay and every fingerprint line are those of the run-ahead after the
+  load. `MOHO64UI_AHEAD_IN_LOAD=0`: after the load, as before.
 - `--backdrop` / `--no-backdrop`: the main menu's moving background (see Status). By itself it is
   on in a live window and off in a run without one.
 - `--stage` says how far to go: `userinit` runs `/lua/userInit.lua`, `setup` adds the root frame and
@@ -1269,6 +1305,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   gameresult.lua calls it; and both commanders destroyed in the same beat, which the rules do not
   call a draw: both armies defeated, "You have been defeated!" (`ui/tests/draw.lua`,
   `-- /drawcase together`; the commanders killed in the simulation by `ui/tests/draw_sim.lua`).
+  The post-game report (ours, Chris 2026-11-07; the Interface option "Score Screen Extras", on at first, Off is FAF's
+  screen as it is; `ui/data/hook/lua/ui/dialogs/hotstats.lua`): FAF's graphs already show every army's mass and energy,
+  units alive, built, killed and lost over the game; ours adds the game's moments on them (the replay timeline's
+  markers along the top, a line down through the graph at each one's time, its text under the mouse; a strip of the
+  fighting per 5 s along the bottom), "Army Value (Mass)" in the list (built less lost mass, INFERRED: the score keeps
+  no value of what stands), and the Kill Stats chart's ACU column counting kills (FAF's table names the commanders
+  built there). The moments are the host's (`moho64ui_GameMoments`, `GameSession::GameMoments`): a replay's are its
+  timeline's; a game played is scanned from its own replay (LastGame) by the engine's `ScanReplayMoments` from the
+  moment it is over, so in a long game they come in while the screen is up ("Finding the game's moments 40%"). Test:
+  `ui/tests/postgame.lua` (an experimental and then the commander killed, the moments found where and when they were,
+  the markers, the strip, six graphs of the list with a line per army, Dual, Kill Stats, the option off).
 - Pause and the game's speed. `SessionRequestPause` / `SessionResume` (FA exe 0x8942b0, 0x894330)
   go into the player's orders like every command, so the simulation pauses with a beat; the
   game's script hears of it from the sync table and shows its own sign (the Pause key runs the

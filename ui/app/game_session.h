@@ -234,6 +234,14 @@ class GameSession {
   // (fastForwardTo, the world's sounds and shakes left out meanwhile); a jump back starts the replay over (the
   // interface made anew) and then runs ahead, the window holding its last picture meanwhile (Rewind).
   ReplayTimelineSource* timeline();
+  // The game's moments for its score screen (ours, not the original's: Chris, 2026-11-07, the post-game report; the
+  // graphs mark them, ui/data/hook/lua/ui/dialogs/hotstats.lua). While a replay plays: its timeline's (above). A game
+  // played: its own replay (LastGame, currentReplay) scanned the timeline's way (the engine's ScanReplayMoments, on a
+  // thread of its own, one worker) from the moment the game is over (Advance), or when the score screen asks first
+  // (`start`: the player defeated, the others still playing); a scan that ended before the game had gone on is made
+  // again on such an ask once the game is over. nullptr: no replay of the game (a campaign operation's) or not begun.
+  // Its Seek does nothing (no replay plays); it stops with the session (End).
+  ReplayTimelineSource* GameMoments(bool start);
   // How the host mounted the game, for the scan's own copy (--init, --folder; the maps are replayMaps), and where the
   // scan stops (0: at the replay's end; --scan-ticks, for tests).
   std::string scanInit;
@@ -299,6 +307,10 @@ class GameSession {
   void ServeLoad();
   bool LoadDone() const;
   bool FinishLoad(std::string* why);
+  // The seconds from the launch call to the end of FinishLoad, and from there to now: for the line the host writes when
+  // the game's screen is made (main.cpp: the load, and how long the start was held past it).
+  double LaunchToLoadEnd() const;
+  double SinceLoadEnd() const;
   Sim* sim() const { return sim_.get(); }
   // The session's mods by uid, in order.
   const std::vector<std::string>& modUids() const { return modUids_; }
@@ -351,6 +363,20 @@ class GameSession {
   void RunAhead(uint32_t toTick);
   bool RunningAhead() const;
   uint32_t AheadRanTo() const { return aheadRanTo_; }  // (the tick they ended at; 0 when this game had none)
+  // The same beats INSIDE the load (Chris, 2026-11-07, the engine's m28s proposal; ui REQUESTS 55, the renderer's
+  // answer to request 46): set before BeginLoad (an Aheadable game, main.cpp's rule for RunAhead) and the loading
+  // thread runs beats 1..kAheadTicks itself, right after the simulation's start and the interface's state, once this
+  // thread has opened the game's record at the hand-over (ServeLoad), so each beat's advance and fingerprint line go
+  // there as it runs. They run while the map opening behind still opens; that map is given the session
+  // (PrepareSession) once they are through, as when the loading thread is through without them (the renderer's first
+  // beat after the swap must find the units it was given: ServeLoad), and LoadDone waits for both, so nothing is held
+  // past the load. No orders are given in them (none can be before the game shows), as in RunAhead: the record, the
+  // replay and the simulation are the same beat for beat. Their syncs are kept for the game's screen (TakeSetupSync,
+  // then TakePendingSync, in order), their sounds and camera shakes come at the load's end, and what the picture takes
+  // of each beat (effects, props' changes) waits in the simulation for PrepareSession, which keeps it for the first
+  // Beat after SwapMap (the renderer's rules: no GameStarted or Beat before SwapMap). FinishLoad then sets
+  // AheadRanTo. Ours.
+  bool aheadInLoad = false;
   // The player's orders since the last beat, as the command stream's bytes; asked before each beat.
   std::function<std::string()> takeOrders;
   // Ends the other worlds alive (the menu's background), asked before the scene's samples change
@@ -423,7 +449,7 @@ class GameSession {
     std::string bank, cue;
     float position[3] = {0, 0, 0};
   };
-  void DecideBeatSounds(std::vector<SoundAction>* out);
+  void DecideBeatSounds(const Sim& sim, std::vector<SoundAction>* out);  // (the session's sim_, or the loading one's)
   void ApplyBeatSounds(const std::vector<SoundAction>& actions);
   std::vector<SoundAction> beatSounds_;
   bool beatSoundsDecided_ = false;
@@ -508,9 +534,16 @@ class GameSession {
   void TakeFrozen(const std::vector<uint8_t>& rgba, int w, int h);
   void StartMomentScan(const ReplayHeader& header, const std::string& file, const std::vector<std::string>& uids);
   void StopMomentScan();
+  // (the scan of a replay file on its own thread, for the timeline and for GameMoments; `ticks`: its length so far)
+  std::unique_ptr<Timeline> NewScan(const std::string& file, const std::vector<std::string>& uids, uint32_t ticks, int limit,
+                                    const char* what);
+  std::unique_ptr<Timeline> postgame_;  // (GameMoments' for a game played; its scan read the file at this tick)
+  uint32_t postgameAt_ = 0;
+  std::vector<std::unique_ptr<Timeline>> stoppingScans_;  // (LetGoOfScan)
+  void LetGoOfScan(std::unique_ptr<Timeline> scan);
   void SeekReached();  // after beats: a jump that got there (or to the replay's end) is over
   void ReadLookOptions(lua_State* L, int options);  // the lobby's Remaster... options into skyNow_
-  void StartReplayFile(const SessionDescription& session);
+  void StartReplayFile(const SessionDescription& session, const Sim& sim);
   void OpenPicture();
   bool pictureDue_ = false;
   std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
@@ -622,6 +655,18 @@ class GameSession {
   double loadHandedAt_ = -1, loadMapReadyAt_ = -1, loadNextNote_ = 10;
   void NoteLoadProgress();  // (ServeLoad's, each frame: when each part was seen through; a line every 10 s)
   void PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids);
+  // (aheadInLoad: the loading thread's beats; their hand-over and what they leave for this thread: game_session.cpp)
+  struct LoadAhead;
+  std::unique_ptr<LoadAhead> loadAhead_;
+  bool LoadParked() const;       // the loading thread waits at the hand-over
+  void HandOverLoad();           // (this thread's part of it, then the loading thread goes on)
+  void StopLoadAhead();          // (a launch dropped, the program ending: the loading thread stops at its next beat)
+  void RunLoadAhead(Sim* sim);   // (on the loading thread)
+  void TakeLoadAhead();          // (FinishLoad: what those beats left)
+  // The game's record and replay file opened (FinishLoad's, or the hand-over's when the beats run in the load).
+  bool recordsOpen_ = false;
+  void OpenRecords(const SessionDescription& session, const Sim& sim);
+  std::chrono::steady_clock::time_point loadEndedAt_{};  // (FinishLoad's end: LaunchToLoadEnd, SinceLoadEnd)
 };
 
 }  // namespace moho::ui

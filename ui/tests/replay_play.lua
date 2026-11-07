@@ -81,5 +81,11 @@ ForkThread(function()
     check("the game is over", SessionIsGameOver(), true)
     WaitSeconds(2)
     check("the score screen is up", import('/lua/ui/dialogs/score.lua').scoreScreenActive, true)
+    -- its graph's moments are the replay timeline's (ours: Score Screen Extras, ui/data/hook/lua/ui/dialogs/hotstats.lua)
+    local moments, timelineMoments = moho64ui_GameMoments and moho64ui_GameMoments(), moho64ui_ReplayMoments and moho64ui_ReplayMoments()
+    check("the score screen's moments are the replay timeline's", moments ~= nil and timelineMoments ~= nil and
+        table.getn(moments.moments) == table.getn(timelineMoments), true)
+    local overlay = hotstats.RemasterMoments and hotstats.RemasterMoments.overlay
+    check("and its graph shows them", overlay ~= nil and not IsDestroyed(overlay), true)
     LOG("TEST done: " .. failed .. " failed")
 end)

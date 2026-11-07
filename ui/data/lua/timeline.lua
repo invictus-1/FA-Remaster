@@ -18,6 +18,17 @@
 -- in over a minute or minutes, the scanned part of the track lighter) and the jumps (forward: the beats run ahead;
 -- back: the replay starts over, this interface is made anew, and runs ahead). A jump back keeps the camera and the army watched through the restart
 -- (moho64ui_ReplaySeek's `keep`, moho64ui_ReplayTakeKept). gamemain's OnFirstUpdate (ui/data/hook) calls Create.
+--
+-- The player's own bookmarks (Chris, 2026-11-07, "lets do all of those"): named marks on the track, each a thin pole
+-- with a small flag of its own colour down through the fighting strip, beside the game's moments above the track. One
+-- is added where the replay is now by the key "Replay bookmark: add one at this moment" (Ctrl-Shift-B at first) or the
+-- flag button under the X, or at the moment under the mouse by a right click on the track (then its name can be typed
+-- at once); its name is its time ("12:40") until the player gives it one. Hover: its name and time; a click jumps
+-- there (forward or the held jump back, as any jump); a right click renames or removes it; the keys "Replay bookmark:
+-- jump to the next one" / "... the one before" (Ctrl-Shift-. and Ctrl-Shift-, at first) jump along them. The host
+-- keeps them with the replay in a small file beside it (<replay>.bookmarks.txt; the replay itself is never written:
+-- moho64ui_ReplayBookmarks, moho64ui_ReplaySetBookmarks, ui/user/replay_timeline.cpp), read when that replay is opened
+-- again.
 
 local UIUtil = import("/lua/ui/uiutil.lua")
 local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
@@ -27,15 +38,17 @@ local Button = import("/lua/maui/button.lua").Button
 local Dragger = import("/lua/maui/dragger.lua").Dragger
 local NinePatch = import("/lua/ui/controls/ninepatch.lua").NinePatch
 local Tooltip = import("/lua/ui/game/tooltip.lua")
+local Edit = import("/lua/maui/edit.lua").Edit
 
 -- How things stand, for the tests: made, shown (the player's choice), visible (on the screen now), place ('bottom',
 -- 'top' or 'free'), hover (the text of the marker under the mouse; false), status (the bar's line: "Scanning 45%",
 -- "Seeking 12:40 ..."), markers and columns (how many), restored (a jump back's camera was put back), panelsTop (the
--- top of the game's bottom panels the bar docks above).
+-- top of the game's bottom panels the bar docks above), bookmarks (how many), popup (the bookmark whose rename / remove
+-- panel is open; false).
 State = { created = false, shown = true, visible = false, place = 'bottom', hover = false, status = "", markers = 0,
-    restored = false }
--- The controls by name (bar, track, played, scanned, thumb, time, length, status, close, handle, markers = {...}), for
--- the tests.
+    restored = false, bookmarks = 0, popup = false }
+-- The controls by name (bar, track, played, scanned, thumb, time, length, status, close, handle, markers = {...}, flags
+-- = {...} (the bookmarks', in their order), bookmarkButton, popup, popupEdit, popupRemove), for the tests.
 Controls = {}
 
 local prefKey = 'moho64ui_replay_timeline'
@@ -52,6 +65,9 @@ local K = {
     frameOut = 21,      -- (how far the frame's pieces reach beyond the bar, to their outer line)
     leadTicks = 50,     -- a click on a marker: 5 s before it
     cyan = 'ff00dbff',  -- (the score panel's time)
+    flag = 'ffff6ec7',  -- a bookmark's colour (none of the moments' frames, the track's, the strip's or the time's)
+    flagWidth = 9, flagHeight = 7,
+    noteFrames = 180,   -- a bookmark's line ("Bookmarked 12:40") in the status place: 3 s
 }
 local my = {
     bar = false, ticker = false, handle = false,
@@ -64,6 +80,9 @@ local my = {
     laidOutWidth = false, laidOutTicks = false,
     selectAfter = false,  -- (a marker's unit, selected when its jump forward is over)
     floor = false,  -- (the top of the game's bottom panels, PanelsTop)
+    bookmarks = {},  -- (the host's, moho64ui_ReplayBookmarks: {tick, name} in the order of their beats)
+    note = "", noteFrames = 0,  -- (a bookmark's line in the status place, and for how many frames more)
+    popupGen = 0,  -- (the rename / remove panel's: one opened again is not closed by the one before's late close)
 }
 local kinds = {
     CommanderDied = { icon = '/textures/ui/icons_strategic/commander_generic.dds', frame = 'ffd23c2c' },
@@ -78,6 +97,7 @@ local kinds = {
 }
 
 MarkerLooks = kinds  -- (for the tests)
+FlagColor = K.flag
 
 local function TimeText(tick)
     local seconds = math.floor((tick or 0) / 10)
@@ -376,6 +396,322 @@ local function AddFight(list)
     end
 end
 
+-- The bookmarks (the player's own; the host keeps them with the replay: moho64ui_ReplayBookmarks).
+local MakeFlags, ClosePopup  -- (below)
+
+-- What a bookmark says: its name and time ("First raid 12:40"), "Bookmark 12:40" while its name is its time.
+function BookmarkText(b)
+    local time = TimeText(b.tick)
+    if b.name == time or (b.name or "") == "" then return "Bookmark " .. time end
+    return b.name .. " " .. time
+end
+
+-- A line in the status place for a while ("Bookmarked 12:40").
+local function Note(text)
+    my.note, my.noteFrames = text, K.noteFrames
+end
+
+-- The bookmarks as the bar has them (copies, in the order of their beats).
+function Bookmarks()
+    local out = {}
+    for i, b in my.bookmarks do out[i] = { tick = b.tick, name = b.name } end
+    return out
+end
+
+-- The bookmarks put in place of the ones there: the host makes the names plain and orders them, keeps them and writes
+-- them beside the replay; the flags are made anew. False and why when the file could not be written (they are kept
+-- for this run of the replay all the same).
+local function PutBookmarks(list)
+    local ok, why = moho64ui_ReplaySetBookmarks(list)
+    if not ok then
+        Note("Bookmarks not saved")
+        WARN("FA Remastered: the replay's bookmarks: " .. tostring(why))
+    end
+    my.bookmarks = moho64ui_ReplayBookmarks() or {}
+    MakeFlags()
+    return ok, why
+end
+
+local function IndexAt(tick)
+    for i, b in my.bookmarks do
+        if b.tick == tick then return i end
+    end
+    return false
+end
+
+-- A bookmark at a beat, named `name` (none or empty: its time): its place in the list (1 ..); at a beat that has one
+-- already, that one. False without the bar.
+function AddBookmark(tick, name)
+    if not my.bar or not tick then return false end
+    tick = math.max(0, math.floor(tick))
+    if (my.info.ticks or 0) > 0 then tick = math.min(tick, my.info.ticks) end
+    local there = IndexAt(tick)
+    if there then return there end
+    local list = Bookmarks()
+    table.insert(list, { tick = tick, name = name or "" })
+    PutBookmarks(list)
+    Note("Bookmarked " .. TimeText(tick))
+    return IndexAt(tick)
+end
+
+-- The i-th bookmark's name (empty: its time again); its removal.
+function RenameBookmark(i, name)
+    local list = Bookmarks()
+    if not list[i] then return false end
+    list[i].name = name or ""
+    PutBookmarks(list)
+    return true
+end
+function RemoveBookmark(i)
+    local list = Bookmarks()
+    local gone = list[i]
+    if not gone then return false end
+    table.remove(list, i)
+    PutBookmarks(list)
+    Note("Removed " .. TimeText(gone.tick))
+    return true
+end
+
+-- A jump to the i-th bookmark's beat (forward, or back with the camera and the army watched kept: Seek).
+function JumpToBookmark(i)
+    local b = my.bookmarks[i]
+    if not b then return false, "no such bookmark" end
+    return Seek(b.tick)
+end
+
+-- The key actions' (ui/data/hook/lua/keymap/keyactions.lua; nothing without the bar): a bookmark where the replay is
+-- now; a jump to the next one after where it is (or goes, while a jump runs); to the one before, more than 2 s before
+-- it (a second press goes on to the one before that, as a film's chapters).
+local function TickNow(goal)
+    local now = moho64ui_ReplayTimeline and moho64ui_ReplayTimeline()
+    if not now then return nil end
+    if goal and now.seeking then return now.seekTo end
+    return now.tick
+end
+function AddBookmarkHere()
+    if not my.bar then return false end
+    return AddBookmark(TickNow(false))
+end
+function NextBookmark()
+    local tick = my.bar and TickNow(true)
+    if not tick then return false end
+    for i, b in my.bookmarks do
+        if b.tick > tick + 3 then return JumpToBookmark(i) end
+    end
+    return false
+end
+function PreviousBookmark()
+    local tick = my.bar and TickNow(true)
+    if not tick then return false end
+    for i = table.getn(my.bookmarks), 1, -1 do
+        if my.bookmarks[i].tick < tick - 20 then return JumpToBookmark(i) end
+    end
+    return false
+end
+
+-- The flags: a thin pole at the bookmark's beat from the track down through the fighting strip, a small flag on it at
+-- the strip's top; the mouse's surface the strip's height and a little wider than the flag, over the track's own (a
+-- click beside a flag still jumps where it is).
+local function LayoutFlags()
+    if not my.bar then return end
+    for _, f in Controls.flags or {} do
+        local dx = math.floor(XOfTick(f.bookmark.tick)) - my.bar.Left() - S(3)
+        f.Left:Set(function() return my.bar.Left() + dx end)
+    end
+end
+
+MakeFlags = function()
+    if Controls.flags and table.getn(Controls.flags) > 0 and State.hover then HideTip() end
+    for _, f in Controls.flags or {} do f:Destroy() end
+    Controls.flags = {}
+    State.bookmarks = table.getn(my.bookmarks)
+    if not my.bar then return end
+    for i, b in my.bookmarks do
+        local index, bookmark = i, b
+        local f = Bitmap(my.bar)
+        f:SetSolidColor('00000000')
+        f.Width:Set(S(K.flagWidth + 6))
+        f.Top:Set(function() return my.bar.Top() + S(K.stripTop) end)
+        f.Height:Set(S(K.stripHeight))
+        f.Depth:Set(function() return my.bar.Depth() + 7 end)
+        local pole = Bitmap(f)
+        pole:SetSolidColor(K.flag)
+        pole.Left:Set(function() return f.Left() + S(3) end)
+        pole.Width:Set(1)
+        pole.Top:Set(function() return my.bar.Top() + S(K.trackTop - 2) end)
+        pole.Bottom:Set(function() return my.bar.Top() + S(K.stripTop + K.stripHeight) end)
+        pole.Depth:Set(function() return f.Depth() + 1 end)
+        pole:DisableHitTest()
+        local edge = Bitmap(f)  -- (a dark edge: the flag stands out over the strip's columns)
+        edge:SetSolidColor('ff0c1114')
+        edge.Left:Set(function() return pole.Left() + 1 end)
+        edge.Top:Set(function() return my.bar.Top() + S(K.stripTop) end)
+        edge.Width:Set(S(K.flagWidth) + 1)
+        edge.Height:Set(S(K.flagHeight) + 2)
+        edge.Depth:Set(function() return f.Depth() + 1 end)
+        edge:DisableHitTest()
+        local cloth = Bitmap(f)
+        cloth:SetSolidColor(K.flag)
+        cloth.Left:Set(function() return pole.Left() + 1 end)
+        cloth.Top:Set(function() return edge.Top() + 1 end)
+        cloth.Width:Set(S(K.flagWidth))
+        cloth.Height:Set(S(K.flagHeight))
+        cloth.Depth:Set(function() return f.Depth() + 2 end)
+        cloth:DisableHitTest()
+        f.bookmark = bookmark
+        f.HandleEvent = function(self, event)
+            if event.Type == 'MouseEnter' then
+                State.hover = BookmarkText(bookmark)
+                Tooltip.CreateMouseoverDisplay(self, { text = State.hover,
+                    body = "Your bookmark. Click to jump here; right click to rename or remove it." }, 0, true, nil, true)
+                return true
+            elseif event.Type == 'MouseExit' then
+                HideTip()
+                return true
+            elseif event.Type == 'ButtonPress' and event.Modifiers.Right then
+                HideTip()
+                OpenBookmark(index)
+                return true
+            elseif event.Type == 'ButtonPress' and event.Modifiers.Left then
+                HideTip()
+                JumpToBookmark(index)
+                return true
+            end
+            return false
+        end
+        table.insert(Controls.flags, f)
+    end
+    LayoutFlags()
+    if not State.visible then my.bar:Hide() end
+end
+
+-- The rename / remove panel of the i-th bookmark, over the bar at its flag (under the bar docked at the top): its time,
+-- its name in an edit line (Enter keeps what is typed, an empty line its time again; Escape leaves it as it was) and
+-- Remove. It goes when the bar hides, at a jump back (a new interface) and when the keys go to another control.
+ClosePopup = function()
+    local p, edit = Controls.popup, Controls.popupEdit
+    Controls.popup, Controls.popupEdit, Controls.popupRemove = false, false, false
+    State.popup = false
+    if edit and not IsDestroyed(edit) then edit:AbandonFocus() end
+    if p then p:Destroy() end
+end
+
+-- The panel of the i-th bookmark (its name to change, Remove); with `newTick` instead the panel of a bookmark not made
+-- yet at that beat (Chris, 2026-11-07: a right click opens the name box first): Enter makes it with the name typed (empty:
+-- its time), Escape or a click elsewhere makes none, and it has no Remove.
+function OpenBookmark(i, newTick)
+    ClosePopup()
+    local b = newTick and { tick = newTick, name = TimeText(newTick) } or my.bookmarks[i]
+    if not b or not my.bar then return false end
+    my.popupGen = my.popupGen + 1
+    local gen = my.popupGen
+    local root = GetFrame(0)
+    local p = Group(my.bar, "replayTimelineBookmark")
+    LayoutHelpers.SetDimensions(p, 300, 26)
+    p.Depth:Set(function() return my.bar.Depth() + 20 end)
+    local x = math.floor(XOfTick(b.tick) - p.Width() / 2)
+    x = math.max(root.Left() + S(K.frameOut), math.min(root.Right() - S(K.frameOut) - p.Width(), x))
+    local dx = x - my.bar.Left()
+    p.Left:Set(function() return my.bar.Left() + dx end)
+    if State.place == 'top' then
+        p.Top:Set(function() return my.bar.Bottom() + S(2 * K.frameOut + 4) end)
+    else
+        p.Top:Set(function() return my.bar.Top() - S(2 * K.frameOut + 4) - p.Height() end)
+    end
+    local frame = NinePatch(p,
+        UIUtil.SkinnableFile('/game/panel/panel_brd_m.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_ul.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_ur.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_ll.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_lr.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_vert_l.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_vert_r.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_horz_um.dds'),
+        UIUtil.SkinnableFile('/game/panel/panel_brd_lm.dds'))
+    frame:Surround(p, 0, 0)
+    frame.Depth:Set(function() return p.Depth() end)
+    local ground = Bitmap(p)
+    ground:SetSolidColor('e0080c0e')
+    ground.Left:Set(function() return p.Left() - S(10) end)
+    ground.Right:Set(function() return p.Right() + S(10) end)
+    ground.Top:Set(function() return p.Top() - S(10) end)
+    ground.Bottom:Set(function() return p.Bottom() + S(10) end)
+    ground.Depth:Set(function() return p.Depth() end)
+    local time = UIUtil.CreateText(p, TimeText(b.tick), 14, UIUtil.bodyFont)
+    time:SetColor(K.flag)
+    LayoutHelpers.AtLeftIn(time, p, 0)
+    LayoutHelpers.AtVerticalCenterIn(time, p)
+    time.Depth:Set(function() return p.Depth() + 2 end)
+    time:DisableHitTest()
+    local edit = Edit(p, "replayTimelineBookmarkName")
+    LayoutHelpers.AtLeftIn(edit, p, 58)
+    LayoutHelpers.AtVerticalCenterIn(edit, p)
+    LayoutHelpers.SetDimensions(edit, 168, 20)
+    UIUtil.SetupEditStd(edit, 'ffffffff', 'ff141c20', 'ff000000', UIUtil.highlightColor, UIUtil.bodyFont, 14, 64)
+    edit:ShowBackground(true)
+    edit.Depth:Set(function() return p.Depth() + 2 end)
+    edit:SetText(b.name == TimeText(b.tick) and "" or b.name)
+    edit.OnEnterPressed = function(self, text)
+        local index = State.popup
+        ClosePopup()
+        if newTick then
+            AddBookmark(newTick, text)
+        elseif index then
+            RenameBookmark(index, text)
+        end
+        return true
+    end
+    edit.OnEscPressed = function(self, text)
+        ClosePopup()
+        return true
+    end
+    -- (the keys taken by another control, or a click elsewhere: the panel goes, a frame later, so that a click on its
+    -- Remove is taken first)
+    edit.OnLoseKeyboardFocus = function(self)
+        ForkThread(function()
+            WaitSeconds(0.05)
+            if Controls.popup and my.popupGen == gen then ClosePopup() end
+        end)
+    end
+    if newTick then  -- (a bookmark not made yet: nothing to remove)
+        Controls.popup, Controls.popupEdit, Controls.popupRemove = p, edit, nil
+        State.popup = 'new'
+        edit:AcquireFocus()
+        return true
+    end
+    local remove = Bitmap(p)
+    remove:SetSolidColor('ff2a1418')
+    LayoutHelpers.SetDimensions(remove, 64, 20)
+    LayoutHelpers.AtRightIn(remove, p, 0)
+    LayoutHelpers.AtVerticalCenterIn(remove, p)
+    remove.Depth:Set(function() return p.Depth() + 2 end)
+    local removeText = UIUtil.CreateText(p, "Remove", 13, UIUtil.bodyFont)
+    removeText:SetColor('ffe8b0b0')
+    LayoutHelpers.AtCenterIn(removeText, remove)
+    removeText.Depth:Set(function() return remove.Depth() + 1 end)
+    removeText:DisableHitTest()
+    remove.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            self:SetSolidColor('ff5a2028')
+            return true
+        elseif event.Type == 'MouseExit' then
+            self:SetSolidColor('ff2a1418')
+            return true
+        elseif event.Type == 'ButtonPress' and event.Modifiers.Left then
+            local index = State.popup
+            PlaySound(Sound({ Cue = 'UI_Tab_Click_01', Bank = 'Interface' }))
+            ClosePopup()
+            if index then RemoveBookmark(index) end
+            return true
+        end
+        return false
+    end
+    Controls.popup, Controls.popupEdit, Controls.popupRemove = p, edit, remove
+    State.popup = i
+    edit:AcquireFocus()
+    return true
+end
+
 local function Frame()
     if not my.bar then return end
     local now = moho64ui_ReplayTimeline()
@@ -397,6 +733,7 @@ local function Frame()
         if visible then my.bar:Show() else
             my.bar:Hide()
             HideTip()
+            ClosePopup()
         end
     end
     -- the handle: the bar hidden by the player, and the mouse near where it was
@@ -430,6 +767,7 @@ local function Frame()
         my.fight = {}
         AddFight(all)
         LayoutMarkers()
+        LayoutFlags()
         LayoutColumns()
         if not State.visible then my.bar:Hide() end
     end
@@ -457,8 +795,11 @@ local function Frame()
     c.time:SetColor(my.scrubTick and 'ffffd200' or K.cyan)
     c.length:SetText("/ " .. TimeText(now.ticks))
     local status = ""
+    if my.noteFrames > 0 then my.noteFrames = my.noteFrames - 1 end
     if now.seeking then
         status = "Seeking " .. TimeText(now.seekTo) .. " ..."
+    elseif my.noteFrames > 0 then
+        status = my.note
     elseif now.scanning then
         status = string.format("Scanning %d%%", math.floor(100 * now.scanned / math.max(1, now.ticks)))
     end
@@ -480,8 +821,16 @@ local function Frame()
     State.seeking = now.seeking
 end
 
--- The track's mouse: a press jumps (on release) to where it is let go; the thumb follows meanwhile.
+-- The track's mouse: a press jumps (on release) to where it is let go; the thumb follows meanwhile. A right click
+-- opens the name box of a bookmark at the moment under the mouse, made when Enter is pressed (one there already: its
+-- panel).
 local function TrackEvent(self, event)
+    if event.Type == 'ButtonPress' and event.Modifiers.Right then
+        local tick = TickAtX(event.MouseX)
+        local there = IndexAt(tick)
+        if there then OpenBookmark(there) else OpenBookmark(nil, tick) end
+        return true
+    end
     if event.Type == 'ButtonPress' and event.Modifiers.Left then
         my.scrubTick = TickAtX(event.MouseX)
         local dragger = Dragger()
@@ -539,11 +888,13 @@ function Create()
     my.placeX, my.placeY = tonumber(saved.x) or 0.5, tonumber(saved.y) or 0.8
     my.info = moho64ui_ReplayTimeline()
     my.moments, my.fight, my.columns, my.columnValue, my.columnMax = {}, {}, {}, {}, 0
+    my.bookmarks, my.note, my.noteFrames = {}, "", 0
     my.laidOutWidth = false
     my.floor = PanelsTop()
     State.panelsTop = my.floor
     local root = GetFrame(0)
-    Controls = { markers = {} }
+    Controls = { markers = {}, flags = {} }
+    State.popup, State.bookmarks = false, 0
     local c = Controls
     my.bar = Group(root, "replayTimeline")
     c.bar = my.bar
@@ -661,6 +1012,55 @@ function Create()
     c.close.OnClick = function(self) Hide() end
     Tooltip.AddControlTooltipManual(c.close, "Hide the timeline", "Ctrl-T or the handle where it was brings it back.", 0)
 
+    -- the bookmark button under the X: a bookmark where the replay is now (a small flag of the bookmarks' colour)
+    local mark = Bitmap(my.bar)
+    mark:SetSolidColor('ff0c1114')
+    LayoutHelpers.SetDimensions(mark, 24, 18)
+    LayoutHelpers.AtRightTopIn(mark, my.bar, 5, 34)
+    mark.Depth:Set(function() return my.bar.Depth() + 8 end)
+    local markPole = Bitmap(mark)
+    markPole:SetSolidColor(K.flag)
+    markPole.Left:Set(function() return mark.Left() + S(6) end)
+    markPole.Width:Set(1)
+    markPole.Top:Set(function() return mark.Top() + S(3) end)
+    markPole.Bottom:Set(function() return mark.Bottom() - S(3) end)
+    markPole.Depth:Set(function() return mark.Depth() + 1 end)
+    markPole:DisableHitTest()
+    local markCloth = Bitmap(mark)
+    markCloth:SetSolidColor(K.flag)
+    markCloth.Left:Set(function() return markPole.Left() + 1 end)
+    markCloth.Top:Set(function() return markPole.Top() end)
+    LayoutHelpers.SetDimensions(markCloth, 7, 5)
+    markCloth.Depth:Set(function() return mark.Depth() + 1 end)
+    markCloth:DisableHitTest()
+    local markPlus = UIUtil.CreateText(mark, "+", 14, UIUtil.bodyFont)
+    markPlus:SetColor(K.flag)
+    LayoutHelpers.AtLeftIn(markPlus, mark, 14)
+    LayoutHelpers.AtVerticalCenterIn(markPlus, mark)
+    markPlus.Depth:Set(function() return mark.Depth() + 1 end)
+    markPlus:DisableHitTest()
+    mark.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            self:SetSolidColor('ff1c2a30')
+            local key = import("/lua/keymap/keymapper.lua").GetCurrentKeyBinding('remaster_bookmark_add')
+            Tooltip.CreateMouseoverDisplay(self, { text = "Bookmark this moment",
+                body = (key and ("Its key: " .. key .. ". ") or "") .. "A right click on the track names a bookmark for the moment " ..
+                    "there (Enter makes it); a right click on a bookmark renames or removes it. They are kept beside the replay." },
+                0, true, nil, true)
+            return true
+        elseif event.Type == 'MouseExit' then
+            self:SetSolidColor('ff0c1114')
+            Tooltip.DestroyMouseoverDisplay()
+            return true
+        elseif event.Type == 'ButtonPress' and event.Modifiers.Left then
+            PlaySound(Sound({ Cue = 'UI_Tab_Click_01', Bank = 'Interface' }))
+            AddBookmarkHere()
+            return true
+        end
+        return false
+    end
+    c.bookmarkButton = mark
+
     -- the handle that brings it back (where the bar was; shown when the mouse comes near)
     my.handle = Group(root, "replayTimelineHandle")
     LayoutHelpers.SetDimensions(my.handle, 36, 22)
@@ -714,6 +1114,9 @@ function Create()
     my.kept = moho64ui_ReplayTakeKept() or false
     if my.kept then PutBack(my.kept) end
     my.wasSeeking = false
+    -- the player's bookmarks of this replay (kept by the host across a jump back)
+    my.bookmarks = moho64ui_ReplayBookmarks and moho64ui_ReplayBookmarks() or {}
+    MakeFlags()
     Frame()
 end
 
@@ -724,6 +1127,7 @@ function Show()
 end
 function Hide()
     State.shown = false
+    ClosePopup()
     SavePlace()
     if my.bar then Frame() end
 end

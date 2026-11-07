@@ -25,7 +25,13 @@ local own = {
     { key = 'Ctrl-T', action = 'remaster_timeline' },
     { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },
     { key = 'Y', action = 'remaster_radial_ping' },
+    { key = 'Ctrl-Shift-B', action = 'remaster_bookmark_add' },
+    { key = 'Ctrl-Shift-Period', action = 'remaster_bookmark_next' },
+    { key = 'Ctrl-Shift-Comma', action = 'remaster_bookmark_previous' },
 }
+-- (FAF's own camera spots 1..9, their keys ours)
+for i = 1, 9 do table.insert(own, { key = 'Ctrl-Alt-' .. i, action = 'SaveCameraPosition' .. i }) end
+for i = 1, 9 do table.insert(own, { key = 'Alt-' .. i, action = 'RestoreCameraPosition' .. i }) end
 local function copy(t)
     local out = {}
     for k, v in t or {} do out[k] = v end

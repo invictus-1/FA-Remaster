@@ -887,6 +887,26 @@ table.insert(options.ui.items, {
     },
 })
 
+-- Score Screen Extras (ours; Chris, 2026-11-07, the post-game report): on the score screen's graphs, the game's moments
+-- (the replay timeline's markers, a commander killed, an experimental, a nuke, the game's end) and a strip of the
+-- fighting; "Army Value (Mass)" in the list of graphs; the Kill Stats chart's ACU column counting kills (FAF's shows
+-- the commanders built). Read when a graph or chart is made (ui/data/hook/lua/ui/dialogs/hotstats.lua). On at first, as
+-- every remastered addition (Chris, 2026-10-18); Off: FAF's score screen as it is.
+table.insert(options.ui.items, {
+    title = "Score Screen Extras",
+    key = 'remaster_score_extras',
+    tip = "On the score screen after a game: the game's big moments (a commander killed, an experimental finished or lost, a nuke, an army defeated) marked on the graphs, with a strip of how much fighting there was, and an Army Value graph. Off: the score screen as in FAF.",
+    type = 'toggle',
+    default = 1,
+    set = function(key, value, startup) end,
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 0 },
+            { text = "<LOC _On>", key = 1 },
+        },
+    },
+})
+
 -- Key Bindings: Import from FAF (Chris, 2026-11-06: FAF opens the Key Bindings dialog only in game, F1 or the game's
 -- menu, and he looked for the import in Options). A button (the dialog's 'button' type: no value kept) that opens the
 -- Key Bindings dialog and asks its "Import from FAF" question at once (ui/data/hook/lua/ui/dialogs/keybindings.lua).

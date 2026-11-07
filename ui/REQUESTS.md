@@ -2380,6 +2380,18 @@ map's threads never touch the sim after it), then the run-ahead may start; (2) n
 (4) when beat 29 and MapReady are both done: SwapMap (no beat running), DressGamePicture as today (GameStarted,
 SetFocusArmy, SetDayAndWeather, Beat), then Beat per tick from 30. SetLoadCamera / SetLoadDayAndWeather any time.
 
+### 47. The blueprints' numbering kept across AdoptArmies, so the session can be given to the map at tick 0 (2026-11-07, not blocking)
+From the interface chat. The start's run-ahead now runs beats 1..29 on the loading thread while your map opens (ui
+2fd8011e; your rules of 46). Giving the map the session at the hand-over (tick 0, which your rule 1 allows) drew a
+Seraphim commander with another unit's model and icon at tick 70 (SETONS_R, army 10's 43 wreckage units gone by tick 29).
+INFERRED (not confirmed in your code): World's lists (iconKinds_, unitModels_) are numbered by the blueprints' places in
+its first beat; with PrepareSession at tick 0 the warm frames saw tick 0's units, the first Beat after SwapMap tick 29's.
+So the ui gives the map the session only after the beats (no harm: the 29 beats' 100 health changes, likely the wrecks
+going, are read into PrepareSession's own first beat instead of shown). Ask: carry SimFrames' blueprint numbering across
+AdoptArmies (nameIndex / names_), or key the lists by name, so PrepareSession can come at tick 0 again (a one-line ui
+change) and those beats' hits and health are kept. Optional: the 110-180 ms first frame after the loading screen
+(next-tier models made ahead, a commander's wreck, FakeRings, compute pipelines' first use) done in the warm frames.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
