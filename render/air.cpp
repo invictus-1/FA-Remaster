@@ -516,7 +516,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.ground[3] = waterLevel;
   k.light[0] = std::clamp(sunForward, -0.95f, 0.95f);
   k.light[1] = std::clamp(lampForward, -0.95f, 0.95f);
-  k.light[2] = std::max(sunInAir, 0.0f);
+  k.light[2] = std::max(sunInAir, 0.0f) * (1 - 0.65f * std::clamp(storm, 0.0f, 1.0f));  // ([stormcells])
   k.light[3] = std::max(skyInAir, 0.0f);
 
   const gfx::Texture last = cells_[1 - now_], gathered = cells_[now_];

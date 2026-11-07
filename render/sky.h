@@ -47,6 +47,9 @@ struct SkyLight {
   // The clouds' grey the fitted sky is taken toward (its brightness, and how much of the sky it takes), for
   // the sky from tables to grey its view as the fit is (view.h, ComputedSky).
   float grey = 0, greyShare = 0;
+  // [stormcells] a storm's grey the sky behind the 3D clouds is taken toward (how much: 0..1; its brightness): the cells
+  // stand apart, with a storm's sky between them (World sets it)
+  float storm = 0, stormGrey = 0;
 };
 
 // The light at that hour (0..24; 6 sunrise, 12 noon, 18 sunset). The sun rises in the east (+x)

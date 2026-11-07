@@ -128,8 +128,9 @@ RWTexture2D<float> coverOut : register(u0);
     [branch] if (cloudLight.w > 0) {
       float2 p = (q + skyClouds.yz) * 0.004;
       float2 turned = float2(p.x * 0.6 + p.y * 0.8, p.y * 0.6 - p.x * 0.8);
-      float cell = smoothstep(0.44, 0.6, CloudNoise(float3(turned * 0.3 + 23.1, skyClouds.w * 0.3 + 5.3)));
-      float between = saturate((field - lerp(0.63, 0.37, skyClouds.x) - 0.03 * cloudLight.w) * 6 + 0.6) * (1 - 0.15 * cloudLight.w);
+      // (a soft rise to the cell's middle: the cover, and with it how high the heap rises, greatest there: a tower, not a slab)
+      float cell = smoothstep(0.42, 0.78, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
+      float between = saturate((field - lerp(0.63, 0.37, skyClouds.x) - 0.2 * cloudLight.w) * 6 + 0.6) * (1 - 0.5 * cloudLight.w);
       cover = max(lerp(cover, between, cloudLight.w), cloudLight.w * cell);
     }
     coverOut[id.xy] = cover;
