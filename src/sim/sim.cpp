@@ -1933,7 +1933,12 @@ void Sim::ProcessDestroyQueue() {
   // for the NEXT beat's drain. (A killed unit's queue was cleared before, by Unit::KillCleanup in step 12.) Seen:
   // Economy 3952, T2 mex 0x3a reclaimed while upgrading: the original's T3 0x57 is still listed after that beat and
   // gone after the next; ours took it in the same drain.
-  for (Entity* e : done)
+  // (EntityDb::Purge deletes them in this order; until its ~Unit has run an entity is still what weak pointers hold:
+  // PurgePending)
+  purging_ = &done;
+  for (size_t di = 0; di < done.size(); ++di) {
+    Entity* e = done[di];
+    purgeAt_ = di;
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ForgetUnitCommands(u);
@@ -1967,6 +1972,8 @@ void Sim::ProcessDestroyQueue() {
         }
       }
     }
+  }
+  purging_ = nullptr;
   // ~Entity in EntityDb::Purge: every kind gives its id back, recon blips too (the player's orders name blips
   // by id, and a new unit's blip takes the lowest free serial of its army's blip pool)
   for (Entity* e : done) ReleaseId(e->id);

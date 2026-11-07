@@ -1215,8 +1215,15 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     }
   } else {
     if (held) return;
-    if (Driving(u) && (u->unitStates.Has(US("Moving")) > 0 || u->unitStates.Has(US("Patrolling")) > 0 ||
-                       u->unitStates.Has(US("Attacking")) > 0)) {
+    // The release calls UpdatePath 0x5d3680 with the steering's target st+0x90 (0x5d2e2e..0x5d2e39) and no test of its
+    // own; UpdatePath makes no batch (modes other than 3 / 4) when that target is the no-target vector (0x5d36fb..
+    // 0x5d370a: memcmp 0x4f0a50 against 0x4ead40, all NaN), which SetWaypoints writes until DriveToNextWaypoint takes a
+    // waypoint up (ours: !steerValid). Seen (oracle probe v3840_6v6_3_release, FAF 3840 pro replay 6v6_3): army 10's
+    // ACU 0xa00000 lets go of the hold at 3345 when its enhancement has ended and its BuildMobile goal is set; the
+    // original's UpdatePath gets (NaN, NaN, NaN) and makes nothing (no Generate), the ACU stands until 3346; ours made a
+    // batch toward the waypoint it held before the hold and stepped 0.017.
+    if (m.steerValid && (u->unitStates.Has(US("Moving")) > 0 || u->unitStates.Has(US("Patrolling")) > 0 ||
+                         u->unitStates.Has(US("Attacking")) > 0)) {
       UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
       CheckCollisions(sim, u);
     }

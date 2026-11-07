@@ -446,6 +446,14 @@ class Sim {
   // By handle (EntityRef): byHandle_, which holds every registered entity at its handle's index.
   Entity* FindEntity(uint32_t id) const { return id < byHandle_.size() ? byHandle_[id] : nullptr; }
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
+  // While the destroy drain runs the units' ~Unit work (EntityDb::Purge order): an entity of the drain whose ~Unit has
+  // not run yet, by handle (a weak pointer to it is still set then); null otherwise.
+  Entity* PurgePending(uint32_t handle) const {
+    if (!purging_ || !handle) return nullptr;
+    for (size_t i = purgeAt_ + 1; i < purging_->size(); ++i)
+      if ((*purging_)[i]->handle == handle) return (*purging_)[i];
+    return nullptr;
+  }
   void RequestRefreshUI(Entity* e);  // Entity:RequestRefreshUI / Entity::Kill (entity.h refreshUI; ui REQUESTS 47)
   // For what dies with a command object (a ferry beacon): the original deletes an emptied command only after
   // the beat's destroy queue has run, so the entity is queued then and goes at the end of the beat after.
@@ -834,6 +842,8 @@ class Sim {
   void RemoveUnitFromLists(Unit* u);
   uint32_t propSerial_ = 0;
   std::vector<Entity*> destroyQueue_;
+  const std::vector<Entity*>* purging_ = nullptr;  // (PurgePending: the drain's list and the entity at work)
+  size_t purgeAt_ = 0;
   uint64_t destroysQueued_ = 0;  // (DestroysQueued)
   void ProcessDestroyQueue();
   std::vector<uint32_t> refreshPending_, refreshSynced_;  // entity handles (EntityRef) with refreshUI / refreshUISynced set

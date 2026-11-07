@@ -3804,7 +3804,18 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       if (Unit* nu = FindUnit(sim, t.targetId)) nu->unitStates.Erase(US("BeingUpgraded"));
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
     } else {
-      Unit* target = FindUnit(sim, t.targetId);
+      // (the task's weak pointer to the upgrade, 0x5f85bd..0x5f85c9: the unit until it is freed, also when it is already
+      // queued for destruction; and the builder's ExecuteOccupyGround below runs with or without it, 0x5f85c2 ->
+      // 0x5f85f2.) Seen (oracle probe v3840_6v6_4_rolloff, FAF 3840 pro replay 6v6_4): army 10's T1 land factory
+      // 0xa00001 finishes its upgrade into 0xa0001e at 2920, starts the second Upgrade queued behind it in the same
+      // beat (0xa0001d) and is destroyed by its script (StructureUnit OnStopBuild); its OnDestroy destroys 0xa0001d
+      // (FactoryUnit DestroyUnitBeingBuilt) before the upgrade task ends. The original's factory cells stay held: the
+      // engineer 0xa00033 made in 0xa0001e does not fit where it stands at 3087 (TryAdvance: fits 0, its Reach to
+      // (110, 650) fails); ours skipped the destroy-queued upgrade here, its own release then cleared the cells, and
+      // the engineer drove straight out.
+      Unit* target = FindUnitAny(sim, t.targetId);
+      if (!target)
+        if (Entity* pe = sim.PurgePending(t.targetId); pe && pe->kind == Entity::Kind::Unit) target = static_cast<Unit*>(pe);
       if (target) {
         // 0x5f85d5..0x5f85f5: ReleaseOccupyGround of the upgrade, its Destroy, then the builder's ExecuteOccupyGround
         // 0x6a7770 whatever it held: the cells the upgrade's release cleared are the builder's again
@@ -3817,8 +3828,8 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
         // original's cell (442, 69) stays held, and at 4450 army 1's tank 0x10003a cannot take the straight way to
         // (442, 68) past it (probe mp3_reach: its corridor test to (442, 68) fails, (443, 68) is taken); ours had freed
         // the cell with the upgrade's release.
-        ExecuteOccupyGround(sim, u);
       }
+      ExecuteOccupyGround(sim, u);  // (0x5f85f2: also when the weak pointer is empty)
       if (t.started && Alive(u)) StopBuild(sim, L, u, t, false);
     }
   } else if (t.type == CommandType::Repair || t.type == CommandType::Guard || t.type == CommandType::BuildAssist ||
