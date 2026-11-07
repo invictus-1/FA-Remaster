@@ -199,6 +199,8 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self);
 void GuardWalksCommandEvent(Sim& sim, UnitCommand& c);
 // RemoveCommandFromQueue 0x6edf80: u drops c (the executing head ends its task). False if u did not hold it.
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c);
+// 0x6ee4f0 (CUnitCommand::DecreaseCount 0x6f16a0, after an Upgrade left u's queue): the queue's upgrade chain re-checked.
+void RecheckUpgradeChain(Sim& sim, Unit* u);
 // What IssueClearCommands (0x6f1950) does to one unit: ClearCommandQueue 0x6ee2d0 and its attacker's Stop
 // 0x5d56f0 (also CSquad::Stop 0x724820, for CPlatoon:Stop).
 void IssueClearCommandsTo(Sim& sim, Unit* u, bool stopAttacker = true);

@@ -2188,6 +2188,17 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   a.pendingTick = tick;
   a.pendingGoal = {cx + b.footprintX * 0.5f, 0.0f, cz + b.footprintZ * 0.5f};
   a.pendingGoal.y = cellHeight(a.pendingGoal.x, a.pendingGoal.z);
+  // SetGoal 0x5a4c60 (air_nav.md 4.2) sets inFormation from GetFormation 0x6a9720 at the call: a guard formation the
+  // guarded unit makes later in the beat (UpdateGuardFormation, its MotionTick) is not seen. Seen (probe
+  // v3840_2v2_5_ffollow): 2v2_5 4822, army 1's aircraft 0x10006c / 0x100072, given a Guard of 0x10005c at 4821, get
+  // their follow goals from the guard (0x614139) in the command stage: inFormation 0 at 4823 in the original (leader
+  // link set only then), so their 4823 air control aims at the goals; ours took the pending goal in the motion step,
+  // after 0x10005c had made the formation, and flew to the formation's stale slot.
+  a.pendingInForm = false;
+  if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
+    Formation* f = GetFormation(sim, u);
+    a.pendingInForm = f && FormationIsForm(*f);
+  }
   a.destEntity = 0;  // (a destination is cleared by the next SetGoal)
   u->motion.hasGoal = true;
   u->motion.arrived = false;
@@ -2318,11 +2329,7 @@ void TakePendingGoal(Sim& sim, Unit* u) {
     SetTarget(sim, u, a.pendingPreGoal, Vec3{}, a.pendingLayer ? a.pendingLayer : kAir);
   }
   SetTarget(sim, u, a.goal, a.pendingFacing, a.pendingLayer ? a.pendingLayer : kAir);
-  a.inFormation = false;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it
-  if (!(u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation))) {
-    Formation* f = GetFormation(sim, u);
-    a.inFormation = f && FormationIsForm(*f);
-  }
+  a.inFormation = a.pendingInForm;  // SetGoal 0x5a4c60: in a form formation unless the navigator ignores it (at its call)
 }
 
 void AirTakeGoalNow(Sim& sim, Unit* u) {

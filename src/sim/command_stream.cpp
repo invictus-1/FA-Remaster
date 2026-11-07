@@ -532,7 +532,10 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
           std::sort(holders.begin(), holders.end(), [](Unit* x, Unit* y) { return x->id < y->id; });
           for (Unit* u : holders) {
             bool removed = RemoveCommandFromUnit(sim, u, *c);
-            if (removed && c->type == CommandType::Upgrade) unhandled("DecreaseCommandCount of an Upgrade");
+            if (removed && c->type == CommandType::Upgrade) {  // (0x6f174e..0x6f1761: then unit+0xa2 = 1)
+              RecheckUpgradeChain(sim, u);
+              sim.RequestRefreshUI(u);
+            }
           }
         }
       }

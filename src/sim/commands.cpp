@@ -1783,6 +1783,50 @@ void SetCommandTargetFromStream(Sim& sim, UnitCommand& c, const StreamTarget& t)
   c.issueTargetPos = t.pos;
 }
 
+// 0x6ee4f0 (read), called by CUnitCommand::DecreaseCount 0x6f16a0 (0x6f174e..0x6f1761) for each unit an Upgrade order
+// (type 0x1b) left: the queue is walked from its head with the unit's own blueprint as the chain's; a BuildFactory or
+// BuildMobile (7, 8) whose blueprint the chain's blueprint may not build (its BuildableCategory with the army's and the
+// unit's restrictions, 0x5577b0 / 0x557710; the order's blueprint ordinal +0x5c tested in that set, 0x6ee796..0x6ee7c3)
+// goes; an Upgrade goes when its blueprint is unknown, or (General.SeedUnit, bp+0x1dc, set) its SeedUnit is not the
+// chain's blueprint, or (no SeedUnit) the chain's General.UpgradesTo (bp+0x188) is not the order's blueprint (compares
+// ignoring case, 0xaa549e; no UpgradesFrom test here); one that follows becomes the chain's blueprint. Other orders stay.
+// Then every one collected leaves the queue (0x6ee829..0x6ee84f). Seen (oracle recording of FAF 3840 pro replay 6v6_3):
+// army 5's factory 0x500021 holds Upgrade xsb0203 (5840), five BuildFactory, then Upgrade xsb0203 and Upgrade xsb0303
+// (5868); at 5884 the stream's DecreaseCommandCount takes the xsb0303 off, and the original's queue loses the second
+// xsb0203 with it (xsb0203's UpgradesTo is xsb0303): 12 -> 10 orders; ours kept it (11).
+void RecheckUpgradeChain(Sim& sim, Unit* u) {
+  if (!u || !u->blueprint) return;
+  const BlueprintInfo* cur = u->blueprint;
+  auto canBuild = [&](const BlueprintInfo& chainBp, const BlueprintInfo& bp) {
+    if (bp.entityIndex < 0) return false;
+    const UnitBpData& cd = GetUnitBpData(sim.L(), chainBp);
+    const size_t w = static_cast<size_t>(bp.entityIndex) >> 6;
+    const uint64_t bit = uint64_t(1) << (bp.entityIndex & 63);
+    if (w >= cd.buildable.size() || !(cd.buildable[w] & bit)) return false;
+    if (w < u->buildAllowed.size() && !(u->buildAllowed[w] & bit)) return false;
+    if (u->army && w < u->army->buildRestricted.size() && (u->army->buildRestricted[w] & bit)) return false;
+    return true;
+  };
+  std::vector<std::shared_ptr<UnitCommand>> gone;
+  for (const auto& c : u->commands) {
+    if (!c) continue;
+    if (c->type == CommandType::BuildFactory || c->type == CommandType::BuildMobile) {
+      const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
+      if (!bp || !canBuild(*cur, *bp)) gone.push_back(c);
+    } else if (c->type == CommandType::Upgrade) {
+      const BlueprintInfo* to = sim.blueprints().Find(c->blueprintId);
+      bool fits = false;
+      if (to) {
+        const std::string seed = GeneralString(sim, *to, "SeedUnit");
+        fits = !seed.empty() ? SameIdNoCase(seed, cur->id) : SameIdNoCase(GeneralString(sim, *cur, "UpgradesTo"), to->id);
+      }
+      if (fits) cur = to;
+      else gone.push_back(c);
+    }
+  }
+  for (const auto& c : gone) RemoveCommandFromUnit(sim, u, *c);
+}
+
 bool RemoveCommandFromUnit(Sim& sim, Unit* u, UnitCommand& c) {
   auto& q = u->commands;
   size_t i = 0;

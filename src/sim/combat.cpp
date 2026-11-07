@@ -1894,6 +1894,28 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   if (maxR <= 0) return ret;
   float range = WeaponReach(w);
   bool useAngle = b.turreted || b.slavedToBody;
+  // CAcquireTargetTask::ResolveAttachedParentDesiredTarget 0x5d78e0 (read; called at 0x5d9373, before the blip list and
+  // FindBestEnemy): the unit the weapon's unit is attached to (unit+0x194, as a unit), its attacker (+0x544), that
+  // attacker's commanded target (vt+0x24 GetDesiredTarget) with an entity (0x5e2ce0); the own attacker can attack it
+  // (vt+0x2c CanAttackTarget 0x5d6fa0: not being built, a weapon whose CanAttackTarget says yes) and this weapon has it
+  // in its solution (TargetIsTooClose 0x6d5d80 gives 0): then that entity is the target (UpdateTarget 0x5d55b0, one
+  // target-point draw; SetTarget 0x6d5f30 at 0x5d94e9) and nothing is searched. Seen (probe v3840_4v4_4_fbe): 4v4_4,
+  // army 4's mech marines 0x40003d / 0x40001d riding the transport 0x40002e: at 4261 the transport's commanded target
+  // 0x70002f is out of their solution (status 3) and FindBestEnemy gives 0x700035; at 4265 it is in it and both take
+  // 0x70002f without a search. Ours searched, kept 0x700035 and fired at 4266.
+  if (u->parentId && !u->beingBuilt) {
+    Entity* pe = sim.FindEntity(u->parentId);
+    Unit* P = pe && pe->kind == Entity::Kind::Unit ? static_cast<Unit*>(pe) : nullptr;
+    if (P && !P->weapons.empty()) {
+      const AiTarget& pd = P->desiredTarget;
+      Entity* pt = TargetEntity(sim, pd);
+      if (pt && TargetWeapon(sim, u, pd) && TargetStatus(sim, w, pd) == 0) {
+        TargetPointDraw(sim, pt);
+        SetTarget(sim, w, EntityTarget(pt));
+        return ret;
+      }
+    }
+  }
   const std::vector<Unit*>& list = BlipsInRange(sim, u, period);
   bool bestBlip = false;
   uint32_t bestFake = 0;

@@ -118,6 +118,7 @@ struct AirMotion {
   bool pending = false;      // a SetGoal waiting for its tick
   uint32_t pendingTick = 0;
   Vec3 pendingGoal;
+  bool pendingInForm = false;  // SetGoal's inFormation, as the formation stood when it was called
   int pendingLayer = 0;   // the goal's layer (0: Air; 1: a landing move)
   Vec3 pendingFacing;     // SetFacing while a goal is pending
   bool pendingPre = false; // NewMoveTask's first goal (the order's own cell) before the move task's free spot
