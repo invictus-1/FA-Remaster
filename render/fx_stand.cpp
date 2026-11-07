@@ -488,6 +488,15 @@ void FxStand::Fire(World& world, Side& side, double now, Vec3 from) {
   for (const std::string& t : polyTrails_) side.trails.push_back(world.ribbons.StartTrail(t, from, shotFaction_));
   for (const std::string& e : fxTrails_) side.carried.push_back(world.particles.Start(EmitterPath(e), from, turn, 1, -1, true, shotFaction_));
   side.flying = true;
+  side.scatter = Vec3{0, 0, 0};
+  if (setup_.scatter > 0) {  // [dents] (somewhere within the scatter, evenly over its disc)
+    auto next = [&]() {
+      side.scatterRng = side.scatterRng * 1664525u + 1013904223u;
+      return static_cast<float>(side.scatterRng >> 8) / 16777216.0f;
+    };
+    const float r = setup_.scatter * std::sqrt(next()), a = 6.2831853f * next();
+    side.scatter = Vec3{r * std::cos(a), 0, r * std::sin(a)};
+  }
 }
 
 void FxStand::Update(World& world, double now, Vec3 right, const std::function<float(float, float)>& ground) {
@@ -733,7 +742,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       }
     }
     if (!projectile_.empty() && side.flying) {  // the shot on its way: its mesh, its trails, and its hit where it lands
-      const Vec3 from = place(setup_.from, side), to = place(setup_.to, side);
+      const Vec3 from = place(setup_.from, side), to = place(setup_.to + side.scatter, side);  // ([dents] --fx-scatter)
       const float length = std::max(Length(to - from), 1e-3f);
       const double since = again ? 0.0 : now - started_;
       const float f = std::min(1.0f, static_cast<float>(since) * speed_ / length);
@@ -756,6 +765,8 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         for (uint32_t e : side.emitters) world.particles.Stop(e);
         side.emitters.clear();
         for (const std::string& e : impact_) side.emitters.push_back(world.particles.Start(EmitterPath(e), to, turn, 1, -1, false, shotFaction_));
+        world.RockHit(to, 0.25f, (to - from) * (1 / length));  // [rockhits] (a shell's direct hit: a rock it lands on, or beside, chips; World::rockHits)
+        if (setup_.hit == "land" && setup_.dent > 0) world.DentGround(to, setup_.dent);  // [dents] (with deep tracks)
         if (entities_) {  // what its impact makes (a nuke's explosion)
           std::string why;
           if (!entities_->Spawn(entity_, to, sides_.size() == 2 ? !side.remastered : !lookRemastered, &why, static_cast<int>(k)))
@@ -772,6 +783,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
     if (setup_.blast > 0 && !side.blasted && now - started_ >= setup_.killAt) {
       side.blasted = true;
       world.blasts.Add(place(setup_.at, side), setup_.blast, now);
+      world.RockHit(place(setup_.at, side), setup_.blast);  // [rockhits] (the rocks it reaches; World::rockHits)
     }
   }
   // the unit's death, `killAt` into the play (the same moment on both sides)

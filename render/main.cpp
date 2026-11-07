@@ -295,6 +295,10 @@
 //           at them close and to time many
 // --debris-show <unit>  the debris's library of shapes (debris_shapes.h) laid out in two rows over where the camera starts,
 //           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
+// --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
+//           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
+//           a puff of rock dust; the rock darkens with soot and cracks as the hits add up (with --fx-shot, --fx-hit prop and
+//           --fx-to on a rock: to see it)
 // --fx-blast <size>  with the effects stand: a blast of that size (world units, about an explosion's radius: a small
 //           tank's death 0.4, a shell's 1 to 3, an experimental's 4) at --fx-at --fx-kill-at seconds into each play
 //           (alone too, every --fx-repeat seconds)
@@ -314,7 +318,9 @@
 //           own shapes; --ground-kind <part>=<kind>  the layers whose texture's path holds <part> taken as that kind
 //           (snow, mud, sand, grass, dirt, hard, or two with a plus: "soil=mud"; may be given several times; before
 //           the map opens), as remap.json's "ground" would say it; the map's mud material (remap.json) is drawn in the
-//           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]
+//           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]; [dents] shell holes where shots
+//           strike the ground (a bowl, a raised lip, the earth thrown round it; deep in snow and mud, shallow in dirt, sand
+//           and grass, none in rock; filled by falling snow, softened by rain), the picture only
 // --ground-parallax  [parallax] the ground's relief close by (World::groundParallax, Terrain::parallax; modern look, a
 //           remastered map): its stones stand up and its hollows sink as the eye passes, a low sun shades the hollows;
 //           --ground-parallax-tune depth[,reach[,shadows]]: the relief that many times the scans' real one (1), full
@@ -587,6 +593,9 @@
 // --fx-shot <projectile>  fires that projectile (an id such as TDFGauss01, or its blueprint) from --fx-from
 //           x,z,height to --fx-to x,z[,height] (else across where the camera looks, away from it), with the
 //           trails and the hit its script class gives it; --fx-hit land|unit|water|underwater|prop|shield|air|none
+//           ([dents] with --deep-tracks its hit on land dents the ground --fx-dent units across (1; 0 none: as the scorch
+//           the game lays, a small gun's 0.2, an artillery shell's 1 to 3), each shot landing somewhere within
+//           --fx-scatter units of --fx-to (0): a shelled patch)
 // --fx-compare  the remastered effects on the left, the original's on the right (--fx-spacing apart, 8)
 // --fx-entity <effect entity>  an effect entity (UEFNukeEffectController01, or its blueprint's path) made at
 //           --fx-at as a nuke's impact makes it, its own scripts run (fx_entities.h), every --fx-repeat seconds
@@ -896,6 +905,7 @@ struct Options {
   bool leafLight = false;               // --leaf-light
   bool blastWaves = false, blastDust = false, debris = false;  // --blasts, --blast-waves, --blast-dust, --debris
   int debrisMost = -1;                  // --debris-most
+  bool rockHits = false;                // [rockhits] --rock-hits
   std::string debrisTest, debrisShow;   // --debris-test, --debris-show
   float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
@@ -1234,6 +1244,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--movement-dust") o->movementDust = true;
     else if (a == "--movement-dust-over") o->movementDust = true, o->movementDustOver = true;
     else if (a == "--debris") o->debris = true;
+    else if (a == "--rock-hits") o->rockHits = true;  // [rockhits]
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
@@ -1594,6 +1605,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--fx-shot") o->fx.shot = v;
     else if (a == "--fx-hit") o->fx.hit = v;
+    else if (a == "--fx-dent") o->fx.dent = std::max(0.0f, static_cast<float>(atof(v)));        // [dents]
+    else if (a == "--fx-scatter") o->fx.scatter = std::max(0.0f, static_cast<float>(atof(v)));  // [dents]
     else if (a == "--fx-repeat") {
       o->fx.repeat = std::max(0.2f, static_cast<float>(atof(v)));
       o->fxRepeat = o->fx.repeatGiven = true;
@@ -2263,6 +2276,7 @@ int main(int argc, char** argv) {
   world.blastWaves = opt.blastWaves;
   world.blastDust = opt.blastDust;
   world.blastDebris = opt.debris;
+  world.rockHits = opt.rockHits;  // [rockhits]
   world.movementDust = opt.movementDust;
   world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
@@ -4766,6 +4780,9 @@ int main(int argc, char** argv) {
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
                world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
+      if (world.rockHits)  // [rockhits]
+        printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
+               world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());
       printf("\n");
       if (opt.wildlifeVerbose) tellFlocks("at the end");
       if (opt.timings && timing.frames > 0) {

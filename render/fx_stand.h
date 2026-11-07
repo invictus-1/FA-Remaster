@@ -111,6 +111,9 @@ struct FxStandSetup {
   // a blast of this size (world units, about an explosion's radius: blasts.h) at `at` at `killAt` into each play, for
   // looking at the blasts' waves and dust alone (0: none)
   float blast = 0;
+  // [dents] with deep tracks: the shot's hit on land dents the ground this large (world units across, as the scorch the
+  // game lays for it: World::DentGround; 0 none), and each shot lands somewhere within `scatter` of `to` (a shelled patch)
+  float dent = 1.0f, scatter = 0;
 };
 
 class FxStand {
@@ -162,6 +165,8 @@ class FxStand {
     bool healed = false;
     bool decalsLaid = false;             // --fx-decal
     bool blasted = false;                // --fx-blast
+    Vec3 scatter;                        // [dents] --fx-scatter: where this shot lands, from `to`
+    uint32_t scatterRng = 7;
   };
   void Fire(World& world, Side& side, double now, Vec3 from);
   FxStandSetup setup_;

@@ -474,7 +474,7 @@ void Tarmacs::Ahead() {
 static std::string PadSource(bool snow) {
   return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
          "#define SURFACE_TRACKS 1\n#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\n" +
-         "static float deepWater = 0;\nstatic float2 deepGloss = 0;\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShaderHead +
+         "static float deepWater = 0;\nstatic float2 deepGloss = 0;\nstatic float4 deepDent = 0;\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShaderHead +
          (snow ? kMarkSnowLying : "") + kShaderTail;
 }
 

@@ -29,6 +29,14 @@
 // fast goes by the kind of ground there (Terrain::GroundKinds) and the weather.
 // The ground's shader (terrain.cpp, under SURFACE_DEEP_TRACKS) reads the field by the kind of ground it draws;
 // the ground cover's pressing pass (grass.cpp) lays the grass flat along it.
+// [dents] Shell holes: where a shot strikes the ground (World::DentGround: the simulation's impacts on the terrain, else
+// the blasts on the ground), a bowl blown out of it with a raised lip and the earth thrown round it (PressCrater), by
+// its size. Kept in the field's third number, apart from the tracks: the height the holes make there in world units
+// (below the ground negative), added up over every hole, as soft ground (snow, mud) holds it; the ground's shader takes
+// less of it on firmer ground and none on rock (terrain.cpp). The picture only: the ground the units drive on and that
+// is picked stays as the game has it. Holes fade as the tracks do, slower (a hole is deeper than a rut): falling snow
+// fills them, rain softens them, mud keeps them longest. The holes of the last while are listed, so that one comes back
+// into the levels round the camera when it comes back to them (at what is left of it).
 #pragma once
 #include <algorithm>
 #include <array>
@@ -92,6 +100,9 @@ class DeepTracks {
   // size (world units) and heading (radians, as decals take it). True: it is pressed into the field (the caller
   // lays no picture of it); false: off, or its picture is not there.
   bool AddPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, float heading, const std::string& texture);
+  // [dents] A shell's hole: its middle on the ground and its size (world units across, as the scorch the game lays for
+  // it: Blasts::FromImpact; a small gun's 0.2 is a scuff, an artillery shell's 1 to 3 a hole).
+  void PressCrater(Vec3 at, float size);
   // Draws what pressed since the last time into the field, clears what came into the levels' windows and lets
   // the field fade, a level at a time (its own pass: before the scene's). `snowing`, `raining` 0..1: how hard;
   // `kinds`: Terrain::GroundKinds (none: all as dirt).
@@ -107,11 +118,12 @@ class DeepTracks {
 
   int stamped = 0;  // (the last Draw: quads drawn into the field, the wrap's copies counted)
   int faded = -1;   // (the last Draw: the level it faded, -1 none)
+  int craters = 0;  // [dents] (holes listed now)
 
  private:
   static constexpr int kLevels = 3;
   // A stamp: a turned rectangle pressed in. shape 0: a picture's alpha; 1: a soft disc; 2: two bands along
-  // its length (a vehicle's tracks).
+  // its length (a vehicle's tracks); 5: [dents] a shell's hole (trough: its depth, berm: its lip's height, world units).
   struct Stamp {
     float x, z;            // its middle (world)
     float halfX, halfZ;    // half its size along its own x and z (world): the shape itself, without the berm's room
@@ -124,6 +136,10 @@ class DeepTracks {
     bool tread = false;    // shape 0: a piece of a tread's line (cut sharp at its ends, its berm to its sides only)
     bool hd = false;       // shape 0: [hdprints] a unit's own print (its red how deep, white deepest)
     float stripX0 = 0, stripX1 = 1;  // shape 0: the columns of its picture it is (a share of its width; [treadlines])
+    // [dents] a hole pressed again as a level's window comes back over it: that level alone (-1: all), and only within
+    // these whole texels of the world (what was cleared: the rest of the level holds it still)
+    int level = -1;
+    float clip[4] = {-1e9f, -1e9f, 1e9f, 1e9f};
   };
   struct Vertex {
     float x, y;              // in the atlas, -1..1
@@ -133,6 +149,12 @@ class DeepTracks {
     float shape, bandX, bandHalf, margin;  // margin: the quad's size over the shape's
     float x0, y0, x1, y1;    // the atlas texels it may write (its level's region)
     float stripX0, stripX1;  // shape 0: the columns of its picture it is
+    float wx = 0, wz = 0;    // [dents] the corner in whole texels of the world, and what of them it may write
+    float clipX0 = -1e9f, clipZ0 = -1e9f, clipX1 = 1e9f, clipZ1 = 1e9f;
+  };
+  struct Crater {            // [dents] a hole of the last while: where, how large, turned how, how much of it is left
+    float x, z, size, heading;
+    float kept = 1;
   };
   struct Level {
     int size = 0;            // texels across (its data, without the copied edges)
@@ -196,6 +218,10 @@ class DeepTracks {
 
   void Quads(const Stamp& s);
   void Quad(const Stamp& s, int level);
+  Stamp CraterStamp(const Crater& c) const;  // [dents]
+  // [dents] The listed holes that reach into whole texels of the world [x0, x1) x [z0, z1) of level 0 or 1, pressed again
+  // there alone (that part of the level was just cleared), at what is left of them.
+  void PressCratersAgain(int level, int x0, int z0, int x1, int z1);
   void ClearQuad(int level, int x0, int z0, int x1, int z1);  // whole texels of the world, [x0, x1) x [z0, z1)
   void RegionQuad(int level, float shape);                       // the level's whole region
   void Emit(const Vertex corners[4]);
@@ -228,6 +254,8 @@ class DeepTracks {
   std::unordered_map<std::string, Picture> pictures_;
   std::unordered_map<std::string, OwnPrints> ownPrints_;      // [hdprints] by blueprint
   std::unordered_map<uint32_t, const OwnPrints*> unitPrints_;  // [hdprints] by unit (those that have any)
+  std::vector<Crater> craters_;  // [dents] the holes of the last while (the oldest first)
+  double cratersFaded_ = -1;     // [dents] (when their `kept` was last brought on)
   const bool debug_ = std::getenv("MOHO64_DEBUG_TRACKS") != nullptr;  // (MOHO64_DEBUG_TRACKS=1: what it drew, once a second)
   int debugStamps_ = 0, debugQuads_ = 0, debugFades_ = 0;
   // (MOHO64_DEBUG_TRACKS=2: also the field itself on the ground: red the trough, green the berm, blue the level read;

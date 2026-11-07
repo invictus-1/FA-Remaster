@@ -29,6 +29,8 @@ struct VIn {
   float4 shape : TEXCOORD2;    // 0 a picture, 1 a disc, 2 two bands; the bands' middles, half widths; the quad's margin
   float4 region : TEXCOORD3;   // the atlas texels it may write: x0, y0, x1, y1
   float2 strip : TEXCOORD4;    // a picture: the columns of it the stamp is (shares of its width; [treadlines])
+  float2 world : TEXCOORD5;    // [dents] where it is, in whole texels of the world
+  float4 clip : TEXCOORD6;     // [dents] what of them it may write: x0, z0, x1, z1
 };
 struct VOut {
   float4 position : SV_Position;
@@ -37,6 +39,8 @@ struct VOut {
   nointerpolation float4 shape : TEXCOORD2;
   nointerpolation float4 region : TEXCOORD3;
   nointerpolation float2 strip : TEXCOORD4;
+  float2 world : TEXCOORD5;
+  nointerpolation float4 clip : TEXCOORD6;
 };
 VOut VS(VIn i) {
   VOut o;
@@ -46,6 +50,8 @@ VOut VS(VIn i) {
   o.shape = i.shape;
   o.region = i.region;
   o.strip = i.strip;
+  o.world = i.world;
+  o.clip = i.clip;
   return o;
 }
 bool Outside(VOut i) { return any(i.position.xy < i.region.xy) || any(i.position.xy >= i.region.zw); }
@@ -64,8 +70,18 @@ float PrintAlpha(float2 uv, float lod, bool tread, bool hd, float2 strip) {
 float Band(float alpha) { return smoothstep(0.05, 0.3, alpha); }
 
 float4 PSStamp(VOut i) : SV_Target {
-  if (Outside(i)) discard;
+  if (Outside(i) || any(i.world < i.clip.xy) || any(i.world >= i.clip.zw)) discard;
   float2 p = i.across * i.shape.w;  // (in the shape's own -1..1)
+  [branch] if (i.shape.x > 4.5) {
+    // [dents] a shell's hole, in the third number: a bowl (as deep as amounts.x in its middle) up to a raised lip (as high
+    // as amounts.y), the earth thrown out beyond it thinning away to about twice its width, in rays; its edge not quite
+    // round (the stamp is turned at random, so that no two holes are alike)
+    float r = length(p), a = atan2(p.y, p.x);
+    float x = r / (1 + 0.07 * sin(3 * a + 0.4) + 0.05 * sin(5 * a + 1.9) + 0.03 * sin(9 * a + 4.2));  // (1 at the lip)
+    float bowl = saturate(1 - x * x);
+    float lip = x < 1 ? smoothstep(0.55, 1.0, x) : exp(-2.6 * (x - 1)) * (1 - smoothstep(1.6, 2.15, x)) * (1 + 0.35 * sin(11 * a + 2.7) * saturate(x - 1));
+    return float4(0, 0, lip * i.amounts.y - bowl * i.amounts.x, 1);
+  }
   float trough, ring;
   if (i.shape.x < 0.5) {
     // a print's picture: its blurred alpha the band pressed down, its sharp alpha the cleats deeper in it, the
@@ -116,7 +132,7 @@ float4 PSStamp(VOut i) : SV_Target {
     trough = (1 - smoothstep(half * 0.6, half, d)) * along;
     ring = smoothstep(half * 0.9, half * 1.2, d) * (1 - smoothstep(half * 1.2, half * 2.2, d)) * along;
   }
-  return float4(trough * i.amounts.x, ring * i.amounts.y, 0, 1);
+  return float4(trough * i.amounts.x, ring * i.amounts.y, 0, 1);  // ([dents] the holes' number left as it is)
 }
 
 float4 PSClear(VOut i) : SV_Target {
@@ -162,12 +178,17 @@ float4 PSFade(VOut i) : SV_Target {
   float rest = saturate(1 - kind.x - kind.y - kind.z - kind.w);
   float rate = rest / 900 + kind.x / 120 + kind.y / 240 + kind.z / 600 + kind.w / 120 + rates.y + rates.z;
   float keep = exp(-rates.x * rate);
+  // [dents] the holes slower (deeper than a rut): dirt and mud in forty minutes, sand in seven, grass in half an hour, a
+  // snow layer in twenty, scuffs on rock in five; falling snow fills them in two and a half minutes at its heaviest, rain
+  // softens them in twenty-five (DeepTracks::Draw keeps the same count of what is left of each, for pressing it again)
+  float holes = rest / 2400 + kind.x / 400 + kind.y / 1800 + kind.z / 1200 + kind.w / 300 + rates.y * 0.6 + rates.z * 0.6;
+  float keepHoles = exp(-rates.x * holes);
   const float drop = 0.04;
-  if (1 - keep < drop) {
-    uint h = FadeHash(uint(rates.w) * 83492791u + 0x68e31da4u);
-    keep = float(h & 0xffffffu) / 16777216.0 < (1 - keep) / drop ? 1 - drop : 1;
-  }
-  return float4(keep, keep, 1, 1);
+  uint h = FadeHash(uint(rates.w) * 83492791u + 0x68e31da4u);
+  float chance = float(h & 0xffffffu) / 16777216.0;
+  if (1 - keep < drop) keep = chance < (1 - keep) / drop ? 1 - drop : 1;
+  if (1 - keepHoles < drop) keepHoles = chance < (1 - keepHoles) / drop ? 1 - drop : 1;
+  return float4(keep, keep, keepHoles, 1);
 }
 )hlsl";
 
@@ -326,15 +347,21 @@ bool DeepTracks::Init(std::string* error) {
               {"TEXCOORD", 1, gfx::AttrType::Float4, offsetof(Vertex, trough)},
               {"TEXCOORD", 2, gfx::AttrType::Float4, offsetof(Vertex, shape)},
               {"TEXCOORD", 3, gfx::AttrType::Float4, offsetof(Vertex, x0)},
-              {"TEXCOORD", 4, gfx::AttrType::Float2, offsetof(Vertex, stripX0)}};
+              {"TEXCOORD", 4, gfx::AttrType::Float2, offsetof(Vertex, stripX0)},
+              {"TEXCOORD", 5, gfx::AttrType::Float2, offsetof(Vertex, wx)},
+              {"TEXCOORD", 6, gfx::AttrType::Float4, offsetof(Vertex, clipX0)}};
   pd.stride = sizeof(Vertex);
   pd.cull = gfx::Cull::None;
   pd.depthTest = pd.depthWrite = false;
   pd.depthTarget = false;
   pd.blend = gfx::Blend::Additive;
-  pd.colorFormat = gfx::Format::RG16F;
+  // ([dents] three numbers a texel: the trough, the berm and the holes' height; the fourth is not used, and the stamps
+  // leave it alone: the additive blend adds their alpha there)
+  pd.colorFormat = gfx::Format::RGBA16F;
+  pd.alphaWrite = false;
   stamp_ = device_->CreatePipeline(pd, error);
   if (!stamp_) return false;
+  pd.alphaWrite = true;
   pd.name = "deep tracks: cleared";
   pd.pixelEntry = "PSClear";
   pd.blend = gfx::Blend::Opaque;
@@ -366,7 +393,7 @@ bool DeepTracks::Init(std::string* error) {
   gfx::TargetDesc td;
   td.width = atlasWidth_;
   td.height = atlasHeight_;
-  td.format = gfx::Format::RG16F;
+  td.format = gfx::Format::RGBA16F;  // ([dents] its third number the holes')
   atlas_ = device_->CreateTarget(td);
   if (!atlas_ || !buffer_) {
     if (error) *error = "the deep tracks' field cannot be made";
@@ -393,6 +420,8 @@ void DeepTracks::SetMap(float width, float height) {
   lines_.clear();
   walkers_.clear();
   unitPrints_.clear();  // [hdprints]
+  craters_.clear();     // [dents]
+  cratersFaded_ = -1;
   lastPressed_ = -1e30;
 }
 
@@ -412,17 +441,26 @@ void DeepTracks::Begin(Vec3 target, double clock) {
     if (!l.placed) {
       l.originX = ox, l.originZ = oz, l.placed = true;
       clears_.push_back({i, 1, 0, 0, 0});
+      PressCratersAgain(i, ox, oz, ox + l.size, oz + l.size);  // [dents]
       continue;
     }
     if (ox == l.originX && oz == l.originZ) continue;
     const int dx = ox - l.originX, dz = oz - l.originZ;
     if (std::abs(dx) >= l.size || std::abs(dz) >= l.size) {
       clears_.push_back({i, 1, 0, 0, 0});
+      PressCratersAgain(i, ox, oz, ox + l.size, oz + l.size);  // [dents]
     } else {
       if (dx > 0) clears_.push_back({i, l.originX + l.size, oz, ox + l.size, oz + l.size});
       if (dx < 0) clears_.push_back({i, ox, oz, l.originX, oz + l.size});
       if (dz > 0) clears_.push_back({i, ox, l.originZ + l.size, ox + l.size, oz + l.size});
       if (dz < 0) clears_.push_back({i, ox, oz, ox + l.size, l.originZ});
+      // [dents] the holes in what came into the window: the strip along x, then the one along z without the first's
+      // columns (the two overlap in a corner, which would have them twice)
+      const int keepX0 = std::max(ox, l.originX), keepX1 = std::min(ox + l.size, l.originX + l.size);
+      if (dx > 0) PressCratersAgain(i, l.originX + l.size, oz, ox + l.size, oz + l.size);
+      if (dx < 0) PressCratersAgain(i, ox, oz, l.originX, oz + l.size);
+      if (dz > 0) PressCratersAgain(i, keepX0, l.originZ + l.size, keepX1, oz + l.size);
+      if (dz < 0) PressCratersAgain(i, keepX0, oz, keepX1, l.originZ);
     }
     l.originX = ox, l.originZ = oz;
   }
@@ -843,6 +881,58 @@ void DeepTracks::PressPrint(uint32_t id, Vec3 centre, float sizeX, float sizeZ, 
   if (laid == 40) line->x = frontX, line->z = frontZ;  // (a jump: the line goes on from here)
 }
 
+// [dents] A shell's hole, listed (the newest last; the oldest let go past a most) and pressed into every level that holds
+// its place. Its bowl is about a third of the scorch's size across each way from its middle (the scorch, wider, is the
+// burnt earth thrown out round it); as deep as 0.3 of its bowl's width across (0.2 for a scuff), never more than a world
+// unit; its lip a third as high. Turned at random by its place.
+void DeepTracks::PressCrater(Vec3 at, float size) {
+  if (!on || !atlas_ || !(size > 0.05f)) return;
+  uint32_t h = static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.x * 16))) * 73856093u ^ static_cast<uint32_t>(static_cast<int32_t>(std::floor(at.z * 16))) * 19349663u;
+  h = (h ^ (h >> 13)) * 0x5bd1e995u;
+  h ^= h >> 15;
+  Crater c;
+  c.x = at.x;
+  c.z = at.z;
+  c.size = std::min(size, 40.0f);
+  c.heading = static_cast<float>(h & 0xffffu) / 65536.0f * 6.2831853f;
+  if (craters_.size() >= 4096) craters_.erase(craters_.begin(), craters_.begin() + 512);
+  craters_.push_back(c);
+  stamps_.push_back(CraterStamp(c));
+  lastPressed_ = clock_;
+  if (debug_) printf("render: deep tracks: a hole %.2f across at %.2f,%.2f\n", size, at.x, at.z);
+}
+
+DeepTracks::Stamp DeepTracks::CraterStamp(const Crater& c) const {
+  Stamp s{};
+  s.shape = 5;
+  s.x = c.x;
+  s.z = c.z;
+  s.heading = c.heading;
+  const float bowl = 0.32f * c.size;
+  const float steep = 0.2f + 0.1f * std::clamp((c.size - 0.2f) / 0.8f, 0.0f, 1.0f);  // (a scuff shallow, a hole deep)
+  const float depth = std::min(2 * bowl * steep, 1.0f);
+  s.halfX = s.halfZ = bowl;
+  s.trough = depth * c.kept;
+  s.berm = depth * 0.33f * c.kept;
+  return s;
+}
+
+void DeepTracks::PressCratersAgain(int level, int x0, int z0, int x1, int z1) {
+  if (craters_.empty() || x1 <= x0 || z1 <= z0) return;
+  const Level& l = levels_[level];
+  const float inv = 1 / l.texel;
+  for (const Crater& c : craters_) {
+    if (c.kept < 0.02f) continue;
+    const float reach = 0.32f * c.size * 2.3f * inv + 2;  // (the earth thrown round it, and a texel or two)
+    const float cx = c.x * inv, cz = c.z * inv;
+    if (cx + reach < static_cast<float>(x0) || cx - reach > static_cast<float>(x1) || cz + reach < static_cast<float>(z0) || cz - reach > static_cast<float>(z1)) continue;
+    Stamp s = CraterStamp(c);
+    s.level = level;
+    s.clip[0] = static_cast<float>(x0), s.clip[1] = static_cast<float>(z0), s.clip[2] = static_cast<float>(x1), s.clip[3] = static_cast<float>(z1);
+    stamps_.push_back(s);
+  }
+}
+
 void DeepTracks::Emit(const Vertex c[4]) {
   for (int k : {0, 1, 2, 0, 2, 3}) vertices_.push_back(c[k]);
 }
@@ -856,7 +946,18 @@ void DeepTracks::Quad(const Stamp& s, int level) {
   // the room the berm needs round the shape
   float margin = shape == 0 ? 1.35f : shape == 1 ? 1.45f : (s.bandX + 2.3f * s.bandHalf);
   margin = std::max(margin, 1.05f);
-  if (level == 2 || (shape == 0 && 2 * std::max(halfX, halfZ) < 2 * l.texel)) {
+  if (shape == 5) {
+    // [dents] a hole: the earth thrown round it to 2.15 of its bowl; one smaller than the level's texel (the map's level:
+    // most) as wide as a texel and less deep by as much, the same in all; the map's level without its lip
+    margin = 2.2f;
+    if (halfX < l.texel) {
+      const float r = l.texel, area = (halfX * halfX) / (r * r);
+      trough *= area;
+      berm *= area;
+      halfX = halfZ = r;
+    }
+    if (level == 2) berm = 0;
+  } else if (level == 2 || (shape == 0 && 2 * std::max(halfX, halfZ) < 2 * l.texel)) {
     // too small for the level to hold its shape: a disc as wide as it, or a texel and a half, pressing as much in all
     const float r = std::max(std::max(halfX, halfZ), 0.75f * l.texel);
     const float area = (halfX * halfZ) / (r * r);
@@ -902,7 +1003,8 @@ void DeepTracks::Quad(const Stamp& s, int level) {
       for (int k = 0; k < 4; ++k) {
         const float atlasX = x0 + px + ox[k], atlasY = pz + oz[k];
         v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, across, (s.tread ? 1.0f : 0.0f) + (s.hd && shape == 0 ? 2.0f : 0.0f),
-                      static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1, s.stripX0, s.stripX1};
+                      static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1, s.stripX0, s.stripX1,
+                      s.x * inv + ox[k], s.z * inv + oz[k], s.clip[0], s.clip[1], s.clip[2], s.clip[3]};  // ([dents] where, and what it may write)
       }
       Emit(v);
       ++stamped;
@@ -910,6 +1012,7 @@ void DeepTracks::Quad(const Stamp& s, int level) {
 }
 
 void DeepTracks::Quads(const Stamp& s) {
+  if (s.level >= 0 && s.level < kLevels) return Quad(s, s.level);  // ([dents] a hole pressed again into one level)
   for (int level = 0; level < kLevels; ++level) Quad(s, level);
 }
 
@@ -955,6 +1058,19 @@ void DeepTracks::Draw(float snowing, float raining, gfx::Texture kinds) {
     return;
   }
   vertices_.clear();
+  // [dents] what is left of each hole listed, as the field's fading leaves it on dirt (PSFade: the slowest of the ground's
+  // kinds but mud's) in this weather; those all but gone let go
+  {
+    if (cratersFaded_ < 0 || clock_ < cratersFaded_) cratersFaded_ = clock_;
+    const double since = clock_ - cratersFaded_;
+    if (since > 0.5) {
+      cratersFaded_ = clock_;
+      const float keep = static_cast<float>(std::exp(-since * (1.0 / 2400 + std::max(snowing, 0.0f) / 150.0 + std::max(raining, 0.0f) / 1500.0)));
+      for (Crater& c : craters_) c.kept *= keep;
+      craters_.erase(std::remove_if(craters_.begin(), craters_.end(), [](const Crater& c) { return c.kept < 0.02f; }), craters_.end());
+    }
+    craters = static_cast<int>(craters_.size());
+  }
   // the fading: one level a frame, each when a fifth of a second (the map's level: a second) has passed since it was
   // last faded; not at all a while after nothing has pressed (all is gone by then)
   FadeConstants fade{};

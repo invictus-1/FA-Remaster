@@ -94,6 +94,20 @@ class Debris {
   // A unit's pieces thrown now: its blueprint id and model, its place and turn, its army's colour, how fast it was
   // moving. Its own fragments where `fragments` has some, else a handful from the library, from its lower body.
   void Throw(const std::string& unitId, const Model* model, Vec3 position, const Quat& turn, Vec3 color, Vec3 velocity, uint32_t seed);
+  // [rockhits] Chips off a rock under fire (rock_hits.h, World::rockHits): `count` small lumps wearing patches of the rock's
+  // own texture (`rock`, its model as drawn), skin and fractures alike darkened (never pale flakes), thrown from `at`
+  // (where it was struck, on its surface) out along `out` (unit length) in quick low arcs, as fast as `strength` says;
+  // `size` across at the most. A share of them (`chipsKept`) stay lying as rubble at the rock's foot for `chipRubbleLasts`
+  // (at most `mostChipRubble`, the oldest sinking away first); the rest sink into the ground within seconds of landing.
+  // None past `mostChipsFlying` in the air at once. Kept apart from the deaths' rubble and its most.
+  void Chip(const Model* rock, Vec3 at, Vec3 out, int count, float size, float strength);
+  int mostChipsFlying = 200;
+  int mostChipRubble = 300;
+  float chipsKept = 0.4f;
+  float chipRubbleLasts = 240;
+  int ChipsFlying() const { return chipsFlying_; }
+  int ChipsLying() const { return static_cast<int>(chips_.size()); }
+  int chipped = 0;  // chips since the map was opened
 
   // The game's own debris shells, in a frame of a game (World::AddFrame, after Watch): BeginShells once, then Shell for
   // each projectile seen. Shell: true when it is one of the death's debris shells (by its blueprint: its index among the
@@ -148,6 +162,7 @@ class Debris {
     const Model* dusty = nullptr;     // its skin once dust has settled on it (none: it stays as it is)
     bool solid = false;               // (a lump: its fractures are large, drawn at any distance)
     bool smokes = false;              // (one of the biggest: it trails smoke while it flies)
+    bool chip = false;                // [rockhits] (a chip off a rock: Chip)
     uint32_t trail = 0;               // its smoke's emitter
     int bounces = 0;
     double born = 0, settled = 0, fading = 0, sank = 0;  // thrown; came to rest; began to sink away; went into the water
@@ -235,6 +250,10 @@ class Debris {
   std::unordered_map<const Model*, Looks> looks_;
   std::vector<Chunk> flying_;
   std::deque<Chunk> lying_;  // in the order they came to rest
+  // [rockhits] the chips lying, in the order they came to rest (each sinks away from its `fading`, which is set as it lands:
+  // soon, or after chipRubbleLasts for those kept); and how many are in the air
+  std::deque<Chunk> chips_;
+  int chipsFlying_ = 0;
   std::unordered_map<uint32_t, Dying> dying_;
   std::unordered_map<uint32_t, GameShell> shells_;
   std::vector<int8_t> shellKinds_;  // (by blueprint index: -1 not known yet, 0 not a debris shell, 1 one)

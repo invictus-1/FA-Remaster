@@ -34,6 +34,16 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 59. To the INTERFACE track: rocks that react to fire in the Battle Effects bundle (2026-11-07, Chris approved; not blocking)
+
+**What:** render [rockhits] (merge 710f4378): hits on or beside rocks throw rock chips and dust, rocks darken and crack the
+more they are hit, rubble stays at their foot for some minutes (picture only). Please add it to the "Battle Effects"
+bundle beside the debris and the blasts' dust (on where that bundle turns those on). World side: `world.rockHits` (bool, off
+by default; the modern look only). Viewer flag: `--rock-hits`. Changeable between frames (off puts every rock back as it was).
+(The snow and mud dents, [dents], need nothing: they ride on the existing deep tracks.)
+
+**Answer:** (none yet)
+
 ## 58. To the INTERFACE track: a player option for the starry night (2026-11-07, Chris's ask: "a proper night sky like starry night ... so its beautiful"; not blocking) - DONE
 
 **What:** render acf9384 gives the night a starry sky by default (a deep night sky, many more stars, the Milky Way bright and

@@ -68,6 +68,7 @@
 #include "ray_scene.h"
 #include "bounce.h"
 #include "ribbons.h"
+#include "rock_hits.h"  // [rockhits]
 #include "scmap.h"
 #include "seasons.h"  // [seasons]
 #include "snow_ground.h"  // [snowhitch] (SnowProp)
@@ -230,6 +231,12 @@ class World {
   // Deep tracks (deepTracks): a frame's units press the ground as AddFrame has them do, for a host that draws them
   // itself (the effects test stand).
   void PressGround(const Frame& frame);
+  // [dents] A shell's hole where a shot struck the ground (deep tracks: the picture only; the ground's heights the game
+  // and the picking go by stay as they are): `at` where, `size` how large across, as the scorch the game lays for it
+  // (Blasts::FromImpact's: a small gun's 0.2, an artillery shell's 1 to 3). None in the air or on or under the water.
+  // AddFrame makes them from the simulation's impacts on the terrain (else from the blasts on the ground); the effects
+  // stand from its shot's (--fx-dent).
+  void DentGround(Vec3 at, float size);
   // How the simulation changed the ground's heights (SimFrames::TakeGroundChanges): drawn so at once.
   // Within a frame (the ground's height texture is written).
   void ChangeGround(const std::vector<FrameGroundChange>& changes);
@@ -674,10 +681,20 @@ class World {
   bool blastWaves = false, blastDust = false, blastDebris = false;
   Blasts blasts;  // the blasts of the last half minute (blasts.Recent(): for the water's ripples), their waves and dust
   Debris debris;  // the chunks and the rubble
+  // [rockhits] Rocks that answer fire (rock_hits.h; Chris, 2026-11-07): a shot or blast that lands on or beside one of the
+  // map's rocks chips it (small pieces of its stone fly off, some stay lying at its foot for minutes) and throws a puff of
+  // rock dust; each rock keeps how much it was hit, its soot darkening it in patches, cracks opening over it, a fresh
+  // coat of dust fading; the soot eases back a little over minutes. To be seen only: the props stay where the game has
+  // them. Modern look; off by default (proposed for the "Battle Effects" bundle). RockHit: a hit told by the host itself
+  // (the effects stand's shots; a game's come from its frames: AddFrame).
+  bool rockHits = false;
+  RockHits rocks;
+  void RockHit(Vec3 at, float size, Vec3 way = {});
   // Deep tracks (deep_tracks.h, `trackField`): where units drive and walk, the ground is pressed by the kind it is:
   // troughs and berms in snow, dark wet ruts in mud, compacted dirt, soft sand with ridged edges, grass laid flat and
   // worn to the earth; fading with the weather and the ground. The game's tread marks and footprints are pressed in
-  // by their own shapes instead of laid as pictures. Modern look; off by default.
+  // by their own shapes instead of laid as pictures. [dents] Shots that strike the ground leave shell holes in it
+  // (DentGround), deepest in snow and mud. Modern look; off by default.
   bool deepTracks = false;
   // [parallax] The ground's relief close by (terrain.h, Terrain::parallax; Chris, 2026-10-19): on a remastered map, the
   // ground's stones, pebbles and clods stand up out of it and its hollows sink as the eye passes, from the height its
@@ -1140,6 +1157,15 @@ class World {
   Vec3 heatTint_;
   void HoldHot(uint32_t id, PlacedProp* prop);
   void UpdateHotProps();
+  // [rockhits] (rockHits on now: the modern look, a map, no picture for something else; the map's rocks found the first time it
+  // is, MakeRocks; the hits acted on at this moment of the game's, at and size: a shot's impact and the blast the game makes
+  // of it are told apart, at the same place and moment, and act once; the shots seen stopped, when the game's impacts are not
+  // kept)
+  bool rocksNow_ = false;
+  std::vector<Vec4> rockHitsNow_;
+  double rockHitsClock_ = -1;
+  std::vector<uint32_t> rockShotsStopped_, rockShotsBefore_;
+  void MakeRocks();
   static void Sphere(const Model* model, const Mat4& world, Vec3* centre, float* radius);
   bool UnderWater(Vec3 centre, float radius) const;
   // the last hits on each unit's personal shield (at most eight, the newest last): where, on the model at
@@ -1309,6 +1335,10 @@ class World {
   bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
   std::vector<Particles::Hot> hot_;  // (lit smoke: the lasting fires, this frame)
   bool deepTried_ = false, deepNow_ = false;  // (deep tracks: their field tried; on this frame)
+  // [dents] How large a weapon's shot's hole is (DentGround's size), by its id as the simulation names it ("uel0103-1-MainGun"):
+  // from its blueprint's DamageRadius and Damage, read once
+  std::unordered_map<std::string, float> dentSizes_;
+  float ShotDentSize(const std::string& weapon);
   bool buildNow_ = false;  // (buildfx: the remastered build look this frame)
   bool exhaustsNow_ = false;  // (unitsfx: the real exhausts this frame)
   void PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation);
