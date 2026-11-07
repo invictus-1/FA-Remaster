@@ -63,6 +63,9 @@ class Clouds {
   int shrink = 2;            // the march at the picture's size (1) or at half its width and height (2)
   float shapeSize = 600;     // the shapes' noise repeats every this many world units
   float detailSize = 110;    // the detail's
+  // [cloudmix] the heaps placed at random and of mixed sizes (clouds.cpp, CloudShape; Chris 2026-11-06); 0: in rows, of
+  // one size, as before; above 1 more of the big ones
+  float mix = 1;
   // A storm's lightning, set by the world each frame: where its flash is in the layer (where the bolt leaves the
   // clouds), how far its light spreads through them, and its light (0: no flash). It lights them from within.
   Vec3 boltAt{0, 0, 0};
