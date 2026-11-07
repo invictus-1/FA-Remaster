@@ -128,10 +128,9 @@ RWTexture2D<float> coverOut : register(u0);
     [branch] if (cloudLight.w > 0) {
       float2 p = (q + skyClouds.yz) * 0.004;
       float2 turned = float2(p.x * 0.6 + p.y * 0.8, p.y * 0.6 - p.x * 0.8);
-      // (a soft rise to the cell's middle: the cover, and with it how high the heap rises, greatest there: a tower, not a slab)
-      float cell = smoothstep(0.42, 0.78, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
-      float between = saturate((field - lerp(0.63, 0.37, skyClouds.x) - 0.2 * cloudLight.w) * 6 + 0.6) * (1 - 0.5 * cloudLight.w);
-      cover = max(lerp(cover, between, cloudLight.w), cloudLight.w * cell);
+      // (where a cell or its anvil may be, StormCell; nothing between the cells: no scraps)
+      float cell = smoothstep(0.25, 0.85, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
+      cover = max(cover * (1 - cloudLight.w), cloudLight.w * cell);
     }
     coverOut[id.xy] = cover;
     return;
@@ -184,6 +183,23 @@ float4 CloudShape(float3 p, float3 wind, float mix, float bigAtLeast = 0) {
 #ifdef RING
 #define Cloud CloudBeforeRing
 #endif
+// [stormcells] (visuals' section 96, Chris: "the cloud shape needs a bit more ... realism") A storm cell's own shape, from
+// how strong the cell is at a place (the coverage's cell field, `strength` 0 at its edge .. 1 at its heart): one flat, level
+// base for every cell; a column that widens upward (a place belongs to it once its strength passes a bar that falls with
+// height), bulging where the big shapes heap (`bulge`); its top the higher the stronger the heart (domes); and on the
+// strongest cells an anvil: the top flattened and spread wide, thinner. 0..1.
+float StormCell(float strength, float h, float bulge, float wide) {
+  float c = strength + bulge;
+  float bar = lerp(0.62, 0.3, saturate(h / 0.75));                       // (narrow at the base, wider up)
+  float top = 0.35 + 0.6 * smoothstep(0.3, 0.95, strength);              // (the heart rises highest)
+  float body = saturate((c - bar) * 2.5) * saturate((top - h + bulge * 0.4) * 5) * saturate(h * 40);
+  // the anvil: a sheet just under the top of a strong cell's column, out to some 1.6 times its width
+  float anvilAt = 0.62 + 0.3 * wide;
+  float sheet = smoothstep(anvilAt - 0.1, anvilAt - 0.03, h) * (1 - smoothstep(anvilAt + 0.02, anvilAt + 0.07, h));
+  float anvil = sheet * smoothstep(0.66, 0.82, wide) * saturate((strength + bulge * 0.5 - 0.2) * 4) * 0.45;
+  return max(body, anvil);
+}
+
 // How much cloud there is at a place, `h` its height in the layer (0 underside .. 1 top). `frayed`: with
 // the detail that frays the edges (the steps toward the light go without it).
 float Cloud(float3 p, float h, bool frayed) {
@@ -199,10 +215,22 @@ float Cloud(float3 p, float h, bool frayed) {
   float shape = Remap(s.r, low - 1, 1, 0, 1) * profile;
   // (coverage only lets the shapes through: where they are low, a hole; their heaps make the outline)
   float d = saturate(Remap(shape, 1 - cover * 0.6, 1, 0, 1)) * cover;
+  // [stormcells] in a storm the cells' own shape (StormCell) in place of the heaps
+  float storm = cloudLight.w;
+  [branch] if (storm > 0.01) {
+    float2 pp = (p.xz + skyClouds.yz) * 0.004;
+    float2 turned = float2(pp.x * 0.6 + pp.y * 0.8, pp.y * 0.6 - pp.x * 0.8);
+    float strength = smoothstep(0.42, 0.85, CloudNoise(float3(turned * 0.28 + 23.1, skyClouds.w * 0.3 + 5.3)));
+    float wide = CloudNoise(float3(turned * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1));  // (which cells are the big ones)
+    // (cauliflower: the big shapes' heaps and their Worley lumps, the finer the higher)
+    float lumps = (s.r - 0.5) * 0.35 + (low - 0.5) * 0.5;
+    d = lerp(d, StormCell(strength, h, lumps, wide), storm);
+  }
   if (!frayed || d <= 0) return d;
   float3 e = detailNoise.SampleLevel(samplerLinear, (p + wind * 1.4) * cloudLook.w, 0).rgb;
   float fine = e.r * 0.625 + e.g * 0.25 + e.b * 0.125;
   float fray = lerp(fine, 1 - fine, saturate(h * 4));  // (wisps below, billows above)
+  fray = lerp(fray, (1 - fine) * 0.95, storm);  // ([stormcells] billows all over, a firm base: no ragged underside)
   return saturate(Remap(d, fray * 0.6, 1, 0, 1));
 }
 #ifdef RING
@@ -566,7 +594,7 @@ static void FillConstants(void* to, const View& view, const Camera& camera, cons
   std::memcpy(k.up, u4, sizeof k.up);
   std::memcpy(k.ahead, a4, sizeof k.ahead);
   k.size[2] = 1 / kCoverReach;
-  k.look[0] = std::max(clouds.density, 0.0f) * (1 + 0.6f * std::clamp(clouds.storm, 0.0f, 1.0f));  // ([stormcells] dark bases)
+  k.look[0] = std::max(clouds.density, 0.0f) * (1 + 0.3f * std::clamp(clouds.storm, 0.0f, 1.0f));  // ([stormcells] dark bases)
   k.light[3] = std::clamp(clouds.storm, 0.0f, 1.0f);  // [stormcells]
   k.look[1] = static_cast<float>(std::clamp(clouds.steps, 4, 256));
   k.look[2] = 1 / std::max(clouds.shapeSize, 1.0f);
