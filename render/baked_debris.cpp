@@ -73,7 +73,14 @@ BakedDebris::Set* BakedDebris::SetOf(const std::string& unitId) {
   std::unique_ptr<Set> set;
   if (files && models) {
     // ([debrispile] a set: its chunks' mesh, or a style's own, in the trial folder or beside the export; its styles read as asked)
-    const std::string trial = "/debris-trial/", folder = "/preview/" + id + "/";
+    std::string trial = "/debris-trial/";
+    const std::string folder = "/preview/" + id + "/";
+    // ([debrisstyle] or visuals' sets folder, a unit's set in <ID>/deliver/ of it)
+    for (const char* name : {"_debris.scm", "_debris_break.scm"})
+      if (files->Exists(trial + id + "/deliver/" + id + name)) {
+        trial += id + "/deliver/";
+        break;
+      }
     bool any = false;
     for (const char* name : {"_debris.scm", "_debris_break.scm", "_debris_melt.scm", "_debris_vaporise.scm"})
       any = any || files->Exists(trial + id + name) || files->Exists(folder + id + name);

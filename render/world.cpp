@@ -2486,7 +2486,10 @@ void World::AddCombat(FrameCombat&& combat) {
     p.impacts.clear();
     p.health.clear();
   }
-  for (FrameHit& h : combat.hits) p.hits.push_back(std::move(h));
+  for (FrameHit& h : combat.hits) {
+    if (h.killing && h.targetKind == 0) debris.Killed(h.target, h);  // [debrisstyle] (which death its baked set plays)
+    p.hits.push_back(std::move(h));
+  }
   for (FrameImpact& m : combat.impacts) p.impacts.push_back(std::move(m));
   for (const FrameHealth& h : combat.health) p.health.push_back(h);
 }

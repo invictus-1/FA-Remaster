@@ -82,7 +82,7 @@ class BakedDebris {
   float paint = 0.85f;      // their army's colour against the unit's (torn paint, a little dulled, as the debris's)
   // [debrispile] MELT: how far its hot parts sag (a share of their height over their chunk's lowest point, at full heat: the
   // vertex shader), over its first `meltSeconds`, then held (0: none, for a set whose melt is bent in its bake)
-  float meltSag = 0.4f;
+  float meltSag = 0.8f;  // ([debrisstyle] Chris, 2026-11-07: the live sag doubled)
   float meltSeconds = 2;
   // [debrispile] VAPORISE: the chunks that end beyond this many times the unit's box (across) are thrown debris, not the wreck:
   // they lie and sink away as a death's without a wreck; the biggest `mostTrails` of those flying trail the debris's smoke

@@ -96,6 +96,10 @@ class Debris {
   // [debrispile] Every death in this style of its baked set (the viewer's --debris-style: "break", "melt", "vaporise"; ""
   // as DebrisStyleFor chooses).
   std::string debrisStyle;
+  // [debrisstyle] The killing blow on a unit (World::AddCombat, from the simulation's hits): DebrisStyleFor chooses its baked
+  // set's style by it - VAPORISE for a nuke's or a crushing overkill, MELT for beams, fire and the energy weapons' shells,
+  // BREAK for the rest (and where no killing blow was told: a host without hits, a death the army did not see struck).
+  void Killed(uint32_t unit, const FrameHit& hit);
   // A unit's own fragments in place of the library's (unset, or none for a unit: the library's). `unitId`: its
   // blueprint id; `unit`: its model as drawn.
   std::function<std::vector<Piece>(const std::string& unitId, const Model* unit)> fragments;
@@ -194,7 +198,7 @@ class Debris {
   };
   // [bakeddebris] Which style of its baked set a death plays ("break", "melt", "vaporise": by the killing weapon's kind and how
   // far it overkilled, once the engine's killing hit is read here); "break" for every death until then.
-  std::string DebrisStyleFor(const Dying& d) const;
+  std::string DebrisStyleFor(uint32_t unit, const Dying& d) const;
   // one of the game's debris shells
   struct GameShell {
     Chunk piece;         // what is drawn (where the game has it)
@@ -267,6 +271,15 @@ class Debris {
   std::deque<Chunk> chips_;
   int chipsFlying_ = 0;
   std::unordered_map<uint32_t, Dying> dying_;
+  // [debrisstyle] each unit's killing blow, as the simulation told it (Killed), until its death plays (kept a minute at most)
+  struct KillBlow {
+    bool beam = false;
+    std::string damageType, projectile, weapon;
+    float overkill = 0;
+    double told = 0;
+  };
+  std::unordered_map<uint32_t, KillBlow> kills_;
+  double killsClock_ = 0;
   std::unordered_map<uint32_t, GameShell> shells_;
   std::vector<int8_t> shellKinds_;  // (by blueprint index: -1 not known yet, 0 not a debris shell, 1 one)
   uint32_t shellStamp_ = 0;

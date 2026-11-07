@@ -299,8 +299,10 @@
 //           <ID>_debris.scm and <ID>_debris_<style>.json take the place of those beside the unit's remastered export
 //           ([debrispile] and <ID>_debris_<style>.scm, a style's own chunks' mesh)
 // --debris-style break|melt|vaporise  [debrispile] every baked death dies in that style of its set (else as Debris::
-//           DebrisStyleFor chooses: break until the killing hit is read)
-// --debris-sag <share>  [debrispile] how far a MELT death's hot parts sag in the vertex shader (BakedDebris::meltSag, 0.4;
+//           DebrisStyleFor chooses by the killing blow: vaporise for a nuke or an overkill of 1.5 and more, melt for
+//           beams, fire and energy shells, else break). [debrisstyle] A --debris-dir folder may hold each unit's set in
+//           <ID>/deliver/ of it.
+// --debris-sag <share>  [debrispile] how far a MELT death's hot parts sag in the vertex shader (BakedDebris::meltSag, 0.8;
 //           0: none, for a set whose melt is bent in its bake)
 // --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
 //           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
