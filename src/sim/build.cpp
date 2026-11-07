@@ -2364,6 +2364,15 @@ BuildTask* FactoryWork(Sim& sim, Unit* U, GuardData& g, Unit* G) {
     g.ownCmd = c;
     BuildTask* t = NewChild(sim, c->type, c->type == CommandType::Upgrade ? "Upgrade" : "FactoryBuild");
     t->bp = bp;
+    // The CUnitUpgradeTask ctor (0x5f847b..0x5f8499, read) sets Upgrading (+0x4a0 |= 0x40) and the workProgress
+    // (+0x2ac) to 0 on the unit at once; the guard returns 7, so the task's first tick (TickUpgrade) is six beats on.
+    // Seen (oracle recording of FAF 3840 pro replay 4v4_5): army 1's repeating naval factory 0x100031, guarding
+    // 0x100025, ends a build at 4194 and its guard takes the queued Upgrade: Upgrading from 4194 in the original,
+    // from 4200 in ours. (The dispatcher's Upgrade runs its first tick in the same pass: no difference there.)
+    if (c->type == CommandType::Upgrade) {
+      U->unitStates.Insert(US("Upgrading"));
+      U->workProgress = 0;
+    }
     return t;
   }
   const int n = static_cast<int>(G->commands.size());
@@ -2455,13 +2464,46 @@ Unit* AssistCandidate(Sim& sim, Unit* U, GuardData& g) {
   float r = GuardScanRadiusOf(U);
   Unit* best = nullptr;
   float bestD2 = std::numeric_limits<float>::infinity();
-  for (Unit* u : sim.units()) {
+  // COGrid::ForAllEntitiesIterator 0x721fb0 (mask 0x100, the sphere around +0x84 of radius GuardScanRadius): the
+  // entity grid's cells under the sphere's box, in the grid's order (rows by z, columns by x, in a cell the most
+  // recently registered first), each unit whose primitive meets the sphere (above a radius of 3 [0xe4f718], one whose
+  // bounds meet the cube of half side r x 0.707 is taken without the exact test). Ties of the distance below keep the
+  // first, so the order decides between two candidates at the same place. Seen: 4v4_2 3431, army 3's factory 0x300003
+  // starts 0x30001e (made at the factory's own position) in the command stage; the guards 0x300009 / 0x30000a meet the
+  // engineer 0x300014 (its repair child, still on the factory, gives the full-health factory) before the factory and
+  // 0x30001e, at the same distance: the factory is taken, DispatchAssistOrCapture makes no child, and their next turn
+  // (3437) finds 0x30001e. 0x300014's turn comes after the others' repair children ended: it takes 0x30001e at once.
+  // Ours went by unit id (the factory first) and all three repaired from 3437.
+  std::vector<Unit*> around;
+  if (sim.entityGrid().ready()) {
+    std::vector<Entity*> cells;
+    sim.entityGrid().GatherBox(g.pos.x - r, g.pos.z - r, g.pos.x + r, g.pos.z + r, 1, &cells);
+    for (Entity* e : cells) {
+      if (e->kind != Entity::Kind::Unit) continue;
+      WorldShape ws;
+      if (!GetWorldShape(e, &ws)) continue;
+      bool inCube = false;
+      if (r > 3.0f) {
+        const float h = r * 0.707f;
+        Vec3 mn, mx;
+        ShapeBounds(ws, &mn, &mx);
+        inCube = !(g.pos.x - h > mx.x || mn.x > g.pos.x + h || g.pos.y - h > mx.y || mn.y > g.pos.y + h ||
+                   g.pos.z - h > mx.z || mn.z > g.pos.z + h);
+      }
+      if (!inCube && !SphereOverlap(ws, g.pos, r)) continue;
+      around.push_back(static_cast<Unit*>(e));
+    }
+  } else {
+    for (Unit* u : sim.units()) {
+      float rad = static_cast<float>(std::max(Fp(u).sizeX, Fp(u).sizeZ)) * 0.5f;
+      float ex = u->position.x - g.pos.x, ey = u->position.y - g.pos.y, ez = u->position.z - g.pos.z;
+      if (std::sqrt(ex * ex + ey * ey + ez * ez) <= r + rad) around.push_back(u);  // (no map: no grid)
+    }
+  }
+  for (Unit* u : around) {
     if (!Alive(u) || u == U || !u->blueprint) continue;
     // 0x61368d: inside the playable rect with a margin of 1 (the whole map if the guard's army may use it)
     if (!sim.IsWithin(u->position.x, u->position.z, 1.0f, Sim::UseWholeMap(U->army))) continue;
-    float rad = static_cast<float>(std::max(Fp(u).sizeX, Fp(u).sizeZ)) * 0.5f;
-    float ex = u->position.x - g.pos.x, ey = u->position.y - g.pos.y, ez = u->position.z - g.pos.z;
-    if (std::sqrt(ex * ex + ey * ey + ez * ez) > r + rad) continue;  // (collision primitive vs sphere)
     if (Moved(u) || u->layer == "Air") continue;
     Unit* cand = nullptr;
     if (rebuilder) continue;  // (rebuilders: guard-command positions, not carried out)
@@ -2854,8 +2896,14 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       float ticks = c[0] * 10.0f;
       if (1.0f > ticks) ticks = 1.0f;
       t.capTotal = static_cast<int>(static_cast<float>(t.capTotal) + ticks);
+      // 0x604a2f..0x604b90 (read): every entity attached to the target (Entity::GetAttachedEntities, vt+0x58, the
+      // children vector), as a unit (vt+0x10; others skipped), not dead (vt+0x28; a destroy only queued still counts),
+      // whose GetCaptureCosts gives three numbers: its time x 10 (at least 1) and its costs are added. So a factory's
+      // unit on its build bone counts (whatever attached it), not only a transport's cargo. Seen (oracle recording of FAF
+      // 3840 pro replay 2v2_4): at 4412 six of army 2's engineers capture army 1's 0x10006a (2100 E over 30 s) while a
+      // unit is attached to it (time 0: one tick more): the original asks 2100 / 301 = 6.9767 E a beat each, ours 7.
       for (Unit* x : sim.units()) {
-        if (x->transportedBy != EntityRef(T) || x->dead || x->destroyQueued) continue;
+        if (x->parentId != EntityRef(T) || x->dead) continue;
         float cc[3];
         if (!CaptureCosts(sim, L, u, x, cc)) continue;
         float tk = cc[0] * 10.0f;
