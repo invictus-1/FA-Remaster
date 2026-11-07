@@ -319,6 +319,10 @@ class ModelCache {
   // texture places), drawn at the unit's scale, its heat mask lit (ModelLod::heatMask). Made once; null where the file
   // cannot be read or the unit is not drawn remastered (its textures would not fit).
   const Model* DebrisChunks(const std::string& blueprintId, const std::string& meshPath);
+  // [debrishull] A ship's hull without the parts its baked death throws (<ID>_debris_hull.scm: on the unit's own skeleton, bone
+  // for bone, in its own textures and texture places), drawn in place of the ship from the throw on, posed by the game's
+  // sinking as the ship itself. Null where the unit is not drawn remastered or the file's bones are not the unit's.
+  const Model* DebrisHull(const std::string& blueprintId, const std::string& meshPath);
   // A unit's own look for its personal shield (from its blueprint file, read once; see PersonalShieldLook).
   const PersonalShieldLook& PersonalShield(const std::string& blueprintId);
   // [wakes] Whose a unit is, for the faction's own effects in the remastered look (effect_files.h): by its id where

@@ -99,6 +99,18 @@ BakedDebris::Set* BakedDebris::SetOf(const std::string& unitId) {
 
 bool BakedDebris::Has(const std::string& unitId) { return SetOf(unitId) != nullptr; }
 
+const Model* BakedDebris::HullOf(const std::string& unitId) {  // [debrishull]
+  Set* set = SetOf(unitId);
+  if (!set) return nullptr;
+  if (!set->hullAsked) {
+    set->hullAsked = true;
+    const std::string id = Lower(unitId), name = id + "_debris_hull.scm";
+    const std::string path = files->Exists(set->trial + name) ? set->trial + name : files->Exists(set->folder + name) ? set->folder + name : std::string();
+    if (!path.empty()) set->hull = models->DebrisHull(id, path);
+  }
+  return set->hull;
+}
+
 const BakedDebris::Style* BakedDebris::StyleOf(Set& set, const std::string& unitId, const std::string& style) {
   auto it = set.styles.find(style);
   if (it != set.styles.end()) return it->second.get();

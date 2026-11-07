@@ -96,6 +96,8 @@ class BakedDebris {
 
   // Whether the unit has a set (its files looked for once).
   bool Has(const std::string& unitId);
+  // [debrishull] A ship's hull without the parts its set throws (<ID>_debris_hull.scm; ModelCache::DebrisHull), or null.
+  const Model* HullOf(const std::string& unitId);
   // A unit dies now (`clock`, the game's): plays that style of its set at `at` (its place), turned with `turn`'s heading, in
   // its army's `color`. False where it has no set (of that style; else the break style), or too many play already: the
   // caller throws the generic debris then. `unit`: its model as drawn (its scale).
@@ -160,6 +162,8 @@ class BakedDebris {
   struct Set {
     std::unordered_map<std::string, std::unique_ptr<Style>> styles;  // by name ("break"); a missing one null (asked once)
     std::string folder, trial;  // (where its files are: the export's, and the trial folder's)
+    const Model* hull = nullptr;  // [debrishull] (a ship's hull without the thrown parts; asked once)
+    bool hullAsked = false;
   };
   Set* SetOf(const std::string& unitId);
   const Style* StyleOf(Set& set, const std::string& unitId, const std::string& style);

@@ -100,6 +100,9 @@ class Debris {
   // set's style by it - VAPORISE for a nuke's or a crushing overkill, MELT for beams, fire and the energy weapons' shells,
   // BREAK for the rest (and where no killing blow was told: a host without hits, a death the army did not see struck).
   void Killed(uint32_t unit, const FrameHit& hit);
+  // [debrishull] A dying ship whose baked parts were thrown: its hull without them (BakedDebris::HullOf), drawn in its place;
+  // else null (the unit's own model).
+  const Model* HullFor(uint32_t unit);
   // A unit's own fragments in place of the library's (unset, or none for a unit: the library's). `unitId`: its
   // blueprint id; `unit`: its model as drawn.
   std::function<std::vector<Piece>(const std::string& unitId, const Model* unit)> fragments;
