@@ -428,6 +428,12 @@ struct HitEvent {
   // The shot's direction, a unit vector: the shell's velocity as it struck, the beam's axis, else from the origin
   // to the target's position (what OnDamage gets as its vector, made unit length); 0 0 0 when that is 0.
   float direction[3] = {0, 0, 0};
+  // The killing blow (visuals' death-debris pilot, 2026-11-07): set on the beat's last hit on a unit when that unit
+  // is then killed (KillUnit, after CheckCanBeKilled), with the overkill ratio OnKilled gets (FAF: the damage past
+  // the unit's health over its max health). A read only; a unit killed without a recorded hit (Kill() by a script, a
+  // crash, a death weapon's own blast) marks nothing.
+  bool killing = false;
+  float overkill = 0;
 };
 
 // An impact: each time a shell's or a beam's OnImpact(type, entity) runs (Projectile::Impact 0x69dec0, the beam's

@@ -417,6 +417,14 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   u->unitStates.Erase(US("Patrolling"));  // (nor "Patrolling": the patrol task goes the same way)
   u->unitStates.Erase(US("Guarding"));    // (nor guarding)
   u->unitStates.Erase(US("GuardBusy"));
+  if (sim.collectHits) {  // a host's read only (sim_view.h HitEvent::killing): the beat's last hit on this unit
+    for (auto it = sim.hitEvents.rbegin(); it != sim.hitEvents.rend(); ++it) {
+      if (it->target != u->id || it->shield) continue;
+      it->killing = true;
+      it->overkill = ratio;
+      break;
+    }
+  }
   PushObject(L, instigator && instigator->HasLuaObject() ? instigator : nullptr);
   lua_pushstring(L, type.c_str());
   lua_pushnumber(L, ratio);
