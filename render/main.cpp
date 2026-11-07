@@ -297,6 +297,11 @@
 //           turning slowly, in that unit's paint (above) and charred (below), with their torn faces (hot with --hot-metal)
 // --debris-dir <folder>  [bakeddebris] with --debris: units' baked death debris from a trial folder (baked_debris.h): its
 //           <ID>_debris.scm and <ID>_debris_<style>.json take the place of those beside the unit's remastered export
+//           ([debrispile] and <ID>_debris_<style>.scm, a style's own chunks' mesh)
+// --debris-style break|melt|vaporise  [debrispile] every baked death dies in that style of its set (else as Debris::
+//           DebrisStyleFor chooses: break until the killing hit is read)
+// --debris-sag <share>  [debrispile] how far a MELT death's hot parts sag in the vertex shader (BakedDebris::meltSag, 0.4;
+//           0: none, for a set whose melt is bent in its bake)
 // --rock-hits  [rockhits] rocks that answer fire (World::rockHits, rock_hits.h; modern look): a shot or blast that lands on
 //           or beside one of the map's rocks chips it (pieces of its stone fly, some lie at its foot for minutes) and throws
 //           a puff of rock dust; the rock darkens with soot and cracks as the hits add up (with --fx-shot, --fx-hit prop and
@@ -611,7 +616,8 @@
 //           path --fx-kill-at seconds (1) into each play, every --fx-repeat seconds (12 unless given):
 //           its explosion, debris and wreck as the game's scripts make them, an aircraft falling (it
 //           flies in at its elevation and comes down at the spot), a ship sinking on water; --fx-overkill
-//           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck)
+//           r: the overkill ratio it dies with (0.2; above 1 it leaves no wreck); --fx-death-unseen: [debrispile] its death
+//           not told to the debris (a death the picture did not see: a wreck with a baked set drawn as its pile at rest at once)
 // --fx-faction uef|aeon|cybran|seraphim  the stand's effects are that faction's own in the remastered
 //           look (else the faction of what they are made on: a shot's by its id, a unit's)
 // --fx-move <unit>  that unit (UEL0203) made at --fx-at by its own script class and driven round a loop there
@@ -910,6 +916,8 @@ struct Options {
   bool rockHits = false;                // [rockhits] --rock-hits
   std::string debrisTest, debrisShow;   // --debris-test, --debris-show
   std::string debrisDir;                // [bakeddebris] --debris-dir
+  std::string debrisStyle;              // [debrispile] --debris-style
+  float debrisSag = -1;                 // [debrispile] --debris-sag
   float debrisTestEvery = 2.5f, debrisTestHeight = 3;
   int blastTest = 0;                    // --blast-test
   bool movementDust = false;            // --movement-dust
@@ -1183,6 +1191,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->hitchLog = atof(argv[++i]);
     }
     else if (a == "--fx-compare") o->fx.compare = true;
+    else if (a == "--fx-death-unseen") o->fx.deathUnseen = true;  // [debrispile]
     else if (a == "--vulkan") o->vulkan = true;
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
@@ -1393,6 +1402,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--debris-most") o->debrisMost = std::max(0, atoi(v));
     else if (a == "--debris-show") o->debrisShow = v;
     else if (a == "--debris-dir") o->debrisDir = v;  // [bakeddebris]
+    else if (a == "--debris-style") o->debrisStyle = v;  // [debrispile]
+    else if (a == "--debris-sag") o->debrisSag = std::max(0.0f, static_cast<float>(atof(v)));  // [debrispile]
     else if (a == "--debris-test") {
       const std::string all = v;
       const size_t comma = all.find(',');
@@ -2287,6 +2298,8 @@ int main(int argc, char** argv) {
   world.movementDust = opt.movementDust;
   world.dust.drawUnder = !opt.movementDustOver;
   if (opt.debrisMost >= 0) world.debris.mostRubble = opt.debrisMost;
+  world.debris.debrisStyle = opt.debrisStyle;                              // [debrispile]
+  if (opt.debrisSag >= 0) world.debris.baked.meltSag = std::min(opt.debrisSag, 1.0f);  // [debrispile]
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
   world.groundParallax = opt.groundParallax;  // [parallax]
@@ -4787,9 +4800,10 @@ int main(int argc, char** argv) {
       if (world.blastWaves || world.blastDust || world.blastDebris)
         printf("; blasts: %d told, %d under way, %d dust puffs; debris: %d chunks thrown, %d flying, %d lying, %d of the game's shells seen", world.blasts.told,
                world.blasts.Active(), world.blasts.dustPuffs, world.debris.thrown, world.debris.Flying(), world.debris.Lying(), world.debris.shellsSeen);
-      if (world.blastDebris && world.debris.baked.played + world.debris.baked.refused > 0)  // [bakeddebris]
-        printf("; baked debris: %d deaths played, %d left to the chunks (too many in flight), %d sets lying", world.debris.baked.played,
-               world.debris.baked.refused, world.debris.baked.Sets());
+      if (world.blastDebris && world.debris.baked.played + world.debris.baked.refused + world.debris.baked.Piles() > 0)  // [bakeddebris] ([debrispile] piles)
+        printf("; baked debris: %d deaths played, %d left to the chunks (too many in flight), %d sets lying; %d wrecks drawn as piles (%d matched to their deaths, %d not seen)",
+               world.debris.baked.played, world.debris.baked.refused, world.debris.baked.Sets(), world.debris.baked.Piles(), world.debris.baked.matched,
+               world.debris.baked.unseenPiles);  // ([debrispile] the piles)
       if (world.rockHits)  // [rockhits]
         printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
                world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());

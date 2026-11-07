@@ -516,6 +516,30 @@ const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std:
   if (!file) return nullptr;
   auto m = std::make_unique<Model>();
   ReadScmBones(*file, &m->bones);
+  // [debrispile] each vertex's height over its chunk's lowest point at rest (model units) in its second texture coordinates'
+  // v, which the chunks do not use otherwise: how far a molten part sags (the vertex shader's melt). The file read as LoadScm
+  // reads it: 68 bytes a vertex, its position first, the second coordinates at 56, its bone the first byte at 64.
+  if (file->size() >= 48 && file->compare(0, 4, "MODL") == 0) {
+    int32_t h[11];
+    std::memcpy(h, file->data() + 4, sizeof h);
+    const int64_t offset = h[3], count = h[5];
+    if (offset >= 0 && count > 0 && offset + count * 68 <= static_cast<int64_t>(file->size())) {
+      std::vector<float> lowest(256, 1e30f);
+      for (int64_t i = 0; i < count; ++i) {
+        float y;
+        std::memcpy(&y, file->data() + offset + i * 68 + 4, sizeof y);
+        float& low = lowest[static_cast<uint8_t>((*file)[static_cast<size_t>(offset + i * 68 + 64)])];
+        low = std::min(low, y);
+      }
+      for (int64_t i = 0; i < count; ++i) {
+        char* v = file->data() + offset + i * 68;
+        float y;
+        std::memcpy(&y, v + 4, sizeof y);
+        const float over = y - lowest[static_cast<uint8_t>(v[64])];
+        std::memcpy(v + 60, &over, sizeof over);
+      }
+    }
+  }
   ModelLod lod;
   lod.serial = NextLodSerial();
   std::string error;
@@ -536,6 +560,17 @@ const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std:
   lod.shaderName = like.shaderName;
   lod.cutoff = like.cutoff;
   lod.heatMask = true;
+  // [debrispile] the unit's remastered wreck's textures (the same texture places), which the chunks take on as they cool
+  {
+    const std::string preview = "/preview/" + id + "/";
+    const std::string wreck = preview + (vfs_->Exists(preview + "textures/" + id + "_wreck_lab_albedo.dds") ? "textures/" : "") + id + "_wreck_lab_";
+    if (vfs_->Exists(wreck + "albedo.dds")) {
+      lod.burntAlbedo = textures_->Get(wreck + "albedo.dds", like.albedo);
+      lod.burntNormals = textures_->Get(wreck + "normal.dds", like.normals);
+      lod.burntSpecular = textures_->Get(wreck + "spec.dds", like.specular);
+      lod.burntSecondary = vfs_->Exists(wreck + "ao.dds") ? textures_->Get(wreck + "ao.dds", textures_->White()) : textures_->White();
+    }
+  }
   m->lods.push_back(std::move(lod));
   m->scale = unit->scale;
   m->ok = true;

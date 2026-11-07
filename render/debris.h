@@ -93,6 +93,9 @@ class Debris {
   // them) dies by that set instead of the chunks thrown here (while it has room for one more in flight), and the game's
   // debris shells thrown near it are not drawn either (they would double it). Moved and drawn with the debris (Update).
   BakedDebris baked;
+  // [debrispile] Every death in this style of its baked set (the viewer's --debris-style: "break", "melt", "vaporise"; ""
+  // as DebrisStyleFor chooses).
+  std::string debrisStyle;
   // A unit's own fragments in place of the library's (unset, or none for a unit: the library's). `unitId`: its
   // blueprint id; `unit`: its model as drawn.
   std::function<std::vector<Piece>(const std::string& unitId, const Model* unit)> fragments;
@@ -191,7 +194,7 @@ class Debris {
   };
   // [bakeddebris] Which style of its baked set a death plays ("break", "melt", "vaporise": by the killing weapon's kind and how
   // far it overkilled, once the engine's killing hit is read here); "break" for every death until then.
-  static std::string DebrisStyleFor(const Dying& d);
+  std::string DebrisStyleFor(const Dying& d) const;
   // one of the game's debris shells
   struct GameShell {
     Chunk piece;         // what is drawn (where the game has it)

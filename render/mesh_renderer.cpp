@@ -159,6 +159,12 @@ Texture2DArray shieldPatterns : register(t7);
 // [stealthlook] the scene as it stood before the see-through pass (World: while a cloaked unit is drawn; else black): a cloaked
 // unit's body bends it
 Texture2D cloakBehind : register(t25);
+// [debrispile] a baked death's chunks: their unit's remastered wreck's textures (ModelLod::burntAlbedo...), which they take on
+// as they cool; bound only for them
+Texture2D burntAlbedoMap : register(t12);
+Texture2D burntNormalsMap : register(t13);
+Texture2D burntSpecularMap : register(t14);
+Texture2D burntSecondaryMap : register(t15);
 
 struct VIn {
   float3 position : POSITION;
@@ -211,6 +217,14 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
     normal = mul(turn, normal);
     tangent = mul(turn, tangent);
     binormal = mul(turn, binormal);
+  }
+  // [debrispile] a baked death's chunks melting (BakedDebris::meltSag): their hot parts (the heat mask) sag down and toward the
+  // side the death came from (its front for now), by their height over their chunk's lowest point at rest (the second
+  // coordinates' v: ModelCache::DebrisChunks) and how far the melt has come (the instance's tint x over 101, in hundredths:
+  // up over its first seconds, then held where it ended)
+  [branch] if (kind13.w > 0.5 && n.bones.y > 100.5) {
+    float sag = floor((n.bones.y + 0.5) / 101) * 0.01 * saturate(i.uv.z) * max(i.uv.w, 0);
+    p.xyz += float3(0, -0.8, 0.6) * sag;
   }
   VOut o;
 #ifdef PLANTS
@@ -317,9 +331,12 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   // [bakeddebris] a baked death's chunks (baked_debris.h): their normal map lies on the first texture coordinates as their other
   // textures do; the second's u is their heat mask, handed on in the tint's x as -1 - mask (no other tint lies there), the heat's
   // age and how long it glows staying in its y and z (BakedDebris: as a wreck's, HotMetal::Tint)
+  // [debrispile] and how far they have cooled into their wreck's textures (hundredths: the instance's tint x is that plus 101
+  // times the melt's sag in hundredths, above), laid under the mask, two a step: -1 - (mask + 2 * hundredths)
   [branch] if (kind13.w > 0.5) {
     o.uv.zw = i.uv.xy;
-    o.tint.x = -1 - i.uv.z;
+    float sagged = floor((n.bones.y + 0.5) / 101);  // ([debrispile] the melt's, below; the burn under it)
+    o.tint.x = -1 - (i.uv.z + 2 * round(n.bones.y - 101 * sagged));
   }
 #ifdef UNDER_SNOW
   // [undersnow] a low plant under lying snow (under_snow.h): sunk into it (the ground hides what goes under), pressed and
@@ -573,6 +590,11 @@ void RockScarSurface(float soot, float crack, float dust, float3 side, float3 sh
     roughness = lerp(roughness, 1, cracked);
   }
 }
+// [debrispile] A baked death's chunks: the heat mask and how far they have cooled into their wreck's textures (0..1), from
+// the tint's x as the vertex shader lays them (-1 - (mask + 2 * hundredths)).
+float BakedBurn(float tintX) { return floor((-1 - tintX) * 0.5 + 0.25) * 0.01; }
+float BakedHeatMask(float tintX) { return saturate(-1 - tintX - 200 * BakedBurn(tintX)); }
+
 float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
@@ -812,6 +834,18 @@ float4 Shade(VOut i, bool front) {
     nxy = normalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1;
     spec = specularMap.Sample(samplerAniso, i.uv.xy);
     secondary = secondaryMap.Sample(samplerAniso, i.uv.xy);  // [grime] (all of it: a unit's masks, unit_grime.h)
+  }
+  // [debrispile] a baked death's chunks cooling: their unit's paint giving way to its wreck's textures (the same texture
+  // places), the army's colour going with the paint (BakedDebris: burnt through by the time they rest)
+  [branch] if (kind13.w > 0.5) {
+    float burn = BakedBurn(i.tint.x);
+    [branch] if (burn > 0.001) {
+      albedo = lerp(albedo, burntAlbedoMap.Sample(samplerAniso, i.uv.xy), burn);
+      nxy = lerp(nxy, burntNormalsMap.Sample(samplerAniso, i.uv.zw).ga * 2 - 1, burn);
+      spec = lerp(spec, burntSpecularMap.Sample(samplerAniso, i.uv.xy), burn);
+      secondary.r = lerp(secondary.r, burntSecondaryMap.Sample(samplerAniso, i.uv.xy).r, burn);
+      i.color.rgb = lerp(i.color.rgb, 1, burn);
+    }
   }
   spec.b *= i.glow;  // [machinery] (a lit piece pulsing with its lamp)
   // [detail] (World::unitDetail, the view's mistMore.w) a remastered unit's surface where its textures are magnified: a grain
@@ -1084,7 +1118,7 @@ float4 Shade(VOut i, bool front) {
     // red, little nothing), cooling as a wreck's torn rims do (HotMetalGlow's rim, half its time); the mask in the tint's x (-1 -
     // mask, VS), its age and how long it glows in y and z
     [branch] if (kind13.w > 0.5 && i.tint.z < 0) {
-      float mask = saturate(-1 - i.tint.x);
+      float mask = BakedHeatMask(i.tint.x);  // ([debrispile] below its burn)
       [branch] if (mask > 0.02) {
         // (hotter and cooler stretches along a rim, so that a torn edge never reads as a strip of light)
         float stretch = smoothstep(0.25, 0.7, CloudNoise(i.rest * 14 + 5.1));
@@ -2399,6 +2433,7 @@ template <class R>
 void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end, std::vector<Instance>& batch, RunCounts* counts) const {
   const bool shadowPass = s.shadowPass, glass = s.glass, blasts = s.blasts, plants = s.plants, snowing = s.snowing;
   int drawing = -1;  // which pipeline is set: 0 the plain one (or the shadows'), 1 leaves, 2 blended, ... (none at a round's start)
+  bool burntBound = false;  // [debrispile] (a baked death's wreck textures in slots 12..15: emptied again after)
   bool cardBound = false;  // [gpuscenery] the card's buffer in the bones' slot (each stretch begins with the bones there)
   for (size_t r = from; r < end; ++r) {
     const Run& run = runs_[r];
@@ -2505,6 +2540,14 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
       to.SetTexture(4, lod->secondary);
       to.SetTexture(22, lod->damageAlbedo);  // [grime] (none but on a unit with its damage set)
       to.SetTexture(23, lod->damageNormal);
+      // [debrispile] (a baked death's chunks: their wreck's textures; only for them, the slots emptied for what follows)
+      if (lod->heatMask || burntBound) {
+        to.SetTexture(12, lod->burntAlbedo);
+        to.SetTexture(13, lod->burntNormals);
+        to.SetTexture(14, lod->burntSpecular);
+        to.SetTexture(15, lod->burntSecondary);
+        burntBound = lod->heatMask;
+      }
     }
     to.SetVertexBuffer(lod->vertices);
     to.SetIndexBuffer(lod->indices);
@@ -2527,6 +2570,8 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
       counts->triangles += triangles;
     }
   }
+  if (burntBound)  // [debrispile]
+    for (int slot = 12; slot <= 15; ++slot) to.SetTexture(slot, {});
 }
 
 bool MeshRenderer::PrepareBlasts() {

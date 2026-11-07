@@ -228,6 +228,8 @@ class World {
   // reached its beat. Wreckage appears, a burnt tree turns black, a fallen one lies, what is
   // reclaimed goes.
   void AddPropEvents(const std::vector<FramePropEvent>& events);
+  // [debrispile] Whether a unit's wreck is drawn as its baked pile (its kind has a baked set: baked_debris.h; the debris on).
+  bool PileKind(const std::string& unitId);
   // Deep tracks (deepTracks): a frame's units press the ground as AddFrame has them do, for a host that draws them
   // itself (the effects test stand).
   void PressGround(const Frame& frame);
@@ -1057,6 +1059,9 @@ class World {
     double born = -1;
     bool wreck = false, hot = false;
     bool unitWreck = false;  // [groundfix] a unit's wreck (the game's DefaultWreckage): it presses the plants under it
+    // [debrispile] a unit's wreck whose kind has a baked set (baked_debris.h): drawn as its pile with the debris on, else as
+    // its model; on its own either way, never in its square's group (pileProps_)
+    bool pile = false;
   };
   struct Pickable {  // a unit of the frame, for UnitAt, UnitsAt and UnitsIn
     uint32_t id;
@@ -1091,6 +1096,11 @@ class World {
   size_t depositsAtOpen_ = 0;
   bool heightsRestored_ = false;
   std::unordered_map<uint32_t, PlacedProp> madeProps_;  // made during the game (wreckage), by entity id
+  // [debrispile] the made props drawn as their piles (PlacedProp::pile), by entity id: their units' kinds; whether the piles
+  // are drawn this frame (the debris on, the modern look: else their models); each told to the debris or drawn (ListPiles)
+  std::unordered_map<uint32_t, std::string> pileProps_;
+  bool pilesNow_ = false;
+  void ListPiles();
   FrameCombat combatPending_;  // AddCombat's, not yet due
   FrameCombat combat_;         // those due in the frame being added (AddFrame), for the looks that answer them
   void TakeDueCombat(double shown);

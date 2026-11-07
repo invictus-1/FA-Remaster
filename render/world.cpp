@@ -507,6 +507,7 @@ void World::RestartGame() {
   snowPropsMade_ = false;
   props_ = propsAtOpen_;
   madeProps_.clear();
+  pileProps_.clear();  // [debrispile]
   for (PropCell& cell : propCells_) {
     cell.ofMap.clear();
     cell.made.clear();
@@ -2085,6 +2086,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // (only the squares near what the camera sees: a square counts when it, widened by the largest
   // prop's reach and by room for a shadow thrown into the picture from outside it, is in view)
   propCellsSeen = propsAdded = 0;
+  pilesNow_ = blastDebris && look == Look::Modern && haveMap_ && !sidePicture;  // [debrispile] (as the debris is moved: Render)
   meshes.addingScenery = true;  // (trees and rocks: drawn before what is laid on the ground, Render)
   if (!propCells_.empty()) {
     const float margin = propReach_ + 30;
@@ -2108,7 +2110,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
           for (uint32_t id : cell.made) {
             auto made = madeProps_.find(id);
             // (a hot wreck is held out while it glows: added on its own with its heat, below)
-            if (made != madeProps_.end() && made->second.model && !made->second.hot) meshes.AddToGroup(cell.group, made->second.model, made->second.world);
+            // ([debrispile] a wreck drawn as its pile, or its model on its own: ListPiles)
+            if (made != madeProps_.end() && made->second.model && !made->second.hot && !made->second.pile)
+              meshes.AddToGroup(cell.group, made->second.model, made->second.world);
           }
           cell.changed = false;
         }
@@ -2120,6 +2124,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   for (uint32_t id : hotProps_) {
     auto made = madeProps_.find(id);
     if (made == madeProps_.end() || !made->second.model) continue;
+    if (made->second.pile && pilesNow_) continue;  // [debrispile] (its pile glows instead)
     const PlacedProp& p = made->second;
     Vec3 centre;
     float radius;
@@ -2129,6 +2134,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
     if (!sidePicture && !extraView) heat.Glowing(id, centre, radius, age, seconds, true);
   }
+  ListPiles();  // [debrispile]
   // [rockhits] the scarred rocks held out of their groups, each with its scars (rock_hits.h, RockHits::Tint; the original
   // look's shading passes them over); those taken away since (reclaimed, or under a structure) not
   for (uint32_t i : rocks.HeldList()) {
@@ -2510,6 +2516,13 @@ void World::AddPropEvents(const std::vector<FramePropEvent>& events) {
   for (const FramePropEvent& e : events) propEvents_.push_back(e);
 }
 
+bool World::PileKind(const std::string& unitId) {  // [debrispile]
+  debris.baked.files = vfs_;
+  debris.baked.models = &models;
+  debris.baked.heat = &heat;
+  return debris.baked.HasPile(unitId);
+}
+
 // The model of a prop as the simulation has it now: its blueprint's own, or the mesh a script set
 // in its place. The game makes a burnt version of every mesh under the name "<mesh>_wreck": a dead
 // unit's wreck is the prop DefaultWreckage with "/units/<id>/<id>_mesh_wreck", a burnt tree its
@@ -2573,7 +2586,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
       }
     }
     if (ofMap) props_[static_cast<size_t>(e.mapIndex)].model = nullptr;
-    else madeProps_.erase(e.id);
+    else madeProps_.erase(e.id), pileProps_.erase(e.id);  // ([debrispile] its pile goes with it: ListPiles tells it no more)
     ++propsGone;
     return;
   }
@@ -2600,6 +2613,15 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
     kept.unitWreck = low.find("defaultwreckage") != std::string::npos;  // [groundfix]
+    // [debrispile] a unit's wreck whose kind has a baked set (its mesh "/units/<id>/<id>_mesh_wreck"): drawn as its pile
+    kept.pile = false;
+    if (kept.unitWreck && kept.model) {
+      const size_t slash = low.rfind('/'), end = low.rfind("_mesh_wreck");
+      const std::string unit = slash != std::string::npos && end != std::string::npos && end > slash ? low.substr(slash + 1, end - slash - 1) : std::string();
+      kept.pile = !unit.empty() && PileKind(unit);
+      if (kept.pile) pileProps_[e.id] = unit;
+    }
+    if (!kept.pile) pileProps_.erase(e.id);
     // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck. Only
     // where a death's explosion went off there just before: the map's own scenery wrecks the game makes as it starts,
     // or later, are old and burnt nothing)
@@ -2775,6 +2797,32 @@ void World::RockHit(Vec3 at, float size, Vec3 way) {
     if (rocks.TakeDust(clock_))
       particles.Start(size < 0.8f ? rocks.dustSmall : rocks.dustLarge, t.at, Quat{}, std::clamp(0.6f + 0.5f * s, 0.6f, 2.2f) * (0.6f + 0.4f * t.strength));
   }
+}
+
+// [debrispile] The wrecks drawn as their piles (pileProps_, PlacedProp::pile): with the debris on and the modern look each told
+// to the baked debris every frame (it draws it, matched to its death: baked_debris.h; one no longer told is gone), else each
+// drawn as its model on its own (a hot one with its heat, hotProps_). The game's prop is the same either way.
+void World::ListPiles() {
+  const bool before = meshes.addingScenery;
+  meshes.addingScenery = true;  // (as the scenery's groups)
+  for (auto it = pileProps_.begin(); it != pileProps_.end();) {
+    auto made = madeProps_.find(it->first);
+    if (made == madeProps_.end() || !made->second.pile || !made->second.model) {
+      it = pileProps_.erase(it);
+      continue;
+    }
+    const PlacedProp& p = made->second;
+    if (pilesNow_) {
+      const Mat4& m = p.world;
+      const float yaw = std::atan2(m.m[0][2], m.m[2][2]);  // (its heading: where its front, the model's z, looks)
+      const float scale = Length(Vec3{m.m[0][0], m.m[1][0], m.m[2][0]});
+      debris.baked.Wreck(it->first, it->second, {m.m[0][3], m.m[1][3], m.m[2][3]}, Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)}, scale, p.born);
+    } else if (!p.hot) {
+      meshes.Add(p.model, p.world, {1, 1, 1});
+    }
+    ++it;
+  }
+  meshes.addingScenery = before;
 }
 
 // Hot metal (hot_metal.h): a fresh wreck is held out of its square's group of still scenery while it glows (the group's

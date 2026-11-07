@@ -614,7 +614,9 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
     // gone before its chunks were thrown (an aircraft that met the ground between two frames): where it was last
     if (!d.thrown && clock - d.seen < 2 && d.at.y - Ground(d.at.x, d.at.z) < 4) {
       d.thrown = true;
-      Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
+      // [debrispile] (a unit on the ground with a baked set: its set, as above; its wreck waits for it, BakedDebris::coming)
+      d.baked = !d.air && baked.Play(d.unit, d.model, d.at, d.turn, d.color, clock, DebrisStyleFor(d));
+      if (!d.baked) Throw(d.unit, d.model, {d.at.x, Ground(d.at.x, d.at.z) + 0.2f, d.at.z}, d.turn, d.color, d.velocity, it->first);
     }
     // (kept a while: a frame may leave a unit out for a moment)
     if (clock - d.seen > 5 || clock < d.seen - 1) it = dying_.erase(it);
@@ -623,8 +625,8 @@ void Debris::Watch(const Frame& frame, double clock, const std::function<const M
 }
 
 // [bakeddebris] (debris.h) The one place a death's style is chosen: the engine's killing hit (its damage type and overkill) is
-// to be read here; until then every death breaks.
-std::string Debris::DebrisStyleFor(const Dying&) { return "break"; }
+// to be read here; until then every death breaks ([debrispile] or dies in the style the viewer asks for: debrisStyle).
+std::string Debris::DebrisStyleFor(const Dying&) const { return debrisStyle.empty() ? "break" : debrisStyle; }
 
 void Debris::BeginShells() {
   ++shellStamp_;
@@ -842,6 +844,19 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
   // [bakeddebris] the baked deaths, on the same ground and clock
   baked.groundHeight = groundHeight;
   baked.hot = hot;
+  baked.smoke = smoke;  // [debrispile] (a vaporised unit's thrown chunks trail the same smoke)
+  baked.trail = kTrail;
+  // [debrispile] (a wreck waits for its death while a unit of its kind dying near it is still to be thrown)
+  baked.coming = [this](const std::string& unitId, Vec3 at) {
+    for (const auto& [id, d] : dying_) {
+      if (d.thrown || d.air || d.unit.size() != unitId.size() || std::hypot(d.at.x - at.x, d.at.z - at.z) > d.radius * 1.5f + 2.0f) continue;
+      bool same = true;
+      for (size_t i = 0; i < unitId.size() && same; ++i)
+        same = std::tolower(static_cast<unsigned char>(d.unit[i])) == std::tolower(static_cast<unsigned char>(unitId[i]));
+      if (same) return true;
+    }
+    return false;
+  };
   baked.Update(clock, eye, meshes);
   if (!meshes) return;
   // drawn as scenery (pressing no grass flat), those near enough to be more than a dot
