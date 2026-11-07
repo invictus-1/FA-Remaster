@@ -544,8 +544,9 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
     f.box[1] = low ? camera.target.y + kLowLayer * 0.5f : camera.target.y + edge * 0.25f;
     f.box[2] = camera.target.z;
     f.box[3] = low ? std::clamp(edge * 0.5f, 30.0f, 200.0f) : edge;
-    // (the fall is as fast as the box is large: seen from far it would otherwise stand still)
-    const float speed = flakes ? std::max(1.2f, edge * 0.05f) : std::max(9.0f, edge * 0.55f);
+    // [rainpace] (Chris's re-test, 2026-11-06: "the rain speeds up when zooming in and out"; it was as fast as the box is
+    // large, so that from far it did not stand still) one speed at every zoom
+    const float speed = flakes ? 2.5f : 30.0f;
     f.velocity[0] = speed * (flakes ? 0.25f : 0.18f);
     f.velocity[1] = -speed;
     f.velocity[2] = speed * 0.08f;
