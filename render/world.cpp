@@ -1534,6 +1534,31 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     decals.snowing = snow;
     const float cover = std::max({cloudCover, SetIn(rain) * (0.8f + 0.2f * rain), SetIn(snow) * (0.75f + 0.2f * snow), fog * 0.6f});  // ([onset])
     skyLight = SkyAt(timeOfDay, cover, skyTables && look == Look::Modern);
+    // [stormcells] (Chris, 2026-11-06: "lets do separate tall towers") a storm's sky dark of itself, slate grey, the sun's
+    // glow round it dimmed: with the 3D clouds' cells standing apart, what shows between them is a storm's sky, not a fair one
+    if (stormCells && volumetricClouds) {
+      const float t = std::clamp((rain - 0.6f) / 0.35f, 0.0f, 1.0f), s = t * t * (3 - 2 * t);
+      if (s > 0) {
+        auto slate = [&](Vec3 v, float dark) {
+          const float b = (v.x + v.y + v.z) / 3;
+          const Vec3 grey = Vec3{0.92f, 0.95f, 1.0f} * b;
+          return (v * (1 - 0.9f * s) + grey * (0.9f * s)) * (1 - dark * s);
+        };
+        skyLight.zenith = slate(skyLight.zenith, 0.55f);
+        skyLight.horizon = slate(skyLight.horizon, 0.35f);
+        // (the sky drawn behind the 3D clouds: toward the same grey, overhead's and the horizon's between)
+        skyLight.storm = 0.85f * s;
+        const Vec3 between = (skyLight.zenith + skyLight.horizon) * 0.5f;
+        skyLight.stormGrey = (between.x + between.y + between.z) / 3;
+        skyLight.glow = skyLight.glow * (1 - 0.75f * s);
+        // (the sky from tables: all of it the clouds' grey, darker)
+        skyLight.greyShare = skyLight.greyShare + (1 - skyLight.greyShare) * s;
+        skyLight.grey *= 1 - 0.45f * s;
+      }
+      air.storm = s;
+    } else {
+      air.storm = 0;
+    }
     Vec3 bolt{0, 0, 0};
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
       bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
