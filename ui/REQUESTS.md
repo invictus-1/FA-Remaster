@@ -1247,6 +1247,15 @@ beat 1099 and was still T1 at 3401 with only T1 units queued in between; he clic
 3401: the panel kept offering the T1 choices, so "T2 units shown late" is most likely this stale panel. Asked too:
 RequestRefreshUI in those two (and at the Stop dispatch, commands.cpp ~895, where our comment notes the original's).
 
+### 55. The game's start without the M28 freeze: its start-of-game work inside the load (2026-11-07, not blocking)
+From the interface chat. Chris decided this on 2026-10-28 (memory supcomlab-m28-start-into-load: "Move M28's work into
+load") and asked for it again on 2026-11-07 as one of four solo-player items. Today the world stands still for about
+3.5 s at beats 10-21 (FAF's nav mesh generation for M28 at beat 10, M28's SetupMap at beats 16 / 17 / 21), freezing the
+commander's warp-in mid-way. Ask: that work done during the load (the nav mesh and SetupMap's decisions bit for bit the
+same, our variant only, M28's licence kept), so the first beats run at their normal pace. The ui does NOT hold the
+loading screen past the load (Chris's rule); if the load gets longer, the loading screen shows it as usual. Tell me what
+you need from the interface (a progress note in the loading screen, a hook), if anything.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
