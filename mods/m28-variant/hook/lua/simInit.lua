@@ -39,6 +39,7 @@ local M28BeginSession = BeginSession
 function BeginSession()
     M28BeginSession()
     M28Events.OnGameStart()
+    import('/mods/m28-variant/lua/AI/M28VariantNavAhead.lua').GenerateAhead() --FA Remastered variant: the navigational mesh made ahead, while the game still loads (M28VariantNavAhead.lua)
 end
 
 local M28OldOnCreateArmyBrain = OnCreateArmyBrain

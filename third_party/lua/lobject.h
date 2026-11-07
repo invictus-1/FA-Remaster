@@ -314,6 +314,9 @@ typedef struct Table {
   Node *firstfree;  /* this position is free; all positions after it are full */
   GCObject *gclist;
   int sizearray;  /* size of `array' array */
+  unsigned int wstamp;  /* moho64: bumped by every store into the table (luaH_set, luaH_setnum, OP_SETTABLE's direct
+                        ** store, the collectors' clearing of a weak table): equal stamps, the same contents. In the
+                        ** struct's tail padding (64 bytes on a 64-bit build either way: the heap's sizes as before) */
 } Table;
 
 

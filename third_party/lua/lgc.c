@@ -302,6 +302,7 @@ static void cleartablekeys (GCObject *l) {
   while (l) {
     Table *h = gcotoh(l);
     int i = sizenode(h);
+    h->wstamp++;  /* (moho64: Table::wstamp) */
     lua_assert(h->marked & KEYWEAK);
     while (i--) {
       Node *n = gnode(h, i);
@@ -320,6 +321,7 @@ static void cleartablevalues (GCObject *l) {
   while (l) {
     Table *h = gcotoh(l);
     int i = h->sizearray;
+    h->wstamp++;  /* (moho64: Table::wstamp) */
     lua_assert(h->marked & VALUEWEAK);
     while (i--) {
       TObject *o = &h->array[i];

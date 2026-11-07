@@ -732,6 +732,58 @@ LUA_API int lua_gpg_peeki (lua_State *L, int idx, int n, const char **s, size_t 
 ** for the rest), into dst's array part made at once first (luaH_gpg_arrayfor: dst a new table, the values not nil).
 ** No collector check falls between those pairs, so the heap is the same after them.
 */
+LUA_API int lua_gpg_tablepairs (lua_State *L, int idx, lua_GpgPair *out, int cap) {
+  Table *h;
+  int i, n = 0;
+  StkId t = luaA_index(L, idx);
+  if (!ttistable(t)) return 0;
+  h = hvalue(t);
+  for (i = 0; i < h->sizearray; i++) {
+    const TObject *v = &h->array[i];
+    if (ttisnil(v)) continue;
+    if (n < cap) {
+      out[n].k = NULL;
+      out[n].kt = LUA_TNUMBER;
+      out[n].v = iscollectable(v) ? (const void *)gcvalue(v) : NULL;
+      out[n].vt = ttype(v);
+    }
+    n++;
+  }
+  for (i = 0; i < sizenode(h); i++) {  /* (lua_next's order: luaH_next) */
+    const Node *nd = gnode(h, i);
+    if (ttisnil(gval(nd))) continue;
+    if (n < cap) {
+      out[n].k = iscollectable(gkey(nd)) ? (const void *)gcvalue(gkey(nd)) : NULL;
+      out[n].kt = ttype(gkey(nd));
+      out[n].v = iscollectable(gval(nd)) ? (const void *)gcvalue(gval(nd)) : NULL;
+      out[n].vt = ttype(gval(nd));
+    }
+    n++;
+  }
+  return n;
+}
+
+LUA_API void lua_gpg_tablestamp (const void *t, unsigned *serial, unsigned *stamp) {
+  const Table *h = (const Table *)t;
+  *serial = h->serial;
+  *stamp = h->wstamp;
+}
+
+LUA_API const char *lua_gpg_strptr (const void *s, size_t *len) {
+  const TString *ts = (const TString *)s;
+  *len = ts->tsv.len;
+  return getstr(ts);
+}
+
+LUA_API void lua_gpg_pushgc (lua_State *L, const void *p, int type) {
+  lua_lock(L);
+  if (type == LUA_TTABLE) { sethvalue(L->top, (Table *)p); }
+  else if (type == LUA_TSTRING) { setsvalue2s(L->top, (TString *)p); }
+  else { setnilvalue(L->top); }
+  api_incr_top(L);
+  lua_unlock(L);
+}
+
 LUA_API void lua_gpg_copyi (lua_State *L, int dst, int src, const int *ix, int n) {
   Table *d, *s;
   int k;

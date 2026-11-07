@@ -327,6 +327,7 @@ static int valmarked_task (const TObject *o) {
 static void clearone (Table *h, int (*marked) (const TObject *)) {
   int i;
   if (!(h->marked & (KEYWEAK | VALUEWEAK))) return;  /* (no longer weak: traversed again at the atomic step) */
+  h->wstamp++;  /* (moho64: Table::wstamp; each weak table is cleared by one task) */
   if (h->marked & VALUEWEAK) {
     i = h->sizearray;
     while (i--) {

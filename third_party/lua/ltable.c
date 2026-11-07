@@ -384,6 +384,7 @@ Table *luaH_new (lua_State *L, int narray, int lnhash) {
   Table *t = luaM_new(L, Table);
   luaC_link(L, valtogco(t), LUA_TTABLE);
   t->serial = G(L)->nextserial++;
+  t->wstamp = 0;
   t->metatable = hvalue(defaultmeta(L));
   t->flags = cast(lu_byte, ~0);
   /* temporary values (kept only if some malloc fails) */
@@ -562,6 +563,7 @@ const TObject *luaH_get (Table *t, const TObject *key) {
 TObject *luaH_set (lua_State *L, Table *t, const TObject *key) {
   const TObject *p = luaH_get(t, key);
   t->flags = 0;
+  t->wstamp++;  /* (moho64: the caller stores into the slot returned) */
   if (p != &luaO_nilobject)
     return cast(TObject *, p);
   else {
@@ -575,6 +577,7 @@ TObject *luaH_set (lua_State *L, Table *t, const TObject *key) {
 
 TObject *luaH_setnum (lua_State *L, Table *t, int key) {
   const TObject *p = luaH_getnum(t, key);
+  t->wstamp++;  /* (moho64: the caller stores into the slot returned) */
   if (p != &luaO_nilobject)
     return cast(TObject *, p);
   else {

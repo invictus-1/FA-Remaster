@@ -2214,7 +2214,13 @@ void MotionTick(Sim& sim, Unit* u) {
       // CalcMoveLand 0x6c3180: SnapToGround runs when the unit moved AND is not Teleporting (state 19: a unit
       // in a transport's beam, whose task places it), or when motion+0x90 asks for it: 0x6c31b7 tests m+0x90 on its
       // own, so a unit standing still snaps too (a flattening under it, 0x74b35a), and clears it (0x6c31fa)
-      const bool beamed = u->unitStates.Has(US("Teleporting")) > 0 && !m.surfaceNext;
+      // CalcMoveWater 0x6c3480 has no such test (read: 0x6c34b0 a move -> the layer test -> SnapToGround 0x6c1cb0 at
+      // 0x6c355c, no IsUnitState): a unit on the water that still coasts under the beam is set back on the surface
+      // (height and tilt) after the beam placed it, as long as it moves. Seen (oracle recording of FAF 3840 pro replay
+      // 4v4_1): army 1's engineer 0x100023 (uel0105, Water layer) beamed up from 4626 while its last 0.004 / 0.0008
+      // of speed die away: the original stays at the surface (y 43.2, level) at 4626 and 4627 and rises from 4628,
+      // when it stands; ours took the beam's height and tilt at once.
+      const bool beamed = landCalc && u->unitStates.Has(US("Teleporting")) > 0 && !m.surfaceNext;
       // CalcMoveWater 0x6c3523: a unit that neither moved nor dives is still set on the water while its dive pitch
       // (m+0x68, CalcRollHack) dies away: |pitch|^2 > 1e-6 (so a surfaced submarine keeps a last trace of it)
       const Vec3& C = m.diveTilt;

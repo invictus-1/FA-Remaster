@@ -1890,6 +1890,8 @@ std::shared_ptr<UnitCommand> MakeStreamCommand(Sim& sim, const StreamIssueData& 
   if (c->fromStream) sim.streamCommands[d.id] = c;
   return c;
 }
+// (below, with IssueReclaim)
+static bool ReclaimOrderValid(lua_State* L, const Unit* u, Entity* t);
 }  // namespace
 
 // UNIT_IssueFactoryCommand 0x6f14d0 for a stream order (command_stream.md 5.5): the command goes to the rally
@@ -1986,6 +1988,13 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (sameOrderAgain(u)) continue;
     if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
     if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
+    // The Reclaim case (0x6f059c..0x6f0743, as IssueReclaim: ReclaimOrderValid): a unit outside RECLAIM (0xe204a8)
+    // refuses, its queue untouched by the clear. Seen (oracle recording of FAF 3840 pro replay 4v4_setons_1): at 3715
+    // army 4's player gives a Reclaim (clear) of the blip of army 3's 0x300024 to five units and the naval factory
+    // 0x40001d; the original's factory keeps building its BuildFactory queue, ours took the Reclaim.
+    if (d.type == static_cast<int>(CommandType::Reclaim) &&
+        !ReclaimOrderValid(sim.L(), u, const_cast<Entity*>(targetEntity)))
+      continue;
     if (RefusesTargetOutside(sim, u, target)) continue;
     if (RefusesWhileEnhancing(u, clear, d.type)) continue;
     if (MoveCaseType(d.type) && RefusesMoveOrder(sim, u, d.target.type != 0, &d.target.pos)) continue;

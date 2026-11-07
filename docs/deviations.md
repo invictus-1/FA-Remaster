@@ -299,6 +299,17 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   and merges in the new ones, sorted in C. The first version's comparator (`tostring` and `string.len` per
   comparison, every id sorted at every update) was 187 million calls and 16% of the Lua of a one-hour M28 game (B1).
   Anything that is not a plain digit string, or two ids with the same text, take that comparator still.
+  The cells' cache (2026-11-07, `Remastered.ReclaimCellTotals`, script/fastlib_reclaim.cpp): an update re-read every
+  entry of its cell (B1, 12,000 beats: 15,461 updates of 527 entries on average, 3.7 s), though 99.3% of them were as at
+  the cell's last update. Each cell now keeps its entries (key text, prop, the prop's write stamp, its handle's box,
+  the three values); an entry whose key, prop and stamp are the same and whose three fields are the prop's own is taken
+  from it, the rest read as before in `lua_next`'s order, liveness read again for every entry, and the totals summed as
+  before. The write stamp is the Lua VM's (`Table::wstamp`, lobject.h: every store into a table bumps it, in the
+  struct's padding, so no table grows), read through `lua_gpg_tablestamp`; the entries come from
+  `lua_gpg_tablepairs` (no call per entry). Same results by construction: `MOHO64_VERIFY_RECLAIM=1` runs the full
+  re-sum beside it at every update and stops at any bit of difference: none in B1 (12,000 beats, parallel order, 16
+  threads, 15,461 updates) and MP1 played with the fixes (20,000 beats, 10,159 updates); B1's fingerprints and Lua heap
+  identical to main's. B1: 3.7 s to 0.8 s.
 - **Why it is safe, what it changes:** the totals are FAF's, summed in a fixed order, and without the entries the
   collector would have cleared anyway. They only matter in a game with that AI.
 - **Tested:**
