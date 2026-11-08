@@ -526,16 +526,17 @@ struct DisplayMode {
   // The heads the program runs with, decided once at the start as the original's device is made once
   // (docs/ui-dualscreen.md 3.2; main.cpp): 1, or 2 with the second head, a window of its own of secondWidth x
   // secondHeight (the second screen's own size: full screen there; or the test window below). Every interface state
-  // makes a root frame per head. Its world view's picture waits for the renderer's second window (ui request 48 to the
-  // renderer): until then window 2 shows head 1's interface only (its world view black).
+  // makes a root frame per head. Window 2 is shown by the renderer's second window (its world view drawn there: the
+  // renderer's answer to ui request 48); without it (--gdi, or it failed) head 1's interface only, its world view black.
   int heads = 1;
   int secondWidth = 0, secondHeight = 0;
   // MOHO64UI_SECOND_WINDOW=WxH / --second-window WxH (tests, and a PC with one screen): head 1 is a framed window of
   // that size on the primary's screen, also beside a windowed primary. Ours.
   bool secondWindowTest = false;
-  // Whether the Secondary Adapter's list offers the other screens: where the PC has two screens or more (one screen:
-  // "Disabled" alone, as the original with one adapter). MOHO64UI_SECOND_HEAD=1 turns it on also with one screen, for
-  // tests.
+  // Whether the Secondary Adapter's list offers the other screens (where the PC has two screens or more; one screen:
+  // "Disabled" alone, as the original with one adapter): where the renderer's second window can show the second head's
+  // world (the renderer's picture in a window, not --gdi: main.cpp). MOHO64UI_SECOND_HEAD=1 turns it on also without
+  // (tests: headless runs have no window).
   bool secondHeadShown = false;
   // The screen the live window is on (its middle), as last looked at (after it opened and after each change of
   // mode); -1 without a window.

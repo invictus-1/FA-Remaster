@@ -809,8 +809,8 @@ void SetupPrimaryAdapterSettings(lua_State* L) {
 // READ (FA exe 0x8d26d0): "Command Line Override" alone (default "overridden") when the command line chose the
 // mode; else "Disabled", and when the primary is not a window (the argument, 0x8d27b7) each mode of adapter 1 at
 // least 1024x768, each once; its default "disabled" (0x8d29ec). Ours: every screen but the main one, with
-// DisplayMode::secondHeadShown (the test switch MOHO64UI_SECOND_HEAD=1; for every PC with two screens once the
-// renderer's request 48 is in). The choice applies at the next start
+// DisplayMode::secondHeadShown (where the renderer's second window can show the second head's world: its picture in
+// the window, not --gdi, main.cpp; or the test switch MOHO64UI_SECOND_HEAD=1). The choice applies at the next start
 // (FAF's option is restart = true; main.cpp's head rule, docs/ui-dualscreen.md 3.2).
 void SetupSecondaryAdapterSettings(lua_State* L, bool windowed) {
   const DisplayMode& display = Display();
@@ -821,8 +821,8 @@ void SetupSecondaryAdapterSettings(lua_State* L, bool windowed) {
     return;
   }
   states.push_back({"<LOC _Disabled>", "disabled"});
-  // (2026-11-08, the lead: with two screens the list waits for the renderer's request 48, the second window's world;
-  // until then only the test switch lists them, so no player picks a second screen whose games show a black world)
+  // (2026-11-08, the lead: no player picks a second screen whose games show a black world: listed only where the
+  // renderer's second window draws it, DisplayMode::secondHeadShown)
   if (!windowed && display.secondHeadShown)
     for (size_t i = 1; i < display.screens.size(); ++i) states.push_back(ScreenState(display, static_cast<int>(i), 1));
   SetOptionStates(L, "secondary_adapter", states, "disabled");

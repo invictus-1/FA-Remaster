@@ -431,11 +431,15 @@ struct GameSession::Picture : WorldSource {
                : v.kind == WorldViewSpec::Kind::Inset ? render::WorldPicture::ViewKind::Inset
                                                       : render::WorldPicture::ViewKind::Main;
       p.every = std::max(v.every, 1);
+      p.window = v.window;  // ([head2] 1: the second window's, its rect in that window's pixels)
       list.push_back(p);
     }
     picture.SetViews(list);
     return true;
   }
+  // [head2] The second head's world view goes to the renderer (a view of window 1) only while its second window is on
+  // (GameSession::UseSecondWindow): the game's picture in the window.
+  bool SecondWindowOn() const override { return direct && picture.SecondWindowOn(); }
   int ViewAt(float x, float y) override { return picture.ViewAt(x, y); }
   bool ViewProject(int view, const float world[3], float* x, float* y) override {
     return picture.ViewProject(view, {world[0], world[1], world[2]}, x, y);
@@ -763,6 +767,7 @@ struct GameSession::WindowPicture {
   int drawnW = 0, drawnH = 0;  // (the window's size as last drawn: the start camera's aspect, ServeLoad)
   bool lowLatency = false;     // (as the renderer's picture starts: SetLowLatency)
   int layerW = 0, layerH = 0;  // the interface layer's size as last given (0: none yet)
+  int layer2W = 0, layer2H = 0;  // [head2] the second window's layer's (GiveSecondLayer)
   // The picture over the window drawn by the card (SetBackdrop): none, the interface's (CardSink: the loading
   // screen's film, the "IN TRANSIT" cover), or black fading out over the menus' map just swapped in (it comes in
   // from black, as the read-back way's background does, rather than at once after the seconds of black), or the
@@ -2583,8 +2588,91 @@ void UseGameWindow(render::WorldPicture& picture, void* window) {
   picture.UseHostSurface(w->SurfaceExtensions(), [w](void* instance) { return w->CreateSurface(instance); }, width, height);
 #endif
 }
+// [head2] The second head's window on the picture (the renderer's answer to ui request 48): its HWND on Windows
+// (UseSecondWindow); elsewhere the SDL window's Vulkan surface (UseSecondHostSurface; UNTESTED, as the SDL path).
+// Before Open it is made with the device (the answer then comes with Open: SecondWindowOn).
+bool UseSecondOn(render::WorldPicture& picture, void* window, int width, int height) {
+#ifdef _WIN32
+  return picture.UseSecondWindow(window, width, height);
+#else
+  auto* w = static_cast<Window*>(window);
+  return picture.UseSecondHostSurface([w](void* instance) { return w->CreateSurface(instance); }, width, height);
+#endif
+}
 }  // namespace
 #endif
+
+bool GameSession::UseSecondWindow(void* handle, int width, int height) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  window2_ = handle, window2W_ = width, window2H_ = height;
+  if (!windowPicture_) return false;  // (none yet, or it failed: EnsureWindowPicture asks for it with the next one)
+  render::WorldPicture& p = windowPicture_->picture;
+  windowPicture_->layer2W = windowPicture_->layer2H = 0;
+  if (!UseSecondOn(p, handle, width, height) || !p.SecondWindowOn()) {
+    Logf(LogLevel::Warning, "moho64ui: the renderer's second window did not open (%s): head 1's interface is shown by the plain copy, its world black",
+         p.SecondWindowError().c_str());
+    return false;
+  }
+  return true;
+#else
+  (void)handle, (void)width, (void)height;
+  return false;
+#endif
+}
+
+void GameSession::CloseSecondWindow() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (windowPicture_) windowPicture_->picture.CloseSecondWindow(), windowPicture_->layer2W = windowPicture_->layer2H = 0;
+#endif
+  window2_ = nullptr;
+}
+
+bool GameSession::SecondWindowOn() const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  return window2_ && windowPicture_ && windowPicture_->picture.SecondWindowOn();
+#else
+  return false;
+#endif
+}
+
+bool GameSession::GiveSecondLayer(const SoftwareTarget& target, const IntRect& changed) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!SecondWindowOn()) return false;
+  WindowPicture& wp = *windowPicture_;
+  // (as GiveLayer: the changed part, all of it the first time and after a change of size; a new size also resizes the
+  // second window's swap chain, the renderer's answer)
+  const int w = target.Width(), h = target.Height();
+  IntRect part = changed.Intersect(IntRect{0, 0, w, h});
+  if (wp.layer2W != w || wp.layer2H != h) part = IntRect{0, 0, w, h}, wp.layer2W = w, wp.layer2H = h;
+  if (part.empty()) part = IntRect{};
+  wp.picture.SetSecondInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
+  return true;
+#else
+  (void)target, (void)changed;
+  return false;
+#endif
+}
+
+bool GameSession::CaptureSecondWindow(const std::string& path) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!SecondWindowOn()) return false;
+  capture2To_ = path;
+  capture2Rgba_.clear();
+  windowPicture_->picture.CaptureNextSecondWindowFrame(&capture2Rgba_);
+  return true;
+#else
+  (void)path;
+  return false;
+#endif
+}
+
+bool GameSession::SecondWindowDrawnLastFrame() const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  return SecondWindowOn() && windowPicture_->picture.SecondWindowDrawnLastFrame();
+#else
+  return false;
+#endif
+}
 
 void GameSession::WaitForNextFrame() {
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -2628,12 +2716,16 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   made->picture.SetVulkan(vulkan);                                  // (the player's Graphics API)
   made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
   UseGameWindow(made->picture, window);
+  if (window2_) UseSecondOn(made->picture, window2_, window2W_, window2H_);  // ([head2] made with the device)
   std::string error;
   if (!made->picture.Open(vfs_, "", &error)) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture did not open (%s): the interface is shown without the renderer", error.c_str());
     windowPictureFailed_ = true;
     return false;
   }
+  if (window2_ && !made->picture.SecondWindowOn())
+    Logf(LogLevel::Warning, "moho64ui: the renderer's second window did not open (%s): head 1's interface is shown by the plain copy, its world black",
+         made->picture.SecondWindowError().c_str());
   Looks().rayTracingSupported = made->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
   windowPicture_ = std::move(made);
   Logf(LogLevel::Info, "moho64ui: the window's picture (no map yet) opened in %.2f s",
@@ -2907,6 +2999,10 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (freezeAsked_ && drawn) TakeFrozen(captureRgba_, w, h);
   else if (freezeAsked_ && ++freezeWaits_ >= 3) TakeFrozen({}, w, h);  // (no frame of the world drawn: held black)
   if (!captureTo_.empty()) SaveWindowCapture(captureRgba_, w, h, captureTo_), captureTo_.clear();
+  // ([head2] the second window's picture, once the renderer has read it back: the frame it was next drawn in)
+  if (!capture2To_.empty() && wp.layer2W > 0 &&
+      capture2Rgba_.size() == static_cast<size_t>(wp.layer2W) * static_cast<size_t>(wp.layer2H) * 4)
+    SaveWindowCapture(capture2Rgba_, wp.layer2W, wp.layer2H, capture2To_), capture2To_.clear();
 #else
   (void)target;
   (void)changed;

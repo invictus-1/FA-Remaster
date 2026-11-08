@@ -889,6 +889,7 @@ WorldView* MainView(Control* c);  // further down: the first world view that is 
 uint32_t g_viewsGathered = 0;
 int g_insetView = -1;                     // (the follow camera's number among them as last gathered; -1: none)
 std::vector<WorldViewSpec> g_viewsGiven;  // (the views as last gathered: moho64ui_Views)
+size_t g_viewsToSource = 0;               // ([head2] how many of them, from the first, the source was given)
 
 class WorldView : public Control {
  public:
@@ -984,15 +985,19 @@ class WorldView : public Control {
   // views in their order.
   // [head2] The world views of the other heads (the original's second head: FAF's CreateSecondView, the camera
   // "CameraHead2" on GetFrame(1)) are gathered too, each a full view (Split) with `window` = its head, its place in that
-  // head's pixels; they are kept on this side (g_viewsGiven, moho64ui_Views) and NOT returned for the source: the
-  // renderer has no second window yet (renderer request 48). Until it has, such a view has no picture (EnsurePicture)
-  // and its input works by the plain view from above (ProjectPoint, Unproject), and nothing changes for head 0.
+  // head's pixels. While the source's second window is on (WorldSource::SecondWindowOn: the renderer's answer to ui
+  // request 48) they are views of the picture as the split screen's are, after head 0's (before the follow camera's
+  // inset): drawn in the second window, picked by their view numbers (ViewProject, ViewGroundAt, ViewUnitAt). Else they
+  // are kept on this side only (g_viewsGiven, moho64ui_Views), have no picture (EnsurePicture) and their input works by
+  // the plain view from above (ProjectPoint, Unproject); nothing changes for head 0 then.
   std::vector<WorldViewSpec> GatherViews(lua_State* L, std::vector<WorldView*>* views) {
     UserState* user = UserState::From(L);
     views->assign(1, this);
     CollectOthers(user->ui().GetFrame(0), views);
     std::vector<WorldView*> otherHeads;
     for (int head = 1; head < user->ui().NumFrames(); ++head) CollectOthers(user->ui().GetFrame(head), &otherHeads);
+    WorldSource* source = user->config().world;
+    if (source && source->SecondWindowOn()) views->insert(views->end(), otherHeads.begin(), otherHeads.end()), otherHeads.clear();
     ++g_viewsGathered;
     viewIndex_ = 0, viewsGathered_ = g_viewsGathered;
     const UserState::FollowCamState& f = user->followCam;
@@ -1000,6 +1005,7 @@ class WorldView : public Control {
     std::vector<WorldViewSpec> specs;
     g_insetView = -1;
     g_viewsGiven.clear();
+    g_viewsToSource = 0;
     auto specOf = [L](WorldView* v, WorldViewSpec::Kind kind) {
       Rect r;
       v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -1011,7 +1017,7 @@ class WorldView : public Control {
       s.window = v->Head();
       return s;
     };
-    // (the other heads' views, after the picture's own: kept for moho64ui_Views; renderer request 48)
+    // (the other heads' views without the second window, after the picture's own: kept for moho64ui_Views)
     auto keepOtherHeads = [&]() {
       if (otherHeads.empty()) return;
       if (g_viewsGiven.empty()) g_viewsGiven.push_back(specOf(this, WorldViewSpec::Kind::Main));
@@ -1042,6 +1048,7 @@ class WorldView : public Control {
       specs.push_back(s);
     }
     g_viewsGiven = specs;
+    g_viewsToSource = specs.size();
     keepOtherHeads();
     return specs;
   }
@@ -1117,12 +1124,17 @@ class WorldView : public Control {
     UserState* user = UserState::From(L);
     WorldSource* source = user->config().world;
     if (!source || miniMap) return false;
-    // [head2] A world view on another head (the second head's CameraHead2): no picture until the renderer has a second
-    // window to draw it in (renderer request 48); its spec is kept by the main view's GatherViews.
-    if (Head() != 0) return false;
+    // [head2] A world view on another head (the second head's CameraHead2): its picture is the main view's, drawn in the
+    // second window, while the source's second window is on (below, as the split screen's); else none (its spec kept
+    // by the main view's GatherViews), nor one kept from when it was on.
+    if (Head() != 0 && !source->SecondWindowOn()) {
+      pixels_ = nullptr;
+      return false;
+    }
     // [views] Another world view than the main one (the split screen's right): its picture is the main view's, which
     // draws it as one of its views (GatherViews); none while it is not among them.
     WorldView* main = MainView(user->ui().GetFrame(0));
+    if (!main && Head() != 0) return false;  // ([head2] no main view on head 0 to draw it)
     if (main && main != this) return main->EnsurePicture(L) && ViewNumber() > 0 && pixels_ != nullptr;
     Rect r;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -1684,8 +1696,8 @@ class WorldView : public Control {
       for (const Outline& o : outlines) DrawMainViewOutline(L, target, r, o.corners);
       return;
     }
-    // ([head2] a world view of the second head has no picture until the renderer's second window, request 48: only the
-    // box of a selection being drawn is drawn there)
+    // ([head2] a world view of the second head without the renderer's second window has no picture: only the box of a
+    // selection being drawn is drawn there)
     const bool picture = EnsurePicture(L);
     if (!picture && Head() == 0) return;
     GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
@@ -4224,6 +4236,9 @@ int l_ViewsForTests(lua_State* L) {
   int n = 0;
   for (const WorldViewSpec& s : g_viewsGiven) {
     lua_newtable(L);
+    lua_pushstring(L, "given");  // ([head2] handed to the picture's source: false for a second head's view without its window)
+    lua_pushboolean(L, static_cast<size_t>(n) < g_viewsToSource);
+    lua_rawset(L, -3);
     const std::pair<const char*, float> numbers[4] = {{"x", static_cast<float>(s.x)}, {"y", static_cast<float>(s.y)},
                                                       {"width", static_cast<float>(s.width)}, {"height", static_cast<float>(s.height)}};
     for (const auto& [key, value] : numbers) {
@@ -4257,6 +4272,17 @@ int l_ViewAtForTests(lua_State* L) {
   WorldSource* source = UserState::From(L)->config().world;
   lua_pushnumber(L, source ? source->ViewAt(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2))) : -1);
   return 1;
+}
+// [head2] moho64ui_ViewNumber(view) -> the world view's number among the picture's views (0: the main one, or the
+// picture has one view), -1 when it has no picture (a second head's view without the renderer's second window); and
+// whether the picture's second window is on (WorldSource::SecondWindowOn). (For the tests.)
+int l_ViewNumberForTests(lua_State* L) {
+  WorldView* v = View(L);
+  const bool picture = v->EnsurePicture(L);
+  lua_pushnumber(L, picture ? v->ViewNumber() : -1);
+  WorldSource* source = UserState::From(L)->config().world;
+  lua_pushboolean(L, source && source->SecondWindowOn());
+  return 2;
 }
 }  // namespace
 
@@ -4367,6 +4393,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_FollowCamJump", l_FollowCamJump);
   lua_register(L, "moho64ui_Views", l_ViewsForTests);
   lua_register(L, "moho64ui_ViewAt", l_ViewAtForTests);
+  lua_register(L, "moho64ui_ViewNumber", l_ViewNumberForTests);
   SetGlobal(L, "SetInvertMidMouseButton", l_SetInvertMidMouseButton);
   SetGlobal(L, "GetMouseScreenPos", l_GetMouseScreenPos);
   SetGlobal(L, "CreatePrefetchSet", l_CreatePrefetchSet);

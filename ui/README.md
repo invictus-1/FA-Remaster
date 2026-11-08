@@ -330,11 +330,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   place (kept in the preferences as `Windows.Main.Previous.width` / `height`, the original's keys;
   1024x768 at first). The lobby's "Windowed mode" checkbox works through the same command.
   "Secondary Adapter" (`SC_SecondaryAdapter <windowed>`, 0x8d37c0, which FAF's options.lua sends
-  whenever the primary's choice changes; the list as the original's 0x8d26d0) lists only "Disabled":
-  the original's second head (a second full-screen window with FAF's multihead.lua second world
-  view, camera "CameraHead2") is not built, as it needs a second picture of the renderer's; with
-  `MOHO64UI_SECOND_HEAD=1` (tests) it lists the other screens, and a choice kept in the profile is
-  only logged at the start. Tests: `ui/tests/screens.lua` (the lists, no window;
+  whenever the primary's choice changes; the list as the original's 0x8d26d0) lists "Disabled" and,
+  where the renderer's second window can show it (its picture in a window, not `--gdi`), the other
+  screens (`MOHO64UI_SECOND_HEAD=1` forces the list, for tests). A screen chosen there opens the
+  original's second head at the next start, beside a full-screen primary: a second full-screen
+  window with FAF's multihead.lua world view of the camera "CameraHead2", drawn by the renderer's
+  second window (docs/ui-dualscreen.md; `MOHO64UI_SECOND_WINDOW=WxH` makes it a framed window for
+  tests). Tests: `ui/tests/dualhead.lua`, `ui/tests/screens.lua` (the lists, no window;
   `MOHO64UI_SCREENS=2560x1440@240,1920x1080@60` makes up screens) and `ui/tests/screens_window.lua`
   (a live window moved from screen to screen, then started on the one kept).
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,

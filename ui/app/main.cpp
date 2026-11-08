@@ -622,9 +622,18 @@ int main(int argc, char** argv) {
   // and the window opens on the screen chosen (the original's device took adapter 0 only).
   // MOHO64UI_SCREENS=2560x1440@240,1920x1080@60 (tests without a window): those screens, side by
   // side, in place of the PC's; MOHO64UI_SECOND_HEAD=1: the Secondary Adapter lists the screens.
+  // [head2] The Secondary Adapter lists the other screens (on a PC with two or more: keymap.cpp
+  // SetupSecondaryAdapterSettings) where the second head's world can be shown: the renderer's picture in the window
+  // (built with it, a window, not --gdi), whose second window draws it (the renderer's answer to ui request 48: Direct3D
+  // 12 and Vulkan both). Not probed here: the second window is made only once a second head is chosen; should it not
+  // open, the log says why and head 1 shows its interface without the world (GameSession::UseSecondWindow). INFERRED rule
+  // (ours): the original lists adapter 1's modes whenever the PC has one.
   ui::DisplayMode& display = ui::Display();
   display.overridden = windowed && modeGiven;
   display.secondHeadShown = std::getenv("MOHO64UI_SECOND_HEAD") != nullptr && std::string(std::getenv("MOHO64UI_SECOND_HEAD")) == "1";
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (windowed && directWindow) display.secondHeadShown = true;
+#endif
   display.screens.clear();
   if (const char* fake = std::getenv("MOHO64UI_SCREENS")) {
     int x = 0;
@@ -1241,6 +1250,13 @@ int main(int argc, char** argv) {
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
       hooks.waitForFrame = [&]() { session.WaitForNextFrame(); };
+      // [head2] The second head's window: the renderer's second window on the window's picture (GameSession)
+      hooks.secondOpened = [&](void* handle, int w, int h) { return session.UseSecondWindow(handle, w, h); };
+      hooks.secondOn = [&]() { return session.SecondWindowOn(); };
+      hooks.secondLayer = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.GiveSecondLayer(layer, changed); };
+      hooks.secondDrawn = [&]() { return session.SecondWindowDrawnLastFrame(); };
+      hooks.secondCapture = [&](const std::string& path) { return session.CaptureSecondWindow(path); };
+      hooks.secondClosing = [&]() { session.CloseSecondWindow(); };
       // The game's beats on a thread of their own, the window showing the world meanwhile
       // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
       session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;

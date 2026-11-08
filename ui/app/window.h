@@ -164,6 +164,19 @@ struct WindowHooks {
   // Whether the renderer's frame generation makes a picture between each two drawn this frame (the statistics then
   // count the shown ones too); unset: never.
   std::function<bool()> frameGenerationOn;
+  // [head2] The second head's window (run_window.cpp opens it after `opened`; docs/ui-dualscreen.md 3.3): `secondOpened`
+  // hears its handle (as `opened`'s) and size and answers whether the renderer shows it (GameSession::UseSecondWindow);
+  // `secondOn`: whether it does now (the window's picture may be made anew, or fail); `secondLayer`: head 1's interface
+  // (transparent where its world view's picture shows) with the part drawn anew, given before `present`, which shows
+  // both windows; `secondDrawn`: the renderer drew it in the last `present`; `secondCapture`: its next picture shown
+  // saved as a PNG (checks); `secondClosing`: before the window goes. Unset, or `secondOn` false: head 1's interface goes
+  // to the window by the plain copy (Window::Present), its world view black.
+  std::function<bool(void* handle, int width, int height)> secondOpened;
+  std::function<bool()> secondOn;
+  std::function<void(const SoftwareTarget& interfaceLayer, const IntRect& changed)> secondLayer;
+  std::function<bool()> secondDrawn;
+  std::function<bool(const std::string& path)> secondCapture;
+  std::function<void()> secondClosing;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,

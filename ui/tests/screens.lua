@@ -3,8 +3,10 @@
 -- "Windowed" and every screen of the PC (the main one first, its key the original's
 -- "width,height,rate", another's "width,height,rate,N"); choosing one asks for a full screen
 -- there. "Secondary Adapter" (the original's second head) lists "Disabled" and, where the PC has
--- two screens or more (or with MOHO64UI_SECOND_HEAD=1), the other screens. Checked from the script
--- side, front end, no window, in the case named after "--" (/screenscase):
+-- two screens or more and the renderer's second window can show the second head (its picture in a
+-- window, not --gdi), or with MOHO64UI_SECOND_HEAD=1, the other screens. Checked from the script
+-- side, front end, no window (so the switch is the only way to the list here), in the case named
+-- after "--" (/screenscase):
 --   pc:     the PC's own screens (one or more)
 --     moho64ui --init <init.lua> --prefs <copy of menu.prefs> --stage setup --size 1920x1080 --quiet
 --              --lua ui/tests/screens.lua --frames 8 --log out.log -- /screenscase pc
@@ -29,7 +31,7 @@ end
 local case = (GetCommandLineArg("/screenscase", 1) or {})[1]
 check("a case is named (-- /screenscase pc|three|second|again)", case == "pc" or case == "three" or case == "second" or case == "again", true)
 local madeUp = case == "three" or case == "second" or case == "again"
-local secondHead = case == "second" or case == "again"  -- (the switch; the only way to the list until renderer 48)
+local secondHead = case == "second" or case == "again"  -- (the switch; without a window the only way to the list)
 
 local video = {}
 for _, item in import('/lua/options/options.lua').options.video.items do
@@ -54,7 +56,7 @@ local function textsOf(list)
 end
 
 local n = moho64ui_Looks().screens
-local listed = secondHead  -- (the Secondary Adapter lists the other screens: the switch only until renderer 48)
+local listed = secondHead  -- (the Secondary Adapter lists the other screens: headless, the switch only)
 LOG("screens: " .. tostring(n) .. "; primary: " .. textsOf(states('primary_adapter')) .. "; secondary: " .. textsOf(states('secondary_adapter')))
 check("at least one screen", n ~= nil and n >= 1, true)
 if madeUp then

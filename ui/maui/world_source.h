@@ -239,9 +239,9 @@ struct WorldViewSpec {
   Kind kind = Kind::Main;
   int every = 2;  // (an inset: drawn every that many frames)
   // [head2] The window (head) the view is shown in: 0 the main one; 1 the original's second head (FAF's multihead.lua
-  // CreateSecondView: a world view of the camera "CameraHead2" on GetFrame(1)), its place in that head's pixels. Kept
-  // on the interface's side only until the renderer has a second window (ui request 48 to the renderer): the world
-  // view hands the source window 0's views alone (maui/worldview.cpp GatherViews).
+  // CreateSecondView: a world view of the camera "CameraHead2" on GetFrame(1)), its place in that head's pixels. Given
+  // to the source only while its second window is on (WorldSource::SecondWindowOn; the renderer's answer to ui request
+  // 48); else kept on the interface's side (maui/worldview.cpp GatherViews: moho64ui_Views).
   int window = 0;
   bool operator==(const WorldViewSpec& o) const {
     return x == o.x && y == o.y && width == o.width && height == o.height && kind == o.kind && every == o.every && window == o.window &&
@@ -263,6 +263,9 @@ class WorldSource {
     (void)views, (void)windowW, (void)windowH;
     return false;
   }
+  // [head2] Whether the source shows views of window 1 (WorldViewSpec::window) in the second head's window: the
+  // renderer's second window is on (GameSession::UseSecondWindow). Off: the second head's world view has no picture.
+  virtual bool SecondWindowOn() const { return false; }
   // The view at a point of the window (an inset before what it lies over); -1: none. Without views: 0.
   virtual int ViewAt(float x, float y) {
     (void)x, (void)y;

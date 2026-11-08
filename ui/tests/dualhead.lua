@@ -2,8 +2,9 @@
 -- its own size from 0,0 (FA exe 0x84cc50), the mouse by head (UiEvent::head, maui/input.cpp), FAF's multihead.lua on
 -- frame 1 (ShowLogoInHead1 in the menus, CreateSecondView in a game: a world view of the camera CameraHead2), the
 -- world cover on every frame (uiutil.CreateWorldCover). Headless: the second head is made by MOHO64UI_HEADS=2 and
--- MOHO64UI_HEAD1_SIZE=1280x720 (no window; its world view has no picture until the renderer's second window, request
--- 48, so its input goes by the plain view from above). The case after "--" (/dualcase):
+-- MOHO64UI_HEAD1_SIZE=1280x720 (no window, so no renderer's second window: its world view has no picture and its input
+-- goes by the plain view from above). In a window (case "window") the renderer's second window shows it: its world
+-- view is a view of the picture (window 1) and is picked by perspective. The case after "--" (/dualcase):
 --   front: the front end, two heads
 --     MOHO64UI_HEADS=2 MOHO64UI_HEAD1_SIZE=1280x720 moho64ui --init <init.lua> --prefs <a copy> --stage frontend
 --              --size 1920x1080 --quiet --lua ui/tests/dualhead.lua --frames 400 --log out.log -- /dualcase front
@@ -12,6 +13,11 @@
 --              --game-lua ui/tests/dualhead.lua --frames 2400 --log out.log -- /dualcase game
 --   one:   a game without the switches: one head, as before
 --     moho64ui ... (as game, no MOHO64UI_HEADS) -- /dualcase one
+--   window: a game in a live window with the test window for head 1 (the renderer's second window; pinned, ~1 min)
+--     MOHO64UI_SECOND_WINDOW=960x540 moho64ui ... --window --size 1280x720 --stage setup --session <session_ai_cheats.lua>
+--              --seed 7 --game-lua ui/tests/dualhead.lua --frames 3000 --log out.log -- /dualcase window
+--     (MOHO64UI_SECOND_CAPTURE=<png> MOHO64UI_CAPTURE_FRAME=<n>: window 2's picture read back by the renderer;
+--     MOHO64UI_OVERLAY_LOG=1: the overlay's frame lines, with "window 2: N a second", in the log)
 -- (the world's picture is needed for the game cases: not with --no-world)
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
@@ -142,7 +148,10 @@ local function Game()
     end
     check("the views: the main one and head 1's (window 1)", table.getn(views) .. " " .. tostring(main ~= nil) .. " " .. tostring(second ~= nil), "2 true true")
     check("head 1's view at its place in head 1's pixels", second and (second.x .. "," .. second.y .. " " .. second.width .. "x" .. second.height .. " " .. second.kind), "0,0 1280x720 split")
-    check("the picture's view at the main window's middle is still 0 (head 1's not given to the renderer: its request 48)", moho64ui_ViewAt(960, 540), 0)
+    check("the picture's view at the main window's middle is still 0", moho64ui_ViewAt(960, 540), 0)
+    check("head 1's view is not given to the picture (no window: no renderer's second window)", second and second.given, false)
+    local number, on = moho64ui_ViewNumber(view)
+    check("and has no picture", tostring(number) .. " " .. tostring(on), "-1 false")
 
     local cam, cam2 = GetCamera('WorldCamera'), GetCamera('CameraHead2')
     check("CameraHead2 is a camera", cam2 ~= nil, true)
@@ -250,6 +259,89 @@ local function Game()
     check("the dialog gone: its covers too", moho64ui_ControlAt(640, 360, 1) == view, true)
 end
 
+-- In a live window, the renderer's second window on (MOHO64UI_SECOND_WINDOW=960x540, --size 1280x720)
+local function WindowGame()
+    WaitSeconds(5)
+    local MH = import("/lua/ui/game/multihead.lua")
+    local cdr = GetArmyAvatars()[1]
+    local pos = cdr:GetPosition()
+    ConExecute("remaster_stats on")  -- (the overlay's frame line: how often window 2 is drawn; MOHO64UI_OVERLAY_LOG logs it)
+    check("two heads, the second the test window's 960x540", moho64ui_Looks().heads .. " " .. moho64ui_Looks().secondWidth .. "x" .. moho64ui_Looks().secondHeight, "2 960x540")
+    local view = MH.view
+    check("CreateSecondView made a world view on frame 1", view and view:GetRootFrame() == GetFrame(1), true)
+    check("filling frame 1", view and (view.Left() .. "," .. view.Top() .. " " .. view.Width() .. "x" .. view.Height()), "0,0 960x540")
+    WaitFrames(5)
+    local number, on = moho64ui_ViewNumber(view)
+    check("the picture's second window is on", on, true)
+    check("head 1's view is a view of the picture (it has a picture, a number after the main view's)", number ~= nil and number > 0, true)
+    LOG("TEST note: head 1's view is the picture's view " .. tostring(number))
+    local second
+    for _, v in moho64ui_Views() do
+        if v.window == 1 then second = v end
+    end
+    check("given to the renderer with window 1, a full view at its place in head 1's pixels",
+        second and (tostring(second.given) .. " " .. second.x .. "," .. second.y .. " " .. second.width .. "x" .. second.height .. " " .. second.kind), "true 0,0 960x540 split")
+    check("the main window's middle is still the main view", moho64ui_ViewAt(640, 360), 0)
+    check("the main view is view 0", moho64ui_ViewNumber(import("/lua/ui/game/worldview.lua").viewLeft), 0)
+
+    -- picking on head 1 by its perspective picture: CameraHead2 on the commander, the main camera elsewhere
+    local cam, cam2 = GetCamera('WorldCamera'), GetCamera('CameraHead2')
+    cam:SnapTo({pos[1] + 150, pos[2], pos[3] + 150}, {3.14159, 1.1, 0}, 70)
+    cam2:SnapTo(pos, {3.14159, 1.0, 0}, 60)
+    WaitFrames(10)
+    -- (a picture in perspective: the upper half of the view covers more ground than the lower; from above it is even)
+    local top, mid, bottom = UnProject(view, {480, 60}), UnProject(view, {480, 270}), UnProject(view, {480, 480})
+    local far, near_ = math.abs(top[3] - mid[3]), math.abs(mid[3] - bottom[3])
+    LOG(string.format("TEST note: head 1's ground: upper half %.1f, lower half %.1f map units deep", far, near_))
+    check("head 1's ground is picked in perspective (its upper half deeper than its lower)", near_ > 0 and far / near_ > 1.15, true)
+    local s = view:Project(pos)
+    local sx, sy = math.floor(s.x), math.floor(s.y)
+    LOG(string.format("TEST note: the commander on head 1 at %d,%d", sx, sy))
+    check("the commander projects into head 1's view", sx > 0 and sx < 960 and sy > 0 and sy < 540, true)
+    SelectUnits(nil)
+    moho64ui_MouseMove(sx, sy, 1)
+    WaitFrames(2)
+    moho64ui_MouseButton("Left", true, sx, sy, "", 1)
+    moho64ui_MouseButton("Left", false, sx, sy, "", 1)
+    local sel = GetSelectedUnits()
+    check("a left click on the commander on head 1 selects him (the picture's pick)", sel and table.getn(sel) == 1 and sel[1] == cdr, true)
+    local w = GetMouseWorldPos()
+    check("the place under the mouse on head 1 is his", near(w[1], pos[1], 3) and near(w[3], pos[3], 3), true)
+    local gx, gy = sx + 80, sy - 60
+    local ground = UnProject(view, {gx, gy})
+    moho64ui_MouseMove(gx, gy, 1)
+    WaitFrames(2)
+    moho64ui_MouseButton("Right", true, gx, gy, "", 1)
+    moho64ui_MouseButton("Right", false, gx, gy, "", 1)
+    WaitSeconds(0.5)
+    local order = (cdr:GetCommandQueue() or {})[1]
+    check("a right click on head 1 gives a move", order and order.type, "Move")
+    check("to the ground under the click by head 1's picture", order and order.position and near(order.position[1], ground[1], 1.5) and near(order.position[3], ground[3], 1.5), true)
+    IssueUnitCommand({cdr}, "Stop")
+    SelectUnits(nil)
+    WaitFrames(5)
+    s = view:Project(cdr:GetPosition())
+    sx, sy = math.floor(s.x), math.floor(s.y)
+    moho64ui_MouseMove(sx - 40, sy - 40, 1)
+    moho64ui_MouseButton("Left", true, sx - 40, sy - 40, "", 1)
+    moho64ui_MouseMove(sx + 40, sy + 40, 1)
+    moho64ui_MouseButton("Left", false, sx + 40, sy + 40, "", 1)
+    sel = GetSelectedUnits()
+    check("a box round him on head 1 selects him (the picture's units in a rectangle)", sel and sel[1] == cdr, true)
+    SelectUnits(nil)
+    moho64ui_MouseMove(640, 360, 0)
+    -- a resize of window 2's head: its view follows, still the picture's
+    moho64ui_Resize(800, 450, 1)
+    WaitFrames(10)
+    second = nil
+    for _, v in moho64ui_Views() do
+        if v.window == 1 then second = v end
+    end
+    check("head 1 resized: its view given at the new size", second and (second.width .. "x" .. second.height .. " " .. tostring(second.given)), "800x450 true")
+    moho64ui_Resize(960, 540, 1)
+    WaitFrames(10)
+end
+
 local function OneHead()
     WaitSeconds(5)
     local MH = import("/lua/ui/game/multihead.lua")
@@ -260,11 +352,20 @@ local function OneHead()
     check("GetFrame(1) is nothing", GetFrame(1), nil)
 end
 
-check("a case is named (-- /dualcase front|game|one)", case == "front" or case == "game" or case == "one", true)
+-- (window, windowone: in a live window; after the checks 15 s of the game for the log's frame numbers, both heads'
+-- cameras still, then the program ends itself: windowone, one head, is the numbers' comparison)
+local windowed = case == "window" or case == "windowone"
+check("a case is named (-- /dualcase front|game|one|window|windowone)", case == "front" or case == "game" or case == "one" or windowed, true)
 check("the case's state (front end or game)", inGame, case ~= "front")
 ForkThread(function()
     if case == "front" then FrontEnd()
     elseif case == "game" then Game()
-    elseif case == "one" then OneHead() end
+    elseif case == "one" or case == "windowone" then OneHead()
+    elseif case == "window" then WindowGame() end
+    if windowed then
+        ConExecute("remaster_stats on")
+        WaitSeconds(15)
+    end
     LOG("TEST done: " .. failed .. " failed")
+    if windowed then ExitApplication() end
 end)
