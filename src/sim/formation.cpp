@@ -535,7 +535,14 @@ int CellOfZ(const Unit* u, float z) { return FormCellCoord(z - FpSizeZ(u) * 0.5f
 void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
   Sim& sim = *F.sim;
   if (Gone(u) || F.type == 15 || F.scale < 1.0f || LayerIndex(u) == 1) return;
-  int size = std::max(FpSizeX(u), FpSizeZ(u));
+  // FindSlotFor 0x59aa20 takes the unit's BLUEPRINT footprint (GetBlueprint vt+0x1c, bp+0xd8: 0x59aa9f..0x59aade) for
+  // its size (the map margin, the reservations) and its fit test SFootprint::FitsAt 0x720aa0 (0x59ab10, the cell of
+  // that footprint); only COORDS_CanMoveAt 0x7212b0 asks GetFootprint 0x678880 (0x7212b6), the AltFootprint while the
+  // unit has it. Seen: FAF 3840 pro replay 4v4_5 7864, army 2's 0x2000cd (forced water-only AltFootprint) in a 4-unit
+  // formation Move: the original keeps its slot (606,339), whose path ends short (ProblemGettingToGoal at 7865, probe
+  // v3840g_4v4_5_problem); ours found the slot unfit for the water-only footprint and took (606,345).
+  const NamedFootprint& bfp = u->motion.bp->footprint;
+  int size = std::max<int>(1, std::max<int>(bfp.sizeX, bfp.sizeZ));
   int layer = LayerIndex(u);
   // MOHO64_DEBUG_FORMSPOT=<unit id>: every spot asked for that unit and which test refused it
   static const long dbgSpot = getenv("MOHO64_DEBUG_FORMSPOT") ? atol(getenv("MOHO64_DEBUG_FORMSPOT")) : -1;
@@ -543,10 +550,10 @@ void AdjustPosition(Formation& F, Unit* u, float* px, float* pz) {
     int cx = CellOfX(u, x), cz = CellOfZ(u, z);
     if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot)
       Logf(LogLevel::Info, "formspot %u unit %u at %.3f %.3f cell (%d,%d): fits %d can move %d within %d free %d (%zu reserved)",
-           sim.tick(), u->id, x, z, cx, cz, LandCellFits(sim, u, cx, cz) ? 1 : 0, CanMoveAt(sim, u, cx, cz) ? 1 : 0,
+           sim.tick(), u->id, x, z, cx, cz, LandFitsAtBp(sim, u, x, z) ? 1 : 0, CanMoveAt(sim, u, cx, cz) ? 1 : 0,
            IsWithinMap(sim, u, x, z, static_cast<float>(size)) ? 1 : 0, IsFree(F, x, z, size, layer) ? 1 : 0,
            F.reservations.size());
-    return LandCellFits(sim, u, cx, cz) && CanMoveAt(sim, u, cx, cz) && IsWithinMap(sim, u, x, z, static_cast<float>(size)) &&
+    return LandFitsAtBp(sim, u, x, z) && CanMoveAt(sim, u, cx, cz) && IsWithinMap(sim, u, x, z, static_cast<float>(size)) &&
            IsFree(F, x, z, size, layer);
   };
   float x = *px, z = *pz;
