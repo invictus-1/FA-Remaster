@@ -1896,9 +1896,15 @@ bool HasNextUnitToLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
   return true;
 }
 
-// cell(p) of the transport's footprint, as a world point (the move goals are 1x1 cell rects)
+// cell(p) of the transport's footprint, as a world point (the move goals are 1x1 cell rects). A landing move (goal
+// layer Land) is NewMoveTask 0x6190a0 (the ferry's state 0: 0x60f685..0x60f6c3, the home cell by the footprint, ctor
+// arguments 0, 0, 1): its first SetGoal (0x6190c9) at that cell already turns the desired facing toward it when it is
+// farther than StartTurnDistance, before the move task's ctor takes the free spot (PrepareMove), as LandingMove. Seen:
+// 4v4_setons_1 (FAF 3840) 4926, army 2's transport 0x200077 (Guard of the ferry beacon 0x20006c, 12.9 away) comes down
+// to its spot (876.5, 413), 5.2 away: the original turns toward the beacon as it comes down; ours kept its heading.
 void FlyTo(Sim& sim, Unit* T, TransportTaskData& d, Vec3 p, int layer) {
   AirSetGoal(sim, T, p, sim.tick(), layer);
+  if (layer == 1) AirSetFirstGoal(sim, T, p);
   d.childMove = true;  // the move task sets Moving
   SetState(T, US("Moving"), true);
   AirSpeedThroughEvent(sim, T);
