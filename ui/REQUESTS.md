@@ -1255,6 +1255,9 @@ commander's warp-in mid-way. Ask: that work done during the load (the nav mesh a
 same, our variant only, M28's licence kept), so the first beats run at their normal pace. The ui does NOT hold the
 loading screen past the load (Chris's rule); if the load gets longer, the loading screen shows it as usual. Tell me what
 you need from the interface (a progress note in the loading screen, a hook), if anything.
+DONE 2026-11-07: engine batch 100 (the nav mesh built in BeginSession; answer in docs/engine-answers.md) + ui 2fd8011e
+(beats 1-29 run in the load) + 0f92b45b (the map handed the session at tick 0). Launch to screen 9.8 / 11.3 s (was
+13.1 / 11.9 s); held past the load 0.07-0.10 s (was 2.1-2.3 s).
 
 ## To the renderer track
 
