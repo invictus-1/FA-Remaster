@@ -723,6 +723,11 @@ bool Debris::Shell(uint32_t id, uint32_t blueprint, const std::string& path, Vec
       if (from && from->model && fragments) own = fragments(from->unit, from->model);
       if (from && from->baked) {  // [bakeddebris] (its baked set is its debris: not drawn)
         c.look = nullptr;
+      } else if (from && Ground(at.x, at.z) < waterLevel && now - from->died > 1.0) {
+        // [confetti] (Chris, 2026-11-07: "debris for units should happen the second it dies ... for navy it explodes into
+        // debris and then sinks. We don't want the debris to act like confetti": a sinking ship's later explosions throw the
+        // game's shells up again and again; only those of its death itself are drawn)
+        c.look = nullptr;
       } else if (!own.empty()) {  // (one of its own fragments, at its own size)
         const Piece& p = own[std::min(static_cast<size_t>(Random() * static_cast<float>(own.size())), own.size() - 1)];
         c.look = p.model;
