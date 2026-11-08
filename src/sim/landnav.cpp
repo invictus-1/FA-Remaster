@@ -1238,6 +1238,24 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
   return Fits(sim, u, CellOf(u, x, z));
 }
 
+// The fit test of FindFreeSpot 0x62b200 (the point, then each ring candidate): func_LocationIsFree 0x720d90 on the
+// unit's BLUEPRINT (CAiNavigatorLand::SetGoal hands it GetBlueprint, 0x5a401c -> edi), whose footprint is the
+// blueprint's own Footprint (bp+0xd8, the sizes at 0x720dcf / 0x720de8), not the AltFootprint GetFootprint 0x678880
+// gives a unit with +0x124 / +0x125 set; the cells around it are still stepped and converted with GetFootprint's.
+// Seen: FAF 3840 pro replay 6v6_2 6722, army 5's Salem 0x500067 (urs0201: AltFootprint water only, forced by its
+// script at 6721) leaves its naval factory for the rally cell (855,573): the original keeps that cell and drives
+// straight out; ours found the cell unfit for the water-only footprint, took (851,569) and turned at once.
+static bool FreeSpotFits(Sim& sim, const Unit* u, const PathCell& c) {
+  if (!(u->altFootprintNav || u->altFootprintForced)) return Fits(sim, u, c);
+  const MotionBlueprint& b = Bp(u);
+  if (tl_navDry && b.gridOwner != &sim.navigation()) throw NavDryStop{};
+  const PathGrid* g = FootprintGrid(sim, b);
+  if (!g) return true;
+  const float x = c.x + SX(u) * 0.5f, z = c.z + SZ(u) * 0.5f;
+  const float bx = x - std::max<int>(1, b.footprint.sizeX) * 0.5f, bz = z - std::max<int>(1, b.footprint.sizeZ) * 0.5f;
+  return g->Passable(static_cast<int>(std::nearbyint(bx)), static_cast<int>(std::nearbyint(bz)));
+}
+
 // The rings of the free-spot search 0x62b200 around a cell that does not fit: square rings stepping by the
 // footprint size, up to 900 candidates. true: *gc is the first cell where the unit fits; false: *gc unchanged.
 static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc, bool wholeMap) {
@@ -1259,7 +1277,7 @@ static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc, bool wholeMap) 
         float m = static_cast<float>(step);
         if (!(x - m >= 0 && z - m >= 0 && x + m < W && z + m < H)) continue;
         PathCell c = CellOf(u, x, z);
-        if (Fits(sim, u, c)) {
+        if (FreeSpotFits(sim, u, c)) {
           *gc = c;
           found = true;
           break;
@@ -1275,7 +1293,7 @@ static bool FreeSpotRings(Sim& sim, const Unit* u, PathCell* gc, bool wholeMap) 
 // teleport's: the whole map, 0x60ad60 pushes 1).
 bool LandFreeSpot(Sim& sim, const Unit* u, Vec3* pos) {
   PathCell c = CellOf(u, pos->x, pos->z);
-  if (!Fits(sim, u, c) && !FreeSpotRings(sim, u, &c, true)) return false;
+  if (!FreeSpotFits(sim, u, c) && !FreeSpotRings(sim, u, &c, true)) return false;
   *pos = WorldOf(sim, u, c);
   return true;
 }
@@ -1314,7 +1332,7 @@ void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool 
     return;
   }
   // the free-spot spiral: the cell itself, then square rings stepping by the footprint size
-  if (single && !Fits(sim, u, gc)) FreeSpotRings(sim, u, &gc, Sim::UseWholeMap(u->army));
+  if (single && !FreeSpotFits(sim, u, gc)) FreeSpotRings(sim, u, &gc, Sim::UseWholeMap(u->army));
   if (single && same && n.goal[0] == gc.x && n.goal[1] == gc.z) {  // (0x5a4056: the spot found is the one it has)
     n.speedThroughGoal = speedThrough;
     return;

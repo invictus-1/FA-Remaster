@@ -999,7 +999,12 @@ void GenerateFormation(Sim& sim, UnitCommand& c, Unit* u) {
   // original's Update puts lastPos at each unit's own cell centre ((285.5, 399.5) for 0x100015), the lost-target
   // branch finds it in reach and ends the task in its first beat; ours centred the formation on the order's stored
   // point, put each unit at its slot 18-28 away, and kept the order.
-  const Vec3 pos = c.targetId ? (sim.FindEntity(c.targetId) ? CommandPosGun(sim, c) : vm::NaNVec()) : c.pos;
+  // The entity a player's order holds is the army's recon blip, which outlives its unit (CommandPosGun): only when
+  // the blip is gone too is the weak entity null.
+  bool held = c.targetId && sim.FindEntity(c.targetId);
+  if (!held && c.targetId && c.targetViaBlip && c.targetBlipRef && !c.targetFakeId)
+    if (const Entity* b = sim.FindEntity(c.targetBlipRef)) held = b->kind == Entity::Kind::Blip;
+  const Vec3 pos = c.targetId ? (held ? CommandPosGun(sim, c) : vm::NaNVec()) : c.pos;
   auto F = NewFormation(sim, units, name, pos.x, pos.z, c.formQw, c.formQx, c.formQy, c.formQz,
                         static_cast<int>(c.type), c.formScale);
   c.form = F;

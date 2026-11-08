@@ -2983,6 +2983,11 @@ void Sim::Tick() {
       u->motion.prevPosSet = true;
     }
     if (u->parentId && u->attachFull) {  // transport cargo: after every unit moved
+      // Unit::MotionTick calls UpdateInfoCache 0x6a9810 (0x6a9069) for every unit, attached or not, before the motion's
+      // fuel step: a unit hanging on a parent takes its top speed (u+0x594) too. Seen: FAF 3840 pro replay 6v6_1, army
+      // 7's 0x70002d (out of fuel, speed mult 0.35: 5.25) docks on a staging platform at 7783; its script's OnGotFuel
+      // sets the mult back to 1 and the original's top speed is 15 from 7784 while it still hangs there; ours kept 5.25.
+      UpdateInfoCache(*this, u);
       if (!u->beingBuilt) FuelTick(*this, u);  // CUnitMotion::ProcessFuelLevels (attached units too)
       return kTurnCargo;  // (its economy: turnEconomy's cargo case)
     }
