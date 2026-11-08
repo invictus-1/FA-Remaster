@@ -332,6 +332,8 @@ class ModelCache {
   // faction's remastered effects (its wakes) whoever else its army has. Read once a kind; "" not known (then the army's,
   // Effects::FactionOf).
   const std::string& Faction(const std::string& blueprintId);
+  // [debriscommander] Whether the unit's blueprint file lists that category (upper case, as "COMMAND"); read once a kind.
+  bool HasCategory(const std::string& blueprintId, const std::string& category);
   // The capsule a personal shield lies on round a model (made once a model): along its longest side, its
   // section a superellipse (|x/a|^3.2 + |y/b|^3.2 = 1), rounded at both ends, a fifth of its smaller half
   // width off it all round; in the model's own units, so it is placed as the model is. Its one level is a
@@ -448,6 +450,7 @@ class ModelCache {
   std::unordered_map<std::string, std::unique_ptr<Model>> models_;
   std::unordered_map<std::string, PersonalShieldLook> personalShields_;  // by unit id
   std::unordered_map<std::string, std::string> factions_;  // [wakes] by unit id (Faction)
+  std::unordered_map<std::string, std::vector<std::string>> categories_;  // [debriscommander] by unit id (HasCategory)
   std::unordered_map<const Model*, std::unique_ptr<Model>> shells_;      // by the model they lie round
   std::unordered_map<std::string, std::string> unitPaths_;  // unit id -> its blueprint file
   // every mod's unit blueprint file by its name ("<id>_unit.bp"), the first in path order: one search of

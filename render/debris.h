@@ -195,7 +195,8 @@ class Debris {
     Quat turn;
     double seen = 0, died = 0;  // when it was seen last; first seen dead
     uint32_t stamp = 0;
-    bool thrown = false, air = false, water = false;  // ([debrisairsea] water: died on or in the water)
+    bool thrown = false, air = false, water = false;
+    std::vector<std::string> hiddenBones;  // [debriscommander] (its bones hidden as it died: upgrades not built)  // ([debrisairsea] water: died on or in the water)
     bool baked = false;            // [bakeddebris] (its baked set plays: the game's shells near it not drawn)
     std::string unit;              // its blueprint id
     const Model* model = nullptr;  // as drawn

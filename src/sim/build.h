@@ -113,6 +113,8 @@ const BuildTask* PatrolChildTask(const BuildTask& t);  // (sim/commands.cpp: the
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
+// A task's walk made by NewMoveTask 0x6190a0 (CUnitMoveTask ctor 0x6180e0 with its rally override; build.cpp MoveTaskWalk).
+void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal);
 // CUnitReclaimTask's command listener 0x620160: the target of the command it listens to changed.
 void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd);
 void RepairTaskCommandEvent(Sim& sim, Unit* h, BuildTask& ch, const UnitCommand& c);

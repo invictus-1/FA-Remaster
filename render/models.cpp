@@ -779,6 +779,23 @@ const std::string& ModelCache::Faction(const std::string& blueprintId) {  // [wa
   return faction;
 }
 
+bool ModelCache::HasCategory(const std::string& blueprintId, const std::string& category) {  // [debriscommander]
+  const std::string id = Lower(blueprintId);
+  auto known = categories_.find(id);
+  if (known == categories_.end()) {
+    std::vector<std::string>& list = categories_[id];
+    const std::string& path = UnitBlueprintPath(id);
+    auto text = path.empty() ? std::optional<std::string>() : vfs_->ReadFile(path);
+    BpValue bp;
+    if (text && ReadBlueprintFile(*text, &bp))
+      for (size_t k = 0; k < bp["Categories"].items.size(); ++k) list.push_back(bp["Categories"].Item(k).StringOr(std::string()));
+    known = categories_.find(id);
+  }
+  for (const std::string& c : known->second)
+    if (c == category) return true;
+  return false;
+}
+
 Vec3 OnShell(const Model& shell, Vec3 rest) {
   const Model::ShellShape& s = shell.shellShape;
   const float scale = shell.scale > 0 ? shell.scale : 1;

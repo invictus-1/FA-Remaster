@@ -166,6 +166,7 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
     }
     Track t;
     t.bone = static_cast<uint32_t>(index);
+    for (const JsonValue& f : c["from"].items) t.from.push_back(f.StringOr(std::string()));  // [debriscommander]
     for (const JsonValue& k : c["keys"].items) {
       if (k.items.size() < 7) continue;
       float n[7];
@@ -275,7 +276,7 @@ std::unique_ptr<BakedDebris::Style> BakedDebris::ReadStyle(const Model& chunks, 
 }
 
 bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, const Quat& turn, Vec3 color, double clock, const std::string& style,
-                       Vec3 fall) {
+                       Vec3 fall, const std::vector<std::string>* hidden) {
   if (!unit || !unit->ok) return false;
   Set* set = SetOf(unitId);
   if (!set) return false;
@@ -309,7 +310,8 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
   const float across = std::hypot(fall.x, fall.z);
   if (s->cls == 1 && across > 1) {
     forward = Vec3{fall.x, 0, fall.z};
-    if (s->impactSpeed > 0) d->stretch = std::clamp(across / s->impactSpeed, 0.5f, 1.5f);
+    // ("impact.speed" is the bake's, in the model's own units a second, as its keys are: in world units by the unit's scale)
+    if (s->impactSpeed > 0) d->stretch = std::clamp(across / (s->impactSpeed * std::max(unit->scale, 1e-4f)), 0.5f, 1.5f);
   }
   const float yaw = std::atan2(forward.x, forward.z);
   d->heading = Quat{0, std::sin(yaw * 0.5f), 0, std::cos(yaw * 0.5f)};
@@ -332,6 +334,27 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
   d->bones.resize(s->tracks.size());
   d->trails.assign(s->tracks.size(), 0);  // [debrispile]
   d->centre = d->at;
+  // [debriscommander] (a chunk of parts the unit did not have - an upgrade not built - left out)
+  d->left.assign(s->tracks.size(), 0);
+  if (hidden && !hidden->empty())
+    for (size_t c = 0; c < s->tracks.size(); ++c) {
+      const std::vector<std::string>& from = s->tracks[c].from;
+      bool all = !from.empty();
+      for (const std::string& b : from) {
+        bool found = false;
+        for (const std::string& h : *hidden) found = found || Lower(h) == Lower(b);
+        all = all && found;
+      }
+      d->left[c] = all ? 1 : 0;
+    }
+  {
+    int left = 0;
+    for (uint8_t l : d->left) left += l;
+    if (left > 0 && !set->leftTold) {  // (once a kind)
+      set->leftTold = true;
+      printf("render: %s: %d of its baked chunks left out (parts it did not have)\n", Lower(unitId).c_str(), left);
+    }
+  }
   if (played == 0) printf("render: %s: its baked debris (%s) first played at %.3f s\n", Lower(unitId).c_str(), style.c_str(), clock);
   deaths_.push_back(std::move(d));
   ++played;
@@ -340,7 +363,8 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
 
 int BakedDebris::Playing() const {
   int n = 0;
-  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < std::max(d->settled, d->style->settled) ? 1 : 0;
+  // ([confetti] in flight while thrown: the slow sinking after it, chunk by chunk down to the bed, is not counted)
+  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < d->style->settled ? 1 : 0;
   return n;
 }
 
@@ -564,7 +588,7 @@ void BakedDebris::Update(double clock, Vec3 eye, MeshRenderer* meshes) {
       bone.bone = t.bone;
       bone.position[0] = placed.x, bone.position[1] = placed.y, bone.position[2] = placed.z;
       bone.orientation[0] = q.x, bone.orientation[1] = q.y, bone.orientation[2] = q.z, bone.orientation[3] = q.w;
-      bone.hidden = own >= 1 || (d.unseen && t.stray);  // [debrispile]
+      bone.hidden = own >= 1 || (d.unseen && t.stray) || (c < d.left.size() && d.left[c]);  // [debrispile] [debriscommander]
       at[c] = d.at + Rotate(d.heading, placed);
       sum += at[c];
       // [debrispile] (VAPORISE: the biggest thrown trail the debris's smoke while they fly)

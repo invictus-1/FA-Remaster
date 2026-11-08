@@ -744,6 +744,8 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
 
 }  // namespace
 
+void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) { MoveTaskWalk(sim, u, goal); }
+
 // ---- tasks ---------------------------------------------------------------------------------------
 
 namespace {
@@ -2826,8 +2828,18 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   // the original's other three (0x200002, 0x200008, 0x200009), later in the command stage, keep Capture through 2377
   // and end at 2378; ours ended them at once.
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  // The held entity is the order's blip for a player's order (+0x44): it stays while the army keeps the blip, also when
+  // the unit it stood for is gone (destroyed: our goal reference no longer resolves); the task then goes on toward the
+  // blip. Seen: 4v4_4 (FAF 3840) 5535, army 7's engineer 0x70004a reaches its Capture of the blip 0x3040000e (stream
+  // 5211; the unit it named, of army 4, destroyed since; the id is another factory's by then): the original walks off
+  // toward the blip (Capture x1 [Moving]); ours found no target and ended the order.
+  if (!e && t.targetViaBlip && !t.targetFakeId && t.targetBlipRef)
+    if (Entity* b = sim.FindEntity(t.targetBlipRef); b && b->kind == Entity::Kind::Blip) e = b;
   Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
-  if (!e || (T && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
+  // 0x604422..0x60445b (read): the capturable byte (attributes +0x69, vt+0x40) is asked only when the held entity is a
+  // unit (vt+0x10); a player's order holds the army's recon BLIP of the unit, and a blip is asked nothing.
+  const bool heldAsUnit = T && !(t.targetViaBlip && !t.targetFakeId);
+  if (!e || (heldAsUnit && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
     PushObject(L, u);
     sim.CallMethod(L, u, "OnStopCapture", 1);
     return kTaskDone;
@@ -2992,10 +3004,14 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     t.capRequest->live = false;
     t.capRequest.reset();
   }
+  // 0x60513c..0x6051ed (read): the focus link (+0x4d0) and +0x4d8 unlinked, the unit state bit 0x04000000 of +0x4a0
+  // (Capturing) cleared and the work progress (+0x2ac) 0, with no test of the unit's life. Seen: 4v4_setons_1 (FAF 3840)
+  // 4707, army 5's engineer 0x500035 is killed capturing (its queue empties): the original's record has no Capturing
+  // from that beat on; ours kept it to the end.
+  if (u->focusId == t.goalId) u->focusId = 0;
+  u->unitStates.Erase(US("Capturing"));
+  u->workProgress = 0;
   if (Alive(u)) {
-    if (u->focusId == t.goalId) u->focusId = 0;
-    u->unitStates.Erase(US("Capturing"));
-    u->workProgress = 0;
     SetArmAimTarget(sim, u, Vec3{});
     if (t.moving) {
       t.moving = false;
@@ -3657,6 +3673,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->order = "Capture";
       t->goalId = c.targetId;
       t->targetViaBlip = c.targetViaBlip;  // (its CAiTarget holds the blip: CaptureStep's spot search)
+      t->targetBlipRef = c.targetBlipRef;  // (the blip itself, which outlives its unit: CaptureStep)
       // the ctor 0x603f90 first makes its own CAiTarget of the order's entity (UpdateTarget 0x5d55b0 at 0x604020):
       // one Unit::PickTargetPoint draw for a unit (or a unit's blip) with AI.TargetBones, the value unused. Seen:
       // Engineers 2272, three engineers given Capture of a blip at 2271 draw 0x6aaf94 once each as their tasks start
@@ -3933,7 +3950,13 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     Entity* e = sim.FindEntity(t.goalId);
     if (e && e->kind == Entity::Kind::Unit) static_cast<Unit*>(e)->unitStates.Erase(US("BeingReclaimed"));
   }
-  if (t.reclaimStarted && Alive(u)) {
+  // (No test of the builder's life: the dtor's 0x62035f..0x620363 -> 0x620110 -> RunScript 0x605600 "OnStopReclaim" asks
+  // only the task's started byte +0x5c. So a reclaimer killed at work tells its script too, and FAF's OnStopReclaim
+  // brings the prop's ReclaimLeft to its fraction (Prop.UpdateReclaimLeft). Seen: 2v2_5 (FAF 3840) 5334, army 1's
+  // engineer 0x100023, patrolling, is killed after five steps on the tree group 0x2ff070ae (fraction 0.2647); the group
+  // splits at 5352 (Prop.SplitOnBonesByName: MaxMassReclaim x ReclaimLeft x 2 / count) and army 2's 0x20007f reclaims one
+  // of its palms at 5842: the original books E 0.6 M 0.1235 (ReclaimLeft 0.2647), ours booked E 2.2667 M 0.4667 (1).)
+  if (t.reclaimStarted && u->HasLuaObject()) {
     // the target as the task's weak pointer holds it (0x620110 -> 0x605600 -> 0x6057d0: the entity's Lua object while
     // the pointer is set, else nil; no test of a Destroy), so a target destroyed this beat, not yet deleted, is passed.
     // Seen: Skirmish 2300, army 3's engineers 0x300019, 0x300022 and 0x300020 reclaim army 4's 0x40001a; 0x300022
@@ -3958,7 +3981,15 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     u->unitStates.Erase(US("Reclaiming"));
     u->unitStates.Erase(US("Repairing"));
     u->workProgress = 0;
-    if (walking) FreeWalkRect(u);  // (the walking child's dtor, 0x618891, has no test of the unit's life)
+    // The walking child's dtor 0x618700 has no test of the unit's life: Moving off (0x6187bd), the navigator's AbortMove
+    // (0x618884, when its table byte +0x90 says so; a kill's ClearCommandQueue does), whose MakeIdle -> ResetPathState
+    // 0x5ad9c0 takes PathFinding and ProblemGettingToGoal off, then FreeOgridRect (0x618891). Seen: 2v2_2 (FAF 3840)
+    // 6349, army 0's engineer 0x23 killed on its walk to a wall site (BuildMobile, Moving + ProblemGettingToGoal): the
+    // original's record loses ProblemGettingToGoal in the kill's beat; ours kept it until the unit was gone.
+    if (walking) {
+      t.moving = false;
+      EndMoveChild(u);
+    }
   }
   if (Alive(u)) {
     u->unitStates.Erase(US("Reclaiming"));
