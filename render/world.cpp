@@ -2131,6 +2131,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     float radius;
     Sphere(p.model, p.world, &centre, &radius);
     const float age = static_cast<float>(clock_ - p.born), seconds = heat.WreckSeconds(radius);
+    if (!GlowShown(p, centre)) {  // [fogglow] (a wreck the army never saw the unit of, out of sight: cold, no light, no smoke)
+      meshes.Add(p.model, p.world, {1, 1, 1}, 1);
+      continue;
+    }
     heatTint_ = HotMetal::Tint(age, seconds);
     meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
     if (!sidePicture && !extraView) heat.Glowing(id, centre, radius, age, seconds, true);
@@ -2610,7 +2614,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     // (hot metal: when it appeared, kept through its changes, and whether it is a unit's wreck: the game's
     // DefaultWreckage with the unit's "_mesh_wreck")
     const double born = kept.born >= 0 ? kept.born : static_cast<double>(e.tick) * 0.1;
-    const bool hot = kept.hot;
+    const bool hot = kept.hot, glowKnown = kept.glowKnown;  // ([fogglow] kept through its changes)
     kept = placed;
     kept.born = born;
     kept.hot = hot;
@@ -2627,6 +2631,15 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
       if (kept.pile) pileProps_[e.id] = unit;
     }
     if (!kept.pile) pileProps_.erase(e.id);
+    // [fogglow] (made now: whether its unit was ever seen; a change keeps what was decided)
+    if (e.kind == FramePropEvent::Create && kept.unitWreck && kept.model && sight.On()) {
+      Vec3 centre;
+      float radius;
+      Sphere(kept.model, kept.world, &centre, &radius);
+      kept.glowKnown = WreckKnown(centre, radius, born);
+    } else if (e.kind != FramePropEvent::Create) {
+      kept.glowKnown = glowKnown;
+    }
     // [plants] (a unit's fresh wreck: its death burnt the ground round it; a burnt tree's mesh is no unit's wreck. Only
     // where a death's explosion went off there just before: the map's own scenery wrecks the game makes as it starts,
     // or later, are old and burnt nothing)
@@ -2836,7 +2849,9 @@ void World::ListPiles() {
 // instances are kept from frame to frame; a hot wreck's heat changes every frame), and added on its own with its heat
 // (Begin); once it has cooled, or hot metal is switched off, it goes back into the group.
 void World::HoldHot(uint32_t id, PlacedProp* prop) {
-  if (!hotOn_ || prop->hot || !prop->wreck || !prop->model || prop->born < 0) return;
+  // ([fogglow] nor one the game makes as it starts, its own scenery's wrecks at its first second: they are old, and glowed
+  // round the map for the first minute)
+  if (!hotOn_ || prop->hot || !prop->wreck || !prop->model || prop->born < 1.0) return;
   Vec3 centre;
   float radius;
   Sphere(prop->model, prop->world, &centre, &radius);
@@ -2874,6 +2889,23 @@ void World::UpdateHotProps() {
     }
   }
   hotBefore_ = hotOn_;
+}
+
+// [fogglow] Was the unit a wreck made here at `born` belongs to ever seen by the army the picture is for: a death told
+// near it (within its size and a little) up to a minute before. None found (a wreck the game made otherwise): not known.
+bool World::WreckKnown(Vec3 centre, float radius, double born) const {
+  const float reach = radius + 3;
+  for (const KnownDeath& d : deaths_) {
+    const float dx = d.at.x - centre.x, dz = d.at.z - centre.z;
+    if (d.when <= born + 1 && born - d.when < 60 && dx * dx + dz * dz <= reach * reach && d.known) return true;
+  }
+  return false;
+}
+
+// [fogglow] A hot wreck glows (its heat, its light, its smoke) where the army knew its unit, or where it sees now.
+bool World::GlowShown(const PlacedProp& p, Vec3 centre) const {
+  if (p.glowKnown || !haveMap_ || !sight.On()) return true;
+  return sight.SeenAt(centre.x / static_cast<float>(map.width), centre.z / static_cast<float>(map.height));
 }
 
 // (a wreck that lies under the water - a ship's on the bottom - is quenched: it does not glow)
@@ -2929,6 +2961,15 @@ void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors)
 void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   auto colorOf = [&](uint32_t army) { return armyColors.empty() ? Vec3{0.6f, 0.6f, 0.6f} : armyColors[army % armyColors.size()]; };
   TakeDueCombat(static_cast<double>(frame.tick) + frame.blend);  // (hits, impacts, health whose beat is shown now: combat_)
+  // [fogglow] who died and whether the army saw them (its own side's always; another's seen now or at some time)
+  if (sight.On() && !extraView) {
+    for (const FrameUnit& u : frame.units)
+      if (u.dead && deathsTold_.insert(u.id).second)
+        deaths_.push_back({{u.position[0], u.position[1], u.position[2]}, clock_, u.recon == 0xff || u.Seen() || (u.recon & 0x10) != 0});
+    deaths_.erase(std::remove_if(deaths_.begin(), deaths_.end(), [&](const KnownDeath& d) { return clock_ - d.when > 60 || clock_ < d.when - 1; }),
+                  deaths_.end());
+    if (deathsTold_.size() > 8192) deathsTold_.clear();
+  }
   // blasts where the game says an area's damage went off (an area's hits, one a target, merge into one blast), beside
   // the flashes and scorches the effects tell of. A push is no explosion and left out: the trees' own, 'TreeForce', is
   // the same shot's; 'Force' rings knock trees and props over (a commander's warp-in sends several round its start,
