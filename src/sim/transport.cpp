@@ -62,6 +62,7 @@ struct TransportTaskData {
   std::vector<uint32_t> which;
   bool specific = false;
   Vec3 goal;
+  std::weak_ptr<UnitCommand> goalCmd;  // a ferry's unload child: the route point it unloads at (unload task +0x80)
   // ferry (transport) / wait for ferry (cargo)
   int route = 0;                     // CUnitFerryTask+0x34: route index
   Vec3 home;                         // +0x3c: the beacon's position
@@ -1972,6 +1973,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         auto cd = std::make_shared<TransportTaskData>();
         cd->kind = kUnload;
         cd->goal = CmdPos(sim, *c);
+        cd->goalCmd = R[d.route];  // (its landing move links this command, RetargetUnloadMoves)
         SetState(T, US("TransportUnloading"), true);
         // (the unload task's AbortMove comes whether or not a move is on: an aircraft that was already stopped at
         // "one second ahead" by the leg's end gets a new such point from where it is now)
@@ -2047,10 +2049,17 @@ int TickWaitFerry(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f)), cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
         int r[4] = {cx, cz, cx + fp.sizeX, cz + fp.sizeZ};
         GroundReserveRect(sim, u, r);
-        TaskMoveToward(sim, u, Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f});
+        // NewMoveTask 0x6190a0 (0x60fdfc..0x60fe09, no flags): a CUnitMoveTask, so its ctor's rally override applies
+        // (MoveTaskWalk): a unit fresh from its factory whose only order is the factory's TransportLoadUnits walks to the
+        // free spot PrepareMove finds by that order's target point rounded (no exclusion rect), and the o-grid rect
+        // moves there. Seen (probes v3840_4v4_5_ferryspot / v3840_4v4_4_ferryspot): 4v4_5 5027, army 5's 0x500073:
+        // the task's PrepareMove gives (890,185) (reserved, as ours), then the ctor's (0x618526) from (888,184) gives
+        // (890,186), the path's goal; ours walked to (890,185), its TryAdvance at 5048 could not reach that last cell
+        // and handed a drive-through waypoint where the original reaches its goal (byte 0). Likewise 4v4_4 4275,
+        // army 7's 0x700021: (447,717) then (448,716).
+        TaskMoveTaskWalk(sim, u, Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f});
         d.childMove = true;  // the move task sets Moving
         SetState(u, US("Moving"), true);
-        AirSpeedThroughEvent(sim, u);
         t.state = 1;
         return kTaskRunning;
       }
@@ -3884,6 +3893,28 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
 // flies in; the original's motion target is (55, 306) from 2572 and it starts down there (within its
 // StartTurnDistance of the new point, inferred); ours kept (55, 304) and went down a beat later.
 void RetargetUnloadMoves(Sim& sim, UnitCommand& c) {
+  // A ferry's unload child (TickFerry state 2) makes the same landing move, but with the route point it unloads at as
+  // its command (+0x80, not the queue's head), so a drag of THAT Ferry point re-goals the landing. Seen: 4v4_4 (FAF 3840)
+  // 4809, army 7's player drags the far Ferry point 0x0700001f of transport 0x700020 (queue: 0x1c by the beacon, 0x1f)
+  // while it flies in to unload there: the original's motion target is the new point's cell (178.5, 706) from 4810;
+  // ours kept the old (266.5, 621). (Which command the child is given is inferred from that: the unload task's ctor
+  // was not read for the ferry case.)
+  if (c.type == CommandType::Ferry) {
+    std::vector<Unit*> holders(c.units.begin(), c.units.end());
+    std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+    for (Unit* u : holders) {
+      if (!Alive(u) || !u->task || !u->task->tdata || u->task->tdata->kind != kFerry || !u->task->tdata->child) continue;
+      BuildTask& ch = *u->task->tdata->child;
+      if (!ch.tdata || ch.tdata->kind != kUnload || ch.state != 3 || !ch.tdata->moving || !CanFly(u) || !u->motion.hasGoal)
+        continue;
+      if (ch.tdata->goalCmd.lock().get() != &c) continue;
+      const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+      const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+      LandingMove(sim, u, p, false);
+      AirTakeGoalNow(sim, u);
+    }
+    return;
+  }
   if (c.type != CommandType::TransportUnloadUnits && c.type != CommandType::TransportUnloadSpecificUnits) return;
   std::vector<Unit*> holders(c.units.begin(), c.units.end());
   std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });

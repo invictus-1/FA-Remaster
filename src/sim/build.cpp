@@ -744,6 +744,8 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
 
 }  // namespace
 
+void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) { MoveTaskWalk(sim, u, goal); }
+
 // ---- tasks ---------------------------------------------------------------------------------------
 
 namespace {

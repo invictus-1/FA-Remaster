@@ -3835,12 +3835,24 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
       return 0;
     case 2: {  // back off (inside MinRadius)
       if (u->weapons.empty()) return -1;
-      if (w && TargetStatus(sim, w, target) == 1) {
+      // 0x5f3748..0x5f389b (read): the attacker's IsTooClose (vt+0x54 = 0x5d7210, over all its weapons: AttackerTooClose)
+      // decides; the point is the target's (GetTargetPosGun 0x5e2a90, flag clear) plus the unit's offset from it set to
+      // AI.GuardScanRadius (bp+0x460, VecSetLength 0x5b1c90), and it goes through Unit::PrepareMove 0x62b780 (spacing 0,
+      // no exclusion rect, 0x5f3849) before the navigator's SetGoal (0x5f3899). Seen (probe v3840_1v1_4_through): 1v1_4
+      // (FAF 3840) 5927, army 1's 0x100078 on an AggressiveMove's attack child backs off: the original's goal is (885,528),
+      // the free spot PrepareMove finds; ours took the point's own cell (887,530), TryAdvance reached it at once at 5929
+      // (in goal: drive-through 0) where the original hands a waypoint short of its goal (1).
+      if (AttackerTooClose(sim, u, target)) {
         Vec3 tp = TargetPos(sim, target, false);
         Vec3 v = Sub(u->position, tp);
         float l = Len(v);
         float gsr = CB(u).guardScanRadius;
         Vec3 p = l > 0 ? Add(tp, Mul(v, gsr / l)) : tp;
+        {
+          static const float none[4] = {0, 0, 0, 0};
+          if (u->motion.bp && u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+          else GroundPrepareMove(sim, u, &p, none, 0);
+        }
         AttackSetPosGoal(sim, u, p);
         AttackerUnpackStop(sim, u);  // (after the navigator's SetGoal: 0x5f38b8)
         return 10;
@@ -4082,6 +4094,13 @@ BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c) {
   t->site = c.pos;
   if (c.targetId)
     if (Entity* e = sim.FindEntity(c.targetId)) t->site = e->position;
+  // An order whose target is an entity (the issue target's type 1, cmd+0x9c) that the sim does not hold (a blip let go
+  // of before the order came) keeps an entity CAiTarget with an empty weak pointer (CAiTarget::UpdateTarget 0x5d55b0
+  // finds no entity): the task's target is an entity that is not there, as for a target that died later (the
+  // lost-target branch, 0x5f3994), not the ground at (0, 0, 0). Seen: 4v4_5 (FAF 3840) 5113, army 2's player queues an
+  // Attack on the blip 0x3070001e (made at 1703, let go of since) behind 0x200053's Move; when the Move ends at 5139 the
+  // original's task ends at once (its formation cell lies in reach: queue empty); ours attacked the ground there.
+  if (!c.targetId && c.issueTargetType == 1) t->goalId = 0xffffffffu;  // (no entity has this handle: FindEntity gives null)
   InitAttack(sim, u, *t, c.type == CommandType::FormAttack);
   BuildTask* r = t.get();
   sim.Own(std::move(t));
