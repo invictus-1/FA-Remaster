@@ -171,6 +171,10 @@ class WorldPicture {
   // Its interface layer, exactly as SetInterfaceLayer's; a new width x height resizes the second window's pictures.
   void SetSecondInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h);
   bool SecondWindowDrawnLastFrame() const;  // (stats, checks)
+  // (checks) The second window's next picture shown (its views and layer as they go to it) read back into `out`, RGBA,
+  // its width x height x 4, when that frame ends; as CaptureNextWindowFrame. Not in a frame whose first window is read
+  // back too (CaptureNextWindowFrame): then the frame after.
+  void CaptureNextSecondWindowFrame(std::vector<uint8_t>* out);
   // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
   void SetVulkan(bool on);
   // (checks) Before Open: the graphics API's validation layer, where installed (the viewer's --debug).

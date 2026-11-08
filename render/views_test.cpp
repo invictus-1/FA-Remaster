@@ -131,6 +131,14 @@ void Head2Test(WorldPicture& picture, const Camera& gameCamera, double tick, con
   picture.CaptureNextWindowFrame(&shot);
   picture.DrawToWindow(gameCamera, w, h, tick);
   const std::string first = setup.base + "_views_head2_first.png";
+  {  // (the second window read back: CaptureNextSecondWindowFrame)
+    std::vector<uint8_t> back;
+    picture.CaptureNextSecondWindowFrame(&back);
+    for (int i = 0; i < 10 && back.empty(); ++i) picture.DrawToWindow(gameCamera, w, h, tick);
+    const std::string path = setup.base + "_views_head2_second_readback.png";
+    printf("render: --views head2: second window read back %s\n",
+           back.size() >= static_cast<size_t>(sw) * sh * 4 && WritePng(path, back.data(), sw, sh) ? path.c_str() : "not read back");
+  }
   printf("render: --views head2: first window %s\n", shot.size() >= static_cast<size_t>(w) * h * 4 && WritePng(first, shot.data(), w, h) ? first.c_str() : "not read back");
 #if defined(_WIN32)
   for (int i = 0; i < 20; ++i) {  // (a few more, the screen showing the newest)

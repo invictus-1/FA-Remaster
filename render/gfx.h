@@ -529,6 +529,9 @@ class Device {
   // (the window keeps the picture it shows) or the window or picture will not do. Asked again in the same frame: the
   // later picture is shown.
   virtual bool ShowInWindow(int window, Texture picture) { (void)window, (void)picture; return false; }
+  // (checks) The next picture shown in extra window `window` read back into `out` (RGBA, its width x height x 4) when that
+  // frame ends (the frame then waits for the card); not in a frame whose own window is read back too (the next one).
+  virtual void CaptureInWindow(int window, std::vector<uint8_t>* out) { (void)window, (void)out; }
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;
