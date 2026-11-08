@@ -398,6 +398,11 @@ class D3D12Device final : public Device {
   bool BeginParallel(int count) override;
   Recorder* Parallel(int index) override;
   void EndParallel() override;
+  // [head2] extra windows (gfx.h)
+  int AddWindow(const WindowDesc& desc, std::string* error) override;
+  void RemoveWindow(int window) override;
+  void ResizeWindow(int window, int width, int height) override;
+  bool ShowInWindow(int window, Texture picture) override;
 
  private:
   // [mcrec] Recording on several threads. The frame's commands are then several lists, handed to the card together in
@@ -592,6 +597,23 @@ class D3D12Device final : public Device {
   Com<ID3D12InfoQueue> infoQueue_;
   Com<ID3D12CommandQueue> queue_;
   Com<IDXGISwapChain3> swapChain_;
+  // [head2] the extra windows (AddWindow): a swap chain each on the frame's queue, two pictures, the waitable object at a
+  // frame latency of one (signalled: a picture is free); `show` the picture ShowInWindow asked for this frame
+  struct ExtraWindow {
+    HWND hwnd = nullptr;
+    Com<IDXGISwapChain3> chain;
+    HANDLE wait = nullptr;
+    int width = 0, height = 0;
+    Texture show;
+    bool used = false;
+  };
+  std::vector<ExtraWindow> extras_;  // (index + 1: the window's number)
+  ExtraWindow* Extra(int window) {
+    return window >= 1 && static_cast<size_t>(window) <= extras_.size() && extras_[static_cast<size_t>(window - 1)].used
+               ? &extras_[static_cast<size_t>(window - 1)]
+               : nullptr;
+  }
+  void ShowExtras(bool present);  // (EndFrame: the pictures copied into their windows' back buffers / shown)
   Com<ID3D12GraphicsCommandList> list_, uploadList_;
   static constexpr int kUploadBatches = 4;
   Com<ID3D12CommandAllocator> uploadAllocators_[kUploadBatches];
@@ -3902,6 +3924,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   FrameSlot& f = frames_[cur_];
   ReleasePassTargets();
   ReleaseUnordered();
+  ShowExtras(false);  // [head2] (their pictures copied into their back buffers; shown after the frame is handed over)
   // frame generation: the picture between this frame and the one before made (it may dispatch and draw); what is
   // read back is the window's picture (or that one), which is readable now
   const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -4006,6 +4029,7 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
       TakeStatistics();
     }
   }
+  ShowExtras(true);  // [head2]
   if (infoQueue_) {  // --debug: the validation layer's messages, which otherwise only a debugger sees
     std::vector<char> buf;
     for (UINT64 i = 0, n = infoQueue_->GetNumStoredMessages(); i < n; ++i) {
@@ -4247,6 +4271,114 @@ bool D3D12Device::MemoryBudget(uint64_t* budget, uint64_t* used) {
     *budget = std::min<uint64_t>(*budget, info.CurrentUsage + left);
   }
   return true;
+}
+
+// [head2] Extra windows (gfx.h, the interface's request 48: the original's head 1 on the second screen). Each a swap chain
+// of its own on the frame's queue; its picture is copied in at the frame's end and shown without waiting for its screen
+// (sync interval 0, no tearing: the flip model shows its newest picture at that screen's own refresh), and only when its
+// waitable object says a picture is free (a frame latency of one), so that it never holds the frames back.
+int D3D12Device::AddWindow(const WindowDesc& desc, std::string* error) {
+  if (inFrame_) {
+    if (error) *error = "Direct3D 12: AddWindow within a frame";
+    return -1;
+  }
+  if (desc.windowSystem != DeviceDesc::WindowSystem::Win32 || !desc.window || desc.width <= 0 || desc.height <= 0) {
+    if (error) *error = "Direct3D 12: an extra window needs a Win32 window and a size";
+    return -1;
+  }
+  ExtraWindow w;
+  w.hwnd = static_cast<HWND>(desc.window);
+  w.width = desc.width;
+  w.height = desc.height;
+  DXGI_SWAP_CHAIN_DESC1 sd = {};
+  sd.Width = static_cast<UINT>(w.width);
+  sd.Height = static_cast<UINT>(w.height);
+  sd.Format = kBackFormat;
+  sd.SampleDesc.Count = 1;
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.BufferCount = 3;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+  sd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+  Com<IDXGISwapChain1> sc1;
+  HRESULT hr = factory_->CreateSwapChainForHwnd(queue_.Get(), w.hwnd, &sd, nullptr, nullptr, sc1.Put());
+  if (SUCCEEDED(hr)) hr = sc1->QueryInterface(IID_PPV_ARGS(w.chain.Put()));
+  if (FAILED(hr)) {
+    char buf[160];
+    snprintf(buf, sizeof buf, "Direct3D 12: making an extra window's swap chain failed (0x%08lx)", static_cast<unsigned long>(hr));
+    if (error) *error = buf;
+    return -1;
+  }
+  factory_->MakeWindowAssociation(w.hwnd, DXGI_MWA_NO_ALT_ENTER);
+  w.chain->SetMaximumFrameLatency(2);
+  w.wait = w.chain->GetFrameLatencyWaitableObject();
+  w.used = true;
+  for (size_t i = 0; i < extras_.size(); ++i)
+    if (!extras_[i].used) {
+      extras_[i] = std::move(w);
+      return static_cast<int>(i) + 1;
+    }
+  extras_.push_back(std::move(w));
+  return static_cast<int>(extras_.size());
+}
+
+void D3D12Device::RemoveWindow(int window) {
+  ExtraWindow* w = Extra(window);
+  if (!w || inFrame_) return;
+  WaitIdle();  // (its pictures no longer in use by the card)
+  if (w->wait) CloseHandle(w->wait);
+  *w = ExtraWindow{};
+}
+
+void D3D12Device::ResizeWindow(int window, int width, int height) {
+  ExtraWindow* w = Extra(window);
+  if (!w || inFrame_ || width <= 0 || height <= 0 || (width == w->width && height == w->height)) return;
+  WaitIdle();
+  HRESULT hr = w->chain->ResizeBuffers(0, static_cast<UINT>(width), static_cast<UINT>(height), kBackFormat,
+                                       DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+  if (FAILED(hr)) {
+    Complain("ResizeBuffers (an extra window)", hr);
+    return;
+  }
+  w->width = width;
+  w->height = height;
+}
+
+bool D3D12Device::ShowInWindow(int window, Texture picture) {
+  ExtraWindow* w = Extra(window);
+  TextureRec* t = Find(picture);
+  if (!w || !inFrame_ || !t || t->depth) return false;
+  const D3D12_RESOURCE_DESC d = t->resource->GetDesc();
+  if (d.Format != kBackFormat || d.Width != static_cast<UINT64>(w->width) || d.Height != static_cast<UINT>(w->height)) return false;
+  if (!w->show && WaitForSingleObject(w->wait, 0) != WAIT_OBJECT_0) return false;  // (no picture free: none drawn)
+  w->show = picture;
+  return true;
+}
+
+void D3D12Device::ShowExtras(bool present) {
+  const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+  for (ExtraWindow& w : extras_) {
+    if (!w.used || !w.show) continue;
+    if (present) {
+      HRESULT hr = w.chain->Present(0, 0);
+      if (FAILED(hr)) Complain("Present (an extra window)", hr);
+      w.show = {};
+      continue;
+    }
+    TextureRec* t = Find(w.show);
+    Com<ID3D12Resource> back;
+    if (!t || FAILED(w.chain->GetBuffer(w.chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(back.Put())))) {
+      w.show = {};
+      continue;
+    }
+    D3D12_RESOURCE_BARRIER in[2] = {Transition(t->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_SOURCE),
+                                    Transition(back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST)};
+    list_->ResourceBarrier(2, in);
+    list_->CopyResource(back.Get(), t->resource.Get());
+    D3D12_RESOURCE_BARRIER out[2] = {Transition(t->resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, readable),
+                                     Transition(back.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)};
+    list_->ResourceBarrier(2, out);
+  }
 }
 
 }  // namespace

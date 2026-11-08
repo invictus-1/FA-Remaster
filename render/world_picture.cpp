@@ -245,6 +245,28 @@ struct WorldPicture::Impl {
   std::unique_ptr<ViewSide> mapSide;
   std::unique_ptr<ViewLayer> viewLayer;
   bool viewLayerTried = false, viewLayerOk = false;
+  // [head2] the second window (UseSecondWindow): the device's window number (0: none), what was asked (made with the
+  // device when asked before Open), the picture its views and layer are put together in (the window's size: shown by a
+  // copy), its interface layer as the first's, whether it has a picture free this frame (asked once a frame)
+  struct Head2 {
+    int window = 0;
+    bool wanted = false;
+    void* hwnd = nullptr;
+    std::function<uint64_t(void* instance)> hostSurface;
+    int width = 0, height = 0;
+    std::string error;
+    gfx::Texture picture;
+    int pictureWidth = 0, pictureHeight = 0;
+    gfx::Texture layer;
+    int layerWidth = 0, layerHeight = 0, layerMadeWidth = 0, layerMadeHeight = 0;
+    const uint32_t* layerPixels = nullptr;
+    int layerPitch = 0, dirtyX = 0, dirtyY = 0, dirtyW = 0, dirtyH = 0;
+    bool asked = false, free = false, composed = false, drawnLast = false;
+  } head2;
+  bool MakeHead2();                      // (the device's extra window, as asked)
+  bool AskHead2();                       // (once a frame: its picture made at its size; a picture free in its swap chain?)
+  void ComposeHead2(const std::vector<std::pair<gfx::Texture, WorldPicture::ViewRect>>& laid);  // (its views + layer)
+  bool Head2View(size_t i) const { return i > 0 && i < views.size() && views[i].window == 1; }
   uint64_t viewFrames = 0;
   bool viewsNow = false, playingNow = false, framegenHeld = false;
   int viewsWidth = 0, viewsHeight = 0;
@@ -421,6 +443,8 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
   if (m.HostShows() && m.lowLatency) m.device->SetLatencyLimiter(true);  // (Low Latency, as set before Open)
+  if (m.HostShows() && m.head2.wanted && !m.MakeHead2())  // [head2] (asked before Open)
+    fprintf(stderr, "render: the second window: %s\n", m.head2.error.c_str());
   if (m.HostShows()) {  // the interface laid over the world: its pixels as they are, over what is there
     static const char kLayer[] = R"hlsl(
 Texture2D layer : register(t0);
@@ -1111,6 +1135,14 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     m.ServiceLoads(m.loadBudgetMs);  // [bgload]
     return;
   }
+  // [head2] (the second window's swap chain at its layer's size: between frames)
+  if (m.head2.window && m.head2.layerWidth > 0 && m.head2.layerHeight > 0 &&
+      (m.head2.layerWidth != m.head2.width || m.head2.layerHeight != m.head2.height)) {
+    m.head2.width = m.head2.layerWidth;
+    m.head2.height = m.head2.layerHeight;
+    m.device->ResizeWindow(m.head2.window, m.head2.width, m.head2.height);
+  }
+  m.head2.asked = m.head2.free = m.head2.composed = false;
   if (m.world) {
     RenderWorld(camera, width, height, tick);
     m.depthIsWindow = true;
@@ -1119,6 +1151,17 @@ void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, dou
     const float black[4] = {0, 0, 0, 1};
     m.device->BeginFrame(black);
   }
+  // [head2] the second window with no view of the world this frame (the front end, a loading, no view for it): its layer
+  // over black; then the first window's pass again for its backdrop and interface
+  if (m.head2.window && !m.head2.composed && m.AskHead2()) {
+    m.ComposeHead2({});
+    gfx::PassDesc back;
+    back.window = true;
+    back.clearColor = false;
+    back.clearDepth = false;
+    m.device->BeginPass(back);
+  }
+  m.head2.drawnLast = m.head2.window && m.head2.free;
   m.LayBackdrop(width, height, m.world && m.worldShown);  // [backdrop]
   m.LayInterface(width, height);
   const auto ending = std::chrono::steady_clock::now();
@@ -2520,6 +2563,7 @@ int WorldPicture::ViewAt(float x, float y) const {
   const Impl& m = *impl_;
   if (m.views.empty()) return x >= 0 && y >= 0 ? 0 : -1;
   for (int i = static_cast<int>(m.views.size()) - 1; i >= 0; --i) {
+    if (m.Head2View(static_cast<size_t>(i))) continue;  // [head2] (the first window's views only)
     const ViewRect& r = m.views[static_cast<size_t>(i)].rect;
     if (x >= static_cast<float>(r.x) && y >= static_cast<float>(r.y) && x < static_cast<float>(r.x + r.width) && y < static_cast<float>(r.y + r.height)) return i;
   }
@@ -2662,10 +2706,12 @@ void WorldPicture::DrawViews(int width, int height) {
     }
   }
   count(true);
-  // the others, the same moment from their cameras
+  // the others, the same moment from their cameras ([head2] the second window's only when it has a picture free)
   const double shown = m.lastTick;
+  const bool head2Free = m.head2.window && m.AskHead2();
   for (size_t i = 1; i < m.views.size(); ++i) {
     const PictureView& v = m.views[i];
+    if (m.Head2View(i) && !head2Free) continue;
     const bool inset = v.kind == ViewKind::Inset;
     ViewSide& s = side(i);
     const int vw = std::max(v.rect.width, 16), vh = std::max(v.rect.height, 16);
@@ -2708,6 +2754,16 @@ void WorldPicture::DrawViews(int width, int height) {
   }
   m.viewsCounted = true;
   ++m.viewFrames;
+  // [head2] the second window's views and its layer put together in its picture
+  if (head2Free) {
+    std::vector<std::pair<gfx::Texture, ViewRect>> laid;
+    for (size_t i = 1; i < m.views.size(); ++i) {
+      const ViewSide* s = m.sides[i].get();
+      if (!m.Head2View(i) || !s || !s->drawn) continue;
+      laid.push_back({s->color, ViewRect{m.views[i].rect.x, m.views[i].rect.y, s->width, s->height}});
+    }
+    m.ComposeHead2(laid);
+  }
   // the pictures into the window, in their order (what fills the window is there already)
   gfx::PassDesc back;
   back.window = true;
@@ -2715,11 +2771,158 @@ void WorldPicture::DrawViews(int width, int height) {
   m.device->BeginPass(back);
   for (size_t i = 0; i < m.views.size(); ++i) {
     if (i == 0 && fills) continue;
+    if (m.Head2View(i)) continue;  // [head2] (the second window's)
     const ViewSide* s = m.sides[i].get();
     if (!s || !s->drawn) continue;
     const ViewRect& r = m.views[i].rect;
     m.viewLayer->Lay(s->color, r.x, r.y, s->width, s->height, width, height);
   }
+}
+
+// [head2] The second window (world_picture.h, UseSecondWindow; the interface's request 48).
+bool WorldPicture::Impl::MakeHead2() {
+  Head2& h = head2;
+  h.error.clear();
+  gfx::Device::WindowDesc wd;
+  if (h.hostSurface) {
+    wd.windowSystem = gfx::DeviceDesc::WindowSystem::Host;
+    wd.hostSurface = h.hostSurface;
+  } else {
+    wd.window = h.hwnd;
+  }
+  wd.width = h.width;
+  wd.height = h.height;
+  const int made = device->AddWindow(wd, &h.error);
+  h.window = made > 0 ? made : 0;
+  return h.window != 0;
+}
+
+bool WorldPicture::Impl::AskHead2() {
+  Head2& h = head2;
+  if (h.asked) return h.free;
+  h.asked = true;
+  h.free = false;
+  if (!h.window || h.width <= 0 || h.height <= 0) return false;
+  if (!h.picture || h.pictureWidth != h.width || h.pictureHeight != h.height) {
+    if (h.picture) device->Destroy(h.picture);
+    gfx::TargetDesc td;
+    td.width = h.width;
+    td.height = h.height;
+    td.format = gfx::Format::RGBA8;
+    h.picture = device->CreateTarget(td);
+    h.pictureWidth = h.width;
+    h.pictureHeight = h.height;
+    if (!h.picture) return false;
+  }
+  h.free = device->ShowInWindow(h.window, h.picture);
+  return h.free;
+}
+
+void WorldPicture::Impl::ComposeHead2(const std::vector<std::pair<gfx::Texture, WorldPicture::ViewRect>>& laid) {
+  Head2& h = head2;
+  h.composed = true;
+  gfx::PassDesc pass;
+  pass.color = h.picture;
+  pass.clearColor = true;
+  pass.clearValue[3] = 1;
+  pass.clearDepth = false;
+  device->BeginPass(pass);
+  device->Mark("the second window");
+  if (viewLayerOk)
+    for (const auto& [picture, r] : laid) viewLayer->Lay(picture, r.x, r.y, r.width, r.height, h.width, h.height);
+  // its layer, as LayInterface's
+  if (h.layerPixels && h.layerWidth > 0 && h.layerHeight > 0) {
+    if (!h.layer || h.layerMadeWidth != h.layerWidth || h.layerMadeHeight != h.layerHeight) {
+      if (h.layer) device->Destroy(h.layer);
+      std::vector<uint32_t> clear(static_cast<size_t>(h.layerWidth) * static_cast<size_t>(h.layerHeight), 0u);
+      gfx::TextureDesc td;
+      td.width = h.layerWidth;
+      td.height = h.layerHeight;
+      td.format = gfx::Format::BGRA8;
+      td.data = clear.data();
+      td.dataSize = clear.size() * 4;
+      h.layer = device->CreateTexture(td);
+      h.layerMadeWidth = h.layerWidth;
+      h.layerMadeHeight = h.layerHeight;
+      h.dirtyX = h.dirtyY = 0;
+      h.dirtyW = h.layerWidth;
+      h.dirtyH = h.layerHeight;
+    }
+    if (h.layer && h.dirtyW > 0 && h.dirtyH > 0) {
+      const int x = std::clamp(h.dirtyX, 0, h.layerWidth), y = std::clamp(h.dirtyY, 0, h.layerHeight);
+      const int w = std::min(h.dirtyW, h.layerWidth - x), hh = std::min(h.dirtyH, h.layerHeight - y);
+      if (w > 0 && hh > 0)
+        device->UpdateTexture(h.layer, x, y, w, hh, h.layerPixels + static_cast<size_t>(y) * static_cast<size_t>(h.layerPitch) + static_cast<size_t>(x),
+                              static_cast<uint32_t>(h.layerPitch) * 4);
+    }
+    h.dirtyW = h.dirtyH = 0;
+    h.layerPixels = nullptr;
+  }
+  if (h.layer && h.layerMadeWidth == h.width && h.layerMadeHeight == h.height && layerPipeline) {
+    device->SetPipeline(layerPipeline);
+    device->SetTexture(0, h.layer);
+    device->Draw(3);
+  }
+}
+
+bool WorldPicture::UseSecondWindow(void* hwnd, int width, int height) {
+  Impl& m = *impl_;
+  CloseSecondWindow();
+  m.head2.wanted = true;
+  m.head2.hwnd = hwnd;
+  m.head2.hostSurface = nullptr;
+  m.head2.width = m.head2.layerWidth = width;
+  m.head2.height = m.head2.layerHeight = height;
+  if (!m.device) return true;  // (made with the device, Open)
+  return m.MakeHead2();
+}
+
+bool WorldPicture::UseSecondHostSurface(std::function<uint64_t(void* vkInstance)> createSurface, int width, int height) {
+  Impl& m = *impl_;
+  CloseSecondWindow();
+  m.head2.wanted = true;
+  m.head2.hwnd = nullptr;
+  m.head2.hostSurface = std::move(createSurface);
+  m.head2.width = m.head2.layerWidth = width;
+  m.head2.height = m.head2.layerHeight = height;
+  if (!m.device) return true;
+  return m.MakeHead2();
+}
+
+void WorldPicture::CloseSecondWindow() {
+  Impl& m = *impl_;
+  if (m.device) {
+    if (m.head2.window) m.device->RemoveWindow(m.head2.window);
+    if (m.head2.picture) m.device->Destroy(m.head2.picture);
+    if (m.head2.layer) m.device->Destroy(m.head2.layer);
+  }
+  m.head2 = Impl::Head2{};
+}
+
+bool WorldPicture::SecondWindowOn() const { return impl_->head2.window != 0; }
+std::string WorldPicture::SecondWindowError() const { return impl_->head2.error; }
+bool WorldPicture::SecondWindowDrawnLastFrame() const { return impl_->head2.drawnLast; }
+
+void WorldPicture::SetSecondInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {
+  Impl::Head2& m = impl_->head2;
+  m.layerPixels = pixels;
+  m.layerPitch = pitch;
+  if (width != m.layerWidth || height != m.layerHeight) {  // a new size: all of it
+    m.layerWidth = width;
+    m.layerHeight = height;
+    m.dirtyX = m.dirtyY = 0;
+    m.dirtyW = width;
+    m.dirtyH = height;
+    return;
+  }
+  if (w <= 0 || h <= 0) return;
+  if (m.dirtyW <= 0 || m.dirtyH <= 0) {
+    m.dirtyX = x, m.dirtyY = y, m.dirtyW = w, m.dirtyH = h;
+    return;
+  }
+  const int x0 = std::min(m.dirtyX, x), y0 = std::min(m.dirtyY, y);
+  const int x1 = std::max(m.dirtyX + m.dirtyW, x + w), y1 = std::max(m.dirtyY + m.dirtyH, y + h);
+  m.dirtyX = x0, m.dirtyY = y0, m.dirtyW = x1 - x0, m.dirtyH = y1 - y0;
 }
 
 }  // namespace render

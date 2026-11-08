@@ -154,6 +154,23 @@ class WorldPicture {
   // The picture draws with Vulkan then (SetVulkan is not needed). `width` x `height`: the drawable's size in
   // pixels at first; later sizes come with each DrawToWindow, as with the other windows.
   void UseHostSurface(std::vector<std::string> instanceExtensions, std::function<uint64_t(void* vkInstance)> createSurface, int width, int height);
+  // [head2] The original's head 1 (FAF's multihead.lua: a world view of camera CameraHead2 on the second screen; the
+  // interface's request 48, docs/ui-dualscreen.md section 4): a second window on this picture's device, `width` x
+  // `height` pixels. Before or after Open (made with the device, or at once); one at a time; closed by CloseSecondWindow
+  // or with the picture. What it shows: the views given to SetViews with `window` 1 (their rects in its pixels), and
+  // SetSecondInterfaceLayer's layer over them, over black (no such view - the front end, a loading - the layer alone).
+  // The first window paces the frames as ever; the second is drawn only when its swap chain has a picture free (a 160 Hz
+  // screen beside a 240 Hz one: about 160 times a second), and never makes a frame wait; when it is not, its views are
+  // not drawn that frame and it keeps the picture it shows. Both windows show the same moment of the game.
+  bool UseSecondWindow(void* hwnd, int width, int height);  // (Win32; false: it could not be made, `SecondWindowError`)
+  // (Vulkan: the host makes the second window's surface for the instance it is given, as UseHostSurface's)
+  bool UseSecondHostSurface(std::function<uint64_t(void* vkInstance)> createSurface, int width, int height);
+  void CloseSecondWindow();
+  bool SecondWindowOn() const;
+  std::string SecondWindowError() const;
+  // Its interface layer, exactly as SetInterfaceLayer's; a new width x height resizes the second window's pictures.
+  void SetSecondInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h);
+  bool SecondWindowDrawnLastFrame() const;  // (stats, checks)
   // Before Open: draws with Vulkan in place of Direct3D 12 (being tried: docs/render-vulkan.md).
   void SetVulkan(bool on);
   // (checks) Before Open: the graphics API's validation layer, where installed (the viewer's --debug).
@@ -579,6 +596,7 @@ class WorldPicture {
     ViewKind kind = ViewKind::Main;
     int every = 2;       // Inset: drawn every that many frames
     float detail = 0.5f; // Inset: the models' and their shadows' detail, a share of the main view's
+    int window = 0;      // [head2] 0: the first window; 1: the second (UseSecondWindow; `rect` in its pixels). View 0: 0.
   };
   // The views, from the next frame on, view 0 first (the main one; its kind is taken as Main), the rest drawn over it in
   // their order (an inset after the views it lies over). A host whose cameras move gives them every frame (a copy of the
