@@ -2992,10 +2992,14 @@ void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     t.capRequest->live = false;
     t.capRequest.reset();
   }
+  // 0x60513c..0x6051ed (read): the focus link (+0x4d0) and +0x4d8 unlinked, the unit state bit 0x04000000 of +0x4a0
+  // (Capturing) cleared and the work progress (+0x2ac) 0, with no test of the unit's life. Seen: 4v4_setons_1 (FAF 3840)
+  // 4707, army 5's engineer 0x500035 is killed capturing (its queue empties): the original's record has no Capturing
+  // from that beat on; ours kept it to the end.
+  if (u->focusId == t.goalId) u->focusId = 0;
+  u->unitStates.Erase(US("Capturing"));
+  u->workProgress = 0;
   if (Alive(u)) {
-    if (u->focusId == t.goalId) u->focusId = 0;
-    u->unitStates.Erase(US("Capturing"));
-    u->workProgress = 0;
     SetArmAimTarget(sim, u, Vec3{});
     if (t.moving) {
       t.moving = false;
