@@ -751,6 +751,26 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
   const uint32_t next = sim.tick() + 6;  // return 7
   if (!u->motion.bp || !u->motion.bp->mobile() || (p.goalIssued && p.atGoal)) return kTaskDone;
   ++p.ticks;
+  // (a) the air staging platform (0x61c195..0x61c1cb, read): a patrol with no formation of its own (+0x58: only
+  // FormPatrol / FormAggressiveMove get one, see (d)) asks Unit::FindPlatform 0x62f030 first (fuel under 0.2 or health
+  // under 75 %, the Dock cap, an idle platform within its StagingPlatformScanRadius); one found gets IssueRefuelTask
+  // 0x622110 (a child, CUnitRefuel: Refueling at once), the goal flag (+0x80) cleared, return 7; enemies and reclaim
+  // come after. Seen: 6v6_1 (FAF 3840) 6642, army 0's patrolling aircraft 0x30 runs low on fuel: the original's
+  // record has Refueling and the speed-through byte 0 from that beat; ours flew on with its patrol.
+  {
+    const UnitCommand* hc = u->commands.empty() ? nullptr : u->commands.front().get();
+    const bool ownForm = hc && hc->form && (t.type == CommandType::FormPatrol || t.type == CommandType::FormAggressiveMove);
+    if (!ownForm)
+      if (Unit* P = FindPlatform(sim, u))
+        if (BuildTask* c = MakeRefuelTask(sim, u, P)) {
+          u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
+          p.child = c;
+          p.childFrom = next;
+          p.goalIssued = false;
+          t.waitUntil = next;
+          return kTaskRunning;
+        }
+  }
   // (b) enemies
   if (Unit* e = PatrolFindTarget(sim, u, p.box)) {
     u->leashPos = u->position;
@@ -1584,6 +1604,18 @@ bool RefusesOrderWhileBuilt(Sim& sim, const Unit* u) {
   return u->beingBuilt && !BpInCategory(sim, u->blueprint, "FACTORY") && !BpInCategory(sim, u->blueprint, "CQUEMOV");
 }
 
+// ... and the hook's second pass (0x128daec..0x128db0c, read) first stores eax, the 0 that IsInCategory 0x67b050 gave
+// for FACTORY (its bitset path: sbb / neg), at [esp+0x20], which (one push down) is ProcessUnitCommand's [esp+0x1c]: the
+// order's target entity found by id (0x6efa8e..0x6efaa5), read as ebp at 0x6efc99 by every case of the type switch. So a
+// unit being built that passes as CQUEMOV (not FACTORY) validates the order as one with no target entity: an order on
+// an entity is refused where its case asks for one (Repair 0x6f0760, an immobile unit's Guard), while a Move on a
+// place goes through. Seen: 6v6_1 (FAF 3840) 5860, army 1's player gives a Repair (clear) of 0x10005b to the Hive
+// 0x10006b and the Hive 0x100071 (xrb0104: CQUEMOV, half built), and a Guard at 5862: the original's 0x100071 keeps its
+// AssistCommander until it is finished; ours took both orders.
+const Entity* TargetSeenWhileBuilt(Sim& sim, const Unit* u, const Entity* target) {
+  return u->beingBuilt && !BpInCategory(sim, u->blueprint, "FACTORY") ? nullptr : target;
+}
+
 // ProcessUnitCommand 0x6ef9e0, after the playable-rect test and before its type switch (0x6efd90..0x6efdad): a unit
 // in state Enhancing (IsUnitState vt+0x3c, 0x26) refuses an order that comes with clear (the third argument,
 // UNIT_IssueCommand's clear: [esp+0x37c]) unless it is a Stop (type 1): the enhancement and its queue stay. Seen: 6v6_1
@@ -1716,8 +1748,9 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     // through IssueFactoryRallyPoint / IssueFactoryCommand, factory_handoff.md 3.2)
     if (FactoryCommand(type) && IsImmobileFactory(*sim, u)) continue;
     if (RefusesOrderWhileBuilt(*sim, u)) continue;
-    if (type == CommandType::Guard && RefusesGuard(*sim, L, u, targetEntity)) continue;
-    if (type == CommandType::Repair && RefusesRepair(*sim, u, targetEntity)) continue;
+    const Entity* seen = TargetSeenWhileBuilt(*sim, u, targetEntity);  // (FAF's hook: CQUEMOV while built)
+    if (type == CommandType::Guard && RefusesGuard(*sim, L, u, seen)) continue;
+    if (type == CommandType::Repair && RefusesRepair(*sim, u, seen)) continue;
     if (RefusesTargetOutside(*sim, u, target)) continue;
     if (MoveCaseType(static_cast<int>(type)) && RefusesMoveOrder(*sim, u, target || targetEntity, target)) continue;
     if ((type == CommandType::Attack || type == CommandType::FormAttack) && RefusesAttackOrder(u)) continue;
@@ -2044,16 +2077,21 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (!IsAlive(u)) continue;
     if (RefusesOrderWhileBuilt(sim, u)) continue;  // (the being-built rule, above)
     if (sameOrderAgain(u)) continue;
-    if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, targetEntity)) continue;
-    if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, targetEntity)) continue;
+    const Entity* seen = TargetSeenWhileBuilt(sim, u, targetEntity);  // (FAF's hook: CQUEMOV while built)
+    if (d.type == static_cast<int>(CommandType::Guard) && RefusesGuard(sim, sim.L(), u, seen)) continue;
+    if (d.type == static_cast<int>(CommandType::Repair) && RefusesRepair(sim, u, seen)) continue;
     // The Reclaim case (0x6f059c..0x6f0743, as IssueReclaim: ReclaimOrderValid): a unit outside RECLAIM (0xe204a8)
     // refuses, its queue untouched by the clear. Seen (oracle recording of FAF 3840 pro replay 4v4_setons_1): at 3715
     // army 4's player gives a Reclaim (clear) of the blip of army 3's 0x300024 to five units and the naval factory
     // 0x40001d; the original's factory keeps building its BuildFactory queue, ours took the Reclaim.
     if (d.type == static_cast<int>(CommandType::Reclaim) &&
-        !ReclaimOrderValid(sim.L(), u, const_cast<Entity*>(targetEntity)))
+        !ReclaimOrderValid(sim.L(), u, const_cast<Entity*>(seen)))
       continue;
-    if (RefusesTargetOutside(sim, u, target)) continue;
+    // (with the entity slot zeroed the place test reads the order's own point, cmd+0x18 (0x6efcad), which a stream order
+    // on an entity leaves at (0, 0, 0): outside a map whose playable rect starts above 0. Seen: 6v6_1 (FAF 3840) 6143,
+    // army 2's player gives an Attack (blip 0x30900000) to two units and the point defence 0x20004f (uab2301: CQUEMOV)
+    // being built; the map (Dual Gap adaptive) sets a playable area: the original's 0x20004f stays without orders.)
+    if (RefusesTargetOutside(sim, u, seen == targetEntity ? target : &d.target.pos)) continue;
     if (RefusesWhileEnhancing(u, clear, d.type)) continue;
     if (MoveCaseType(d.type) && RefusesMoveOrder(sim, u, d.target.type != 0, &d.target.pos)) continue;
     if ((d.type == static_cast<int>(CommandType::Attack) || d.type == static_cast<int>(CommandType::FormAttack)) &&
@@ -2061,7 +2099,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       continue;
     if (d.type == static_cast<int>(CommandType::Upgrade) && RefusesUpgradeAgain(sim, u, d.blueprint)) continue;
     if (reverseLoad && RefusesReverseLoad(sim, u, units, reverseTarget)) continue;  // (its case, 0x6f0f53)
-    if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, targetEntity))
+    if (d.type == static_cast<int>(CommandType::TransportLoadUnits) && RefusesLoadOrder(sim, u, seen))
       continue;  // (its case, 0x6f0bf3)
     // The unload case of the type switch (TransportUnloadUnits 24 / TransportUnloadSpecificUnits 25: index 12,
     // 0x6f1189, read): a unit on the Seabed layer (unit+0x120 == 2) refuses; one with a transport object (unit+0x55c)
