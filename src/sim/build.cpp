@@ -441,7 +441,14 @@ void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success
 void SetFocus(Sim& sim, lua_State* L, Unit* builder, Unit* target, BuildTask& t) {
   if (!target) return;
   if (t.started && t.targetId == EntityRef(target)) return;
-  if (t.started) StopBuild(sim, L, builder, t, true);  // switching work: the old target is not failed
+  // switching work: CBuildTaskHelper::SetFocus 0x5f5b00 stops the old work (OnStopBuild 0x5f5a20, 0x5f5b32..0x5f5b36)
+  // only when its weak link to the old target (helper+8) still holds an entity (0x5f5b10..0x5f5b2c); a target
+  // freed since is not stopped at all, and the new one is started at once (started +0x10 = 1, OnStartBuild
+  // 0x5fc8e0). Seen: pro replay 4v4_setons_1 5418, army 4's engineers 0x400034, 0x400030 and 0x40003b, guards
+  // whose repair children worked on the factory 0x400033 that its upgrade replaced (destroyed at 5417): the
+  // original starts them on the new factory with no OnStopBuild between, so their consumption stays on and their
+  // grants are not handed back (the army's income 74.42 E 7.21 M at 5419; ours 78.89 / 8.11, three grants more).
+  if (t.started && FindUnitAny(sim, t.targetId)) StopBuild(sim, L, builder, t, true);
   t.targetId = EntityRef(target);
   builder->focusId = EntityRef(target);  // Unit::SetFocusEntity, then OnAssignedFocusEntity (no args)
   sim.CallMethod(L, builder, "OnAssignedFocusEntity", 0);
@@ -3284,12 +3291,15 @@ void RefreshGuardTasks(Sim& sim, UnitCommand& c) {
 // prologue's null test 0x5f939d..0x5f93a5), noMove = 0, state 0. The caller wakes the thread.
 void RepairTaskCommandEvent(Sim& sim, Unit* h, BuildTask& ch, const UnitCommand& c) {
   lua_State* L = sim.L();
-  if (ch.workId) {
-    if (Unit* w = FindUnitAny(sim, ch.workId)) w->unitStates.Erase(US("NoReclaim"));
+  // 0x5f9d65..0x5f9d77: all of it only when the task's weak link to its work target (+0x5c) still holds an entity;
+  // a work target freed since (its link emptied) gets no OnStopBuild here, and the helper stays started (see
+  // SetFocus). Seen: pro replay 4v4_setons_1 5418 (SetFocus above).
+  if (Unit* w = ch.workId ? FindUnitAny(sim, ch.workId) : nullptr) {
+    w->unitStates.Erase(US("NoReclaim"));
     h->workProgress = 0;
     if (ch.started) StopBuild(sim, L, h, ch, true);
-    ch.workId = 0;
   }
+  ch.workId = 0;
   Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
   ch.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
   ch.noMove = false;

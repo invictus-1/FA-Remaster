@@ -139,7 +139,9 @@ float AirLayerSpawnHeight(const Sim& sim, const BlueprintInfo& bp, lua_State* L,
 void AirMotionTick(Sim& sim, Unit* u);
 // The air navigator's formation following (UpdateCurrentTargetFromFormation 0x5a4d80), as its Execute runs it in the
 // army stage: in the motion pass before the unit's UpdateInfoCache and MotionTick.
-void AirFormationFollow(Sim& sim, Unit* u);
+void AirFormationFollow(Sim& sim, Unit* u, bool deferred = false);
+// The turns AirFormationFollow put off until the path queues have delivered (original order: after LandNavStageEnd)
+void AirFormationFollowDeferred(Sim& sim);
 // The navigator's SetGoal: fly to the cell of `goal`; takes effect at `tick`. layer 1 (Land) is a
 // landing move (NewMoveTask with goal layer Land): the spot goes through PrepareMove and the
 // aircraft lands (or hovers at TransportHoverHeight while loading / carrying) there.

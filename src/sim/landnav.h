@@ -98,6 +98,10 @@ bool LandNavActive(const Unit* u);
 bool LandNavTarget(const Unit* u, Vec3* out);
 bool LandNavGoal(const Unit* u, Vec3* out);
 int LandNavStatus(const Unit* u);
+// CAiNavigatorLand::HasGoodPath 0x5a3eb0: the path navigator (+0x68) is in state 5 (following its path)
+bool LandNavHasGoodPath(const Unit* u);
+// The path navigator's state (+0xc; 0 without a navigator)
+int LandNavPathState(const Unit* u);
 // Structures changed occupancy in cells [x0, x1) x [z0, z1).
 void LandNavDirty(Sim& sim, int x0, int z0, int x1, int z1);
 // Before the occupancy (cells [x0, x1) x [z0, z1)) or the heights (vertices [vx0, vx1] x [vz0, vz1]) change: the
