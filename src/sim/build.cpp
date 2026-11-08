@@ -2828,8 +2828,18 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   // the original's other three (0x200002, 0x200008, 0x200009), later in the command stage, keep Capture through 2377
   // and end at 2378; ours ended them at once.
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  // The held entity is the order's blip for a player's order (+0x44): it stays while the army keeps the blip, also when
+  // the unit it stood for is gone (destroyed: our goal reference no longer resolves); the task then goes on toward the
+  // blip. Seen: 4v4_4 (FAF 3840) 5535, army 7's engineer 0x70004a reaches its Capture of the blip 0x3040000e (stream
+  // 5211; the unit it named, of army 4, destroyed since; the id is another factory's by then): the original walks off
+  // toward the blip (Capture x1 [Moving]); ours found no target and ended the order.
+  if (!e && t.targetViaBlip && !t.targetFakeId && t.targetBlipRef)
+    if (Entity* b = sim.FindEntity(t.targetBlipRef); b && b->kind == Entity::Kind::Blip) e = b;
   Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
-  if (!e || (T && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
+  // 0x604422..0x60445b (read): the capturable byte (attributes +0x69, vt+0x40) is asked only when the held entity is a
+  // unit (vt+0x10); a player's order holds the army's recon BLIP of the unit, and a blip is asked nothing.
+  const bool heldAsUnit = T && !(t.targetViaBlip && !t.targetFakeId);
+  if (!e || (heldAsUnit && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
     PushObject(L, u);
     sim.CallMethod(L, u, "OnStopCapture", 1);
     return kTaskDone;
@@ -3663,6 +3673,7 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->order = "Capture";
       t->goalId = c.targetId;
       t->targetViaBlip = c.targetViaBlip;  // (its CAiTarget holds the blip: CaptureStep's spot search)
+      t->targetBlipRef = c.targetBlipRef;  // (the blip itself, which outlives its unit: CaptureStep)
       // the ctor 0x603f90 first makes its own CAiTarget of the order's entity (UpdateTarget 0x5d55b0 at 0x604020):
       // one Unit::PickTargetPoint draw for a unit (or a unit's blip) with AI.TargetBones, the value unused. Seen:
       // Engineers 2272, three engineers given Capture of a blip at 2271 draw 0x6aaf94 once each as their tasks start
