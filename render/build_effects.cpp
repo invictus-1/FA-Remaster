@@ -26,6 +26,13 @@ namespace render {
 // and where the cells come down to a few pixels across the lattice fills in to a faint glow of the shape, so that far
 // off it does not crawl. The derivatives are taken first, before anything branches per pixel.
 const char kBuildShaderBlock[] = R"hlsl(
+// [fogbuild] 1 while the model drawn is a building the army remembers under the fog of war (the mesh shader sets it from the
+// instance): its build look is a still photo of it, not at work - its clock stands at 0. (Declared once, here or in the
+// mesh shader's own source.)
+#ifndef BUILD_STILL
+#define BUILD_STILL
+static float buildStill = 0;
+#endif
 // A lattice's lines in one cell coordinate `c` (lines where its fraction is a half, as the original's), `width` of a
 // cell each side of a line, `dc` the coordinate's change over a pixel. x: how much of a line covers this pixel (what is
 // cut away and what is not goes by it); y: how bright it is there. A line is drawn at least about a pixel wide, and as
@@ -58,10 +65,10 @@ float RemasteredBuildSolid(int faction, float f, float3 shape, float3 rest, out 
     float veinNoise = CloudNoise(rest * 1.6) * 0.65 + CloudNoise(rest * 4.1 + 7.3) * 0.35;
     float takeNoise = CloudNoise(rest * 2.3 + 3.7) * 0.7 + CloudNoise(rest * 7.9) * 0.3;
     float dv = fwidth(veinNoise), dt = fwidth(takeNoise);
-    float g = abs(frac(veinNoise * 5 - time * 0.06) - 0.5);
+    float g = abs(frac(veinNoise * 5 - (time * (1 - buildStill)) * 0.06) - 0.5);
     float vw = max(0.05, dv * 3);
     float veins = (1 - smoothstep(vw - dv * 2.5, vw + dv * 2.5, g)) * saturate(0.05 / vw);
-    float pulse = 0.75 + 0.25 * sin(time * 1.7 + veinNoise * 9);
+    float pulse = 0.75 + 0.25 * sin((time * (1 - buildStill)) * 1.7 + veinNoise * 9);
     float take = (f - 0.5) * 2.2 - 0.1;                    // (the front: below 0 none yet, past 1 all of it)
     float edgeWidth = max(0.04, dt * 2);
     float solid = smoothstep(takeNoise - edgeWidth * 0.5, takeNoise + edgeWidth * 0.5, take);
@@ -89,9 +96,9 @@ float RemasteredBuildSolid(int faction, float f, float3 shape, float3 rest, out 
     float2 wire = BuildLines(cc, dcy, 0.03);
     float along = dot(cc, float3(1, 1, 1)) * 0.7;
     float lane = CloudHash(floor(cc) + 1.3);
-    float glint = saturate(1 - abs(frac(along - time * (0.35 + 0.4 * lane) + lane) - 0.5) * 12);
+    float glint = saturate(1 - abs(frac(along - (time * (1 - buildStill)) * (0.35 + 0.4 * lane) + lane) - 0.5) * 12);
     glint *= glint * glint;
-    work = float3(1.0, 0.12, 0.05) * (wire.y * (1.1 + 0.35 * sin(time * 5 + shape.y * 30))) + float3(1.0, 0.6, 0.4) * (wire.y * glint * 3);
+    work = float3(1.0, 0.12, 0.05) * (wire.y * (1.1 + 0.35 * sin((time * (1 - buildStill)) * 5 + shape.y * 30))) + float3(1.0, 0.6, 0.4) * (wire.y * glint * 3);
     return wire.x > 0.3 ? 0 : -1;
   }
   // the UEF (and whatever has no look of its own): from the top down as the game's box of light sinks; the level of
@@ -108,9 +115,9 @@ float RemasteredBuildSolid(int faction, float f, float3 shape, float3 rest, out 
     return 1;
   }
   float2 wire = BuildLines(cu, du, 0.035);
-  float band = saturate(1 - abs(frac(shape.y * 0.5 - time * 0.25) - 0.5) * 6);
+  float band = saturate(1 - abs(frac(shape.y * 0.5 - (time * (1 - buildStill)) * 0.25) - 0.5) * 6);
   // (a thin scan line running up it every two seconds or so)
-  float phase = frac(shape.y * 0.7 - time * 0.45);
+  float phase = frac(shape.y * 0.7 - (time * (1 - buildStill)) * 0.45);
   float scan = 1 - smoothstep(0, max(0.004, dy * 1.0), min(phase, 1 - phase));
   work = float3(0.2, 0.55, 1.0) * (wire.y * (0.8 + 1.5 * band * band)) + float3(0.6, 0.85, 1.0) * (wire.y * scan * 2.5);
   return wire.x > 0.3 ? 0 : -1;
@@ -122,7 +129,7 @@ void RemasteredBuildSurface(int faction, float solid, float3 rest, float edge, i
   if (faction == 1) {
     // Aeon: liquid metal, a pale gold, its surface flowing (the normal bent by a slow noise running up it), a faint warm
     // light of its own (molten)
-    float3 q = rest * 1.5 + float3(0, -time * 0.5, 0);
+    float3 q = rest * 1.5 + float3(0, -(time * (1 - buildStill)) * 0.5, 0);
     float3 bend = float3(CloudNoise(q), CloudNoise(q + 11.3), CloudNoise(q + 23.1)) - 0.5;
     float3 liquidN = normalize(N + bend * 0.9);
     N = normalize(lerp(liquidN, N, solid));

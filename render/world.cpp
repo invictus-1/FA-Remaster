@@ -3339,6 +3339,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale), color, built, asRemembered && !photo ? nullptr : &pose, hitAt,
                  model->scrolls && !hitAt ? (photo ? photo->treads : u.treads) : nullptr, u.id + 1);
       meshes.Belt(belt);  // [machinery]
+      if (asRemembered && fractionComplete < 1) meshes.StillBuild();  // [fogbuild] (a photo: its build look not at work)
       }
       // [stealthlook] hidden from radar (its stealth on, or within an allied stealth field), the player's side alone: a faint
       // shimmering veil a little out from its body
@@ -3744,7 +3745,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (u.hasShield && !u.dead) energy.AddOwner({u.position[0], u.position[1], u.position[2]}, u.shieldRatio);
   // a weapon's beam without the game's own effect on it: a plain band in a lightened army colour
   for (const FrameBeam& b : frame.beams) {
-    if (effects.OnEntity(b.id)) continue;
+    if (effects.OnEntity(b.id) || !b.seen) continue;  // ([fogbeam] not one the army does not see)
     const Vec3 c = colorOf(b.army) * 0.5f + Vec3{0.5f, 0.5f, 0.5f};
     ribbons.PlainBeam({b.start[0], b.start[1], b.start[2]}, {b.end[0], b.end[1], b.end[2]}, c, 0.25f);
   }

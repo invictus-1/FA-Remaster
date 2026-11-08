@@ -689,6 +689,7 @@ void Wildlife::Listen(const Frame& frame, const FrameCombat& combat) {
   }
   // beams: heard where they start and end when they come on
   for (const FrameBeam& b : frame.beams) {
+    if (!b.seen) continue;  // [fogbeam] (as the shots: not what the army does not see)
     auto [it, fresh] = beams_.try_emplace(b.id);
     it->second.stamp = stamp_;
     if (fresh) {
