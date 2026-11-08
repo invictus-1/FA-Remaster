@@ -813,7 +813,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
 }
 
 uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Quat& orientation, float scale, double startedAt, bool attached,
-                          const std::string& faction) {
+                          const std::string& faction, bool hidden) {
   const EmitterBlueprint* bp = Blueprint(blueprint, faction);
   if (!bp->ok) return 0;
   const double when = startedAt >= 0 ? startedAt : now_;
@@ -845,6 +845,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.emitIfVisible = bp->emitIfVisible;
   e.attached = attached;
   e.started = startedAt >= 0 ? startedAt : now_;
+  e.hidden = hidden;  // [fogflash]
   index_[e.id] = emitters_.size();
   emitters_.push_back(e);
   if (volumesOn && bp->volumeInside) {  // (VolumeReplaces = "inside": remembered a moment, VolumeBorn)
@@ -856,7 +857,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   // they are; the blueprint may say otherwise (LightRadius, LightSeconds, LightStrength)
   const bool adds = (bp->blendMode == 2 || bp->blendMode == 3) && !bp->rampPath.empty();
   const bool brief = bp->lifetime > 0 && bp->lifetime <= 30;
-  if (remastered && bp->lightStrength > 0 && (bp->lightRadius > 0 || (adds && brief)) && flashes.size() < 400) {
+  if (remastered && !hidden && bp->lightStrength > 0 && (bp->lightRadius > 0 || (adds && brief)) && flashes.size() < 400) {
     Flash f;
     f.position = position;
     f.born = e.started;
