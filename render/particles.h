@@ -136,8 +136,10 @@ class Particles {
   // `faction` ("uef", "aeon", "cybran", "seraphim"; "": none): whose the thing it is made on or at is.
   // In the remastered look the blueprint is read first from the visuals track's folder of that faction
   // beside the shared one (effect_files.h); its textures are read by the paths it names, as always.
+  // [fogflash] `hidden`: made on something the army the picture is for does not see now - it starts hidden (as Hide), and
+  // throws no flash of light (a muzzle flash in the fog lit the ground round a unit not drawn: Chris's "Cybran flicker")
   uint32_t Start(const std::string& blueprint, Vec3 position, const Quat& orientation = {}, float scale = 1, double startedAt = -1,
-                 bool attached = false, const std::string& faction = std::string());
+                 bool attached = false, const std::string& faction = std::string(), bool hidden = false);
   // Where an emitter is now (one that sits on something that moves).
   void Move(uint32_t emitter, Vec3 position, const Quat& orientation);
   // What the game's scripts change on an emitter: its size (ScaleEmitter), and one of its

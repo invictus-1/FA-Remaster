@@ -410,13 +410,16 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     e.kind = Kind::Emitter;
     e.attached = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity";
     if (VolfxLog* log = VolfxLog::Get()) log->SetOrigin(event, frame);  // (MOHO64_DEBUG_VOLFX: what it is made on)
+    // [fogflash] made on a thing the army does not see now: hidden from its start, and no flash of light (the update hides it
+    // only a frame later, and the flash was already made)
+    const bool unseen = Hidden(frame, event.entity);
     // [snowkick] a ground effect of the map's terrain type, its snow's for the share of the snow lying (which ones: by the
     // effect's number, so that the same ones always are)
     if (snowLying > 0 && particles_->remastered && (event.id * 2654435761u >> 8) % 1000 < snowLying * 1000) {
       const std::string snow = SnowKick(event.blueprint);
-      if (!snow.empty()) e.handle = particles_->Start(snow, e.position, e.orientation, 1, at, e.attached, e.faction);
+      if (!snow.empty()) e.handle = particles_->Start(snow, e.position, e.orientation, 1, at, e.attached, e.faction, unseen);
     }
-    if (!e.handle) e.handle = particles_->Start(e.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction);
+    if (!e.handle) e.handle = particles_->Start(e.blueprint, e.position, e.orientation, 1, at, e.attached, e.faction, unseen);
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     if (!e.handle) return;
   } else if (f == "CreateTrail") {
