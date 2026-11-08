@@ -363,7 +363,8 @@ bool BakedDebris::Play(const std::string& unitId, const Model* unit, Vec3 at, co
 
 int BakedDebris::Playing() const {
   int n = 0;
-  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < std::max(d->settled, d->style->settled) ? 1 : 0;
+  // ([confetti] in flight while thrown: the slow sinking after it, chunk by chunk down to the bed, is not counted)
+  for (const auto& d : deaths_) n += clock_ < 0 || clock_ - d->born < d->style->settled ? 1 : 0;
   return n;
 }
 

@@ -75,7 +75,7 @@ class BakedDebris {
   bool hot = false;
   std::function<float(float, float)> groundHeight;
   // --- tuning ---
-  int mostPlaying = 8;      // deaths in flight at once
+  int mostPlaying = 24;     // deaths in flight at once ([confetti] was 8: a big sea fight left most to the generic chunks)
   int mostLying = 40;       // sets lying at once
   float lieSeconds = 10;    // after the last chunk has come to rest, they lie still this long,
   float sinkSeconds = 70;   // then sink into the ground over this long (each its own height), and are gone
