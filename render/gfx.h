@@ -504,6 +504,31 @@ class Device {
   // (checks) with vsync, each picture shown for this many refreshes (1 to 4; Direct3D 12's sync interval; Vulkan: 1
   // always): a screen of 240 Hz shows 60 pictures a second with 4
   int syncInterval = 1;
+  // [head2] Extra windows on this device (the original's dual-screen mode, its head 1 on the second screen; the
+  // interface's request 48, docs/ui-dualscreen.md section 4). The device's own window (DeviceDesc's) is window 0 and
+  // paces the frames as ever (vsync, the latency limiter, frame generation are its alone); an extra window never makes
+  // a frame wait: its picture is shown without waiting for its screen's refresh, and only when its swap chain has a
+  // picture free (so a 160 Hz second screen is drawn for about 160 times a second beside a 240 Hz first one).
+  struct WindowDesc {
+    DeviceDesc::WindowSystem windowSystem = DeviceDesc{}.windowSystem;
+    void* window = nullptr;
+    void* display = nullptr;
+    std::function<uint64_t(void* instance)> hostSurface;  // (Host: makes the window's surface for the device's instance)
+    int width = 0, height = 0;
+  };
+  // A new extra window (1, 2, ...); -1 and `error` when it cannot be made. Not within a frame.
+  virtual int AddWindow(const WindowDesc& desc, std::string* error) {
+    (void)desc;
+    if (error) *error = "this device has no extra windows";
+    return -1;
+  }
+  virtual void RemoveWindow(int window) { (void)window; }  // (not within a frame)
+  virtual void ResizeWindow(int window, int width, int height) { (void)window, (void)width, (void)height; }  // (not within a frame)
+  // Within a frame: `picture` (a colour target, RGBA8, exactly the window's size) shown in extra window `window` when
+  // the frame ends - if its swap chain has a picture free now (never waits). False, and nothing done, when it has none
+  // (the window keeps the picture it shows) or the window or picture will not do. Asked again in the same frame: the
+  // later picture is shown.
+  virtual bool ShowInWindow(int window, Texture picture) { (void)window, (void)picture; return false; }
   // The graphics card's time at this point of the frame: a stage of that name starts here and lasts
   // until the next mark or the frame's end. `name` must last (a string literal). At most 62 a frame.
   virtual void Mark(const char* name) = 0;

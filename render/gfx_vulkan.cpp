@@ -691,6 +691,11 @@ class VulkanDevice final : public Device {
   bool BeginParallel(int count) override;
   Recorder* Parallel(int index) override;
   void EndParallel() override;
+  // [head2] extra windows (gfx.h)
+  int AddWindow(const WindowDesc& desc, std::string* error) override;
+  void RemoveWindow(int window) override;
+  void ResizeWindow(int window, int width, int height) override;
+  bool ShowInWindow(int window, Texture picture) override;
 
  private:
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size; a
@@ -820,6 +825,36 @@ class VulkanDevice final : public Device {
   bool memoryBudget_ = false;
   PFN_vkGetPhysicalDeviceMemoryProperties2 memoryProperties2_ = nullptr;
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+  // [head2] the extra windows (AddWindow): a surface and a swap chain each (mailbox, else immediate, else fifo), shown from
+  // the frame's queue; an image acquired without waiting when ShowInWindow is asked (none free: none drawn), the picture
+  // blitted in at the frame's end, the frame's submit waiting for the acquire and signalling the image's `rendered`
+  struct ExtraWindow {
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkSwapchainKHR chain = VK_NULL_HANDLE;
+    std::vector<VkImage> images;
+    std::vector<VkImageLayout> layouts;
+    std::vector<VkSemaphore> rendered;  // (per image)
+    VkSemaphore acquired[kFrames] = {};
+    VkExtent2D extent{};
+    int width = 0, height = 0;
+    uint32_t image = 0;
+    Texture show;
+    bool held = false;  // (an image acquired for this frame)
+    bool stale = false;
+    bool used = false;
+  };
+  std::vector<ExtraWindow> extras_;  // (index + 1: the window's number)
+  ExtraWindow* Extra(int window) {
+    return window >= 1 && static_cast<size_t>(window) <= extras_.size() && extras_[static_cast<size_t>(window - 1)].used
+               ? &extras_[static_cast<size_t>(window - 1)]
+               : nullptr;
+  }
+  bool MakeExtraChain(ExtraWindow* w, std::string* error);
+  void DropExtraChain(ExtraWindow* w);
+  void DropExtra(ExtraWindow* w);
+  // (EndFrame) the extra windows' pictures blitted into their images; the semaphores the submit waits for / signals
+  void RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals);
+  void PresentExtras();
   VkFormat swapFormat_ = VK_FORMAT_UNDEFINED;
   std::vector<VkImage> swapImages_;
   std::vector<VkImageLayout> swapLayouts_;
@@ -1204,6 +1239,8 @@ VulkanDevice::~VulkanDevice() {
   }
   if (generating_) StopPresenter();
   vkDeviceWaitIdle(device_);
+  for (ExtraWindow& w : extras_)  // [head2]
+    if (w.used) DropExtra(&w);
   earlyAcquired_ = false;  // (its semaphore goes with the frames' below)
   if (watcher_.joinable()) {  // (the measure's watcher: what it still waits for shown or given up)
     {
@@ -5401,17 +5438,22 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, latencyQueries_, static_cast<uint32_t>(2 * cur_ + 1));
     latencySlots_[cur_].timed = true;
   }
+  // [head2] the extra windows' pictures, and what the submit waits for and signals besides the window's
+  std::vector<VkSemaphore> waits, signals;
+  if (waitAcquired_) waits.push_back(f.acquired);
+  if (show) signals.push_back(rendered_[swapIndex_]);
+  RecordExtras(cmd, &waits, &signals);
   vkEndCommandBuffer(cmd);
   FlushUploads();  // (what this frame draws with goes to the card ahead of it)
-  VkPipelineStageFlags wait = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  const std::vector<VkPipelineStageFlags> wait(waits.size(), VK_PIPELINE_STAGE_TRANSFER_BIT);
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  si.waitSemaphoreCount = waitAcquired_ ? 1 : 0;
-  si.pWaitSemaphores = &f.acquired;
-  si.pWaitDstStageMask = &wait;
+  si.waitSemaphoreCount = static_cast<uint32_t>(waits.size());
+  si.pWaitSemaphores = waits.data();
+  si.pWaitDstStageMask = wait.data();
   si.commandBufferCount = 1;
   si.pCommandBuffers = &cmd;
-  si.signalSemaphoreCount = show ? 1 : 0;
-  si.pSignalSemaphores = show ? &rendered_[swapIndex_] : nullptr;
+  si.signalSemaphoreCount = static_cast<uint32_t>(signals.size());
+  si.pSignalSemaphores = signals.empty() ? nullptr : signals.data();
   vkQueueSubmit(queue_, 1, &si, f.done);
   if (latency_ || measureLatency) latencySlots_[cur_].handed = Now(), latencySlots_[cur_].order = ++handedCount_;
   if (show) {
@@ -5437,6 +5479,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
       if (measureLatency) Watch(id, latencySlots_[cur_].read);
     }
   }
+  PresentExtras();  // [head2]
   inFrame_ = false;
   if (capture) {
     vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
@@ -5444,6 +5487,239 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
   }
   cur_ = (cur_ + 1) % kFrames;
+}
+
+// [head2] Extra windows (gfx.h, the interface's request 48: the original's head 1 on the second screen). Each a surface
+// and a swap chain of its own, shown from the frame's queue (which must be able to show on it). An image is acquired
+// without waiting when ShowInWindow is asked; none free, nothing is drawn for it that frame. The picture is blitted in
+// at the frame's end (the blit turns RGBA into the chain's order), the frame's submit waits for the acquire and signals
+// the image's semaphore, and the image is shown after the window's own: mailbox where there is (the newest picture at the
+// screen's own refresh, never waiting), else immediate, else fifo (where a frame would then wait for that screen).
+int VulkanDevice::AddWindow(const WindowDesc& desc, std::string* error) {
+  auto fail = [&](const std::string& what) {
+    if (error) *error = "Vulkan: an extra window: " + what;
+    return -1;
+  };
+  if (inFrame_) return fail("not within a frame");
+  if (desc.width <= 0 || desc.height <= 0) return fail("no size");
+  ExtraWindow w;
+  w.width = desc.width;
+  w.height = desc.height;
+  VkResult r = VK_ERROR_INITIALIZATION_FAILED;
+  if (desc.windowSystem == DeviceDesc::WindowSystem::Host) {
+    const uint64_t made = desc.hostSurface ? desc.hostSurface(static_cast<void*>(instance_)) : 0;
+    std::memcpy(&w.surface, &made, sizeof w.surface);
+    r = made ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+  } else {
+#if defined(_WIN32)
+    if (desc.windowSystem == DeviceDesc::WindowSystem::Win32 && desc.window) {
+      VkWin32SurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+      sci.hinstance = GetModuleHandleW(nullptr);
+      sci.hwnd = static_cast<HWND>(desc.window);
+      r = vkCreateWin32SurfaceKHR(instance_, &sci, nullptr, &w.surface);
+    }
+#else
+    // (written to the specification; not tried: there is no Linux or macOS here)
+    if (desc.windowSystem == DeviceDesc::WindowSystem::Xlib && vkCreateXlibSurfaceKHR) {
+      VkXlibSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
+      sci.dpy = static_cast<Display*>(desc.display);
+      sci.window = static_cast<Window>(reinterpret_cast<uintptr_t>(desc.window));
+      r = vkCreateXlibSurfaceKHR(instance_, &sci, nullptr, &w.surface);
+    } else if (desc.windowSystem == DeviceDesc::WindowSystem::Wayland && vkCreateWaylandSurfaceKHR) {
+      VkWaylandSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+      sci.display = static_cast<wl_display*>(desc.display);
+      sci.surface = static_cast<wl_surface*>(desc.window);
+      r = vkCreateWaylandSurfaceKHR(instance_, &sci, nullptr, &w.surface);
+    } else if (desc.windowSystem == DeviceDesc::WindowSystem::Metal && vkCreateMetalSurfaceEXT) {
+      VkMetalSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+      sci.pLayer = static_cast<const CAMetalLayer*>(desc.window);
+      r = vkCreateMetalSurfaceEXT(instance_, &sci, nullptr, &w.surface);
+    }
+#endif
+  }
+  if (r != VK_SUCCESS || !w.surface) return fail(std::string("its surface: ") + Result(r));
+  VkBool32 can = VK_FALSE;
+  vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queueFamily_, w.surface, &can);
+  if (!can) {
+    vkDestroySurfaceKHR(instance_, w.surface, nullptr);
+    return fail("the drawing queue cannot show on it");
+  }
+  for (VkSemaphore& sem : w.acquired) {
+    VkSemaphoreCreateInfo smi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    vkCreateSemaphore(device_, &smi, nullptr, &sem);
+  }
+  w.used = true;
+  if (!MakeExtraChain(&w, error)) {
+    DropExtra(&w);
+    return -1;
+  }
+  for (size_t i = 0; i < extras_.size(); ++i)
+    if (!extras_[i].used) {
+      extras_[i] = std::move(w);
+      return static_cast<int>(i) + 1;
+    }
+  extras_.push_back(std::move(w));
+  return static_cast<int>(extras_.size());
+}
+
+bool VulkanDevice::MakeExtraChain(ExtraWindow* w, std::string* error) {
+  VkSurfaceCapabilitiesKHR caps;
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, w->surface, &caps);
+  if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+    if (error) *error = "Vulkan: an extra window's swap chain cannot be copied into";
+    return false;
+  }
+  uint32_t n = 0;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, w->surface, &n, nullptr);
+  std::vector<VkSurfaceFormatKHR> formats(n);
+  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, w->surface, &n, formats.data());
+  VkSurfaceFormatKHR chosen = formats.empty() ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR} : formats[0];
+  for (const VkSurfaceFormatKHR& f : formats)
+    if ((f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+      chosen = f;
+      break;
+    }
+  vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, w->surface, &n, nullptr);
+  std::vector<VkPresentModeKHR> modes(n);
+  vkGetPhysicalDeviceSurfacePresentModesKHR(physical_, w->surface, &n, modes.data());
+  VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+  for (VkPresentModeKHR m : modes)
+    if (m == VK_PRESENT_MODE_MAILBOX_KHR || (m == VK_PRESENT_MODE_IMMEDIATE_KHR && mode == VK_PRESENT_MODE_FIFO_KHR)) mode = m;
+  VkExtent2D extent = caps.currentExtent;
+  if (extent.width == UINT32_MAX) extent = {static_cast<uint32_t>(w->width), static_cast<uint32_t>(w->height)};
+  w->extent = extent;
+  if (extent.width == 0 || extent.height == 0) return true;  // (minimised: none until it has a size again)
+  VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+  sci.surface = w->surface;
+  sci.minImageCount = std::max(caps.minImageCount, 3u);
+  if (caps.maxImageCount) sci.minImageCount = std::min(sci.minImageCount, caps.maxImageCount);
+  sci.imageFormat = chosen.format;
+  sci.imageColorSpace = chosen.colorSpace;
+  sci.imageExtent = extent;
+  sci.imageArrayLayers = 1;
+  sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  sci.preTransform = caps.currentTransform;
+  sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  sci.presentMode = mode;
+  sci.clipped = VK_TRUE;
+  sci.oldSwapchain = w->chain;
+  VkSwapchainKHR made = VK_NULL_HANDLE;
+  const VkResult r = vkCreateSwapchainKHR(device_, &sci, nullptr, &made);
+  DropExtraChain(w);  // (the old one, retired by the new)
+  if (r != VK_SUCCESS) {
+    if (error) *error = std::string("Vulkan: an extra window's swap chain: ") + Result(r);
+    return false;
+  }
+  w->chain = made;
+  vkGetSwapchainImagesKHR(device_, w->chain, &n, nullptr);
+  w->images.resize(n);
+  vkGetSwapchainImagesKHR(device_, w->chain, &n, w->images.data());
+  w->layouts.assign(n, VK_IMAGE_LAYOUT_UNDEFINED);
+  w->rendered.assign(n, VK_NULL_HANDLE);
+  for (VkSemaphore& sem : w->rendered) {
+    VkSemaphoreCreateInfo smi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    vkCreateSemaphore(device_, &smi, nullptr, &sem);
+  }
+  w->stale = false;
+  return true;
+}
+
+void VulkanDevice::DropExtraChain(ExtraWindow* w) {
+  for (VkSemaphore sem : w->rendered)
+    if (sem) vkDestroySemaphore(device_, sem, nullptr);
+  w->rendered.clear();
+  w->images.clear();
+  w->layouts.clear();
+  if (w->chain) vkDestroySwapchainKHR(device_, w->chain, nullptr);
+  w->chain = VK_NULL_HANDLE;
+  w->held = false;
+}
+
+void VulkanDevice::DropExtra(ExtraWindow* w) {
+  DropExtraChain(w);
+  for (VkSemaphore& sem : w->acquired)
+    if (sem) vkDestroySemaphore(device_, sem, nullptr), sem = VK_NULL_HANDLE;
+  if (w->surface) vkDestroySurfaceKHR(instance_, w->surface, nullptr);
+  *w = ExtraWindow{};
+}
+
+void VulkanDevice::RemoveWindow(int window) {
+  ExtraWindow* w = Extra(window);
+  if (!w || inFrame_) return;
+  vkDeviceWaitIdle(device_);
+  DropExtra(w);
+}
+
+void VulkanDevice::ResizeWindow(int window, int width, int height) {
+  ExtraWindow* w = Extra(window);
+  if (!w || inFrame_ || width <= 0 || height <= 0 || (width == w->width && height == w->height && !w->stale)) return;
+  vkDeviceWaitIdle(device_);
+  w->width = width;
+  w->height = height;
+  std::string error;
+  if (!MakeExtraChain(w, &error)) fprintf(stderr, "render: %s\n", error.c_str());
+}
+
+bool VulkanDevice::ShowInWindow(int window, Texture picture) {
+  ExtraWindow* w = Extra(window);
+  TextureRec* t = Find(picture);
+  if (!w || !inFrame_ || !t || t->depth || generating_ || PhotoNow()) return false;
+  if (t->width != w->width || t->height != w->height) return false;
+  if (w->stale && !w->held) {  // (out of date: made again, the card idle first)
+    vkDeviceWaitIdle(device_);
+    std::string error;
+    if (!MakeExtraChain(w, &error)) return false;
+  }
+  if (!w->chain || w->extent.width != static_cast<uint32_t>(w->width) || w->extent.height != static_cast<uint32_t>(w->height)) return false;
+  if (!w->held) {
+    const VkResult r = vkAcquireNextImageKHR(device_, w->chain, 0, w->acquired[cur_], VK_NULL_HANDLE, &w->image);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR) w->stale = true;
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return false;  // (none free now: nothing drawn for it)
+    if (r == VK_SUBOPTIMAL_KHR) w->stale = true;
+    w->held = true;
+  }
+  w->show = picture;
+  return true;
+}
+
+void VulkanDevice::RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals) {
+  for (ExtraWindow& w : extras_) {
+    if (!w.used || !w.held) continue;
+    TextureRec* t = Find(w.show);
+    waits->push_back(w.acquired[cur_]);  // (the acquire is waited for whatever: its semaphore is signalled)
+    signals->push_back(w.rendered[w.image]);
+    const VkImage swap = w.images[w.image];
+    Barrier(cmd, swap, w.layouts[w.image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+    if (t) {
+      const VkImageLayout was = t->layout;
+      Barrier(cmd, t->image, was, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT);
+      VkImageBlit blit{};
+      blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      blit.srcOffsets[1] = {t->width, t->height, 1};
+      blit.dstOffsets[1] = {static_cast<int32_t>(w.extent.width), static_cast<int32_t>(w.extent.height), 1};
+      vkCmdBlitImage(cmd, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+      Barrier(cmd, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, was, VK_IMAGE_ASPECT_COLOR_BIT);
+    }
+    Barrier(cmd, swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
+    w.layouts[w.image] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  }
+}
+
+void VulkanDevice::PresentExtras() {
+  for (ExtraWindow& w : extras_) {
+    if (!w.used || !w.held) continue;
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores = &w.rendered[w.image];
+    pi.swapchainCount = 1;
+    pi.pSwapchains = &w.chain;
+    pi.pImageIndices = &w.image;
+    const VkResult r = vkQueuePresentKHR(queue_, &pi);
+    if (r != VK_SUCCESS) w.stale = true;
+    w.held = false;
+    w.show = {};
+  }
 }
 
 }  // namespace
