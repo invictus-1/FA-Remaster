@@ -111,6 +111,8 @@ void LandNavTerrainChanged(Sim& sim, int vx0, int vz0, int vx1, int vz1);
 bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z);
 // FootprintFits at a cell (terrain and structures).
 bool LandCellFits(Sim& sim, const Unit* u, int x, int z);
+// SFootprint::FitsAt 0x720aa0 of the unit's BLUEPRINT footprint (bp+0xd8) at world (x, z): its own cell
+bool LandFitsAtBp(Sim& sim, const Unit* u, float x, float z);
 // The path navigator follows its formation slot (state 6): the land navigator's FollowingLeader.
 bool LandNavFollowingSlot(const Unit* u);
 // Drops the sim's path tables (Sim::~Sim: they point into this sim's navigation grids) and prints its profile

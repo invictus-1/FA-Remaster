@@ -92,6 +92,9 @@ bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
   if (shot != projectileAt_.end()) return !frame.projectiles[shot->second].seen;
   auto made = entityAt_.find(entity);
   if (made != entityAt_.end()) return !frame.entities[made->second].seen;
+  // [fogbeam] a weapon's beam (by its unit)
+  auto beam = beamAt_.find(entity);
+  if (beam != beamAt_.end() && beam->second < frame.beams.size() && frame.beams[beam->second].id == entity) return !frame.beams[beam->second].seen;
   return false;
 }
 
@@ -99,7 +102,7 @@ bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
 bool Effects::Listed(const Frame& frame, uint32_t entity) const {
   if (entity == kNone) return false;
   auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
-  return (unit != frame.units.end() && unit->id == entity) || projectileAt_.count(entity) || entityAt_.count(entity);
+  return (unit != frame.units.end() && unit->id == entity) || projectileAt_.count(entity) || entityAt_.count(entity) || beamAt_.count(entity);
 }
 
 bool Effects::Explosion(const FrameEffectEvent& event, const Frame& frame) const {
@@ -412,7 +415,10 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     if (VolfxLog* log = VolfxLog::Get()) log->SetOrigin(event, frame);  // (MOHO64_DEBUG_VOLFX: what it is made on)
     // [fogflash] made on a thing the army does not see now: hidden from its start, and no flash of light (the update hides it
     // only a frame later, and the flash was already made)
-    const bool unseen = Hidden(frame, event.entity);
+    // ([fogbeam] on an entity in none of the frame's lists - a script's Entity() without a mesh, as the Cybran build beams'
+    // far ends that carry their sparks: by its place when made, as long as it lasts)
+    e.unlistedUnseen = e.attached && !event.seen && !Listed(frame, event.entity);
+    const bool unseen = Hidden(frame, event.entity) || e.unlistedUnseen;
     // [snowkick] a ground effect of the map's terrain type, its snow's for the share of the snow lying (which ones: by the
     // effect's number, so that the same ones always are)
     if (snowLying > 0 && particles_->remastered && (event.id * 2654435761u >> 8) % 1000 < snowLying * 1000) {
@@ -557,7 +563,8 @@ void Effects::Update(double tick, const Frame& frame) {
       }
     }
     // what hangs on something the army the picture is for does not see is not shown
-    const bool hidden = e.attached && here && Hidden(frame, e.entity);
+    // ([fogbeam] also one on a beam or on a script's entity without a mesh, which AttachPoint may not place)
+    const bool hidden = e.attached && (Hidden(frame, e.entity) || (e.unlistedUnseen && !Listed(frame, e.entity)));
     switch (e.kind) {
       case Kind::Emitter:
         // one that is not attached and has run out is forgotten (the particle system has ended it)

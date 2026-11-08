@@ -1212,6 +1212,14 @@ bool LandCellFits(Sim& sim, const Unit* u, int x, int z) {
   return nav.FootprintFits(nav.CellCaps(fp, x, z, true), fp, x, z) != 0;
 }
 
+bool LandFitsAtBp(Sim& sim, const Unit* u, float x, float z) {
+  const NamedFootprint& fp = Bp(u).footprint;
+  const int cx = static_cast<int>(std::nearbyint(x - std::max<int>(1, fp.sizeX) * 0.5f));
+  const int cz = static_cast<int>(std::nearbyint(z - std::max<int>(1, fp.sizeZ) * 0.5f));
+  Navigation& nav = sim.navigation();
+  return nav.FootprintFits(nav.CellCaps(fp, cx, cz, true), fp, cx, cz) != 0;
+}
+
 bool LandNavFollowingSlot(const Unit* u) {
   const LandNav* n = u->motion.nav.get();
   return n && n->active && n->state == 6;

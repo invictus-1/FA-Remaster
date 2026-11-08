@@ -47,6 +47,9 @@ int ShotEvent(Sim& sim, int impactType, const AiTarget& target, const Entity* hi
 void WeaponImpactEvent(Sim& sim, class UnitWeapon* w, int event);
 // The direction a standing unit turns its body to for a weapon slaved to the body (false: none).
 bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir);
+// Every unit's combat data (its blueprint's, read in Lua at the unit's first need) made now, serially, for a stage
+// whose turns run on the worker pool and may read it (parallel order's entity pass: SlavedFaceVector's AI.AttackAngle)
+void MakeCombatData(const std::vector<Unit*>& units);
 
 // Weapon blueprint values the engine reads (RUnitBlueprintWeapon), cached per blueprint table.
 struct WeaponBp {

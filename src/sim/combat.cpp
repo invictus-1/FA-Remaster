@@ -3408,6 +3408,14 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
 // within GuardScanRadius of the unit (score = distance; no angle). The blip cache is read as the weapons
 // last built it (not refreshed here).
 float GuardScanRadiusOf(Unit* u) { return CB(u).guardScanRadius; }
+
+// (the weapons stage does the same for its units, WeaponsTickParallel; the entity pass also has the units made after
+// that stage in the beat: a unit made by a script in the commands or threads stage, given a target there, whose
+// weapon is slaved to its body, read its blueprint's AI.AttackAngle at its first motion turn, on the pool, through Lua.
+// Seen: B1 (16 threads, parallel order) at beat 25919, "a parallel task called the Lua API" from SlavedFaceVector.)
+void MakeCombatData(const std::vector<Unit*>& units) {
+  for (Unit* u : units) (void)CB(u);
+}
 Unit* GuardBestEnemy(Sim& sim, Unit* u) {
   UnitWeapon* w = PrimaryWeapon(u);
   if (!w || !w->bp) return nullptr;

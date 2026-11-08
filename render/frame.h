@@ -158,6 +158,8 @@ struct FrameBeam {
   uint32_t army = 0;
   float start[3] = {0, 0, 0};
   float end[3] = {0, 0, 0};
+  // [fogbeam] by the army the picture is for: its firing unit seen now (its unit gone: the place it starts at)
+  bool seen = true;
 };
 
 // What a script did with an effect in one beat: the engine's EffectEvent (src/sim/sim_view.h,

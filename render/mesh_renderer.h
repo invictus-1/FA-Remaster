@@ -77,6 +77,9 @@ class MeshRenderer {
   // ground and what stands behind showing through. It casts no shadow, and is left out of what the rest of the frame takes
   // from the list (ForEachAdded: the ground cover's discs, the rays' scene): it is not there.
   void SeeThroughGhost();
+  // [fogbuild] The model just added (a building under construction) is one the army remembers under the fog of war: its
+  // build look drawn still and faint (a photo of it as last seen, not at work: World's remembered buildings).
+  void StillBuild();
   // [stealthlook] The scene as it stood before the see-through pass, which a cloaked unit's body (a ghost added with `built`
   // 1.25: World::cloakLook) bends; the world sets it before that pass while such a unit is listed, and clears it after.
   gfx::Texture cloakBehind;

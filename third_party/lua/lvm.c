@@ -647,6 +647,7 @@ StkId luaV_execute (lua_State *L) {
           if (slot && slot != &luaO_nilobject && (!ttisnil(slot) || h->metatable == NULL)) {
             h->flags = 0;
             h->wstamp++;
+            luaC_logslot(L, h, slot);
             setobj2t(slot, RKC(i));
             luaC_barriert(L, h);
             vmbreak;

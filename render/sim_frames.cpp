@@ -702,6 +702,10 @@ void SimFrames::Beat(const moho::Sim& sim) {
     b.army = v.army > 0 ? static_cast<uint32_t>(v.army - 1) : 0xff;
     std::memcpy(b.start, v.start, sizeof b.start);
     std::memcpy(b.end, v.end, sizeof b.end);
+    // [fogbeam] seen while its unit is (Monkeylord's laser, a Colossus's beam: drawn in the fog with their units hidden)
+    if (focus > 0)
+      b.seen = v.unit != 0xffffffffu && v.unit != 0 ? (moho::ReconOf(sim, focus, v.unit) & moho::kReconSeenNow) != 0
+                                                    : (moho::ReconAt(sim, focus, v.start) & moho::kReconSeenNow) != 0;
     beat.beams.push_back(b);
   }
   // how the simulation changed the ground since the last beat (FlattenMapRect under a structure):

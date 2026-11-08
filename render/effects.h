@@ -124,6 +124,7 @@ class Effects {
     Vec3 glowColor;
     std::string faction;       // beams and trails: whose blueprint they play (FactionOf)
     bool buildBeam = false;    // (buildfx) a build beam (BuildEffects::IsBuildBeam)
+    bool unlistedUnseen = false;  // [fogbeam] made on an entity in no list where the army did not see (hidden while so)
     bool original = false;     // (buildfx) made in the original effects' look whatever the world's (the stand's right side)
     float beamLength = -1e30f, beamThickness = -1e30f;  // (unitsfx) what SetBeamParam set (below -1e29: not set; exhausts.h)
   };

@@ -32,6 +32,14 @@
 
 struct Table;
 void luaC_incbarriert (lua_State *L, struct Table *t);
+/* moho64: the slots written into a black table while the collector marks are logged (lgcinc.c, "written slots"), so
+** that its re-traversal looks at those slots only. luaC_logslot before every store into a table's slot (where
+** Table::wstamp is bumped: luaH_set, luaH_setnum, newkey, OP_SETTABLE's direct store); luaC_logfull when its slots
+** move (resize). One test of the table's mark byte (black, bit 2, or logged, bit 7) on the way of every store. */
+#define luaC_logslot(L,t,o)	{ if ((t)->marked & ((1<<2) | (1<<7))) luaC_inclogslot(L, t, o); }
+#define luaC_logfull(L,t)	{ if ((t)->marked & (1<<7)) luaC_inclogfull(L, t); }
+void luaC_inclogslot (lua_State *L, struct Table *t, const TObject *slot);
+void luaC_inclogfull (lua_State *L, struct Table *t);
 void luaC_incbarrierf (lua_State *L, GCObject *o, GCObject *v);
 void luaC_linkupval (lua_State *L, GCObject *o);
 lu_byte luaC_newmark (lua_State *L, lu_byte classic);

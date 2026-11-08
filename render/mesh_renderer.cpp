@@ -320,13 +320,14 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   }
   [branch] if (n.bones.y < -0.5) {
     // [machinery] (y -2: a factory whose belt moves, z how far: its vertices on the belt's bone)
-    if (n.bones.y < -1.5 && kind12.z >= 0 && i.bones.x == (uint)(kind12.z + 0.5)) o.belt = n.bones.z;
+    if (n.bones.y < -1.5 && n.bones.y > -2.5 && kind12.z >= 0 && i.bones.x == (uint)(kind12.z + 0.5)) o.belt = n.bones.z;
     // a tank's treads, scrolled as it drives, as the original's ComputeScrolledTexcoord does it: the two
     // strips at the foot of its texture, each by its tread's amount (bones.z, bones.w), across both sets;
     // where the level's mesh says its treads scroll
     float scroll = kind6.x < 0.5 ? 0 : i.uv.y > 0.95 ? n.bones.z : i.uv.y > 0.90 ? n.bones.w : 0;
     o.uv.xz += scroll;
     o.tint = 0;  // (no ghost's tint)
+    if (n.bones.y < -2.5) o.tint.x = -3;  // [fogbuild] (y -3: a remembered building under construction, StillBuild)
   }
   // [bakeddebris] a baked death's chunks (baked_debris.h): their normal map lies on the first texture coordinates as their other
   // textures do; the second's u is their heat mask, handed on in the tint's x as -1 - mask (no other tint lies there), the heat's
@@ -365,6 +366,11 @@ VOut VS(VIn i, uint instance : SV_InstanceID) {
   return o;
 }
 
+// [fogbuild] (build_effects.cpp's kBuildShaderBlock: 1 for a remembered building, its build look's clock still)
+#ifndef BUILD_STILL
+#define BUILD_STILL
+static float buildStill = 0;
+#endif
 // A unit under construction: how much of the finished surface shows at a place of the model
 // (0..1; below 0: nothing is there yet), and the light of the work itself.
 float BuildSolid(int faction, float f, float3 shape, out float3 work) {
@@ -382,7 +388,7 @@ float BuildSolid(int faction, float f, float3 shape, out float3 work) {
     }
     float3 g = abs(frac(shape * 7 + shape.yzx * 7) - 0.5);
     float wire = 1 - smoothstep(0.0, 0.05, min(g.x, min(g.y, g.z)));
-    work = float3(1.0, 0.12, 0.05) * (wire * (1.5 + 0.5 * sin(time * 5 + shape.y * 30)));
+    work = float3(1.0, 0.12, 0.05) * (wire * (1.5 + 0.5 * sin((time * (1 - buildStill)) * 5 + shape.y * 30)));
     return wire > 0.3 ? 0 : -1;
   }
   // the UEF, and whatever else: from the top down, as the game's own box of light sinks round what is
@@ -394,7 +400,7 @@ float BuildSolid(int faction, float f, float3 shape, out float3 work) {
   }
   float3 g = abs(frac(shape * 10) - 0.5);
   float wire = 1 - smoothstep(0.0, 0.07, min(g.x, min(g.y, g.z)));
-  float band = saturate(1 - abs(frac(shape.y * 0.5 - time * 0.25) - 0.5) * 6);
+  float band = saturate(1 - abs(frac(shape.y * 0.5 - (time * (1 - buildStill)) * 0.25) - 0.5) * 6);
   work = float3(0.2, 0.55, 1.0) * (wire * (0.8 + 1.5 * band * band));
   return wire > 0.3 ? 0 : -1;
 }
@@ -905,7 +911,9 @@ float4 Shade(VOut i, bool front) {
   float solid = 1;
   float3 work = 0;
   if (building) {
+    buildStill = i.tint.x < -2.5 ? 1 : 0;  // [fogbuild]
     solid = BuildSolid(faction, i.color.a, i.shape, work);
+    work *= 1 - 0.6 * buildStill;  // ([fogbuild] remembered, not at work: its build light faint)
     clip(solid);
     work *= falling.w > 0 ? falling.w : 1;  // (less to an eye opened for the night)
     // (a lattice's line: its own light and nothing else)
@@ -2027,6 +2035,13 @@ void MeshRenderer::Reach(Vec3 centre, float radius) {  // [bakeddebris]
   entries_.back().radius = radius;
   culls_.back().centre = centre;
   culls_.back().radius = radius;
+}
+
+void MeshRenderer::StillBuild() {
+  if (entries_.empty()) return;
+  Entry& e = entries_.back();
+  if (e.instance.color[3] >= 0.999f || e.instance.bones[1] != 0 || e.instance.bones[2] != 0 || e.instance.bones[3] != 0) return;
+  e.instance.bones[1] = -3;  // (the vertex shader: y -3, its build look still)
 }
 
 void MeshRenderer::SeeThroughGhost() {
