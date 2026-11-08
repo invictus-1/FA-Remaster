@@ -1551,6 +1551,21 @@ bool TargetExempt(Sim& sim, const Unit* u, const Entity* e) {
   return false;
 }
 
+// IsTargetExempt 0x5d7340 asked of a recon blip (FindBestEnemy passes each entry of its list as it is: 0x5d7cb1..0x5d7cbf,
+// the attacker's vt+0x58 with the entry): a Reclaim (0x13) or Capture (0x15) order of the unit whose target entity as
+// held (cmd+0x120: the blip the order named, 0x5d73c2..0x5d73d6) or as resolved (GetEntity 0x5e2ce0 on cmd+0x11c:
+// the blip's unit, 0x5d73dc..0x5d73ee) is that blip. (The BeingCaptured part, 0x5d7423, asks the entity's unit,
+// vt+0x10: none for a blip.)
+bool BlipExempt(const Unit* u, const Entity* blip) {
+  if (!blip) return false;
+  const uint32_t ref = EntityRef(blip);
+  for (const auto& c : u->commands)
+    if ((c->type == CommandType::Reclaim || c->type == CommandType::Capture) &&
+        (c->targetId == ref || (c->targetViaBlip && c->targetBlipRef == ref)))
+      return true;
+  return false;
+}
+
 // FindBestEnemy 0x5d7cf6: the candidate inside the playable rect, edges included (no margin, no army flag)
 bool InMap(Sim& sim, Vec3 p) {
   if (!sim.map()) return true;
@@ -1621,6 +1636,13 @@ Unit* FindBestEnemy(Sim& sim, UnitWeapon* w, const std::vector<Unit*>& list, flo
         continue;
       }
       if (Blacklisted(w, e) || TargetExempt(sim, u, e) || e->unitStates.Has(US("DoNotTarget"))) continue;
+    } else if (BlipExempt(u, fake ? static_cast<const Entity*>(fake) : e->blip)) {
+      // (the entry is the blip: an order to reclaim or capture the unit names its blip, so the unit's own entry is
+      // exempt by the order's resolved target and its blip's entry by the target as held. Seen: 4v4_1 (FAF 3840)
+      // 5830, army 6's commander 0x600000 (url0001) holds a Reclaim of army 1's 0x100016 given through its blip
+      // 0x30100016 (5627); its RightRipper's list has the unit and its blip: the original takes neither (no acquire
+      // draws at 5830), ours took the blip (out of range, status 3) and drew twice.)
+      continue;
     }
     if (e->layer != "Air" && !InMap(sim, ep)) continue;
     if (!Targetable(sim, w, e)) continue;
@@ -3982,13 +4004,18 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 // Seen: MP1 14957 / 14961, army 0's player drags the ground Attack 0x2b of its strategic bomber 0x18f (uaa0304) to
 // (579.67, 335.37) and (578.74, 333.71): the original's air target turns to (580, 335) at 14958 and (579, 334) at
 // 14962; ours kept flying at the first point (581, 333).
-// (The patrol's and the guard's child attack tasks link the same listener to their parent's command; they are not
-// handled here.)
-void AttackTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& c) {
+// The patrol's child attack task links the same listener to the command heading the queue (the ctor's link does not
+// ask whose child the task is), so a drag of the patrol point reaches it: asChild (RetargetPatrolTasks). The patrol's
+// own listener (0x61c3e0) was linked first and is told first. Seen: 4v4_setons_2 (FAF 3839) 6318, army 0's player
+// drags the formation AggressiveMove 0x45 (43 units); 0x50 and 0xa7, whose attack children were made at 6317 (their
+// first tick due 6323) and who still drove on to their old goals, brake from 6319 in the original (the woken child's
+// state 5: AbortMove) and stand from 6328 with a new child (Attacking); ours drove on. (The guard's child attack
+// tasks are not handled here.)
+void AttackTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& c, bool asChild) {
   {
-    if (!t.adata || t.child) return;
+    if (!t.adata || t.child != asChild) return;
     AttackData& d = *t.adata;
-    if (d.cmd.lock().get() != &c) return;
+    if (!asChild && d.cmd.lock().get() != &c) return;
     const AiTarget old = CommandTarget(sim, t);
     const bool cmdEntity = c.targetId && sim.FindEntity(c.targetId);
     const bool taskEntity = old.type == 1 && sim.FindEntity(old.entityId);
