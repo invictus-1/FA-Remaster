@@ -466,10 +466,13 @@ int l_LooksForTests(lua_State* L) {
   // main one); screens: how many; secondScreen: the Secondary Adapter's at the start (-1: none); windowScreen: the
   // screen the live window is on (-1: none)
   const DisplayMode& display = Display();
-  const char* modes[7] = {"displayRequest", "windowedWidth", "windowedHeight", "displayScreen", "screens", "secondScreen", "windowScreen"};
-  const int modeValues[7] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight,
-                             display.screen, static_cast<int>(display.screens.size()), display.secondScreen, display.windowScreen};
-  for (int i = 0; i < 7; ++i) {
+  // heads: the heads the program runs with (2: the second head), secondWidth / secondHeight: head 1's size
+  const char* modes[10] = {"displayRequest", "windowedWidth", "windowedHeight", "displayScreen", "screens", "secondScreen", "windowScreen",
+                           "heads", "secondWidth", "secondHeight"};
+  const int modeValues[10] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight,
+                              display.screen, static_cast<int>(display.screens.size()), display.secondScreen, display.windowScreen,
+                              display.heads, display.secondWidth, display.secondHeight};
+  for (int i = 0; i < 10; ++i) {
     lua_pushstring(L, modes[i]);
     lua_pushnumber(L, modeValues[i]);
     lua_rawset(L, -3);
@@ -805,8 +808,10 @@ void SetupPrimaryAdapterSettings(lua_State* L) {
 
 // READ (FA exe 0x8d26d0): "Command Line Override" alone (default "overridden") when the command line chose the
 // mode; else "Disabled", and when the primary is not a window (the argument, 0x8d27b7) each mode of adapter 1 at
-// least 1024x768, each once; its default "disabled" (0x8d29ec). Ours: every screen but the main one, and only
-// where a second head can be shown (DisplayMode::secondHeadShown).
+// least 1024x768, each once; its default "disabled" (0x8d29ec). Ours: every screen but the main one, with
+// DisplayMode::secondHeadShown (the test switch MOHO64UI_SECOND_HEAD=1; for every PC with two screens once the
+// renderer's request 48 is in). The choice applies at the next start
+// (FAF's option is restart = true; main.cpp's head rule, docs/ui-dualscreen.md 3.2).
 void SetupSecondaryAdapterSettings(lua_State* L, bool windowed) {
   const DisplayMode& display = Display();
   std::vector<std::pair<std::string, std::string>> states;
@@ -816,6 +821,8 @@ void SetupSecondaryAdapterSettings(lua_State* L, bool windowed) {
     return;
   }
   states.push_back({"<LOC _Disabled>", "disabled"});
+  // (2026-11-08, the lead: with two screens the list waits for the renderer's request 48, the second window's world;
+  // until then only the test switch lists them, so no player picks a second screen whose games show a black world)
   if (!windowed && display.secondHeadShown)
     for (size_t i = 1; i < display.screens.size(); ++i) states.push_back(ScreenState(display, static_cast<int>(i), 1));
   SetOptionStates(L, "secondary_adapter", states, "disabled");
@@ -1579,6 +1586,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     }
     if (key == "CAM_FREE") return turn(keys.camFree);  // (CameraControls::camFree)
     if (key == "CAM_SETLOD") return CameraLodCommand(L, value);  // (a camera's LOD scale: worldview.cpp)
+    if (key == "UI_TRACKUNIT") return TrackUnitCommand(L, value);  // (a camera follows the selection: worldview.cpp)
     if (key == "REN_DECALFADEFRACTION") {  // (kept for the picture: LookSettings::decalFadeFraction)
       if (!value.empty()) Looks().decalFadeFraction = number;
       return;

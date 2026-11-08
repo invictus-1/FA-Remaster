@@ -321,7 +321,7 @@ check("the display modes are Windowed and one per screen", table.getn(adapter) =
     and string.find(adapter[2].key or '', '^%d+,%d+,%d+$') ~= nil, true)
 check("and a profile that never chose takes the main screen's own", video.primary_adapter.default, adapter[2] and adapter[2].key)
 local second = video.secondary_adapter and video.secondary_adapter.custom and video.secondary_adapter.custom.states or {}
-check("no second screen to choose (no second head yet)", table.getn(second) == 1 and second[1].key == 'disabled', true)
+check("no second screen to choose (the list waits for the renderer's second window)", table.getn(second) == 1 and second[1].key == 'disabled', true)
 ConExecute("SC_PrimaryAdapter windowed")
 check("Windowed asks the window to leave a full screen", moho64ui_Looks().displayRequest, 1)
 check("at the size it had as a window (1024x768 when none is kept)", moho64ui_Looks().windowedWidth .. "x" .. moho64ui_Looks().windowedHeight, "1024x768")

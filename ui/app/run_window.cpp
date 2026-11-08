@@ -188,7 +188,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   Window window;
   Window::Callbacks cb;
   // (hooks.held: the window holds its picture; the state shown gets no input, and a resize only makes the target anew)
-  bool holding = false, resizeOwed = false;
+  bool holding = false, resizeOwed = false, resizeOwed1 = false;
   cb.mouseMove = [&](const UiEvent& e) {
     if (!holding) MouseMove(current().L(), current().ui(), e);
   };
@@ -206,7 +206,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);
     if (holding) resizeOwed = true;
-    else current().ui().Resize(w, h);
+    else current().ui().OnResize(current().L(), 0, w, h);  // (its frame, then uimain.OnApplicationResize: IUIManager::OnResize)
   };
   // (With hooks the window first stays hidden: the world's picture may be opened on it at once,
   // which takes seconds, and a window shown but not answering would be marked so by the system.)
@@ -222,6 +222,65 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.Show();
   }
   NoteWindowScreen(window);
+  // [head2] The second head's window (DisplayMode::heads, main.cpp's head rule; docs/ui-dualscreen.md 3.3): owned by
+  // the main one and never activated (the keys stay with the main window: the original's keys are global), full screen
+  // on the Secondary Adapter's screen, or the test window (framed, on the primary's screen). Its mouse is head 1's (its
+  // own pixels, UiEvent::head); the wheel over it is handed to it by the main window; the mouse lock holds the mouse in
+  // the rectangle round both. Until the renderer has a second window (renderer request 48), it shows head 1's interface
+  // through the plain copy (Window::Present), drawn only where it changed: FAF's logo in the menus, the loading splash,
+  // and in a game the frame of CameraHead2's world view, whose world stays black. SDL: UNTESTED (window_sdl.cpp).
+  const DisplayMode& startMode = Display();
+  std::unique_ptr<Window> window2;
+  std::unique_ptr<SoftwareTarget> target1;
+  RecordingTarget recorder1;
+  IncrementalPainter painter1;
+  long long shown1 = 0;
+  int sinceShown1 = 0;
+  if (startMode.heads >= 2 && startMode.secondWidth > 0 && startMode.secondHeight > 0) {
+    Window::Callbacks cb1;
+    auto onHead1 = [](UiEvent e) {
+      e.head = 1;
+      return e;
+    };
+    cb1.mouseMove = [&, onHead1](const UiEvent& e) {
+      if (!holding) MouseMove(current().L(), current().ui(), onHead1(e));
+    };
+    cb1.mouseButton = [&, onHead1](const UiEvent& e, bool pressed, bool dbl) {
+      if (!holding) MouseButton(current().L(), current().ui(), onHead1(e), pressed, dbl);
+    };
+    cb1.mouseWheel = [&, onHead1](const UiEvent& e) {
+      if (!holding) MouseWheel(current().L(), current().ui(), onHead1(e));
+    };
+    cb1.key = cb.key;  // (keys are global; it never has the keyboard, but should the system give it a key)
+    cb1.resized = [&](int w, int h) {
+      if (target1 && w == target1->Width() && h == target1->Height()) return;
+      target1 = std::make_unique<SoftwareTarget>(w, h);
+      painter1.Invalidate();
+      if (holding) resizeOwed1 = true;
+      else current().ui().OnResize(current().L(), 1, w, h);
+    };
+    target1 = std::make_unique<SoftwareTarget>(startMode.secondWidth, startMode.secondHeight);
+    window2 = std::make_unique<Window>();
+    window2->owner = window.Handle();
+    window2->noActivate = true;
+    Window::Screen on2;
+    const bool full2 = !startMode.secondWindowTest && ScreenOf(startMode.secondScreen, &on2);
+    if (window2->Create(startMode.secondWidth, startMode.secondHeight, "FA Remastered - second head", cb1, full2, true, full2 ? &on2 : nullptr)) {
+      window.partner = window2.get(), window2->partner = &window;
+      Logf(LogLevel::Info,
+           "moho64ui: window 2 (the second head): %s %dx%d; head 1's interface by the plain copy, its world view black until the "
+           "renderer's second window (renderer request 48)",
+           full2 ? ("full screen on screen " + std::to_string(startMode.secondScreen + 1) + ",").c_str() : "a framed window of",
+           startMode.secondWidth, startMode.secondHeight);
+    } else {
+      Logf(LogLevel::Warning, "moho64ui: window 2 (the second head) did not open: head 1 is not shown");
+      window2.reset();
+    }
+  }
+  // (MOHO64UI_SECOND_CAPTURE=<file.png>: head 1's picture as window 2 shows it, saved at the frame MOHO64UI_CAPTURE_FRAME,
+  // 300 unless given: for checks)
+  const char* secondCapture = std::getenv("MOHO64UI_SECOND_CAPTURE");
+  const int secondCaptureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
   // The mouse pointer: the texture the scripts last set, as the system's own pointer.
   std::string pointerTexture, pointersShown;
   int pointerX = 0, pointerY = 0;
@@ -234,11 +293,14 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (pointerKnown && texture == pointerTexture && hotX == pointerX && hotY == pointerY && hidden == pointerHidden) return;
     pointerKnown = true, pointerTexture = texture, pointerX = hotX, pointerY = hotY, pointerHidden = hidden;
     window.HidePointer(hidden);
+    if (window2) window2->HidePointer(hidden);  // ([head2] the same pointer over both windows)
     if (hidden) return;
     static const Image none;
     const Image& image = texture.empty() ? none : LoadTexture(ScriptState::From(user.L())->vfs(), texture);
     bool made = image.valid() && window.SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY);
     if (!made) window.SetPointer(nullptr, 0, 0, 0, 0);
+    if (window2 && !(made && window2->SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY)))
+      window2->SetPointer(nullptr, 0, 0, 0, 0);
     // For the log: which pointers the run showed (an animated one counts once, by its first picture).
     std::string name = texture.substr(texture.find_last_of('/') + 1);
     size_t dash = name.find_last_of('-');
@@ -389,7 +451,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         hostDrawn = IntRect{0, 0, target->Width(), target->Height()};
         if (resizeOwed && (current().ui().width() != target->Width() || current().ui().height() != target->Height()))
           current().ui().Resize(target->Width(), target->Height());
-        resizeOwed = false;
+        if (resizeOwed1 && target1 && (current().ui().width(1) != target1->Width() || current().ui().height(1) != target1->Height()))
+          current().ui().Resize(1, target1->Width(), target1->Height());
+        resizeOwed = resizeOwed1 = false;
+        painter1.Invalidate();
       }
       double dt = std::chrono::duration<double>(now - last).count();  // (since the last frame shown)
       last = now;
@@ -492,8 +557,38 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         else window.Present(*target);
       }
       presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
+      // [head2] Head 1's interface into window 2: drawn only where it changed, shown when it did (and once a second,
+      // for a window uncovered meanwhile). Until the renderer's second window (request 48) by the plain copy.
+      if (window2 && target1) {
+        MOHO_LAYER_ZONE(Ui, "ui: the second head's interface");
+        UserState& user1 = current();  // (eachFrame may have replaced the state shown)
+        IntRect changed1;
+        if (incremental) {
+          recorder1.Begin(target1->Width(), target1->Height());
+          user1.ui().Render(user1.L(), recorder1, 1);
+          changed1 = painter1.Paint(recorder1.commands(), *target1, 0xff000000u, IntRect{});
+        } else {
+          target1->Clear(0xff000000u);
+          user1.ui().Render(user1.L(), *target1, 1);
+          changed1 = IntRect{0, 0, target1->Width(), target1->Height()};
+        }
+        if (!changed1.empty() || ++sinceShown1 >= 60) {
+          window2->Present(*target1);
+          sinceShown1 = 0;
+          if (shown1++ == 0) Logf(LogLevel::Info, "moho64ui: window 2: head 1's first picture shown (frame %d)", frames);
+        }
+        if (secondCapture && frames + 1 == secondCaptureAt) {
+          if (target1->SavePng(secondCapture)) Logf(LogLevel::Info, "moho64ui: window 2: head 1's picture saved as %s", secondCapture);
+          else Logf(LogLevel::Warning, "moho64ui: window 2: cannot write %s", secondCapture);
+        }
+      }
       updatePointer(current());
-      window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
+      {  // while the camera is dragged or turned, in the window the mouse is in ([head2] the second head's: window 2)
+        const bool hold = current().ui().holdPointer;
+        const bool onHead1 = window2 && current().ui().mouseHead == 1;
+        window.HoldPointer(hold && !onHead1);
+        if (window2) window2->HoldPointer(hold && onHead1);
+      }
       drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count() * 1000.0; };
       stats.NoteParts(ms(now, t0), ms(t0, te), ms(te, tp), ms(tp, Clock::now()));
@@ -609,6 +704,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
          now.heldPictures - timesBefore.heldPictures, counted);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
+  if (window2) {
+    Logf(LogLevel::Info, "moho64ui: window 2: %lld pictures of head 1 shown in %d frames (%lld of %lld drawn whole)", shown1, frames,
+         painter1.fullFrames, painter1.frames);
+    window.partner = nullptr;
+  }
   LogDrawProfile();
   return frames;
 }

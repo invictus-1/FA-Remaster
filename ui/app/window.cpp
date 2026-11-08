@@ -51,6 +51,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     UiEvent e = MouseEvent(wp, lp);
     if (w->holding()) w->HeldPlace(&e.x, &e.y);  // a held pointer: the place its moves add up to
     e.left = left, e.middle = middle, e.right = right;  // for a button event: the button it is about
+    // [head2] A press on the second head's window (it never takes the keyboard) while no window of ours is in front: its
+    // owner comes to the front, so the keys reach the game again (ours, INFERRED: the original's exclusive heads had no
+    // other window to click).
+    if (pressed && w->noActivate && w->owner && !w->InFront()) SetForegroundWindow(static_cast<HWND>(w->owner));
     if (pressed) SetCapture(hwnd);
     else ReleaseCapture();
     if (w->callbacks.mouseButton) w->callbacks.mouseButton(e, pressed, dbl);
@@ -77,11 +81,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_RBUTTONUP: button(false, false, true, false, false); return 0;
     case WM_MOUSEWHEEL: {
       POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};  // screen coordinates for the wheel
-      ScreenToClient(hwnd, &p);
+      // [head2] The wheel comes to the window with the keyboard (the main one); over the other head's window it is that
+      // window's (in its own pixels, its own callbacks: head 1).
+      Window* to = w;
+      if (w->partner && w->partner->Handle() && WindowFromPoint(p) == static_cast<HWND>(w->partner->Handle())) to = w->partner;
+      ScreenToClient(static_cast<HWND>(to->Handle()), &p);
       UiEvent e = MouseEvent(GET_KEYSTATE_WPARAM(wp), MAKELPARAM(p.x, p.y));
       e.wheelRotation = GET_WHEEL_DELTA_WPARAM(wp);  // signed: away from the user is positive
       e.wheelDelta = WHEEL_DELTA;                    // the size of one notch
-      if (w->callbacks.mouseWheel) w->callbacks.mouseWheel(e);
+      if (to->callbacks.mouseWheel) to->callbacks.mouseWheel(e);
       return 0;
     }
     // Keys as the original's window library hands them on: a key down first; when nothing handled
@@ -304,7 +312,7 @@ void Window::SetMode(bool full, int width, int height, const Screen* on) {
     fullScreen = true;
     SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
     SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-    KeepMouseInside(lockMouse && GetForegroundWindow() == hwnd);
+    KeepMouseInside(lockMouse && InFront());
     return;
   }
   if (fullScreen) ClipCursor(nullptr);
@@ -336,7 +344,12 @@ void Window::Middle(int* x, int* y) const {
 void Window::LockMouse(bool lock) {
   if (lock == lockMouse) return;
   lockMouse = lock;
-  if (fullScreen) KeepMouseInside(lock && hwnd_ && GetForegroundWindow() == static_cast<HWND>(hwnd_));
+  if (fullScreen) KeepMouseInside(lock && hwnd_ && InFront());
+}
+
+bool Window::InFront() const {
+  const HWND front = GetForegroundWindow();
+  return front && ((hwnd_ && front == static_cast<HWND>(hwnd_)) || (partner && partner->hwnd_ && front == static_cast<HWND>(partner->hwnd_)));
 }
 
 void Window::KeepMouseInside(bool keep) {
@@ -344,12 +357,22 @@ void Window::KeepMouseInside(bool keep) {
     ClipCursor(nullptr);
     return;
   }
-  RECT rc;
-  GetClientRect(static_cast<HWND>(hwnd_), &rc);
-  POINT a{rc.left, rc.top}, b{rc.right, rc.bottom};
-  ClientToScreen(static_cast<HWND>(hwnd_), &a);
-  ClientToScreen(static_cast<HWND>(hwnd_), &b);
-  RECT clip{a.x, a.y, b.x, b.y};
+  // (the window's inside on the desktop; [head2] with the other head's window, the rectangle round both: the mouse may
+  // go over to head 1, not to a third screen)
+  auto inside = [](HWND h) {
+    RECT rc;
+    GetClientRect(h, &rc);
+    POINT a{rc.left, rc.top}, b{rc.right, rc.bottom};
+    ClientToScreen(h, &a);
+    ClientToScreen(h, &b);
+    return RECT{a.x, a.y, b.x, b.y};
+  };
+  RECT clip = inside(static_cast<HWND>(hwnd_));
+  if (partner && partner->hwnd_) {
+    const RECT o = inside(static_cast<HWND>(partner->hwnd_));
+    clip.left = std::min(clip.left, o.left), clip.top = std::min(clip.top, o.top);
+    clip.right = std::max(clip.right, o.right), clip.bottom = std::max(clip.bottom, o.bottom);
+  }
   ClipCursor(&clip);
 }
 
@@ -372,18 +395,20 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   wchar_t wtitle[256];
   MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
   const int fullX = on ? on->x : 0, fullY = on ? on->y : 0;  // (the main screen's top left is the desktop's 0, 0)
-  HWND hwnd = CreateWindowExW(0, wc.lpszClassName, wtitle, style, full ? fullX : CW_USEDEFAULT, full ? fullY : CW_USEDEFAULT,
-                              rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
+  // ([head2] the second head's: owned by the main window, never activated; see `owner`, `noActivate`)
+  HWND hwnd = CreateWindowExW(noActivate ? WS_EX_NOACTIVATE : 0, wc.lpszClassName, wtitle, style, full ? fullX : CW_USEDEFAULT,
+                              full ? fullY : CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, static_cast<HWND>(owner), nullptr,
+                              inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
   arrow_ = wc.hCursor;
   SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-  if (show) ShowWindow(hwnd, SW_SHOW);
+  if (show) ShowWindow(hwnd, noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
   return true;
 }
 
 void Window::Show() {
-  if (hwnd_) ShowWindow(static_cast<HWND>(hwnd_), SW_SHOW);
+  if (hwnd_) ShowWindow(static_cast<HWND>(hwnd_), noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
 }
 
 bool Window::Pump() {
@@ -427,6 +452,7 @@ bool Window::ScreenSize(int*, int*) { return false; }
 std::vector<Window::Screen> Window::Screens() { return {}; }
 int Window::RefreshRate() { return 60; }
 void Window::KeepMouseInside(bool) {}
+bool Window::InFront() const { return false; }
 void Window::LockMouse(bool lock) { lockMouse = lock; }
 void Window::SetMode(bool full, int, int, const Screen*) { fullScreen = full; }
 void Window::ClientSize(int* width, int* height) const { *width = *height = 0; }

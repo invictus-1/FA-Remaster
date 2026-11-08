@@ -391,6 +391,7 @@ bool OfferToCard(lua_State* L, DrawTarget& target, const Rect& dst, const Image&
   UserState* user = UserState::From(L);
   CardBackdrop* card = user->config().cardBackdrop;
   if (!card || !image.valid()) return false;
+  if (user->ui().renderingHead != 0) return false;  // ([head2] the card's backdrop is the main window's: head 1 draws its own)
   const float W = static_cast<float>(target.Width()), H = static_cast<float>(target.Height());
   auto near = [](float a, float b) { return std::fabs(a - b) < 0.5f; };
   if (!near(dst.x0, 0) || !near(dst.y0, 0) || !near(dst.x1, W) || !near(dst.y1, H)) return false;

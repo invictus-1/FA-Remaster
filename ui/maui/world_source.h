@@ -238,8 +238,13 @@ struct WorldViewSpec {
   WorldCamera camera;
   Kind kind = Kind::Main;
   int every = 2;  // (an inset: drawn every that many frames)
+  // [head2] The window (head) the view is shown in: 0 the main one; 1 the original's second head (FAF's multihead.lua
+  // CreateSecondView: a world view of the camera "CameraHead2" on GetFrame(1)), its place in that head's pixels. Kept
+  // on the interface's side only until the renderer has a second window (ui request 48 to the renderer): the world
+  // view hands the source window 0's views alone (maui/worldview.cpp GatherViews).
+  int window = 0;
   bool operator==(const WorldViewSpec& o) const {
-    return x == o.x && y == o.y && width == o.width && height == o.height && kind == o.kind && every == o.every &&
+    return x == o.x && y == o.y && width == o.width && height == o.height && kind == o.kind && every == o.every && window == o.window &&
            camera.target[0] == o.camera.target[0] && camera.target[1] == o.camera.target[1] && camera.target[2] == o.camera.target[2] &&
            camera.distance == o.camera.distance && camera.heading == o.camera.heading && camera.pitch == o.camera.pitch &&
            camera.fovY == o.camera.fovY && camera.lodScale == o.camera.lodScale;

@@ -15,7 +15,7 @@
 
 namespace moho::ui {
 
-class Window {  // (the host's one window)
+class Window {  // (the host's window: one, or with the second head two, docs/ui-dualscreen.md 3.3)
  public:
   struct Callbacks {
     std::function<void(const UiEvent&)> mouseMove;
@@ -117,6 +117,17 @@ class Window {  // (the host's one window)
   bool lockMouse = false;
   void LockMouse(bool lock);
   void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
+  // [head2] The second head's window (set before Create): `owner` the main window's handle (owned: not in the taskbar
+  // nor the alt-tab list, it rises with its owner), `noActivate` (WS_EX_NOACTIVATE: a click on it leaves the keyboard
+  // with the main window, so the keys keep working while the mouse is on head 1: the original's keys are global, input.h
+  // KeyEvent). `partner` (on the main window): the other head's window, whose screen the mouse may go to while it is
+  // kept inside (the lock is the bounding rectangle of both) and which a wheel over it is handed to.
+  void* owner = nullptr;
+  bool noActivate = false;
+  Window* partner = nullptr;
+  // Whether this window or its partner is the one in front (the original's WindowIsForeground 0x79cb10: the foreground
+  // window against its heads' windows).
+  bool InFront() const;
 };
 
 class UserState;

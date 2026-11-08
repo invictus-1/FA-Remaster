@@ -387,3 +387,46 @@ E. Chris's own look (two 4K screens, 240 / 160 Hz): goes on the ONE playtest lis
   renderer to confirm with his frame statistics.
 - Whether head 1 should also get FAF's minimap or other panels: FAF puts none there; keep as FAF (Chris's "original's
   way included"; a richer head 1 could be a later player option).
+
+---
+
+## 8. What is built (2026-11-08, ui helper "dualhead"; steps 1-5 and 8 of section 5)
+
+- `DisplayMode::heads`, `secondWidth/secondHeight`, `secondWindowTest` (user_state.h); main.cpp's head rule (3.2)
+  decides once at the start and logs `no second head: <why>` (the Secondary Adapter names no screen / the primary is
+  windowed / the PC has one screen / its screen is not there / it names the primary's own screen / there is no
+  window). Test switches: `--second-window WxH` or `MOHO64UI_SECOND_WINDOW=WxH` (a framed window on the primary's
+  screen, with a window only); headless `MOHO64UI_HEADS=2` + `MOHO64UI_HEAD1_SIZE=WxH` (no window). Condition (d)
+  of 3.2 (the renderer's window picture) is NOT applied: without the renderer's second window head 1 shows its
+  interface by the plain copy anyway.
+- `UiManager::CreateRootFrames(L, sizes)` (a frame per head at its own size), `Resize(head, w, h)`,
+  `width(head)/height(head)`, `OnResize(L, head, w, h)` = the frame, then `uimain.OnApplicationResize(head, w, h)`
+  (READ: IUIManager::OnResize 0x84cfc0 -> CMauiFrame::SetBounds 0x796550, MAUI_OnApplicationResize 0x83d9c0); the
+  window's resize and `moho64ui_Resize(w, h [, head])` go through it. Every UserState makes `Config::heads` frames.
+- Input: `UiEvent::head`, `UiManager::mouseHead`; `Target` hits the event's head's frame, the capture stack stays
+  global; test functions take a head (`moho64ui_MouseMove(x, y, head)`, `MouseButton(b, p, x, y, mods, head)`,
+  `MouseWheel(x, y, n, head)`, `ControlAt(x, y, head)`, `PixelAt(x, y, head)`, `InterfacePng(file, head)`), and
+  `moho64ui_EdgeScroll(on)`. Edge pan only with the mouse on head 0. The world views' mouse tests (PointedView,
+  the path preview's cursor, GetRightMouseButtonOrder) and MouseInView go by the mouse's head.
+- World views: `GatherViews` walks the other heads' frames; their views get `WorldViewSpec::window = 1` in
+  `g_viewsGiven` (`moho64ui_Views()` reports `window`) and are NOT given to the source ("renderer request 48"):
+  nothing changes for head 0. Until then a head-1 view has no picture (EnsurePicture false; only a selection box is
+  drawn in it) and its picking is the plain view from above (ProjectPoint / Unproject / UnitNearPlace): select, box
+  select, right-click orders and GetMouseWorldPos work on head 1 by that, not by the perspective picture.
+- `UI_TrackUnit <camera> ...` built (READ 0x834460: TargetNothing / GetTargetEntity / TargetEntities with the
+  selection); `cam_SetLOD CameraHead2` worked already.
+- Window: `Window::owner`, `noActivate` (WS_EX_NOACTIVATE, owned), `partner` (the mouse lock clips to the rectangle
+  round both windows; the wheel over the partner is handed to it), `InFront()` (either window); a press on window 2
+  while none of ours is in front brings the main one forward. RunWindow opens window 2 (full screen on the
+  Secondary Adapter's screen, or the test window), routes its mouse to head 1, draws head 1 into its own target
+  (recorder + incremental painter) and shows it by `Window::Present` when it changed (and once a second); the pointer
+  and the held pointer on both. `MOHO64UI_SECOND_CAPTURE=<png>` saves head 1's picture at frame
+  `MOHO64UI_CAPTURE_FRAME` (300). SDL: events go to their window by `windowID` (`SDL_WINDOW_NOT_FOCUSABLE` for
+  window 2; the mouse grab is off with two windows) - UNTESTED.
+- Options: the Secondary Adapter lists the other screens whenever the PC has 2 or more (MOHO64UI_SECOND_HEAD=1 still
+  forces it); `moho64ui_Looks()` gives `heads`, `secondWidth`, `secondHeight`.
+- Not done: steps 6-7 on the renderer's side (layer 1 to the renderer, `UseSecondWindow`), 3.3's WM_DISPLAYCHANGE
+  handling (head 1's screen gone, or the primary moved onto it: nothing hides window 2 yet), the `/dual` command
+  line, docs step 9 (README, HANDOFF).
+- Test: `ui/tests/dualhead.lua` (cases front, game, one); `screens.lua` and `lobby.lua` expect the list with 2+
+  screens.
