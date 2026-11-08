@@ -3368,7 +3368,23 @@ bool WithinWeaponRange(Sim& sim, UnitWeapon* w, const AiTarget& t) {
 Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
   if (!c.targetId) return c.pos;
   Entity* e = sim.FindEntity(c.targetId);
-  if (!e) return c.pos;
+  if (!e) {
+    // A player's order holds the army's recon BLIP (cmd+0x11c), which outlives its unit: with the unit gone,
+    // GetTargetPosGun 0x5e2a90 asks the blip (vt+0x1c, 0x5e2b27..0x5e2b75: ReconBlip::GetTargetPoint 0x5bf5f0, its
+    // no-source branch 0x5bf666: the blip's own place, raised). Seen: FAF 3839 pro replay setons_2 6847, army 0's
+    // 62-unit Attack 0x5a on blip 0x3010009a of army 1's structure 0x100098 (gone 6846, the blip until 6855): its
+    // formation is made at 6847 and centred near the blip in the original (unit 2 walks to its cell from 6856,
+    // Attacking until 6960); ours centred it on NaN, every unit got its own cell and ended the attack at 6856.
+    if (c.targetViaBlip && c.targetBlipRef && !c.targetFakeId)
+      if (Entity* b = sim.FindEntity(c.targetBlipRef); b && b->kind == Entity::Kind::Blip) {
+        AiTarget a;
+        a.type = 1;
+        a.entityId = c.targetBlipRef;
+        const Vec3 p = combat::TargetPos(sim, a, false);
+        return std::isnan(p.x) ? c.pos : p;
+      }
+    return c.pos;
+  }
   AiTarget a;
   a.type = 1;
   a.entityId = c.targetId;
