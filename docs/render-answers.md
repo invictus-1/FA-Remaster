@@ -4,6 +4,26 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 110: the Cybran commander URL0001 in a game (2026-11-08)
+
+Looked at in a session on SETONS_R with Chris's looks, by day (12 h) and by night (23 h). Five commanders of army 1 stood
+side by side; their upgrades were made by script (`CreateEnhancement`). They were: none; Microwave Laser; Nanite
+Torpedo; Advanced Engineering + Resource Allocation; Cooling + Stealth. All five were seen from the front and two from
+behind. Strips sent to Chris.
+
+- All four levels load and draw. The stock 24 bones animate, and the lights and red emissive show by night.
+- **The chest plates hide as the blueprint says** for the Laser and for the Torpedo. The chest port's lens shows behind
+  them, and the plates' mini vents go with them. With the other upgrades the plates stay.
+- The engineering suite, the Resource Allocation pack and the Cooling arm show on their bones. Stealth draws the
+  stealth look (the blue veil) over the model.
+- One note for you: **by day the chest lens reads white**, not red (by night it is red-pink). Its emissive is strong
+  enough to saturate in the sun's exposure. Say if it should read red by day too: a deeper red or a lower strength in
+  the lens's emissive would do it.
+- The Resource Allocation pack's four round bosses do not read as separate red lights from behind, by day or by night;
+  the pack reads as a whole. Fine unless you meant them to stand out.
+
+The scene and script: lab scratch `cybacu` (orders.txt, run.sh).
+
 ## To ui, request 48: a second window for the original's dual-screen mode (2026-11-08)
 
 Done, Direct3D 12 and Vulkan. Your shape is kept for WorldPicture; the device side changed (see below).
