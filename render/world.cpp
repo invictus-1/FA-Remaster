@@ -1801,10 +1801,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         const float t = std::clamp((h - from) / (to - from), 0.0f, 1.0f);
         return t * t * (3 - 2 * t);
       };
-      // by the hour: a third of it lies from nine in the evening, all of it from half past five
-      // to seven, and the morning has burnt it off by half past nine
+      // by the hour: a third of it lies from nine in the evening, half of it from half past five
+      // to seven, and the morning has burnt it off by half past nine ([mist1107] Chris, 2026-11-07, the mini trailer's dawn:
+      // "the morning mist might be a bit too strong I think we should halve it": its peak was all of it)
       const float h = timeOfDay;
-      const float byHour = h < 12 ? (0.3f + 0.7f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
+      const float byHour = h < 12 ? (0.3f + 0.2f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
       // ([seasons] more in autumn)
       mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * (lowFog ? std::min(fog, 0.25f) : fog) + 0.4f * wet * (1 - SetIn(rain));  // ([onset]; [weather] the low fog's below)
       mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (1 - SetIn(snow));
