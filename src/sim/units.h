@@ -456,6 +456,7 @@ class Unit : public Entity {
   // a FAVORSWATER request changes) and its navigator's status (a formation follower holds while its leader thinks).
   bool snapAltFp = false;     // altFootprintNav || altFootprintForced
   int snapNavStatus = 0;      // LandNavStatus
+  bool snapNavGoodPath = false;  // LandNavHasGoodPath
   bool snapAirSteering = false;  // an aircraft's AirMotion::steering
 };
 

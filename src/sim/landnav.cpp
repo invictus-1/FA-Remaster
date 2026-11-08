@@ -686,6 +686,7 @@ void ResetPathState(Sim& sim, Unit* u, LandNav& n) {
   // splice) and the waypoint had 1.)
   n.state = 0;
   n.wait = 0;
+  n.adjacent = false;  // (0x5ada10: +0x96, the 'target was adjacent' flag of the periodic re-check)
   // 0x5ad9c0: the target is the cell the unit stood in at its last Execute (+0x28 := +0x24)
   n.target = n.cur;
   n.hasTarget = true;
@@ -729,6 +730,7 @@ void RequestContinuation(Sim& sim, Unit* u, LandNav& n, int mode) {
   n.fits = Fits(sim, u, n.cur) && UnitClearTo(sim, u, n, n.cur);
   if (u->unitStates.Has(US("Attacking"))) mode = 3;
   if (mode == 3) n.attackVariant = true;
+  n.adjacent = false;  // (0x5aedef: +0x96 cleared with the request; FollowSlot leaves it, see there)
   n.pf.mode = mode;
   n.pf.anchor = n.cur;
   int g[4] = {n.path[0].x, n.path[0].z, n.path[0].x + 1, n.path[0].z + 1};
@@ -992,7 +994,13 @@ int FollowSlot(Sim& sim, Unit* u, LandNav& n) {
     n.following = true;
     n.lastFollow = p;
     n.state = 6;
-    n.adjacent = Manhattan(n.cur, n.target) <= 1;
+    // (0x5ae8b5..0x5ae936 write +0x6c, the target +0x28, +0x92, +0x84 and the state; not +0x96, the 'target was
+    // adjacent' flag of the periodic re-check, which keeps what the last SetTargetPoint gave it until ResetPathState,
+    // RequestPath or RequestContinuationPath clears it. Seen: FAF 3840 pro replay 2v2_5 6108, army 1's naval
+    // 0x100002 in a GrowthFormation move: its TryAdvance of 6095 took the path's goal corner (587,910) from
+    // (587,911), adjacent; from then on the original's 13-beat look-ahead toward its far slot is skipped and it
+    // follows the slot (max speed 6, speed-through 1 at 6108); ours had cleared the flag when it took the slot
+    // again, so the look-ahead failed over the shallows at 6108 and it turned back for (587,910).)
     if (n.path.size() > 1) n.path = {PathCell{n.goal[0], n.goal[1]}};
     return 1;
   }
@@ -1579,6 +1587,7 @@ static void LandNavTickParallel(Sim& sim, const std::vector<Unit*>& all) {
     u->snapForm = u->form;
     u->snapAltFp = u->altFootprintNav || u->altFootprintForced;
     u->snapNavStatus = LandNavStatus(u);
+    u->snapNavGoodPath = LandNavHasGoodPath(u);
     u->snapAirSteering = u->motion.air && u->motion.air->steering;
   }
   SteeringSnapshot(all);
@@ -1745,6 +1754,16 @@ bool LandNavGoal(const Unit* u, Vec3* out) {
   *out = WorldOf(*Sim::From(u->luaState()), u, PathCell{n->goal[0], n->goal[1]});
   return true;
 }
+int LandNavPathState(const Unit* u) {
+  const LandNav* n = u->motion.nav.get();
+  return n ? n->state : 0;
+}
+
+bool LandNavHasGoodPath(const Unit* u) {
+  const LandNav* n = u->motion.nav.get();
+  return n && n->state == 5;  // (0x5a3eb0..0x5a3eb9: [nav+0x68]+0xc == 5; the status +0x54 is not read)
+}
+
 int LandNavStatus(const Unit* u) {
   const LandNav* n = u->motion.nav.get();
   if (!n || !n->active) return 0;

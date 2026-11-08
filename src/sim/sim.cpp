@@ -2848,6 +2848,7 @@ void Sim::Tick() {
   }
   MOHO_LAP(lap, "navigators+paths");
   LandNavStageEnd(*this);  // the path queues' work and what it delivered
+  AirFormationFollowDeferred(*this);  // (the air followers of leaders whose army's path queue ran before theirs)
   phases.Lap(PhaseTimer::kNavigators);
   MOHO_LAP(lap, "weapons");
   threads_->WakeSignalled();

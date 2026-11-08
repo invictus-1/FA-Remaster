@@ -735,6 +735,7 @@ class Sim {
   const Navigation* NavigationIfMade() const { return nav_.get(); }  // (the snapshots: never makes it)
   std::deque<Unit*> pathQueue;
   uint64_t walkSeqNext = 0;  // Unit::walkSeq: the order task walks were made in (their listeners' link order)
+  std::vector<uint32_t> airFollowDeferred;  // AirFormationFollow turns waiting for the path queues (air.cpp)
   std::vector<ResourceDeposit> deposits;
   std::map<uint32_t, std::weak_ptr<UnitCommand>> commandsById;  // by UnitCommand::serial (the scripts' handles)
   uint32_t nextCommandId = 1;  // the next serial
