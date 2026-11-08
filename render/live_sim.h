@@ -34,6 +34,12 @@ class LiveSim {
     std::string session;    // a game configuration to start as a new game (what a lobby hands over at
                             // Launch: a Lua file holding `GameConfig = { ... }`)
     std::string modUids;    // a text file with one mod uid per line (empty: a session's own GameMods)
+    // [streamplay] With `session`: the orders of a game that was played from it (the interface host's --replay-out
+    // record: <name>.stream beside its .session.lua and .seed), played back as the engine's own --stream does; and
+    // the folders of the engine's own mods a session names by its location (the engine's --our-mods: e.g. the M28
+    // variant at /mods/m28-variant), mounted where the init file did not (else beside the program, or one up).
+    std::string stream;
+    std::vector<std::string> ourMods;
     uint32_t seed = 0;      // a new game's random seed; 0: taken from the clock
     std::vector<std::string> maps;  // more folders of map folders, mounted at /maps beside what the init file mounts
     // For tests of a new game: at this beat the army's first unit (its commander) destroys itself at once,

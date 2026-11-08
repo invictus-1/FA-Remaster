@@ -4038,7 +4038,9 @@ float World::ShotDentSize(const std::string& weapon) {
           if (v["Label"].StringOr(std::string()) == label) w = &v;
       if (w) {
         const float radius = static_cast<float>((*w)["DamageRadius"].NumberOr(0)), damage = static_cast<float>((*w)["Damage"].NumberOr(100));
-        size = radius > 0 ? 0.85f * radius * std::clamp(0.01f * damage, 0.25f, 1.0f) : std::min(0.15f + damage / 800, 0.6f);
+        // ([dents] Chris, 2026-11-08: "too small", sized by the weapon - a big shell's hole much larger than small arms':
+        // 1.3 x its radius at full damage, up to 1.4 x for the heaviest; a direct hit's from 0.3 to 1.2 by its damage)
+        size = radius > 0 ? 1.3f * radius * std::clamp(0.01f * damage, 0.35f, 1.4f) : std::min(0.3f + damage / 500, 1.2f);
       }
     }
   }

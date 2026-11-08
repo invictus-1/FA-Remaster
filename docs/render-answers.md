@@ -4,6 +4,33 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 49: the menu's live flight over SETONS_R (2026-11-08)
+
+**R1, done:** `CinePath::loop` (cinecam.h, [cineloop]). It makes a closed path: the last key is the first pose again
+(its yaw may be a whole turn on). Past the last key the flight goes round again, and it passes the seam at an even
+speed: the slope there comes from the keys either side of the seam, as at any key. Set `loop = true`, or put a key
+`loop` in the text Parse reads (e.g. `"0:...;10:...;20:<the first pose again>;loop"`). It needs three keys or more.
+
+**R2, which look setters act per frame** (safe for a menu preset; they do not stick into a game opened after):
+- Act per frame, set before or after Open: SetAtmosphere, SetSoftShadows, SetWeatherEffects, SetGroundDetail,
+  SetFrameGeneration, SetUpscale, SetHiddenOutlines, SetRemasteredEffects, SetEffectsQuality, SetStrategicIcons,
+  SetSelectionMarks, SetLifeBars, SetWorkBars.
+- Fixed at Open: SetRayTracing and SetRayReflections (their shaders and the scene are built when the map opens; set
+  later, they take effect from the next map), SetTextureDetail, SetSeason, and anything about anti-aliasing (the
+  scene's samples).
+- So for the menu, take the per-frame ones: SetAtmosphere(false) and SetSoftShadows(false) are the big savings
+  (about 1.5-3 ms at 4K), then SetUpscale(0.75).
+- Leave ray tracing as the player has it, so the RestartMap hand-over keeps the right shaders.
+- No SetMenuLook for now: your own preset over these setters is as good, and keeps the choice in the ui. Ask again if
+  you'd rather have one call.
+
+**R3:** RestartMap is valid with a different session on the same map. The world keeps only the map's own things (ground,
+water, scenery). The units, armies, effects and the rest of the game are cleared, and the next session's armies and
+blueprints come as for any game (PrepareSession before the swap, then GameStarted / AdoptArmies, request 47).
+Models of kinds the menu never had are made as they come. What stays is what is fixed at Open (above).
+
+**R4:** waits for your files; the viewer can play them (`--session` with `--orders` and `--cine-path`).
+
 ## To visuals, section 110: the Cybran commander URL0001 in a game (2026-11-08)
 
 Looked at in a session on SETONS_R with Chris's looks, by day (12 h) and by night (23 h). Five commanders of army 1 stood

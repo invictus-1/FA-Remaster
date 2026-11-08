@@ -1050,7 +1050,9 @@ float4 Shade(VOut i, bool front) {
         // model at rest and seen along the three axes, so it goes with the unit and its bones and shows
         // on every side; faint where the surface faces the eye (the paint must show), stronger toward
         // the outline, a little more where the sheet's patches drift, each cell on its own slow beat
-        float3 q = i.rest * (1.0 / 3.0);  // (the sheet some 3 world units across: about 0.4 a cell)
+        // ([pshield2] Chris, 2026-11-08, the Dragonite's: "only when hit, and a finer mesh" - the sheet 2 units across, its
+        // cells finer, and the lattice at rest faint: a hit lights it as before)
+        float3 q = i.rest * (1.0 / 2.0);  // (the sheet some 2 world units across: about 0.27 a cell)
         float3 w = pow(abs(normalize(i.restNormal)), 4);
         w /= w.x + w.y + w.z;
         const float layer = faction;
@@ -1059,7 +1061,7 @@ float4 Shade(VOut i, bool front) {
                      shieldPatterns.Sample(samplerAniso, float3(q.xy, layer)).rgb * w.z;
         float beat = 0.75 + 0.25 * sin(time * 1.7 + pat.b * 6.283);
         float drift = pat.g * (0.6 + 0.4 * sin(time * 0.9 + pat.b * 6.283));
-        glow += tint * (pat.r * (beat * (0.18 + 1.5 * outline) + drift * 0.36));
+        glow += tint * (pat.r * (beat * (0.05 + 0.6 * outline) + drift * 0.12));  // ([pshield2] was 0.18 + 1.5, 0.36)
         [branch] if (hitAge >= 0) {  // a hit: the cells round it light up and fade, in about a second
           float near = saturate(1 - length(i.rest - i.tint) / 0.9);  // (some two cells round it)
           float fade = 1 - hitAge;

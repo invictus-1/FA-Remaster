@@ -282,6 +282,9 @@ Camera CineCamera::MakeView(const CinePose& pose, const GroundFn& ground) {
 
 CinePose CinePath::At(float time) const {
   if (keys.empty()) return {};
+  const bool closed = loop && keys.size() >= 3;  // [cineloop]
+  const float period = keys.back().time - keys.front().time;
+  if (closed && period > 1e-4f) time = keys.front().time + std::fmod(std::fmod(time - keys.front().time, period) + period, period);
   if (keys.size() == 1 || time <= keys.front().time) return keys.front().pose;
   if (time >= keys.back().time) return keys.back().pose;
   size_t i = 0;
@@ -290,8 +293,17 @@ CinePose CinePath::At(float time) const {
   const float span = std::max(b.time - a.time, 1e-4f), s = Clamp((time - a.time) / span, 0, 1);
   // Hermite between the two keys, each key's slope the change from the key before it to the key after it over
   // their time (none at the first and the last: the flight starts and ends gently), so that the speed is even
-  // through every key whatever the times between them
+  // through every key whatever the times between them. ([cineloop] A closed path's first and last keys are one place:
+  // their slope from the key before the last to the key after the first, round the seam, each value carried round by
+  // what the path gains over a lap - a yaw a whole turn - so that it passes the seam as it passes any key.)
   auto slope = [&](size_t k, auto value) {
+    if (closed && (k == 0 || k + 1 == keys.size())) {
+      const size_t n = keys.size();
+      const float lap = value(keys[n - 1]) - value(keys[0]);
+      const float before = value(keys[n - 2]) - lap, after = value(keys[1]);
+      const float t = (keys[1].time - keys[0].time) + (keys[n - 1].time - keys[n - 2].time);
+      return (after - before) / std::max(t, 1e-4f);
+    }
     if (k == 0 || k + 1 >= keys.size()) return 0.0f;
     return (value(keys[k + 1]) - value(keys[k - 1])) / std::max(keys[k + 1].time - keys[k - 1].time, 1e-4f);
   };
@@ -312,6 +324,7 @@ CinePose CinePath::At(float time) const {
 
 bool CinePath::Parse(const std::string& text, const GroundFn& ground, std::string* error) {
   keys.clear();
+  loop = false;
   size_t at = 0;
   while (at < text.size()) {
     size_t end = text.find(';', at);
@@ -319,6 +332,10 @@ bool CinePath::Parse(const std::string& text, const GroundFn& ground, std::strin
     const std::string one = text.substr(at, end - at);
     at = end + 1;
     if (one.find_first_not_of(" \t") == std::string::npos) continue;
+    if (one.find("loop") != std::string::npos) {  // [cineloop]
+      loop = true;
+      continue;
+    }
     Key k;
     float x = 0, y = 0, z = 0, yaw = 0, pitch = 0, fov = 40;
     if (sscanf(one.c_str(), "%f:%f,%f,%f,%f,%f,%f", &k.time, &x, &y, &z, &yaw, &pitch, &fov) < 6) {
