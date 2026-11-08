@@ -9,7 +9,15 @@
 
 #include "linalg.h"
 #include "png.h"
+#include "window.h"
 #include "world_picture.h"
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#undef far
+#undef near
+#endif
 
 namespace render {
 
@@ -50,7 +58,120 @@ void Print(const char* what, const Times& t, int models) {
 
 }  // namespace
 
+// [head2] --views head2 (with --picture-window): the second window (WorldPicture::UseSecondWindow), a window of its own
+// beside the first, a Split view of a second camera in it and a layer over it (a white square, a dark bar); frames timed
+// with the second window and without, how many of them drew it, and each window's picture (the second's read off the
+// screen, the window on top: the swap chain's own picture as the screen shows it).
+void Head2Test(WorldPicture& picture, const Camera& gameCamera, double tick, const ViewsTestSetup& setup) {
+  const int w = setup.width, h = setup.height, w2 = 960, h2 = 540;
+  std::string error;
+  std::unique_ptr<Window> second = Window::Create("FA Remastered (second window)", w2, h2, &error, true, false);
+  if (!second) {
+    printf("render: --views head2: no second window (%s)\n", error.c_str());
+    return;
+  }
+#if defined(_WIN32)
+  SetWindowPos(static_cast<HWND>(second->Handle()), HWND_TOPMOST, 40, 40, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+  RECT cr{};
+  GetClientRect(static_cast<HWND>(second->Handle()), &cr);
+#endif
+  const int sw = second->Width(), sh = second->Height();
+  if (!picture.UseSecondWindow(second->Handle(), sw, sh)) {
+    printf("render: --views head2: the second window could not be made (%s)\n", picture.SecondWindowError().c_str());
+    return;
+  }
+  std::vector<uint32_t> layer(static_cast<size_t>(sw) * static_cast<size_t>(sh), 0u);
+  for (int y = sh - sh / 8; y < sh; ++y)
+    for (int x = 0; x < sw; ++x) layer[static_cast<size_t>(y) * sw + x] = 0xb0101010u;
+  for (int y = 20; y < 100; ++y)
+    for (int x = 20; x < 180; ++x) layer[static_cast<size_t>(y) * sw + x] = 0xffffffffu;
+  float mapW = 0, mapH = 0;
+  picture.MapSize(&mapW, &mapH);
+  Camera other = gameCamera;
+  other.target = {mapW * 0.5f, 0, mapH * 0.5f};
+  other.target.y = picture.GroundHeight(other.target.x, other.target.z);
+  other.heading = gameCamera.heading + 0.6f;
+  WorldPicture::PictureView main, head1;
+  main.rect = {0, 0, w, h};
+  main.camera = gameCamera;
+  head1.rect = {0, 0, sw, sh};
+  head1.camera = other;
+  head1.kind = WorldPicture::ViewKind::Split;
+  head1.window = 1;
+  int drawn = 0;
+  auto frames = [&](int n, bool withSecond, double* ms) {
+    picture.SetViews(withSecond ? std::vector<WorldPicture::PictureView>{main, head1} : std::vector<WorldPicture::PictureView>{});
+    drawn = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < n; ++i) {
+      std::vector<InputEvent> events;
+      second->Pump(&events);
+      picture.WaitForNextFrame();
+      picture.SetSecondInterfaceLayer(layer.data(), sw, sh, sw, 0, 0, i == 0 ? sw : 0, i == 0 ? sh : 0);
+      picture.DrawToWindow(gameCamera, w, h, tick);
+      drawn += picture.SecondWindowDrawnLastFrame() ? 1 : 0;
+    }
+    *ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / n;
+  };
+  double ms = 0;
+  for (bool vsync : {false, true}) {
+    picture.SetVsync(vsync);
+    frames(120, true, &ms);  // (settled)
+    frames(setup.frames, false, &ms);
+    printf("render: --views head2: vsync %s, the first window alone: %.2f ms a frame (second window drawn %d of %d)\n", vsync ? "on" : "off", ms, drawn,
+           setup.frames);
+    frames(setup.frames, true, &ms);
+    printf("render: --views head2: vsync %s, with the second window's view: %.2f ms a frame (second window drawn %d of %d)\n", vsync ? "on" : "off", ms,
+           drawn, setup.frames);
+  }
+  // each window's picture
+  std::vector<uint8_t> shot;
+  picture.SetViews({main, head1});
+  picture.WaitForNextFrame();
+  picture.CaptureNextWindowFrame(&shot);
+  picture.DrawToWindow(gameCamera, w, h, tick);
+  const std::string first = setup.base + "_views_head2_first.png";
+  printf("render: --views head2: first window %s\n", shot.size() >= static_cast<size_t>(w) * h * 4 && WritePng(first, shot.data(), w, h) ? first.c_str() : "not read back");
+#if defined(_WIN32)
+  for (int i = 0; i < 20; ++i) {  // (a few more, the screen showing the newest)
+    std::vector<InputEvent> events;
+    second->Pump(&events);
+    picture.DrawToWindow(gameCamera, w, h, tick);
+  }
+  Sleep(200);
+  POINT at{0, 0};
+  ClientToScreen(static_cast<HWND>(second->Handle()), &at);
+  HDC screen = GetDC(nullptr);
+  HDC mem = CreateCompatibleDC(screen);
+  HBITMAP bmp = CreateCompatibleBitmap(screen, sw, sh);
+  HGDIOBJ old = SelectObject(mem, bmp);
+  BitBlt(mem, 0, 0, sw, sh, screen, at.x, at.y, SRCCOPY);
+  BITMAPINFO bi{};
+  bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+  bi.bmiHeader.biWidth = sw;
+  bi.bmiHeader.biHeight = -sh;
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  std::vector<uint8_t> bgra(static_cast<size_t>(sw) * sh * 4);
+  GetDIBits(mem, bmp, 0, static_cast<UINT>(sh), bgra.data(), &bi, DIB_RGB_COLORS);
+  SelectObject(mem, old);
+  DeleteObject(bmp);
+  DeleteDC(mem);
+  ReleaseDC(nullptr, screen);
+  for (size_t k = 0; k + 3 < bgra.size(); k += 4) std::swap(bgra[k], bgra[k + 2]), bgra[k + 3] = 255;
+  const std::string secondPath = setup.base + "_views_head2_second.png";
+  printf("render: --views head2: second window (off the screen) %s\n", WritePng(secondPath, bgra.data(), sw, sh) ? secondPath.c_str() : "not written");
+#endif
+  picture.SetViews({});
+  picture.CloseSecondWindow();
+}
+
 void ViewsTest(WorldPicture& picture, const Camera& gameCamera, double tick, const Frame& frame, const ViewsTestSetup& setup) {
+  if (setup.mode == "head2") {  // [head2]
+    if (setup.window) Head2Test(picture, gameCamera, tick, setup);
+    else printf("render: --views head2 needs --picture-window\n");
+    return;
+  }
   const int w = setup.width, h = setup.height;
   std::vector<uint8_t> shot;
   // one frame drawn; with `capture` the picture read back into `shot` (RGBA)

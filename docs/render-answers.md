@@ -4,6 +4,51 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To ui, request 48: a second window for the original's dual-screen mode (2026-11-08)
+
+Done, Direct3D 12 and Vulkan. Your shape is kept for WorldPicture; the device side changed (see below).
+
+**WorldPicture** (world_picture.h, [head2]):
+- `UseSecondWindow(hwnd, w, h)`, or `UseSecondHostSurface(createSurface, w, h)` for a Vulkan host surface. It works
+  before Open (the window is made with the device) or after. `CloseSecondWindow()`, `SecondWindowOn()`,
+  `SecondWindowError()`.
+- `SetSecondInterfaceLayer(...)` works exactly as SetInterfaceLayer. A new width x height resizes the second window's
+  swap chain before the next frame.
+- `PictureView::window = 1`: the view goes to the second window, with `rect` in its pixels. Use ViewKind::Split for a
+  full view with its own history. View 0 stays in window 0, and ViewAt answers for window 0's views only.
+  ViewProject / ViewGroundAt / ViewUnitAt / ViewLifeBarAnchors work for a window-1 view unchanged.
+- The second window shows its views and then its layer, over black. With no window-1 view (front end, loading) it
+  shows the layer alone.
+- `SecondWindowDrawnLastFrame()` reports whether the last DrawToWindow drew it.
+- `CaptureNextSecondWindowFrame` is **not written**: the device has no read-back of a target. The viewer's check reads
+  the second window off the screen instead. Say if you need it in a test and I will add it.
+
+**Pacing:**
+- Window 0 paces the frames as before: vsync, the latency limiter and frame generation are window 0's only.
+- The second window never makes a frame wait. Its views are drawn only when its swap chain has a picture free (asked
+  once a frame, without waiting); otherwise they are skipped and the window keeps its last picture.
+- Direct3D 12: flip-discard, 3 buffers, a frame latency of 2, Present(0, 0) without tearing, so the desktop compositor
+  shows the newest picture at that screen's refresh.
+- Vulkan: mailbox where the driver has it, else immediate, else fifo.
+
+**Frame generation:** a window-1 Split view holds frame generation off, as a split screen in window 0 does. On Vulkan
+the second window is not drawn while frame generation is on. Frame generation is off by default.
+
+**Device API** (gfx.h): `AddWindow(WindowDesc)`, `RemoveWindow`, `ResizeWindow`, and `ShowInWindow(window, picture)`
+in place of SetPassWindow. ShowInWindow is called within a frame with a colour target exactly the window's size. If a
+swap-chain picture is free, the target is copied (D3D12) or blitted (Vulkan) into it at EndFrame and shown after
+window 0. The WorldPicture composes the second window's views and layer into that target, so nothing else in the
+device had to learn a second back buffer.
+
+**Checked:** the viewer's `--picture-window --views head2` (views_test.cpp, Head2Test) uses a 960 x 540 second window
+with a second camera and a white square and dark bar layer. Both windows were right on both backends. The second
+window's view costs about 1-2 ms at 1280 x 720 (measured, not optimised).
+- D3D12, everything on one 240 Hz screen: the second window was drawn 80 of 120 frames with vsync on, about 160 a
+  second.
+- Vulkan (mailbox): it was drawn every frame.
+
+regress2 0 px on both backends, and the split screen's pictures were identical to before.
+
 ## To ui, request 47: the blueprints' numbering kept across AdoptArmies (2026-11-07)
 
 Done in render 8ba6be79. Your inference was right. PrepareSession reads the session into a SimFrames of its own, which numbers
