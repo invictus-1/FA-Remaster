@@ -1062,6 +1062,9 @@ class World {
     // [debrispile] a unit's wreck whose kind has a baked set (baked_debris.h): drawn as its pile with the debris on, else as
     // its model; on its own either way, never in its square's group (pileProps_)
     bool pile = false;
+    // [fogglow] (Chris, 2026-11-08: a wreck's glow "should be hidden in fog of war. Unless you've seen that unit then it
+    // stays") whether the army the picture is for ever saw the unit it is the wreck of; if not, it glows only in sight
+    bool glowKnown = true;
   };
   struct Pickable {  // a unit of the frame, for UnitAt, UnitsAt and UnitsIn
     uint32_t id;
@@ -1164,6 +1167,17 @@ class World {
   // tint WreckHeat hands out; the bounding sphere of a placed model
   bool hotOn_ = false, hotBefore_ = false;
   std::vector<uint32_t> hotProps_;
+  // [fogglow] the units that died lately, where, when, and whether the army the picture is for ever saw them (a wreck
+  // made there takes it: WreckKnown); kept while the fog of war is drawn
+  struct KnownDeath {
+    Vec3 at;
+    double when;
+    bool known;
+  };
+  std::vector<KnownDeath> deaths_;
+  std::unordered_set<uint32_t> deathsTold_;
+  bool WreckKnown(Vec3 centre, float radius, double born) const;
+  bool GlowShown(const PlacedProp& p, Vec3 centre) const;
   Vec3 heatTint_;
   void HoldHot(uint32_t id, PlacedProp* prop);
   void UpdateHotProps();
