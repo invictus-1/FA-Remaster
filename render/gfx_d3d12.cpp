@@ -403,6 +403,7 @@ class D3D12Device final : public Device {
   void RemoveWindow(int window) override;
   void ResizeWindow(int window, int width, int height) override;
   bool ShowInWindow(int window, Texture picture) override;
+  void CaptureInWindow(int window, std::vector<uint8_t>* out) override;
 
  private:
   // [mcrec] Recording on several threads. The frame's commands are then several lists, handed to the card together in
@@ -606,6 +607,11 @@ class D3D12Device final : public Device {
     int width = 0, height = 0;
     Texture show;
     bool used = false;
+    std::vector<uint8_t>* capture = nullptr;  // (CaptureInWindow)
+    Com<ID3D12Resource> readback;
+    UINT64 readbackSize = 0;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
+    bool reading = false;
   };
   std::vector<ExtraWindow> extras_;  // (index + 1: the window's number)
   ExtraWindow* Extra(int window) {
@@ -4355,6 +4361,13 @@ bool D3D12Device::ShowInWindow(int window, Texture picture) {
   return true;
 }
 
+void D3D12Device::CaptureInWindow(int window, std::vector<uint8_t>* out) {
+  if (ExtraWindow* w = Extra(window)) {
+    w->capture = out;
+    if (out) out->clear();
+  }
+}
+
 void D3D12Device::ShowExtras(bool present) {
   const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   for (ExtraWindow& w : extras_) {
@@ -4363,6 +4376,22 @@ void D3D12Device::ShowExtras(bool present) {
       HRESULT hr = w.chain->Present(0, 0);
       if (FAILED(hr)) Complain("Present (an extra window)", hr);
       w.show = {};
+      if (w.reading) {  // (CaptureInWindow: the frame waited for, the rows copied out)
+        WaitIdle();
+        void* mapped = nullptr;
+        const D3D12_RANGE range{0, static_cast<SIZE_T>(w.readbackSize)};
+        if (SUCCEEDED(w.readback->Map(0, &range, &mapped))) {
+          const size_t row = static_cast<size_t>(w.width) * 4;
+          w.capture->resize(row * static_cast<size_t>(w.height));
+          for (int y = 0; y < w.height; ++y)
+            std::memcpy(w.capture->data() + row * static_cast<size_t>(y),
+                        static_cast<const uint8_t*>(mapped) + w.layout.Offset + static_cast<size_t>(w.layout.Footprint.RowPitch) * static_cast<size_t>(y), row);
+          const D3D12_RANGE none{0, 0};
+          w.readback->Unmap(0, &none);
+        }
+        w.reading = false;
+        w.capture = nullptr;
+      }
       continue;
     }
     TextureRec* t = Find(w.show);
@@ -4375,6 +4404,31 @@ void D3D12Device::ShowExtras(bool present) {
                                     Transition(back.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST)};
     list_->ResourceBarrier(2, in);
     list_->CopyResource(back.Get(), t->resource.Get());
+    if (w.capture) {  // (CaptureInWindow: the picture read back as well)
+      D3D12_RESOURCE_DESC td = t->resource->GetDesc();
+      UINT64 total = 0;
+      device_->GetCopyableFootprints(&td, 0, 1, 0, &w.layout, nullptr, nullptr, &total);
+      if (!w.readback || w.readbackSize < total) {
+        if (w.readback) Retire(w.readback.Get());
+        w.readback.Reset();
+        D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_READBACK);
+        D3D12_RESOURCE_DESC rd = BufferResourceDesc(total);
+        HRESULT hr = device_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                      IID_PPV_ARGS(w.readback.Put()));
+        w.readbackSize = SUCCEEDED(hr) ? total : 0;
+      }
+      if (w.readback) {
+        D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
+        to.pResource = w.readback.Get();
+        to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        to.PlacedFootprint = w.layout;
+        from.pResource = t->resource.Get();
+        from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        from.SubresourceIndex = 0;
+        list_->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        w.reading = true;
+      }
+    }
     D3D12_RESOURCE_BARRIER out[2] = {Transition(t->resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, readable),
                                      Transition(back.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT)};
     list_->ResourceBarrier(2, out);

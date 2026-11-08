@@ -696,6 +696,7 @@ class VulkanDevice final : public Device {
   void RemoveWindow(int window) override;
   void ResizeWindow(int window, int width, int height) override;
   bool ShowInWindow(int window, Texture picture) override;
+  void CaptureInWindow(int window, std::vector<uint8_t>* out) override;
 
  private:
   // (photomode) SetPhotoWindow: the picture and the depth a frame draws its window into while it is on, their size; a
@@ -842,6 +843,8 @@ class VulkanDevice final : public Device {
     bool held = false;  // (an image acquired for this frame)
     bool stale = false;
     bool used = false;
+    std::vector<uint8_t>* capture = nullptr;  // (CaptureInWindow: read back through the window's own read-back buffer)
+    bool reading = false;
   };
   std::vector<ExtraWindow> extras_;  // (index + 1: the window's number)
   ExtraWindow* Extra(int window) {
@@ -853,7 +856,7 @@ class VulkanDevice final : public Device {
   void DropExtraChain(ExtraWindow* w);
   void DropExtra(ExtraWindow* w);
   // (EndFrame) the extra windows' pictures blitted into their images; the semaphores the submit waits for / signals
-  void RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals);
+  void RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals, bool windowRead);
   void PresentExtras();
   VkFormat swapFormat_ = VK_FORMAT_UNDEFINED;
   std::vector<VkImage> swapImages_;
@@ -5442,7 +5445,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   std::vector<VkSemaphore> waits, signals;
   if (waitAcquired_) waits.push_back(f.acquired);
   if (show) signals.push_back(rendered_[swapIndex_]);
-  RecordExtras(cmd, &waits, &signals);
+  RecordExtras(cmd, &waits, &signals, capture != nullptr);
   vkEndCommandBuffer(cmd);
   FlushUploads();  // (what this frame draws with goes to the card ahead of it)
   const std::vector<VkPipelineStageFlags> wait(waits.size(), VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -5480,6 +5483,14 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     }
   }
   PresentExtras();  // [head2]
+  for (ExtraWindow& w : extras_)  // ([head2] CaptureInWindow: the frame waited for, the picture copied out)
+    if (w.reading) {
+      vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+      w.capture->resize(static_cast<size_t>(w.width) * static_cast<size_t>(w.height) * 4);
+      std::memcpy(w.capture->data(), readbackMemory_.mapped, w.capture->size());
+      w.reading = false;
+      w.capture = nullptr;
+    }
   inFrame_ = false;
   if (capture) {
     vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
@@ -5683,7 +5694,15 @@ bool VulkanDevice::ShowInWindow(int window, Texture picture) {
   return true;
 }
 
-void VulkanDevice::RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals) {
+void VulkanDevice::CaptureInWindow(int window, std::vector<uint8_t>* out) {
+  if (ExtraWindow* w = Extra(window)) {
+    w->capture = out;
+    if (out) out->clear();
+  }
+}
+
+void VulkanDevice::RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals, bool windowRead) {
+  bool readUsed = windowRead;  // (one read-back buffer: the window's own, when it is not read back this frame)
   for (ExtraWindow& w : extras_) {
     if (!w.used || !w.held) continue;
     TextureRec* t = Find(w.show);
@@ -5699,6 +5718,23 @@ void VulkanDevice::RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* w
       blit.srcOffsets[1] = {t->width, t->height, 1};
       blit.dstOffsets[1] = {static_cast<int32_t>(w.extent.width), static_cast<int32_t>(w.extent.height), 1};
       vkCmdBlitImage(cmd, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+      if (w.capture && !readUsed && EnsureReadback(static_cast<VkDeviceSize>(t->width) * static_cast<VkDeviceSize>(t->height) * 4)) {
+        readUsed = true;
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {static_cast<uint32_t>(t->width), static_cast<uint32_t>(t->height), 1};
+        vkCmdCopyImageToBuffer(cmd, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback_, 1, &copy);
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers = &mb;
+        vkCmdPipelineBarrier2(cmd, &di);
+        w.reading = true;
+      }
       Barrier(cmd, t->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, was, VK_IMAGE_ASPECT_COLOR_BIT);
     }
     Barrier(cmd, swap, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_ASPECT_COLOR_BIT);
