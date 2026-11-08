@@ -3197,6 +3197,9 @@ void Sim::Tick() {
     beamsBefore(0xffffffffu);
     projectilesBefore(0xffffffffu);
     BeatStartSnapshot(*this, motionOrder);
+    // (what the turns read of a unit's blueprint through Lua, made here, at every thread count alike: a unit made since
+    // the weapons stage has had no first read yet, and a turn on the pool may not make it)
+    MakeCombatData(motionOrder);
     std::vector<Quat> prevOris(motionOrder.size());
     std::vector<uint8_t> hows(motionOrder.size(), static_cast<uint8_t>(kTurnReordered));
     std::vector<uint32_t> a1, a2;  // (indices into motionOrder)
