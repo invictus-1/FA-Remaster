@@ -41,6 +41,10 @@ ForkThread(function()
         if n == 'popup' then popup = v end
     end
     check("the dialog has the Import from FAF button", popup and popup.remasterImportButton ~= nil, true)
+    -- (Chris's state of 2026-11-08: a note saying every own action was seen already, from an earlier save)
+    local allOwn = {}
+    for _, own in KeyMapper.RemasterOwnKeys do table.insert(allOwn, own.action) end
+    Prefs.SetToCurrentProfile("UserKeyMapRemasterActions", allOwn)
     -- the button's Yes: the bindings into this profile, the dialog closed (which saves them and loads the keys)
     dialog.RemasterImportOriginalKeyBindings(keys)
     dialog.CloseUI()
@@ -50,6 +54,12 @@ ForkThread(function()
     check("with its preset", Prefs.GetFromCurrentProfile("UserKeyMapName"), "/lua/keymap/hotbuildKeyMap.lua")
     local mapping = KeyMapper.GetKeyMappings()["Ctrl-Q"]
     check("and the key does the action", mapping and mapping.action, "UI_Lua LOG('fixture action')")
+    -- this program's own keys came into the imported map where free (Chris's test 2026-11-08: they did not)
+    check("the bookmark key is in the imported map", saved["Ctrl-Shift-B"], "remaster_bookmark_add")
+    check("camera spot 1 saved by Ctrl-Alt-1", saved["Ctrl-Alt-1"], "SaveCameraPosition1")
+    check("and recalled by Alt-9", saved["Alt-9"], "RestoreCameraPosition9")
+    local spot = KeyMapper.GetKeyMappings()["Alt-1"]
+    check("and Alt-1 is loaded as a key", spot ~= nil, true)
 
     -- Options > Interface > Key Bindings "Import from FAF..." (2026-11-06): a button of the Options dialog that opens
     -- the Key Bindings dialog and asks the import's question at once
