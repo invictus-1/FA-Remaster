@@ -28,6 +28,7 @@
 **   bit 6           tables: in this cycle's weak array
 */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,7 @@
 #define FIXED		(1<<5)
 #define WEAKLISTED	(1<<6)  /* tables: in this cycle's weak array (cleared by the sweep) */
 #define CLASSICFIX	(1<<4)  /* lstring.h luaS_fix in a classic state */
+#define LOGGED		(1<<7)  /* tables: its stores since its traversal are logged (written slots, lgc.h luaC_logslot) */
 
 enum { GCSpause, GCSpropagate, GCSsweepstring, GCSsweep };
 
@@ -79,6 +81,12 @@ typedef struct GCInc {
   GCObject **vlist;       /* (verify: the old grayagain list, head first) */
   size_t vn, vcap;
   unsigned long vchecks, ventries;  /* (verify: atomic steps checked, entries compared) */
+  /* the written slots (option 2): per logged table its log, an open-addressing map by address (outside Lua's count) */
+  struct WLog *wl;
+  size_t wlcap, wln;
+  int logon;              /* MOHO64_GC_WRITTENSLOTS=0: off (every re-traversal scans in full, as before) */
+  int verifylog, logstats;  /* MOHO64_GC_VERIFYLOG, MOHO64_GC_LOGSTATS */
+  lu_mem logscans, logslots, logskipped, logfull, vlogchecks, vlogchildren, wlleft, wlstale;
   GCObject **weakv;       /* the weak tables traversed in this cycle, once each (cleared at the atomic step); an
                           ** array, so that a weak table's gclist serves the gray lists as any table's does */
   size_t nweak, capweak;
@@ -165,6 +173,219 @@ static void weakpush (GCInc *inc, GCObject *o) {
   inc->weakv[inc->nweak++] = o;
 }
 
+
+/* ---- written slots (option 2, e1e 2026-11-07) ----
+** A table written while it is black (marking) goes back on grayagain (luaC_incbarriert) and was traversed again in
+** full: M28's big zone and map tables, written every beat, were re-scanned every beat of a cycle's marking (variant
+** B1 12000 beats: 1.6 G slots, ~85% of the marking, for ~9 M stores). After a traversal every child of the table is
+** marked (not white) until the cycle's flip, so its white children can only be in slots written since; the stores
+** are logged here (slot numbers, from luaC_logslot), and the re-traversal looks at those slots only, in the full
+** scan's order (the array part from the top, then the hash part from the top), the same per-slot rules, the same
+** units charged (so the same budget and the same cycle). Logged only while marking, from the first store into the
+** black table on (its barrier). Not logged, so scanned in full as before: a table whose last traversal was a weak
+** one; a table weak now; a table whose slots moved (resize) or whose log grew past a quarter of its slots. The log
+** is C memory (outside Lua's byte count), keyed by the table's address, and is dropped at the re-traversal, which
+** always comes in the same cycle (grayagain, at the latest at the atomic step). */
+typedef struct WLog {
+  Table *t;
+  int *idx;  /* >= 0: array slot; < 0: hash node -(j + 1) */
+  unsigned int n, cap;
+  int asize, lsize;
+  Node *node;
+  TObject *array;
+  int full;
+} WLog;
+
+static size_t wl_hash (GCInc *inc, Table *t) {
+  return (size_t)(((unsigned long long)(size_t)t >> 4) * 0x9E3779B97F4A7C15ull >> 20) & (inc->wlcap - 1);
+}
+
+static WLog *wl_find (GCInc *inc, Table *t) {
+  size_t i;
+  if (inc->wlcap == 0) return NULL;
+  for (i = wl_hash(inc, t); inc->wl[i].t; i = (i + 1) & (inc->wlcap - 1))
+    if (inc->wl[i].t == t) return &inc->wl[i];
+  return NULL;
+}
+
+static WLog *wl_insert (GCInc *inc, Table *t) {
+  size_t i;
+  if (2 * (inc->wln + 1) > inc->wlcap) {  /* grow (load at most 1/2) */
+    size_t k, oldcap = inc->wlcap, cap = oldcap ? oldcap * 2 : 256;
+    WLog *old = inc->wl;
+    inc->wl = (WLog *)calloc(cap, sizeof(WLog));
+    if (inc->wl == NULL) { fprintf(stderr, "moho64 gc: out of memory for the written slots\n"); abort(); }
+    inc->wlcap = cap;
+    for (k = 0; k < oldcap; k++)
+      if (old[k].t) {
+        for (i = wl_hash(inc, old[k].t); inc->wl[i].t; i = (i + 1) & (cap - 1)) {}
+        inc->wl[i] = old[k];
+      }
+    free(old);
+  }
+  for (i = wl_hash(inc, t); inc->wl[i].t; i = (i + 1) & (inc->wlcap - 1)) {}
+  memset(&inc->wl[i], 0, sizeof(WLog));
+  inc->wl[i].t = t;
+  inc->wln++;
+  return &inc->wl[i];
+}
+
+static void wl_remove (GCInc *inc, WLog *e) {  /* (linear probing: the backward shift) */
+  size_t i = (size_t)(e - inc->wl), j = i, m = inc->wlcap - 1;
+  free(e->idx);
+  for (;;) {
+    size_t k;
+    inc->wl[i].t = NULL;
+    for (;;) {
+      j = (j + 1) & m;
+      if (inc->wl[j].t == NULL) { inc->wln--; return; }
+      k = wl_hash(inc, inc->wl[j].t);
+      if ((i <= j) ? (i < k && k <= j) : (i < k || k <= j)) continue;  /* (k is cyclically in (i, j]: stays) */
+      break;
+    }
+    inc->wl[i] = inc->wl[j];
+    i = j;
+  }
+}
+
+/* The logs left when the marking ends (the atomic step, before the flip): a store logged into a black table that did
+** not happen after all (luaV_settable: an existing key with a nil value and a __newindex, which then runs instead)
+** leaves the table black, LOGGED and off grayagain, so never re-traversed: its log is dropped here, while the table
+** is certainly alive (black: it survives this cycle's sweep), never later (a table freed by a later sweep would be
+** written through a stale key). Dropping changes no mark: nothing was stored. */
+static void wl_clear (GCInc *inc) {
+  size_t k;
+  for (k = 0; k < inc->wlcap; k++)
+    if (inc->wl[k].t) {
+      inc->wl[k].t->marked &= cast(lu_byte, ~LOGGED);
+      free(inc->wl[k].idx);
+      inc->wl[k].t = NULL;
+      inc->wlleft++;
+    }
+  inc->wln = 0;
+}
+
+void luaC_inclogslot (lua_State *L, struct Table *t, const TObject *slot) {
+  GCInc *inc = G(L)->inc;
+  WLog *e;
+  int x;
+  if (inc == NULL || inc->state != GCSpropagate || !inc->logon) return;
+  if (t->marked & LOGGED) {
+    e = wl_find(inc, t);
+    if (e == NULL || e->full) return;
+  }
+  else if (isblack(valtogco(t))) {  /* the first store since its traversal (its barrier follows) */
+    if (t->marked & (KEYWEAK | VALUEWEAK)) return;  /* (a weak traversal: scanned in full again) */
+    e = wl_insert(inc, t);
+    e->asize = t->sizearray;
+    e->lsize = t->lsizenode;
+    e->node = t->node;
+    e->array = t->array;
+    t->marked |= LOGGED;
+  }
+  else return;
+  if (t->array && slot >= t->array && slot < t->array + t->sizearray) x = (int)(slot - t->array);
+  else {
+    const Node *nd = (const Node *)((const char *)slot - offsetof(Node, i_val));
+    ptrdiff_t j = nd - t->node;
+    if (t->node == G(L)->dummynode || j < 0 || j >= sizenode(t) || gval(gnode(t, j)) != slot) { e->full = 1; return; }
+    x = -(int)j - 1;
+  }
+  if (e->n == e->cap) {
+    unsigned int cap = e->cap ? e->cap * 2 : 8;
+    int *v;
+    if (cap > 64 && cap > (unsigned int)(t->sizearray + sizenode(t)) / 4) { e->full = 1; return; }
+    v = (int *)realloc(e->idx, cap * sizeof(int));
+    if (v == NULL) { e->full = 1; return; }
+    e->idx = v;
+    e->cap = cap;
+  }
+  e->idx[e->n++] = x;
+}
+
+void luaC_inclogfull (lua_State *L, struct Table *t) {
+  WLog *e = G(L)->inc ? wl_find(G(L)->inc, t) : NULL;
+  if (e) e->full = 1;
+}
+
+static int wl_cmp (const void *a, const void *b) {  /* the full scan's order: array slots from the top, then nodes */
+  int x = *(const int *)a, y = *(const int *)b;
+  long long kx = x >= 0 ? (1LL << 31) + x : -(long long)x, ky = y >= 0 ? (1LL << 31) + y : -(long long)y;
+  return kx < ky ? 1 : kx > ky ? -1 : 0;
+}
+
+/* (verify: the white children a scan would mark first, in order, without marking; full = every slot, else the log) */
+static size_t wl_dry (Table *h, const int *idx, unsigned int n, int full, GCObject **out, size_t cap) {
+  size_t k = 0, c;
+  int i;
+#define DRY(o) { if (iscollectable(o) && iswhite(gcvalue(o))) { GCObject *x_ = gcvalue(o); \
+    for (c = 0; c < k && out[c] != x_; c++) {} if (c == k && k < cap) out[k++] = x_; } }
+  if (full) {
+    for (i = h->sizearray; i--;) DRY(&h->array[i]);
+    for (i = sizenode(h); i--;) { Node *nd = gnode(h, i); if (!ttisnil(gval(nd))) { DRY(gkey(nd)); DRY(gval(nd)); } }
+  }
+  else {
+    unsigned int m;
+    for (m = 0; m < n; m++) {
+      if (idx[m] >= 0) DRY(&h->array[idx[m]])
+      else { Node *nd = gnode(h, -idx[m] - 1); if (!ttisnil(gval(nd))) { DRY(gkey(nd)); DRY(gval(nd)); } }
+    }
+  }
+#undef DRY
+  return k;
+}
+
+/* traversetable's scan from the log (the caller checked it applies); its children marked as the full scan would */
+static void wl_scan (global_State *g, Table *h, WLog *e) {
+  GCInc *inc = g->inc;
+  unsigned int m, n = 0;
+  if (e->n) {
+    qsort(e->idx, e->n, sizeof(int), wl_cmp);
+    for (m = 0; m < e->n; m++)
+      if (n == 0 || e->idx[m] != e->idx[n - 1]) e->idx[n++] = e->idx[m];
+  }
+  if (inc->verifylog) {
+    size_t cap = 4096, a, b;
+    GCObject **x = (GCObject **)malloc(2 * cap * sizeof(GCObject *));
+    if (x == NULL) abort();
+    a = wl_dry(h, NULL, 0, 1, x, cap);
+    b = wl_dry(h, e->idx, n, 0, x + cap, cap);
+    if (a != b || memcmp(x, x + cap, a * sizeof(GCObject *)) != 0) {
+      fprintf(stderr, "moho64 gc verifylog: table (serial %u, %d + %d slots, %u logged): the full scan finds %lu white "
+              "children, the log %lu, or another order (cycle %lu)\n", (unsigned)h->serial, h->sizearray, sizenode(h),
+              n, (unsigned long)a, (unsigned long)b, (unsigned long)inc->cycles);
+      fflush(stderr);
+      abort();
+    }
+    inc->vlogchecks++;
+    inc->vlogchildren += a;
+    free(x);
+  }
+  for (m = 0; m < n; m++) {
+    int x = e->idx[m];
+    if (x >= 0) markobj(g, &h->array[x])
+    else {
+      Node *nd = gnode(h, -x - 1);
+      if (!ttisnil(gval(nd))) {
+        markobj(g, gkey(nd));
+        markobj(g, gval(nd));
+      }
+    }
+  }
+  inc->logscans++;
+  inc->logslots += n;
+  inc->logskipped += (lu_mem)(h->sizearray + sizenode(h));
+}
+
+static void wl_report (GCInc *inc) {
+  if (inc->verifylog || inc->logstats)
+    fprintf(stderr, "moho64 gc written slots: %lu re-traversals from the log (%lu slots looked at of %lu), %lu in full;"
+            " verified %lu (%lu white children equal); logs of stores that did not happen %lu, stale at a cycle's start %lu\n", (unsigned long)inc->logscans,
+            (unsigned long)inc->logslots, (unsigned long)inc->logskipped, (unsigned long)inc->logfull,
+            (unsigned long)inc->vlogchecks, (unsigned long)inc->vlogchildren, (unsigned long)inc->wlleft,
+            (unsigned long)inc->wlstale);
+}
+
 /* a table: as lgc.c's traversetable (weak modes the same). A weak table is also entered in the weak array (once a
 ** cycle; cleared at the atomic step) and otherwise is a table like any other: it turns black, and a write turns it
 ** gray again (luaC_incbarriert), so that its strong part is traversed again before the atomic step, or at it. */
@@ -173,6 +394,17 @@ static lu_mem traversetable (global_State *g, Table *h) {
   int i;
   int weakkey = 0, weakvalue = 0;
   const TObject *mode;
+  WLog *e = NULL;
+  if (h->marked & LOGGED) {  /* written since its traversal, the stores logged (option 2) */
+    h->marked &= cast(lu_byte, ~LOGGED);
+    e = wl_find(inc, h);
+    if (e && (e->full || e->asize != h->sizearray || e->lsize != h->lsizenode || e->node != h->node ||
+              e->array != h->array)) {
+      wl_remove(inc, e);
+      e = NULL;
+    }
+    if (e == NULL) inc->logfull++;
+  }
   markgco(g, h->metatable);
   mode = gfasttm(g, h->metatable, TM_MODE);
   h->marked &= cast(lu_byte, ~(KEYWEAK | VALUEWEAK));
@@ -186,6 +418,17 @@ static lu_mem traversetable (global_State *g, Table *h) {
         weakpush(inc, valtogco(h));
       }
     }
+  }
+  if (e) {
+    if (!weakkey && !weakvalue) {  /* only the written slots: the same marks in the same order */
+      wl_scan(g, h, e);
+      wl_remove(inc, e);
+      gray2black(valtogco(h));
+      inc->visits += (lu_mem)(h->sizearray + sizenode(h));
+      return 1 + (lu_mem)(h->sizearray + sizenode(h)) / 16;
+    }
+    wl_remove(inc, e);
+    inc->logfull++;
   }
   if (!weakvalue) {
     i = h->sizearray;
@@ -714,6 +957,13 @@ static void startcycle (lua_State *L, global_State *g) {
   inc->wlo = inc->whi = inc->wcap / 2;
   inc->wrev = 0;
   inc->vn = 0;
+  if (inc->wln) {  /* (never: the atomic step drops them; a sweep may have freed their tables, so only the logs go, and
+                   ** a LOGGED bit left on a table finds no log: its next traversal scans in full) */
+    size_t k;
+    for (k = 0; k < inc->wlcap; k++)
+      if (inc->wl[k].t) { free(inc->wl[k].idx); inc->wl[k].t = NULL; inc->wlstale++; }
+    inc->wln = 0;
+  }
   inc->nweak = 0;
   markroots(L, g, 0);
   inc->state = GCSpropagate;
@@ -851,6 +1101,7 @@ static lu_mem atomic (lua_State *L, global_State *g) {
       inc->visits += (lu_mem)(gcotoh(inc->weakv[k])->sizearray + sizenode(gcotoh(inc->weakv[k])));
   }
   clearweak(inc);
+  if (inc->wln) wl_clear(inc);  /* (the written slots' logs of stores that did not happen, see wl_clear) */
   ph_mark(inc, &ph, 0, 0);
   /* (the check: after the clearing, which marks the strings a weak table keeps; before the flip) */
   if (inc->verify) {
@@ -1021,6 +1272,9 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
   inc->verify = envint("MOHO64_GC_VERIFY", 0);
   inc->phases = envint("MOHO64_GC_PHASES", 0);
   inc->verifyorder = envint("MOHO64_GC_VERIFYORDER", 0);
+  inc->logon = envint("MOHO64_GC_WRITTENSLOTS", 1) != 0;
+  inc->verifylog = envint("MOHO64_GC_VERIFYLOG", 0);
+  inc->logstats = envint("MOHO64_GC_LOGSTATS", 0);
   g->inc = inc;
   /* every object so far (made by lua_open and the libraries) takes the current white; lgc.c's fixed strings stay
   ** fixed; udata keep lgc.c's "finalized" (its bit 1 clear) */
@@ -1154,6 +1408,9 @@ void luaC_incleave (lua_State *L) {
     for (o = g->strt.hash[i]; o; o = o->gch.next) o->gch.marked = cast(lu_byte, (o->gch.marked & FIXED) ? CLASSICFIX : 0);
   g->mainthread->marked = 0;
   vreport(g->inc);
+  wl_report(g->inc);
+  if (g->inc->wln) wl_clear(g->inc);
+  free(g->inc->wl);
   free(g->inc->weakv);
   free(g->inc->wres);
   free(g->inc->waiting);
@@ -1165,6 +1422,12 @@ void luaC_incleave (lua_State *L) {
 void luaC_incfree (lua_State *L) {
   if (G(L)->inc) {
     vreport(G(L)->inc);
+    wl_report(G(L)->inc);
+    {  /* (the tables may be freed by now: only the logs) */
+      size_t k;
+      for (k = 0; k < G(L)->inc->wlcap; k++) if (G(L)->inc->wl[k].t) free(G(L)->inc->wl[k].idx);
+    }
+    free(G(L)->inc->wl);
     free(G(L)->inc->weakv); free(G(L)->inc->wres); free(G(L)->inc->waiting); free(G(L)->inc->vlist); free(G(L)->inc);
   }
   G(L)->inc = NULL;
