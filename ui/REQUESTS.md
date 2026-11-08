@@ -2395,6 +2395,25 @@ AdoptArmies (nameIndex / names_), or key the lists by name, so PrepareSession ca
 change) and those beats' hits and health are kept. Optional: the 110-180 ms first frame after the loading screen
 (next-tier models made ahead, a commander's wreck, FakeRings, compute pipelines' first use) done in the warm frames.
 
+### 48. A second window for the original's dual-screen mode (head 1: a world view on the second screen) (2026-11-08, not blocking)
+From the interface chat. Chris approved the original's dual-screen mode on 2026-11-01 "after the UEF polish" (his PC:
+two 4K screens, 240 Hz main, 160 Hz second). The original (CScApp::CreateDevice 0x8d0712..0x8d0793) adds a second
+full-screen head when `secondary_adapter` names a screen; FAF's multihead.lua puts a world view of camera `CameraHead2`
+on root frame 1 (the logo in the menus). The interface side (root frames per head, input by head, the second OS window,
+options) is mine; what I need from you is in docs/ui-dualscreen.md section 4 (a proposal, change it as you see fit):
+- gfx: one main window plus extra windows on the same device: AddWindow / RemoveWindow / ResizeWindow, and passes into
+  "the window" sent to an extra window's back buffer, skipped (never waited for) when its swap chain has no free buffer.
+- WorldPicture: UseSecondWindow(hwnd, w, h) (+ a host-surface form for SDL / Vulkan), SetSecondInterfaceLayer (as
+  SetInterfaceLayer), CloseSecondWindow, CaptureNextSecondWindowFrame (checks); PictureView gains `window` (0 / 1): a
+  window-1 view is drawn as one more view of the same world (your request 35's ViewSide, Split semantics) and laid into
+  window 2 instead of window 1. With no window-1 view (front end, loading) only the layer goes there.
+- Pacing: window 0 paces as today (vsync, latency limiter, frame generation stay its own); window 2 never makes the
+  loop wait (presented without a vsync wait, drawn only when a buffer is free), so screen 2 shows ~160 per second and
+  screen 1 keeps 240. GUESS on the exact DXGI / Vulkan behaviour: yours to confirm.
+- Stats: window 2's card time separately (to measure only; optimise at the end).
+I build and test the interface side headless meanwhile (two root frames, CameraHead2's view, input by head). A test
+mode opens window 2 framed on the same screen, so no second monitor is needed for your checks either.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
