@@ -60,6 +60,12 @@ local function RemasterAddOwn(map, seen)
     return map
 end
 
+-- (for the FAF import, ui/data/hook/lua/ui/dialogs/keybindings.lua: a whole map from elsewhere, which never had the own
+-- actions, gets them where their key is free, as a preset does)
+function RemasterAddOwnKeys(map)
+    return RemasterAddOwn(map)
+end
+
 local RemasterGetDefaultKeyMap = GetDefaultKeyMap
 function GetDefaultKeyMap()
     return RemasterAddOwn(RemasterGetDefaultKeyMap())
