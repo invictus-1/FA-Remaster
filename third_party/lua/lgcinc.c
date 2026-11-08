@@ -68,7 +68,17 @@ typedef struct GCInc {
   GCObject **sweepgc;     /* where the sweep of rootgc stands */
   GCObject **sweepud;     /* ... and of rootudata */
   GCObject *gray;         /* gray tables, closures, threads and protos to traverse */
-  GCObject *grayagain;    /* threads, and black tables written since (re-traversed at the atomic step) */
+  GCObject *grayagain;    /* threads, and black tables written since (re-traversed at the atomic step): those put
+                          ** there since regraytables last ran; the threads it left are in `waiting' */
+  /* the threads regraytables left on grayagain, in the list's order (a deque: `wrev' 0 = waiting[wlo..whi) is the
+  ** list's order, 1 = the reverse); outside Lua's byte count, as weakv */
+  GCObject **waiting;
+  size_t wlo, whi, wcap;
+  int wrev;
+  int verifyorder;        /* MOHO64_GC_VERIFYORDER: the old list kept beside, compared at the atomic step */
+  GCObject **vlist;       /* (verify: the old grayagain list, head first) */
+  size_t vn, vcap;
+  unsigned long vchecks, ventries;  /* (verify: atomic steps checked, entries compared) */
   GCObject **weakv;       /* the weak tables traversed in this cycle, once each (cleared at the atomic step); an
                           ** array, so that a weak table's gclist serves the gray lists as any table's does */
   size_t nweak, capweak;
@@ -115,6 +125,7 @@ typedef struct GCInc {
 /* ---- marking ---- */
 
 static void reallymark (global_State *g, GCObject *o);
+static void vpush (GCInc *inc, GCObject *o);  /* (option 1's verify) */
 
 #define markobj(g,o)	{ if (iscollectable(o) && iswhite(gcvalue(o))) reallymark(g, gcvalue(o)); }
 #define markgco(g,o)	{ if ((o) != NULL && iswhite(valtogco(o))) reallymark(g, valtogco(o)); }
@@ -261,6 +272,7 @@ static lu_mem propagateone (lua_State *L, global_State *g, int atomic) {
       if (!atomic) {  /* stays gray: once more at the atomic step */
         th->gclist = inc->grayagain;
         inc->grayagain = o;
+        if (inc->verifyorder) vpush(inc, o);
       }
       return traversethread(L, g, th, atomic);
     }
@@ -381,6 +393,7 @@ void luaC_incbarriert (lua_State *L, struct Table *t) {
     black2gray(valtogco(t));
     t->gclist = inc->grayagain;
     inc->grayagain = valtogco(t);
+    if (inc->verifyorder) vpush(inc, valtogco(t));
   }
 }
 
@@ -592,9 +605,115 @@ static int weakmode (global_State *g, Table *h) {
   return m;
 }
 
+/* ---- grayagain's waiting threads (option 1, e1e 2026-11-07) ----
+** Every thread traversed while marking stays gray on grayagain until the atomic step, and regraytables (each time the
+** gray list runs empty) walked the whole list to take the written tables out, leaving the threads in reversed order:
+** B3-16k's ~24 k threads, ~200 ns each (cache misses), ~73% of its marking. Now regraytables walks only what was put
+** on grayagain since its last call; the threads it leaves join `waiting', which keeps the order the list had: the old
+** walk made the list reverse(old threads) ++ reverse(new threads), so here the deque's direction flips and the new
+** threads go on its far end. The atomic step links grayagain ++ waiting into the one list it always got. */
+static void wfail (void) {
+  fprintf(stderr, "moho64 gc: out of memory for the waiting threads\n");
+  abort();
+}
+
+static void wreserve (GCInc *inc, size_t front, size_t back) {  /* room for `front' before wlo and `back' after whi */
+  if (inc->wlo >= front && inc->wcap - inc->whi >= back) return;
+  {
+    size_t n = inc->whi - inc->wlo;
+    size_t cap = inc->wcap ? inc->wcap : 1024;
+    size_t lo;
+    GCObject **v;
+    while (cap < 2 * (n + front + back) + 64) cap *= 2;
+    v = (GCObject **)malloc(cap * sizeof(GCObject *));
+    if (v == NULL) wfail();
+    lo = (cap - n) / 2;
+    if (lo < front) lo = front;
+    if (n) memcpy(v + lo, inc->waiting + inc->wlo, n * sizeof(GCObject *));
+    free(inc->waiting);
+    inc->waiting = v;
+    inc->wcap = cap;
+    inc->wlo = lo;
+    inc->whi = lo + n;
+  }
+}
+
+/* (verify: the old list's operations on vlist, head first) */
+static void vpush (GCInc *inc, GCObject *o) {
+  if (inc->vn == inc->vcap) {
+    size_t cap = inc->vcap ? inc->vcap * 2 : 1024;
+    GCObject **v = (GCObject **)realloc(inc->vlist, cap * sizeof(GCObject *));
+    if (v == NULL) wfail();
+    inc->vlist = v;
+    inc->vcap = cap;
+  }
+  memmove(inc->vlist + 1, inc->vlist, inc->vn * sizeof(GCObject *));
+  inc->vlist[0] = o;
+  inc->vn++;
+}
+
+static void vregray (GCInc *inc) {  /* the old regraytables: tables out, the threads left reversed */
+  size_t i, n = 0;
+  for (i = 0; i < inc->vn; i++)
+    if (inc->vlist[i]->gch.tt != LUA_TTABLE) inc->vlist[n++] = inc->vlist[i];
+  for (i = 0; i < n / 2; i++) {
+    GCObject *t = inc->vlist[i];
+    inc->vlist[i] = inc->vlist[n - 1 - i];
+    inc->vlist[n - 1 - i] = t;
+  }
+  inc->vn = n;
+}
+
+/* grayagain's next link of o */
+#define AGAINNEXT(o)	((o)->gch.tt == LUA_TTABLE ? &gcotoh(o)->gclist : &gcototh(o)->gclist)
+
+/* the whole grayagain list (as the old code had it) on inc->grayagain, `waiting' emptied */
+static void joinwaiting (GCInc *inc) {
+  GCObject *head = NULL, **tail = &head;
+  size_t k, n = inc->whi - inc->wlo;
+  for (k = 0; k < n; k++) {
+    GCObject *o = inc->wrev ? inc->waiting[inc->whi - 1 - k] : inc->waiting[inc->wlo + k];
+    *tail = o;
+    tail = AGAINNEXT(o);
+  }
+  *tail = NULL;
+  if (inc->grayagain == NULL) inc->grayagain = head;
+  else {
+    GCObject *o = inc->grayagain;
+    while (*AGAINNEXT(o)) o = *AGAINNEXT(o);
+    *AGAINNEXT(o) = head;
+  }
+  inc->wlo = inc->whi = inc->wcap / 2;
+  inc->wrev = 0;
+  if (inc->verifyorder) {  /* the same list, object for object? */
+    GCObject *o = inc->grayagain;
+    size_t i = 0;
+    for (; o && i < inc->vn; o = *AGAINNEXT(o), i++)
+      if (o != inc->vlist[i]) break;
+    if (o != NULL || i != inc->vn) {
+      fprintf(stderr, "moho64 gc verify: grayagain at the atomic step differs from the old list at entry %lu of %lu "
+              "(cycle %lu)\n", (unsigned long)i, (unsigned long)inc->vn, (unsigned long)inc->cycles);
+      fflush(stderr);
+      abort();
+    }
+    inc->vchecks++;
+    inc->ventries += (unsigned long)inc->vn;
+    inc->vn = 0;
+  }
+}
+
+static void vreport (GCInc *inc) {
+  if (inc->verifyorder)
+    fprintf(stderr, "moho64 gc verifyorder: %lu atomic steps checked, %lu grayagain entries equal\n", inc->vchecks,
+            inc->ventries);
+}
+
 static void startcycle (lua_State *L, global_State *g) {
   GCInc *inc = g->inc;
   inc->gray = inc->grayagain = NULL;
+  inc->wlo = inc->whi = inc->wcap / 2;
+  inc->wrev = 0;
+  inc->vn = 0;
   inc->nweak = 0;
   markroots(L, g, 0);
   inc->state = GCSpropagate;
@@ -660,6 +779,7 @@ static lu_mem atomic (lua_State *L, global_State *g) {
   pu += propagateall(L, g, 1);
   u += pu;
   ph_mark(inc, &ph, pu, 0);
+  joinwaiting(inc);  /* (grayagain as the old code had it: then as before) */
   if (inc->phases) {  /* (statistics: the threads and the tables on grayagain) */
     GCObject *o = inc->grayagain;
     while (o) {
@@ -766,25 +886,41 @@ static lu_mem atomic (lua_State *L, global_State *g) {
 ** 210 k units). Threads stay on grayagain: their stacks are re-traversed at the atomic step in any case.
 ** Returns the number of tables moved. */
 static int regraytables (GCInc *inc) {
-  GCObject *o = inc->grayagain, *threads = NULL;
+  GCObject *o = inc->grayagain;
   int n = 0;
-  while (o) {
-    GCObject *next;
-    if (o->gch.tt == LUA_TTABLE) {
-      next = gcotoh(o)->gclist;
-      gcotoh(o)->gclist = inc->gray;
-      inc->gray = o;
-      n++;
+  size_t nt = 0;
+  /* the threads put on grayagain since the last call: the old walk's `threads' list, reversed (option 1) */
+  for (o = inc->grayagain; o; o = *AGAINNEXT(o))
+    if (o->gch.tt != LUA_TTABLE) nt++;
+  inc->wrev = !inc->wrev;  /* reverse(the waiting threads) ... */
+  if (nt) wreserve(inc, inc->wrev ? nt : 0, inc->wrev ? 0 : nt);
+  {  /* ... ++ reverse(the new threads): in the list's order the last first, each on the far end */
+    GCObject **tmp = nt ? (GCObject **)malloc(nt * sizeof(GCObject *)) : NULL;
+    size_t k = 0;
+    if (nt && tmp == NULL) wfail();
+    o = inc->grayagain;
+    while (o) {
+      GCObject *next;
+      if (o->gch.tt == LUA_TTABLE) {
+        next = gcotoh(o)->gclist;
+        gcotoh(o)->gclist = inc->gray;
+        inc->gray = o;
+        n++;
+      }
+      else {
+        next = gcototh(o)->gclist;
+        tmp[k++] = o;
+      }
+      o = next;
     }
-    else {
-      lua_State *th = gcototh(o);
-      next = th->gclist;
-      th->gclist = threads;
-      threads = o;
+    while (k--) {  /* the new threads from the last one: each after what the deque holds, in the list's order */
+      if (inc->wrev) inc->waiting[--inc->wlo] = tmp[k];
+      else inc->waiting[inc->whi++] = tmp[k];
     }
-    o = next;
+    free(tmp);
   }
-  inc->grayagain = threads;
+  inc->grayagain = NULL;
+  if (inc->verifyorder) vregray(inc);
   return n;
 }
 
@@ -884,6 +1020,7 @@ LUA_API int lua_gpg_setgcmode (lua_State *L, int mode) {
   inc->ceiling = (lu_mem)envint("MOHO64_GC_CEILING", 64 << 20);
   inc->verify = envint("MOHO64_GC_VERIFY", 0);
   inc->phases = envint("MOHO64_GC_PHASES", 0);
+  inc->verifyorder = envint("MOHO64_GC_VERIFYORDER", 0);
   g->inc = inc;
   /* every object so far (made by lua_open and the libraries) takes the current white; lgc.c's fixed strings stay
   ** fixed; udata keep lgc.c's "finalized" (its bit 1 clear) */
@@ -1016,14 +1153,20 @@ void luaC_incleave (lua_State *L) {
   for (i = 0; i < g->strt.size; i++)
     for (o = g->strt.hash[i]; o; o = o->gch.next) o->gch.marked = cast(lu_byte, (o->gch.marked & FIXED) ? CLASSICFIX : 0);
   g->mainthread->marked = 0;
+  vreport(g->inc);
   free(g->inc->weakv);
   free(g->inc->wres);
+  free(g->inc->waiting);
+  free(g->inc->vlist);
   free(g->inc);
   g->inc = NULL;
 }
 
 void luaC_incfree (lua_State *L) {
-  if (G(L)->inc) { free(G(L)->inc->weakv); free(G(L)->inc->wres); free(G(L)->inc); }
+  if (G(L)->inc) {
+    vreport(G(L)->inc);
+    free(G(L)->inc->weakv); free(G(L)->inc->wres); free(G(L)->inc->waiting); free(G(L)->inc->vlist); free(G(L)->inc);
+  }
   G(L)->inc = NULL;
 }
 
