@@ -2902,6 +2902,9 @@ void WorldPicture::CloseSecondWindow() {
 bool WorldPicture::SecondWindowOn() const { return impl_->head2.window != 0; }
 std::string WorldPicture::SecondWindowError() const { return impl_->head2.error; }
 bool WorldPicture::SecondWindowDrawnLastFrame() const { return impl_->head2.drawnLast; }
+void WorldPicture::CaptureNextSecondWindowFrame(std::vector<uint8_t>* out) {
+  if (impl_->device && impl_->head2.window) impl_->device->CaptureInWindow(impl_->head2.window, out);
+}
 
 void WorldPicture::SetSecondInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {
   Impl::Head2& m = impl_->head2;

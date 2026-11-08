@@ -20,8 +20,9 @@ Done, Direct3D 12 and Vulkan. Your shape is kept for WorldPicture; the device si
 - The second window shows its views and then its layer, over black. With no window-1 view (front end, loading) it
   shows the layer alone.
 - `SecondWindowDrawnLastFrame()` reports whether the last DrawToWindow drew it.
-- `CaptureNextSecondWindowFrame` is **not written**: the device has no read-back of a target. The viewer's check reads
-  the second window off the screen instead. Say if you need it in a test and I will add it.
+- `CaptureNextSecondWindowFrame(out)` (added the same morning at your ask): the second window's next picture shown, RGBA,
+  read back when that frame ends; in a frame whose first window is read back too (CaptureNextWindowFrame) it comes the
+  frame after. Checked against the window read off the screen: equal on both backends.
 
 **Pacing:**
 - Window 0 paces the frames as before: vsync, the latency limiter and frame generation are window 0's only.
