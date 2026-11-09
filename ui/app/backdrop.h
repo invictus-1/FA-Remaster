@@ -40,10 +40,26 @@ namespace moho::ui {
 
 class Backdrop : public BackdropSource {
  public:
+  // What plays behind the main menu (the Interface tab's "Menu Background", LookSettings::menuBackground; Chris
+  // approved the flight on 2026-11-08, docs/ui-menuflight.md): Flight, the live battle over Seton's Clutch Remastered
+  // (app/menu_flight.h; the window's picture only); Dusk, this background as it was before (stock Seton's in the
+  // evening, the slow round); Still, one picture of Dusk's first view drawn once at the start and shown as it is
+  // (GameSession: the lightest, for weak cards). The map follows the mode: SETONS_R for Flight, else stock Seton's.
+  enum class Mode { Flight, Dusk, Still };
+  static constexpr const char* kDuskMap = "/maps/SCMP_009/SCMP_009.scmap";
+  static constexpr float kDuskHour = 17.4f;  // (the evening of the menu's background: Dress, and the flight's day)
+  static const char* ModeName(Mode mode) { return mode == Mode::Flight ? "flight" : mode == Mode::Dusk ? "dusk" : "still"; }
   // `map`: the map file in the game's file system ("/maps/SCMP_009/SCMP_009.scmap"). The map is
   // read only after Begin(): its picture builds the renderer's pipelines for render::gSceneSamples,
   // which must not change while a world is alive (render/world.h), so the caller sets it first.
   Backdrop(const Vfs* vfs, std::string map);
+  Backdrop(const Vfs* vfs, Mode mode);
+  Mode mode() const { return mode_; }
+  // The mode changed (the option, live; a fallback): the map with it (the window's picture opens it behind and swaps
+  // it in, GameSession::ServeWindowMap). The direct way only (the read-back way's thread has its map).
+  void SetMode(Mode mode);
+  // A camera given by another (the flight's) fitted to the movie's part of the window, as TakeView fits its own.
+  void FitToMovie(render::Camera* camera, int height) const;
   ~Backdrop() override;
   // `vulkan`: drawn with Vulkan in place of Direct3D 12 (the player's Graphics API);
   // `textureDetail`: WorldPicture::SetTextureDetail (the game's Texture Detail); `direct`: shown by
@@ -78,6 +94,7 @@ class Backdrop : public BackdropSource {
   void Run();
   const Vfs* vfs_;
   std::string map_;
+  Mode mode_ = Mode::Dusk;
   std::thread thread_;
   std::atomic<bool> running_{true};
   std::atomic<bool> begun_{false};
@@ -111,7 +128,7 @@ class Backdrop : public BackdropSource {
   std::chrono::steady_clock::time_point firstShown_{}, lastShown_{}, shownSince_{};
   float movieHeight_ = 0;
   // (For pictures of it: MOHO64UI_BACKDROP_AT=<seconds> starts that far along the camera's way;
-  // MOHO64UI_BACKDROP_HOLD=1 keeps it there, the world's moment too, to compare pictures.)
+  // MOHO64UI_BACKDROP_HOLD=1 keeps it there, the world's moment too, to compare pictures. Still: held at its start.)
   double along_ = 0;
   bool hold_ = false;
 };

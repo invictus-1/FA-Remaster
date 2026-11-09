@@ -49,6 +49,7 @@ class SoundSystem;
 class ReplayTimelineSource;
 class Backdrop;
 class CardBackdrop;
+class MenuFlight;
 
 class GameSession {
  public:
@@ -271,6 +272,17 @@ class GameSession {
   // the background's map behind it; every map after (a game's, the menus' again) is opened behind
   // the one shown while the window goes on showing frames, and swapped in when ready.
   Backdrop* menuBackdrop = nullptr;
+  // The main menu's flight (app/menu_flight.h; nullptr: none): with the background in its Flight mode, the window's
+  // picture opens its map behind (as any menu map), its simulation is begun meanwhile (only while no game's session
+  // is there) and handed to that map before the swap (PrepareSession), and once shown it gets each of its beats; at
+  // the storyboard's end the picture goes black over a second, the battle starts over on the map shown (RestartMap,
+  // no reopening) and comes in again from black. Stopped before any game's session is made (PrepareSession). The
+  // background falls back to Dusk for the run when the map or the simulation cannot be had, or when the flight's
+  // frames cost the card more than 12 ms (MOHO64UI_MENUFLIGHT_GPU_MS) on average over 5 s after its first 10 s.
+  MenuFlight* menuFlight = nullptr;
+  // The window's shortest frame while the menu's flight shows (the menu at most 60 frames a second, whatever the
+  // player's Frame Rate: the renderer's advice; 0 otherwise): for the host's pacing (WindowHooks::framePeriod).
+  double MenuFramePeriod() const;
   void OpenWindowPicture();
   bool DrawsToWindow() const;
   // Where the interface's controls hand a picture over the whole window to the graphics card (the
@@ -588,6 +600,26 @@ class GameSession {
   void BeginWindowMap(bool game, const std::string& map);  // (the game's map or the menus' background's, behind)
   void ServeWindowMap();
   void GiveBackdrop(WindowPicture& wp);
+  // (the main menu's background's mode by the option and the fallback; the flight's simulation begun, given to its map,
+  // started on the world shown; the still picture)
+  void FollowMenuMode();
+  void ServeMenuFlight(WindowPicture& wp);
+  void StartFlightOnPicture(WindowPicture& wp, bool restart);
+  bool flightGiven_ = false;     // the flight's simulation given to its map opening behind (PrepareSession)
+  bool flightShows_ = false;     // the world shown is the flight's, its session started (GameStarted)
+  bool flightCovering_ = false;  // the loop's cover: black over a second, held until the battle starts over
+  std::chrono::steady_clock::time_point flightFrameAt_{}, coverFrom_{}, flightShownAt_{};
+  double flightGpuMs_ = 0;  // (the card's time of the flight's frames, 10..15 s after it first showed: the fallback)
+  int flightGpuFrames_ = 0;
+  // (the log's line every 10 s while it shows: the card's time and the frames' and beats' at their slowest)
+  double flightLogGpu_ = 0, flightLogFrameMax_ = 0, flightLogBeatMax_ = 0;
+  int flightLogFrames_ = 0;
+  std::chrono::steady_clock::time_point flightLogFrom_{};
+  bool flightCostChecked_ = false;
+  std::function<float(float, float)> flightGround_;  // (the picture's ground, CineGround, once the flight's map shows)
+  std::vector<uint32_t> still_;  // (Still: the one picture, its size; taken once a size)
+  int stillW_ = 0, stillH_ = 0;
+  bool stillShown_ = false;
   void GameLooksBack(WindowPicture& wp);  // (the menus' map begun behind a game's world, not had: ServeWindowMap)
   // A game played (not a replay) is over (SessionEndGame, or the simulation's EndGame: the victory, the defeat), no
   // beat running.

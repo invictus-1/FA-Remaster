@@ -316,7 +316,8 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_palette", "remaster_timeline", "remaster_follow_cam", "remaster_lamp_colour", "remaster_scorch",
         "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
-        "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky"};
+        "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
+        "remaster_menu_background", "remaster_menu_sound"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -413,6 +414,12 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "season");
   lua_pushnumber(L, looks.season);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "menuBackground");
+  lua_pushnumber(L, looks.menuBackground);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "menuBattleSound");
+  lua_pushboolean(L, looks.menuBattleSound);
   lua_rawset(L, -3);
   lua_pushstring(L, "colorVision");
   lua_pushnumber(L, looks.colorVision);
@@ -1533,6 +1540,19 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       }
       return;
     }
+    if (key == "REMASTER_MENU_BACKGROUND") {  // (Menu Background: flight, dusk or still; 0 / 1 / 2 too: live)
+      const std::string v = Upper(value);
+      if (v.rfind("FLIGHT", 0) == 0 || v == "0") looks.menuBackground = 0;
+      else if (v.rfind("DUSK", 0) == 0 || v == "1") looks.menuBackground = 1;
+      else if (v.rfind("STILL", 0) == 0 || v == "2") looks.menuBackground = 2;
+      return;
+    }
+    if (key == "REMASTER_MENU_SOUND") {  // (Menu Battle Sound: off or distant; 0 / 1 too: from the battle's next start)
+      const std::string v = Upper(value);
+      if (v.rfind("OFF", 0) == 0 || v == "0") looks.menuBattleSound = false;
+      else if (v.rfind("DISTANT", 0) == 0 || v == "1") looks.menuBattleSound = true;
+      return;
+    }
     if (key == "REMASTER_SEASON") {  // (0 summer, 1 autumn; or those words, "fall" too: from the next map opened)
       if (!value.empty()) {
         const std::string v = Upper(value);
@@ -1892,7 +1912,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   lua_register(L, "moho64ui_ConsoleNames", l_ConsoleNames);
   lua_register(L, "moho64ui_Looks", l_LooksForTests);
   // moho64ui_RayTracingSupported() -> true or false once a picture of the renderer has opened and said whether
-  // the graphics card can ray trace, nil before (the Video tab's Ray Tracing: one state, greyed, where it cannot).
+  // the graphics card can ray trace, nil before (the Remastered tab's Ray Tracing: one state, greyed, where it cannot).
   lua_register(L, "moho64ui_RayTracingSupported", [](lua_State* S) -> int {
     const int known = Looks().rayTracingSupported;
     if (known < 0) lua_pushnil(S);
