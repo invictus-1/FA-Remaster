@@ -1042,6 +1042,41 @@ table.insert(options.ui.items, {
     },
 })
 
+-- What plays behind the main menu (Chris approved the flight on 2026-11-08: docs/ui-menuflight.md; the ui chat's lead
+-- put both here, on the Interface tab, until the Remaster options are laid out anew): the live flight over a staged
+-- battle on Seton's Clutch Remastered (the default; without that map: Dusk), the evening flight over the stock map as
+-- before, or one still picture. Live: the main menu changes at once. And the battle's sound: none (the original's menu
+-- played music only, the default) or heard from afar.
+table.insert(options.ui.items, {
+    title = "Menu Background",
+    key = 'remaster_menu_background',
+    tip = "What plays behind the main menu: a cinematic flight over a staged battle on Seton's Clutch Remastered, the earlier evening flight over the original map, or a still picture (the lightest).",
+    type = 'toggle',
+    default = 'flight',
+    set = Look("remaster_menu_background"),
+    custom = {
+        states = {
+            { text = "Remastered Flight", key = 'flight' },
+            { text = "Original Dusk", key = 'dusk' },
+            { text = "Still", key = 'still' },
+        },
+    },
+})
+table.insert(options.ui.items, {
+    title = "Menu Battle Sound",
+    key = 'remaster_menu_sound',
+    tip = "The menu flight's battle heard from afar under the music, or not at all (the original's menu played music only). From the battle's next start.",
+    type = 'toggle',
+    default = 'off',
+    set = Look("remaster_menu_sound"),
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 'off' },
+            { text = "Distant", key = 'distant' },
+        },
+    },
+})
+
 -- The game's own graphics settings drive the renderer (Fidelity, Shadow Fidelity, Anti-Aliasing,
 -- Level Of Detail, Texture Detail; ui/user/keymap.cpp) and mean what they say (Chris, 2026-10-15), so a player
 -- who has never chosen starts at the full look: their defaults are raised to the highest. The
