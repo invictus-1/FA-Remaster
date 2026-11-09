@@ -200,7 +200,7 @@ local looks = {
     {
         title = "Remastered Preset",
         key = 'remaster_preset',
-        tip = "Sets the remastered looks below together, from Off (the original game's look) to Ultra. Each can still be changed after; Custom leaves them as they are.",
+        tip = "Sets the remastered looks below together, from Off (the original game's look) to Ultra. Each can still be changed after; Custom leaves them as they are. Season is not one of them: it stays as you chose it at every level, Off too.",
         type = 'toggle',
         default = 4,
         update = SetRemasterPreset,
@@ -271,7 +271,7 @@ local looks = {
         -- the next map loaded as that setting.)
         title = "Temporal Upscaling (FSR 3)",
         key = 'remaster_temporal_upscale',
-        tip = "Draws the world smaller and sharpens it up to the screen with AMD FSR 3, in place of anti-aliasing. Raises the frame rate only where the graphics card is what holds it back; in a big late game the processor usually is.",
+        tip = "Draws the world smaller and sharpens it up to the screen with AMD FSR 3, in place of anti-aliasing. Raises the frame rate only where the graphics card is what holds it back; in a big late game the processor usually is. Its anti-aliasing part changes from the next map.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_temporal_upscale"),
@@ -1088,7 +1088,11 @@ table.insert(options.ui.items, {
 -- to ui request 24, 2026-10-16): Shadow Resolution (Shadow Fidelity sets the shadows' size),
 -- Shadow render distance (the shadows cover every zoom) and Render Sky (the sky lights the scene;
 -- without it the picture is wrong, not faster).
-local leftOut = { shadow_resolution = true, shadow_render_distance = true, render_skydome = true }
+-- Vertical Sync and Frametime as well (2026-11-09, the review): they and the Remastered tab's Frame Rate set the
+-- same frame pacing (ui/user/keymap.cpp, SC_VERTICALSYNC / SC_FRAMETIMECLAMP / REMASTER_FRAME_RATE). The game's two
+-- send only on OK, ours also at the start, so a change on the Video tab held until the next start and then fell
+-- back to Frame Rate's. Frame Rate has both (Vertical Sync; Uncapped or a limit), so it is the one place.
+local leftOut = { shadow_resolution = true, shadow_render_distance = true, render_skydome = true, vsync = true, frametime = true }
 for i = table.getn(options.video.items), 1, -1 do
     if leftOut[options.video.items[i].key] then
         table.remove(options.video.items, i)

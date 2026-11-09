@@ -39,8 +39,11 @@ local Named = {}  -- single units the markers follow
 local function Spawn(name, army, yaw, list)
     local units = {}
     for _, u in list do
-        local unit = CreateUnitHPR(u[1], army, u[2], Ground(u[2], u[3]), u[3], 0, yaw, 0)
-        if unit then
+        -- (protected, 2026-11-09: CreateUnitHPR raises for a blueprint the player's files lack; the battle goes on
+        -- without that unit)
+        local ok, unit = pcall(CreateUnitHPR, u[1], army, u[2], Ground(u[2], u[3]), u[3], 0, yaw, 0)
+        if not ok then Note(string.format('no unit %s for %s: %s', tostring(u[1]), name, tostring(unit))) end
+        if ok and unit then
             table.insert(units, unit)
             if u[4] then Named[u[4]] = unit end
         end
@@ -183,7 +186,10 @@ local function Run()
                 MenuFlight.ended = tick
                 return
             end
-            what()
+            -- (protected, 2026-11-09: a step that fails is logged and the battle goes on; unprotected it ended this
+            -- thread, `ended` was never set and the menu stayed on the path's last picture for ever)
+            local ok, why = pcall(what)
+            if not ok then Note(string.format('step %d failed at tick %d: %s', step, tick, tostring(why))) end
             step = step + 1
         end
         if not lost then
@@ -224,4 +230,15 @@ end
 
 function OnStart(self)
     ForkThread(Run)
+    -- The backstop (2026-11-09): should Run's thread die all the same, the run still ends a little after the
+    -- board's last step, so the menu's flight starts again instead of standing still.
+    local last = 0
+    for _, b in Board do if b[1] > last then last = b[1] end end
+    ForkThread(function()
+        WaitTicks(last + 50 - GetGameTick())
+        if not MenuFlight.ended then
+            Note(string.format('end by the backstop tick %d', GetGameTick()))
+            MenuFlight.ended = GetGameTick()
+        end
+    end)
 end

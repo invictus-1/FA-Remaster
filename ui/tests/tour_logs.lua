@@ -14,6 +14,15 @@
 -- - The interface's blueprints and the simulation's: the same count and records (moho64ui_BlueprintFacts).
 -- - The reclaim cursor's TGA picture is read.
 -- Run it like orderlines.lua (a launched game with CheatsEnabled = "true"), with --frames 2400.
+-- FAF's construction panel names a unit's enhancement tables (ID, UnitID) when its enhancement tab opens
+-- (construction.lua 451-462), and its queue view reads those names (2361). A test that orders an enhancement
+-- without opening the tab names them the same way, or FAF's view raises a script error (2026-11-09).
+local function NameEnhancements(unit)
+    local bp = unit:GetBlueprint()
+    for name, enh in bp.Enhancements or {} do
+        if type(enh) == 'table' and enh.Slot then enh.ID, enh.UnitID = name, bp.BlueprintId end
+    end
+end
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -86,6 +95,7 @@ ForkThread(function()
     end
     SelectUnits({cdr})
     WaitSeconds(0.5)
+    NameEnhancements(cdr)
     IssueCommand("UNITCOMMAND_Script", {TaskName = "EnhanceTask", Enhancement = "LeftPod"}, true)
     local c = heard[table.getn(heard)]
     check("the enhancement's order is heard", c and c.CommandType, "Script")

@@ -77,7 +77,7 @@ end
 
 -- Which ping the mouse's way from the middle lights (nil inside the middle).
 local function PingAt(x, y)
-    local dx, dy = x - opened.x, y - opened.y
+    local dx, dy = x - opened.mx, y - opened.my
     local dead = LayoutHelpers.ScaleNumber(deadZone)
     if dx * dx + dy * dy < dead * dead then return nil end
     local n = table.getn(Pings)
@@ -133,9 +133,23 @@ function Open(keyCode)
     local info = GetRolloverInfo()
     local mouse = GetMouseScreenPos()
     if keyCode == nil then keyCode = HeldKey() end
-    opened = { x = mouse[1], y = mouse[2], place = place, target = info and info.entityId or nil, keyCode = keyCode }
-
     local frame = GetFrame(0)
+    -- The ring is drawn whole (2026-11-09): opened near the screen's edge its middle moves inwards by what its
+    -- wedges need. The ping still goes to the place under the mouse, and the way is still measured from where the
+    -- mouse was (mx, my), so the gesture is the same everywhere.
+    local needX = LayoutHelpers.ScaleNumber(radius) + LayoutHelpers.ScaleNumber(wedgeW) / 2 + 2
+    local needY = LayoutHelpers.ScaleNumber(radius) + LayoutHelpers.ScaleNumber(wedgeH) / 2 + 2
+    local function Within(v, low, high)
+        if high < low then return (low + high) / 2 end  -- (a screen smaller than the ring: its middle)
+        return math.max(low, math.min(high, v))
+    end
+    opened = {
+        x = Within(mouse[1], frame.Left() + needX, frame.Right() - needX),
+        y = Within(mouse[2], frame.Top() + needY, frame.Bottom() - needY),
+        mx = mouse[1], my = mouse[2],
+        place = place, target = info and info.entityId or nil, keyCode = keyCode,
+    }
+
     local cover = Group(frame)
     LayoutHelpers.FillParent(cover, frame)
     cover.Depth:Set(frame:GetTopmostDepth() + 1)
@@ -212,4 +226,5 @@ function Open(keyCode)
     State.open = true
     State.lit = nil
     State.at = { opened.x, opened.y }
+    State.mouseAt = { opened.mx, opened.my }
 end

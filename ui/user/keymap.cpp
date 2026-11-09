@@ -1389,14 +1389,16 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     const std::string value = at == std::string::npos ? std::string() : rest.substr(at);
     const bool on = !value.empty() && value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0;
     LookSettings& looks = Looks();
-    if (key == "REMASTER_EFFECTS") return void(looks.remasteredEffects = on);
+    // (Without a value a look stays as it is, as the game's own settings below do: until the review of 2026-11-09 these
+    // four went OFF on a bare name typed in the console.)
+    if (key == "REMASTER_EFFECTS") return void(value.empty() ? false : (looks.remasteredEffects = on));
     if (key == "REMASTER_EFFECTS_QUALITY") {
       if (!value.empty()) looks.effectsQuality = std::max(0.05f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
       return;
     }
-    if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
-    if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
-    if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    if (key == "REMASTER_TRACERS") return void(value.empty() ? false : (looks.tracers = on));
+    if (key == "REMASTER_RICH_GROUND") return void(value.empty() ? false : (looks.richGround = on));
+    if (key == "REMASTER_SNOW_TRACKS") return void(value.empty() ? false : (looks.snowTracks = on));
     // The game's own graphics settings (LookSettings); without a value they stay as they are.
     if (key == "GRAPHICS_FIDELITY") {
       if (!value.empty()) looks.fidelity = std::max(0, std::min(2, std::atoi(value.c_str())));

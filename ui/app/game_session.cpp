@@ -2080,7 +2080,10 @@ void GameSession::End() {
   play_.reset();
   LetGoOfScan(std::move(postgame_));  // (a played game's moments' scan stops: GameMoments)
   if (!relaunching_) {  // (the replay closes: its moments' scan stops, a jump under way with it)
-    StopMomentScan();
+    // (Let go of, not waited for, as the played game's scan above: a scan still loading its copy of the game looks
+    // at `cancel` only from its first beat on, so a replay left in its first seconds held the window for the whole
+    // of that load; the review of 2026-11-09. The bookmarks are in their file already: written at each change.)
+    LetGoOfScan(std::move(timeline_));
     seekTo_ = 0;
     seekBack_ = false;
     back_ = BackClock{};

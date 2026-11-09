@@ -104,7 +104,7 @@ end
 local function Frame()
     if not my.frame then return end
     local st = moho64ui_FollowCamState()
-    if not st.on then  -- (the unit is gone and its wreck shown long enough: the engine closed it)
+    if not st or not st.on then  -- (the unit is gone and its wreck shown long enough: the engine closed it)
         Close()
         return
     end

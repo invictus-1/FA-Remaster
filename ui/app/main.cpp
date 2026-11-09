@@ -1390,6 +1390,10 @@ int main(int argc, char** argv) {
                            timed("(host: the game's beats)", [&] { session.Advance(seconds); });
                          },
                          fullScreen, hooks);
+    // The window closed while a game still loads (2026-11-09, the review): the launch is dropped first. With beats in
+    // the load its thread parks until a frame serves it, and no frame comes any more, so the wait below never ended:
+    // the program stayed on without a window, the preferences were not written, a launcher's .bat never returned.
+    if (session.Loading()) session.End();
     session.WaitForBeat();  // (a beat still on its thread at the end: done before anything looks at the game again)
     if (done < 0) ok = false;
   } else {

@@ -5,6 +5,15 @@
 -- or not; a click on the commander's place gives the commander; a click well beside a factory selects nothing (the
 -- picture's sphere about a model reached far past it). Run it like dock.lua (a launched game with CheatsEnabled =
 -- "true", the UEF commander), with --frames 3600.
+-- FAF's construction panel names a unit's enhancement tables (ID, UnitID) when its enhancement tab opens
+-- (construction.lua 451-462), and its queue view reads those names (2361). A test that orders an enhancement
+-- without opening the tab names them the same way, or FAF's view raises a script error (2026-11-09).
+local function NameEnhancements(unit)
+    local bp = unit:GetBlueprint()
+    for name, enh in bp.Enhancements or {} do
+        if type(enh) == 'table' and enh.Slot then enh.ID, enh.UnitID = name, bp.BlueprintId end
+    end
+end
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -52,6 +61,7 @@ ForkThread(function()
     -- UNITCOMMAND_Script {TaskName = 'EnhanceTask', Enhancement = 'LeftPod'}), and a land factory away from him
     SelectUnits({cdr})
     WaitSeconds(0.2)
+    NameEnhancements(cdr)
     IssueCommand("UNITCOMMAND_Script", {TaskName = 'EnhanceTask', Enhancement = 'LeftPod'}, true)
     local factoryPlace = {p[1], p[2], p[3] - 22}
     SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = factoryPlace, bpId = "ueb0101", count = 1, yaw = 0}})

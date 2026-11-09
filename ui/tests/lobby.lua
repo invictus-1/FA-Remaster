@@ -357,7 +357,7 @@ video.remaster_graphics_api.set('remaster_graphics_api', 'd3d12', false)
 check("and back", moho64ui_Looks().vulkan, false)
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
 check("the Remastered tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
-do  -- (as the profile has it: the suite's copy is Chris's, who may have chosen another)
+do  -- (as the profile has it: the suite's template may have chosen another)
     local chosen = (import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}).remaster_frame_rate or 'vsync'
     check("the window keeps to the screen's rate at the start, unless the profile chose otherwise", moho64ui_Looks().verticalSync, chosen == 'vsync')
 end
@@ -381,7 +381,7 @@ do
     check("Low Latency is in no preset level", inAny, false)
 end
 -- Options the remastered picture does its own way are not in the menu; the glow is on unless chosen
-for _, key in {'shadow_resolution', 'shadow_render_distance', 'render_skydome'} do
+for _, key in {'shadow_resolution', 'shadow_render_distance', 'render_skydome', 'vsync', 'frametime'} do
     check("the Video tab leaves out " .. key, video[key], nil)
 end
 check("Bloom Render is on unless chosen", video.bloom_render and video.bloom_render.default, 1)
