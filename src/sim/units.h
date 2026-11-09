@@ -573,6 +573,10 @@ class Projectile : public Entity {
   // at launch, + scaleVel x 0.1 every beat (MotionTick 0x69be40), replaced outright by SetScale / SetDrawScale.
   // For a host that draws (ProjectileView::size); nothing in the simulation goes by it.
   Vec3 drawSize{1, 1, 1};
+  // The bone of its launcher that UnitWeapon:CreateProjectile(muzzle) launched it from, -1 when it was made any
+  // other way (Entity:CreateProjectile, a shell a shell threw). For a host that draws
+  // (ProjectileView::muzzleBone); nothing in the simulation goes by it.
+  int muzzleBone = -1;
   Vec3 prevPos;
   Vec3 prevPosBefore;         // prevPos before its last step (the committed position before the one its step began from)
   uint32_t prevPosTick = 0;   // the beat that step set prevPos in

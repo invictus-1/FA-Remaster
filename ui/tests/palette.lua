@@ -120,6 +120,21 @@ ForkThread(function()
     query("vertical sync")
     e = first()
     check("an option with its tab", tostring(e.kind) .. " " .. tostring(e.tab), "option Video")
+    -- our looks in the Remastered tab, each with its section (the header row above it)
+    query("ocean glitter")
+    e = first()
+    check("a look of ours with its tab and section", tostring(e.kind) .. " " .. tostring(e.tab) .. " " .. tostring(e.section),
+        "option Remastered Water")
+    check("its detail line names both", string.find(Palette.Controls.rowGroups[1].detail and Palette.Controls.rowGroups[1].detail:GetText() or
+        "", "Options > Remastered > Water", 1, true) ~= nil, true)
+    query("water")
+    local found = false
+    for _, row in Palette.State.rows do if row.optionKey == 'remaster_shore_soak' then found = true end end
+    check("a section's name finds its options (water: Shore Soak)", found, true)
+    query("go to section")
+    found = false
+    for _, row in Palette.State.rows do if row.optionKey == 'remaster_goto_section' then found = true end end
+    check("Go to Section is not among the options", found, false)
     query("shadow")
     local options = 0
     for _, row in Palette.State.rows do if row.kind == 'option' then options = options + 1 end end
@@ -235,6 +250,23 @@ ForkThread(function()
     check("the Options dialog is open", tab ~= false, true)
     check("at the option's tab (the chosen tab's button hides under its lit picture)", tab and tab:IsHidden(), true)
     check("at the option itself", Palette.State.shownOption, e.optionKey)
+    if cancel then cancel:OnClick() end
+
+    -- an option of the Remastered tab: the dialog at that tab, scrolled to it
+    WaitSeconds(0.2)
+    moho64ui_Key("p", "Ctrl Shift")
+    query("ocean glitter")
+    e = first()
+    moho64ui_Key(ENTER)
+    WaitSeconds(1)
+    local remaster = import("/lua/options/options.lua").options.remaster
+    tab, cancel = false, false
+    GetFrame(0):ApplyFunction(function(control)
+        if control.tabData == remaster and control.OnClick then tab = control end
+        if control.cancelBtn then cancel = control.cancelBtn end
+    end)
+    check("the Options dialog at the Remastered tab", tab and tab:IsHidden(), true)
+    check("at Ocean Glitter", Palette.State.shownOption, 'remaster_ocean_glitter')
     if cancel then cancel:OnClick() end
 
     -- left open with a few letters typed (for a --screenshot)

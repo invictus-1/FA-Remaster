@@ -41,7 +41,7 @@ world's picture (renderer) and the stock AI opponents (engine; the mod AI M28 al
 | 6 | Sound and movies | – |
 | 7 | Everything around a match: score, restart, replays, saves, campaign | 3, engine |
 | 8 | The modern pass | 4 |
-| 9 | Multiplayer and FAF | last, by request |
+| 9 | Multiplayer and FAF | DROPPED (Chris, 2026-11-09); what is built stays frozen |
 
 ## Stage 1: the front end can be used by hand
 
@@ -142,8 +142,12 @@ The wish: the original's artwork and sounds, but snappy and modern.
 
 ## Stage 9: multiplayer and FAF
 
-Lowest priority by request: the network lobby (joining, peers, discovery of LAN games), the FAF client's
-connection (GPGNet), observers, disconnect and desync dialogs.
+DROPPED as a goal (Chris, 2026-11-09): FA Remastered is for solo play, skirmish, replays and mods; for online
+games use FAF. No new network work; the parked "rejoin a running game" is dropped. What was built (the LAN lobby,
+lockstep play, the desync detail, the two-PC check) stays in the code frozen, with no support promise; whether it is
+labelled "LAN, experimental" or hidden at release is decided then. Determinism stays (gates, replays, saves, AI).
+(Before: lowest priority by request: the network lobby, the FAF client's connection (GPGNet), observers, disconnect
+and desync dialogs.)
 
 ## Running through all stages
 

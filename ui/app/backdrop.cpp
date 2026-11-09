@@ -22,6 +22,13 @@ Backdrop::Backdrop(const Vfs* vfs, std::string map) : vfs_(vfs), map_(std::move(
   hold_ = std::getenv("MOHO64UI_BACKDROP_HOLD") != nullptr;
 }
 
+Backdrop::Backdrop(const Vfs* vfs, Mode mode) : Backdrop(vfs, std::string(kDuskMap)) { SetMode(mode); }
+
+void Backdrop::SetMode(Mode mode) {
+  mode_ = mode;
+  map_ = mode == Mode::Flight ? "/maps/SETONS_R/SETONS_R.scmap" : kDuskMap;  // (MenuFlight::kMap)
+}
+
 void Backdrop::Begin(bool vulkan, int textureDetail, bool direct) {
   if (begun_ || !running_) return;
   vulkan_ = vulkan;
@@ -122,14 +129,10 @@ bool Backdrop::TakeView(const render::WorldPicture& picture, int width, int heig
   (void)width;
   if (!shownThisFrame_) return false;
   shownThisFrame_ = false;
-  const double t = (hold_ ? 0.0 : std::chrono::duration<double>(std::chrono::steady_clock::now() - firstShown_).count()) + along_;
+  const bool hold = hold_ || mode_ == Mode::Still;
+  const double t = (hold ? 0.0 : std::chrono::duration<double>(std::chrono::steady_clock::now() - firstShown_).count()) + along_;
   *camera = WayAt(picture, t);
-  // (The read-back way's picture was the movie's size, its field of view over the movie's height:
-  // the window's picture spans as much over the movie's rows. The movie fills the window's height,
-  // centred (main.lua's CreateBackMovie), so the two are the same picture; one not centred would
-  // show its part of the world off by as much.)
-  if (movieHeight_ >= 1 && std::fabs(movieHeight_ - static_cast<float>(height)) >= 1)
-    camera->fovY = 2.0f * std::atan(std::tan(camera->fovY * 0.5f) * static_cast<float>(height) / movieHeight_);
+  FitToMovie(camera, height);
   *tick = (t - along_) * 10.0;  // (the world's moment by the time shown, as Run's)
   return true;
 #else
@@ -138,11 +141,23 @@ bool Backdrop::TakeView(const render::WorldPicture& picture, int width, int heig
 #endif
 }
 
+// (The read-back way's picture was the movie's size, its field of view over the movie's height: the window's picture
+// spans as much over the movie's rows. The movie fills the window's height, centred (main.lua's CreateBackMovie), so
+// the two are the same picture; one not centred would show its part of the world off by as much.)
+void Backdrop::FitToMovie(render::Camera* camera, int height) const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (movieHeight_ >= 1 && std::fabs(movieHeight_ - static_cast<float>(height)) >= 1)
+    camera->fovY = 2.0f * std::atan(std::tan(camera->fovY * 0.5f) * static_cast<float>(height) / movieHeight_);
+#else
+  (void)camera, (void)height;
+#endif
+}
+
 void Backdrop::Dress(render::WorldPicture& picture) {
 #ifdef MOHO64UI_WORLD_PICTURE
   // The evening: a low sun, some clouds.
   if (render::World* world = picture.world()) {
-    world->timeOfDay = 17.4f;
+    world->timeOfDay = kDuskHour;
     world->cloudCover = 0.45f;
   }
 #else

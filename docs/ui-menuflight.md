@@ -515,3 +515,137 @@ that.
    Should the Cybran side wait for its remaster, or go in now and get better as Cybran is remastered?
 3. Battle sound default: Off (the original's music only) or Distant?
 4. Loop length: about 4 minutes with the nuke near the end, or shorter?
+
+---
+
+## 12. Built: the first version (ui helper "menuflight", 2026-11-08; run and measured 2026-11-09)
+
+What is in (section 9 steps 1-7, first version; the lead's decisions for Chris: dusk, UEF vs Cybran, battle sound Off,
+a loop of 4 minutes with the nuke near its end, the two options on the Interface tab):
+
+- **The battle** (`ui/data/menuflight/`, ours, MIT): `menu_session.lua` (two Human armies, no AI, no mods, no cheats,
+  no fog, `Victory = "sandbox"`, `RemasterSimOrder = "parallel"`), `setons_r_menu_scenario.lua` (SETONS_R's scmap and
+  save read as they are, our script), `menu_battle.lua` (the storyboard by tick: the bases and the two fronts at tick 1,
+  the push over the bridge at 30, gunships at 600, Percivals and Bricks at 900, a third wave (Titans and Pillars,
+  Loyalists and Rhinos) at 1250, the push on at 1300, the nuke ordered at 1700, the end at 2400; `MENUFLIGHT ...` log
+  lines for the tests, with a census every 100 ticks: the units alive, the middle of each side, where the named ones
+  are; `_G.MenuFlight.ended` for the host: the script runs in `ScenarioInfo.Env`, so its own globals are not the sim's).
+  The map's own commanders are not made: `InitializeArmies` runs with `PrebuiltUnits` set to `On` for its call only (no
+  warp-in thread), and the commanders are destroyed in `OnPopulate`.
+- **The runner** `ui/app/menu_flight.{h,cpp}`: the session described once from the file in the front end's state
+  (`SessionFromGameConfig`, the seed fixed at 1108, focus army -1, no record), the `Sim` made and started on its own
+  thread (2 workers), beats on that thread at ten a second while the menu shows (paused while hidden; hidden over
+  120 s: it starts over), the picture's `Beat` on that thread as a game's. The camera is the path's pose at the
+  battle's seconds (`CinePath::At(tick / 10)`, `CineCamera::MakeView`), so camera and battle stay in step.
+  - Before each load it sets the rules' `/preferences/Game.prefs` (sim/session.h `kGamePrefsPath`) to
+    `CurrentMapDir = '/maps/SETONS_R'`, as a lobby's launch on that map writes it. Without it the file held whatever the
+    last launch wrote: the first menu after the start had no map folder (11844 map props without a blueprint, 5334
+    blueprints), the menus after a game on SETONS_R had it (6009), and the two battles differed from the first beat.
+  - `Poll()` moves a finished load to Ready; the window's host calls it before the battle shows (its simulation is
+    handed to the map opening behind while Ready). Without a window the host waits for the load (`WaitLoaded`), so
+    that a test's frames meet the battle at the same frame every run.
+- **The background's modes** (`Backdrop::Mode`): Flight / Dusk / Still, the map by the mode, switched live by the option
+  (`GameSession::FollowMenuMode`). Flight's map opens behind as any menu map; its simulation is handed to it before the
+  swap (`PrepareSession`, `SetLoadCamera` = the path's first pose, `SetLoadDayAndWeather(17.4)`); after the swap
+  `GameStarted`, `Beat`, focus 0, no bars or marks, the evening (`SetDayAndWeather(17.4, still, fair)`: a session's world
+  takes its light from the picture's day, not from Dress's `timeOfDay`; without it the flight showed noon), a cut. Its
+  looks until a menu preset (`FlightLooks`): held for its map, the player's Atmosphere, Soft Shadows and Ground Detail,
+  no Ray Tracing, no Weather Effects, the world's switches as the player has them (`WorldLooks`).
+- **Loop**: at `MenuFlight.ended` black comes over the picture in 1 s (`Over::Cover`), then the old simulation goes, a
+  new one loads (same seed), `RestartMap` on the map shown, `GameStarted`, a cut, in again from black (`Over::Fade`).
+- **Hand-over**: every launch path stops the flight first (`GameSession::PrepareSession`: the beat or load waited for,
+  the simulation freed, the world's sounds stopped). The game's map is opened anew (R3's safe way); back at the menu
+  the flight begins again from its first beat once the game's session is gone.
+- **Fallback** (this run only, the option kept, one log line `the menu's background: flight -> dusk (<why>)`): no
+  SETONS_R, its session or simulation fails, its map fails to open, or its frames cost the card over 12 ms on average
+  from 10 to 15 s after it first showed (`MOHO64UI_MENUFLIGHT_GPU_MS`).
+- **Still**: Dusk's first view taken once with `TakePhoto` (window size, 8 settling frames), shown over the window where
+  the movie shows, the world no longer drawn. Nothing is shipped.
+- **Cost**: the menu is held to 60 frames a second while the flight shows (`WindowHooks::framePeriod`); a log line
+  every 10 s gives the frames, the longest frame, the card's ms a frame and the longest beat.
+- **Sound**: "Menu Battle Sound" Off (default) / Distant: the beat's once-off sounds played where they happen, the
+  listener 400 over the flight's camera; units' running sounds are left out. From the battle's next start.
+- **Options** (Interface tab, right after Key Bindings): `remaster_menu_background` flight|dusk|still,
+  `remaster_menu_sound` off|distant (console commands of the same names; `LookSettings::menuBackground`,
+  `menuBattleSound`).
+- **The camera path** `setons_r_flight.path` (22 keys, 240 s): fitted to the battle's census lines (a headless run), each
+  key's eye 40-90 from the action's middle, turned 22 degrees so that the action sits in the left or right third (the
+  main menu's buttons cover the middle); no point of the spline lower than 19 over the ground or the water (17.5), at
+  most 37 a second. CinePath's text wants no space before a key's colon (`"%f:"`): `12: 640, ...`.
+- **Tests**: `ui/tests/menu_flight_battle.lua` (the battle as an ordinary game to its end: the scenario runs as any
+  map's), `ui/tests/menu_flight.lua` (`--menu-flight` without a window: loads, runs, ends, starts over, stopped by a
+  skirmish launched on SETONS_R, begun again from its first beat; `/flightcase loops`: two whole battles, for the
+  suite's fingerprint compare; `/flightcase nomap`). Test hooks: `moho64ui_MenuFlight()` (`lastEndTick` among its
+  fields), `MOHO64UI_MENUFLIGHT_FAST=1`, `MOHO64UI_MENUFLIGHT_FAST_TO=<tick>` (as fast up to that tick: pictures of the
+  later moments in a window), `MOHO64UI_MENUFLIGHT_FP=<file>`, `MOHO64UI_MENUFLIGHT_THREADS=<n>`,
+  `MOHO64UI_MENUFLIGHT_PATH=<keys>`, `MOHO64UI_MENUFLIGHT_CAPTURES=<ticks>` (with `--window-capture <prefix>`).
+
+### 12.1 Measured (2026-11-09, the helper's build; runs pinned to CPUs 16-31)
+
+- **The battle** (seed 1108; the same on 1 and 8 simulation threads and in every loop, fingerprints equal over all
+  2400 beats): the first loss at tick 266; the UEF front spent by ~500, the gunships at 600, the Monkeylord gone by
+  ~1050, the third waves from 1250, the Fatboy gone by ~1650, the Cybran (Megalith, Bricks, Loyalists: 12 units) then
+  on the UEF end of the bridge; the nuke launched at tick 1729, its impact (the Cybran rear base's witness gone) at 2047;
+  the end at 2400. At most ~85 units alive.
+- **Run as a game** (`--session menu_session.lua`) the battle plays the same story but not the same beats (the census
+  a few units off from tick ~600, the Fatboy living to the end): that launch writes the scenario's own folder
+  (`/moho64ui/menuflight`) as the map folder, so SETONS_R's trees have no blueprint there. The menu's own runs are the
+  reference (the suite's job compares those).
+- **Load**: the simulation ready 1.4-2.6 s after Begin; the flight's map ready 5.5-6.4 s after it began opening (open
+  4.1-4.9 s); the loop's restart: the old simulation let go of in 0.11 s, the new one ready 2.15 s later, behind the
+  cover.
+- **Window, 1920x1080** (no game running; the flight's looks as above, Atmosphere and Soft Shadows on): the card 4-8 ms a
+  frame in the land battle, 9.5-10.5 ms around the nuke, the 10 s average up to 18.4 ms over the blast's seconds; 56
+  frames a second at the 60 cap (the pacing's own overshoot); frames over 33 ms only in the first seconds and around the
+  blast; beats 3-5 ms, single beats up to 150-350 ms (on the flight's thread: the frames do not wait). The GPU
+  fallback's window (10-15 s after first showing) measured 4.6-8.4 ms. 4K was not measured; the blast is the moment
+  to watch there.
+
+Left for later then: the `RestartMap` hand-over (done in 12.2), a menu preset over the per-frame setters (R2; 12.2),
+`CinePath::loop` (R1; the cover hides the seam, and our battle restarts anyway), the kept first frame (12.2), the lens.
+
+## 12.2 The follow-ups (ui helper "flight2", 2026-11-09)
+
+- **The hand-over to a game on SETONS_R** (4.3; `GameSession::KeepMenuMap`, `OpenPicture`). The renderer's answer to
+  request 49: R3, `RestartMap` is valid with a different session on the same map; R2, what stays is what is fixed when the
+  map opened (ray tracing's shaders, the texture detail, the season, the anti-aliasing). So:
+  - The flight's map now opens with the player's Ray Tracing (held for it, `FlightLooks`) and Texture Detail; its lighter
+    look comes after the swap from per-frame setters only (`FlightFrameLooks`: ray tracing off, so bounce light,
+    reflections and the small lights' shadows stop; no Weather Effects; the player's Atmosphere, Soft Shadows and Ground
+    Detail). The shaders built at the opening stay (render/world_picture.cpp: `gRayShaders` = the load's `rays`), so the
+    game turns ray tracing on again on the same world. INFERRED from the renderer's code (`ApplyBundlesTo`); checked by the
+    world's switches in the game (the test below), not by the renderer.
+  - At a launch (`BeginLoad`), when the window's picture shows the flight's map, the game's map is that map, nothing of
+    the opening differs (`WindowPicture::OpenedWith`: texture detail, season, ray tracing as the game would open it) and
+    the picture is not to be made anew (Graphics API, anti-aliasing), no map is begun: at the load's end `OpenPicture`
+    starts the map shown over (`RestartMap`), lays the game's looks on it (`PictureLooks`, `WorldLooks`, the sky as the
+    map opened it, taken before the menu's evening: `WindowPicture::OpenSky`), a cut, then `DressGamePicture` as after a
+    swap. The flight's season is the summer: a player on Autumn gets the map opened again. Any other map: as before.
+    `MOHO64UI_FLIGHT_REOPEN=1`: always opened again. Log lines "the game's map is the menu's flight's: its world is taken
+    over ..." / "... it is opened again (<why>)".
+  - **Measured** (1920x1080 window, test preferences: Ultra, ray tracing on; the skirmish from the main menu, no AI):
+    the game's screen came **2.42, 3.08 and 2.46 s** after the launch call with the hand-over, **11.53 and 7.68 s** with
+    the map opened again (`MOHO64UI_FLIGHT_REOPEN=1`; the map ready 8.9 / 4.9 s after the loading thread). The game's
+    picture after the hand-over against the map opened again, both 3500 frames in: the same within 1% in three areas
+    (mean RGB 80.2/83.9/37.4 against 80.5/84.0/38.1).
+- **The kept first frame** (4.5; `GameSession::KeptFrame`, `TakeKeptFrame`). At the flight's third beat of each run the
+  world alone (`TakePhoto` at the window's size, 8 settling frames: 0.11-0.22 s, under the fade from black) is kept beside
+  the preferences, `<prefs folder>/menuflight_first_<w>x<h>.raw` (a key of the camera path and the looks it was taken
+  with). At the next start it is read on a thread and shown where the movie shows until the flight's world is swapped in
+  (some 6 s), and the flight then comes in over it (the fade's picture is the kept frame, not black). Also when the menu
+  comes back after a game while the flight's map opens again. The menu is held to 60 frames a second while it shows, as
+  for the flight. Nothing is shipped: the first start of a PC shows black as before.
+- **The launch shot** (keys 170-179, the window check): pictures at ticks 1700-2075 (`MOHO64UI_MENUFLIGHT_FAST_TO=1680`):
+  the launch at tick 1729, the impact at 2047 as before.
+- **The Remastered Preset shows Custom** once one of its looks is changed by hand to a value its level does not have
+  (`RemasterPresetLookChanged`, ui/data/hook/lua/options/options.lua), as FAF's Fidelity, Shadow Fidelity and Render Sky
+  set Fidelity Presets to Custom from their `update`. The preset's own setting does not count (`presetSetting`, its
+  sliders' `OnValueSet` too); a look set back to the level's value leaves the preset as it is (Custom stays Custom, as
+  FAF's).
+- **Tests**: `ui/tests/menu_handover.lua` (a live window: the flight shows, its first frame kept, a skirmish on SETONS_R
+  takes its world over with no map begun, the game's world switches as the player's options, not the menu's evening; back
+  at the menu the flight shows again over the kept frame; `/handcase reopen` with `MOHO64UI_FLIGHT_REOPEN=1`;
+  `/handcase kept` a second start in the same folder: the kept frame shown before the flight), the hook's new fields
+  (`moho64ui_MenuFlight()`: `handoversKept`, `handoversReopened`, `handoverWhy`, `mapsBegun`, `flightShows`,
+  `keptShown`, `keptShownFrames`, `keptTaken`, `keptTakeSeconds`, `worldShows`, `worldMap`, `world*` switches);
+  `ui/tests/options_tabs.lua` checks Custom.

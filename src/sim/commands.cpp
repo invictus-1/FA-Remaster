@@ -7,6 +7,7 @@
 #include "sim/combat.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -308,6 +309,42 @@ bool RefusesUpgradeAgain(Sim& sim, Unit* u, const std::string& bpId) {
 }  // namespace
 
 void EndMoveTaskReservation(Unit* u) { EndMoveTaskRect(u); }
+
+uint64_t NextCommandCreateSeq() {
+  static std::atomic<uint64_t> n{0};
+  return ++n;
+}
+
+// CUnitCommandQueue::AddCommandToQueue 0x6edd80 (read): the index is the queue's length, except when the queue holds
+// more than one command, the new one is a Patrol or FormPatrol (cmd+0x98 0x10 / 0x12) and so is the head
+// (0x6eddc3..0x6ede0f): then it is the place of the queued command with the smallest creation number cmd+0x13c (the
+// first such, unsigned compare from 0xffffffff, 0x6ede11..0x6ede43), if that place is past the head (0x6ede45..
+// 0x6ede4b), else the length; InsertCommandToQueue 0x6edcb0 puts it there. A patrol's legs go round by moving the
+// finished point to the back (0x6edfc0), so the oldest point marks where the loop began: a point added while the unit
+// patrols joins the loop after its last point, not after whatever leg is flying now. Seen: FAF 3840 pro replay 6v6_2
+// 8422, army 6's spy plane 0x600043 patrols five points; three more come at 8320 / 8322 / 8324 while its leg to
+// (924, 624) runs: the original flies to the first new point (935, 350) after (897, 701) at 8422; ours had queued
+// them behind the loop's rotation and flew back to (858, 661).
+void AppendCommandToQueue(Unit* u, const std::shared_ptr<UnitCommand>& c) {
+  auto& q = u->commands;
+  size_t at = q.size();
+  auto patrolType = [](const UnitCommand* x) {
+    return x && (x->type == CommandType::Patrol || x->type == CommandType::FormPatrol);
+  };
+  if (q.size() > 1 && patrolType(c.get()) && patrolType(q.front().get())) {
+    size_t best = 0;
+    uint64_t bestSeq = ~0ull;
+    for (size_t i = 0; i < q.size(); ++i) {
+      const uint64_t s = q[i] ? q[i]->createSeq : 0;
+      if (s < bestSeq) {
+        bestSeq = s;
+        best = i;
+      }
+    }
+    if (best > 0) at = best;
+  }
+  q.insert(q.begin() + static_cast<std::ptrdiff_t>(at), c);
+}
 
 uint32_t AssignEngineCommandId(Sim& sim, const std::shared_ptr<UnitCommand>& c) {
   // MOHO64_DEBUG_CMDID=1: every engine id taken ("cmdid alloc <tick> <index> slot <s> from <frames>") and given back
@@ -1302,6 +1339,13 @@ bool NavEventWakesCommandThread(const Unit* u) {
   const BuildTask* t = u->task;
   if (IsPatrolType(HeadTaskType(u))) {  // only the patrol's child's walk listens
     const BuildTask* c = t && t->pdata ? t->pdata->child : nullptr;
+    // a refuel child (FindPlatform's IssueRefuelTask) sleeps in its landing / take-off move task (NewMoveTask 0x6190a0
+    // at 0x621c38 / 0x621e5b), whose listener re-links the thread. Seen (oracle probe v3840k_61_order): FAF 3840 pro
+    // replay 6v6_1, army 7's patrolling 0x70002d lands on staging platform 0x70005a at 7783: the original's
+    // CUnitRefuel::Execute runs first at 7783 (the thread asleep before), and from then on AFTER 0x700040's patrol
+    // (7784, 7802); at 7802 0x700040 asks FindPlatform before 0x70002d takes off, finds no room and patrols on. Ours
+    // had not re-linked 0x70002d: its take-off freed the slot first and sent 0x700040 to refuel.
+    if (c && c->tdata) return TransportTaskAsleepOnMove(c);
     return c && (c->moving || (c->sub && c->sub->moving));
   }
   if (t && t->adata) return false;
@@ -1760,7 +1804,7 @@ std::shared_ptr<UnitCommand> Issue(lua_State* L, const std::vector<Unit*>& units
     if (c->units.empty()) {
       AssignEngineCommandId(*sim, c);
     }
-    u->commands.push_back(c);
+    AppendCommandToQueue(u, c);  // (AddCommandToQueue 0x6edd80: the patrol rule)
     c->units.insert(u);
     AirSpeedThroughEvent(*sim, u);  // queue event 0
   }
@@ -2208,7 +2252,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     }
     if (d.insertBefore != -1 && at < 0) continue;  // not in this unit's queue: it does not get the command
     if (at < 0) {
-      u->commands.push_back(c);
+      AppendCommandToQueue(u, c);  // (AddCommandToQueue 0x6edd80: the patrol rule)
     } else {
       // CUnitCommandQueue::InsertCommandToQueue 0x6edcb0 (read): the command goes into the queue at that place and the
       // queue tells its listeners event 0 (0x6edd19..0x6edd21), which the dispatcher takes for its speed-through

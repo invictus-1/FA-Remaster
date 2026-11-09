@@ -442,6 +442,14 @@ void RegisterBasicBindings(lua_State* L) {
     return 1;
   });
   SetGlobal(L, "GpgNetSend", kNothing);
+  // moho64ui_MenuFlight() -> the main menu's flight as it stands (the host's own function for tests, app/menu_flight.h:
+  // {state, map, tick, moment, loops, endTick, paused, fallbackReason, mode, ...}); nil without one.
+  lua_register(L, "moho64ui_MenuFlight", [](lua_State* S) -> int {
+    const auto& info = UserState::From(S)->config().menuFlightInfo;
+    if (!info) return 0;
+    info(S);
+    return 1;
+  });
   // GetAntiAliasingOptions(): the anti-aliasing sample counts the graphics card offers (the game's
   // Fidelity Presets take the last as Ultra's, the middle one as High's). Here the renderer's:
   // 2 and 4 samples (its scene draws with 1, 2 or 4).

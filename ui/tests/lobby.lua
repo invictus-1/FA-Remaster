@@ -65,14 +65,103 @@ check("a day takes twenty minutes unless chosen", options.RemasterDayLength.valu
 check("the map's edge has no machinery unless chosen (Chris's choice)", options.RemasterMapEdge.values[options.RemasterMapEdge.default].key, 'beyond')
 check("and the original's frame is the other choice", options.RemasterMapEdge.values[2].key, 'frame')
 
--- The program's own looks: options of each player in the Options menu's Video tab, applied at
--- the start (optionslogic.Apply) and when changed.
+-- The program's own looks: options of each player in the Options menu's Remastered tab (after Video; Chris,
+-- 2026-11-08), applied at the start (optionslogic.Apply) and when changed. One map of both tabs (the game's
+-- own graphics settings stay in Video; headers have the key '').
 local video = {}
-for _, item in import('/lua/options/options.lua').options.video.items do
-    video[item.key] = item
+for _, tab in {'video', 'remaster'} do
+    for _, item in import('/lua/options/options.lua').options[tab].items do
+        video[item.key] = item
+    end
+end
+-- The Remastered tab itself (docs/ui-options-layout.md): after Video, the game's Video again its own, every key a
+-- preset level sets on the preset's own page, each option in one tab only, eight sections, and our tips shown
+do
+    local O = import('/lua/options/options.lua')
+    check("the tabs: gameplay, ui, video, remaster, sound", table.concat(O.optionsOrder, " "), "gameplay ui video remaster sound")
+    check("the Remastered tab's title", O.options.remaster.title, "Remastered")
+    local inVideo = {}
+    for _, item in O.options.video.items do
+        if type(item.key) == 'string' and string.find(item.key, '^remaster_') then table.insert(inVideo, item.key) end
+    end
+    check("the Video tab has none of ours but the signpost to the Remastered tab", table.concat(inVideo, " "), "remaster_show_tab")
+    local last, beforeLast = O.options.video.items[table.getn(O.options.video.items)], O.options.video.items[table.getn(O.options.video.items) - 1]
+    check("Video ends with the header FA Remastered and its Show button", beforeLast.type .. " " .. beforeLast.title .. " | " ..
+        last.type .. " " .. last.custom.text, "header FA Remastered | button Show")
+    local remaster, headers, empty, more = {}, {}, 0, false
+    local items = O.options.remaster.items
+    check("its first row: Go to Section", items[1].key .. " " .. items[1].type, "remaster_goto_section toggle")
+    for i, item in items do
+        if item.type == 'header' then
+            table.insert(headers, item.title)
+            if item.title == "More" then more = true end
+            if not items[i + 1] or items[i + 1].type == 'header' then empty = empty + 1 end
+        else
+            remaster[item.key] = item
+        end
+    end
+    check("eight sections under the game's header rows", table.concat(headers, "|"),
+        "Display & Performance|Preset|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
+    check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
+    check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
+    check("51 rows: Go to Section, 8 headers, 42 options", table.getn(items), 51)
+    local missing = {}
+    for key in O.RemasterPresetValues(4) do
+        if not remaster[key] then table.insert(missing, key) end
+    end
+    if not remaster.remaster_preset then table.insert(missing, 'remaster_preset') end
+    check("every key a preset level sets is on the preset's tab", table.concat(missing, " "), "")
+    -- the six that come before the preset are exactly the ones no level touches
+    local before, touched = {}, {}
+    for i = 1, table.getn(items) do
+        if items[i].key == 'remaster_preset' then break end
+        if items[i].type ~= 'header' and items[i].key ~= 'remaster_goto_section' then
+            table.insert(before, items[i].key)
+            if O.RemasterPresetValues(4)[items[i].key] ~= nil or O.RemasterPresetValues(0)[items[i].key] ~= nil then
+                table.insert(touched, items[i].key)
+            end
+        end
+    end
+    check("Display & Performance: six, none set by a preset level", table.getn(before) .. " [" .. table.concat(touched, " ") .. "]", "6 []")
+    local seen, twice = {}, {}
+    for _, tabKey in O.optionsOrder do
+        for _, item in O.options[tabKey].items do
+            if item.type ~= 'header' then
+                if seen[item.key] then table.insert(twice, item.key) end
+                seen[item.key] = tabKey
+            end
+        end
+    end
+    check("every option in one tab only", table.concat(twice, " "), "")
+    check("ours in Interface and Gameplay stayed there", tostring(seen.remaster_color_vision) .. " " .. tostring(seen.remaster_path_preview)
+        .. " " .. tostring(seen.remaster_score_extras) .. " " .. tostring(seen.remaster_import_faf_keys) .. " " .. tostring(seen.remaster_sim_order),
+        "ui ui ui ui gameplay")
+    local function headerAbove(tabKey, key)
+        local h = nil
+        for _, item in O.options[tabKey].items do
+            if item.type == 'header' then h = item.title end
+            if item.key == key then return h end
+        end
+    end
+    check("each under a header FA Remastered", tostring(headerAbove('ui', 'remaster_color_vision')) .. "|" ..
+        tostring(headerAbove('ui', 'remaster_import_faf_keys')) .. "|" .. tostring(headerAbove('gameplay', 'remaster_sim_order')),
+        "FA Remastered|FA Remastered|FA Remastered")
+    local Tips = import('/lua/ui/help/tooltips.lua').Tooltips
+    local tipless, wrong = {}, {}
+    for _, tabKey in O.optionsOrder do
+        for _, item in O.options[tabKey].items do
+            if type(item.key) == 'string' and string.find(item.key, '^remaster_') then
+                local t = Tips['options_' .. item.key]
+                if not item.tip then table.insert(tipless, item.key)
+                elseif not t or t.description ~= item.tip or t.title ~= item.title then table.insert(wrong, item.key) end
+            end
+        end
+    end
+    check("every option of ours has a tip", table.concat(tipless, " "), "")
+    check("and the dialog's tooltip shows it (Tooltips['options_' .. key])", table.concat(wrong, " "), "")
 end
 for _, key in {'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_rich_ground', 'remaster_snow_tracks'} do
-    check("the Video tab has " .. key, video[key] ~= nil and video[key].set ~= nil, true)
+    check("the Remastered tab has " .. key, video[key] ~= nil and video[key].set ~= nil, true)
 end
 check("the remastered effects are on unless chosen", video.remaster_effects and video.remaster_effects.default, 1)
 check("the options took effect at the start", moho64ui_Looks().remasteredEffects, true)
@@ -82,11 +171,11 @@ video.remaster_tracers.set('remaster_tracers', 1, false)
 video.remaster_effects_quality.set('remaster_effects_quality', 0.5, false)
 check("and the effects quality follows", moho64ui_Looks().effectsQuality, 0.5)
 video.remaster_effects_quality.set('remaster_effects_quality', 1, false)
-check("the Video tab has Upscaling (FSR 1), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
+check("the Remastered tab has Upscaling (FSR 1), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
 -- FSR 3 (the renderer's request 30): off unless chosen; on, the scene is drawn with one sample a pixel
 -- (FAF 3840, 2026-11-04: new games are made by 3840's rules, and the menus name that version too: Chris)
 check("the front end's GetVersion: the version new games are made with", GetVersion(), "1.5.3840")
-check("the Video tab has Temporal Upscaling (FSR 3), off unless chosen", video.remaster_temporal_upscale and video.remaster_temporal_upscale.default, 0)
+check("the Remastered tab has Temporal Upscaling (FSR 3), off unless chosen", video.remaster_temporal_upscale and video.remaster_temporal_upscale.default, 0)
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 1, false)
 check("on: FSR 3, and the anti-aliasing gives way (one sample a pixel)", tostring(moho64ui_Looks().temporalUpscale) .. " " .. moho64ui_Looks().samplesDrawn, "true 1")
 video.remaster_temporal_upscale.set('remaster_temporal_upscale', 0, false)
@@ -97,7 +186,7 @@ check("off again: the anti-aliasing's samples (one while Frame Generation is on)
 for _, key in {'remaster_atmosphere', 'remaster_soft_shadows', 'remaster_weather_effects', 'remaster_ground_detail',
                'remaster_water_ripples', 'remaster_lens', 'remaster_battle_effects', 'remaster_energy_shields',
                'remaster_hidden_outlines'} do
-    check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
+    check("the Remastered tab has " .. key .. ", on unless chosen", video[key] and video[key].default, 1)
 end
 check("Frame Generation off unless chosen", video.remaster_frame_generation.default, 0)
 check("Sea Sparkle off unless chosen (Chris, 2026-11-06: the sea is better without it)", video.remaster_sea_sparkle and video.remaster_sea_sparkle.default, 0)
@@ -111,7 +200,7 @@ end
 -- preset level; at the start the program has their defaults (the test's preferences choose none of them)
 for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_ghost_look', 'remaster_guide',
                'remaster_cloak_look', 'remaster_stealth_veil', 'remaster_unit_detail', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky'} do
-    check("the Video tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
+    check("the Remastered tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
 end
 check("Shield Bending: Subtle unless chosen, of Off, Subtle and Full", video.remaster_shield_bend and
     video.remaster_shield_bend.default .. " " .. table.getn(video.remaster_shield_bend.custom.states), "1 3")
@@ -191,7 +280,7 @@ do
 end
 check("Ray Tracing on unless chosen, where the card can", video.remaster_ray_tracing.default, moho64ui_RayTracingSupported() == false and 0 or 1)
 -- The Remastered Preset (Chris, 2026-10-17): the new looks set together; Custom (5) by default leaves them
-check("the Video tab has the Remastered Preset, Ultra unless chosen", video.remaster_preset and video.remaster_preset.default, 4)
+check("the Remastered tab has the Remastered Preset, Ultra unless chosen", video.remaster_preset and video.remaster_preset.default, 4)
 do
     local O = import('/lua/options/options.lua')
     local off, high, ultra = O.RemasterPresetValues(0), O.RemasterPresetValues(3), O.RemasterPresetValues(4)
@@ -254,20 +343,20 @@ video.shadow_quality.set('shadow_quality', 3, false)
 video.level_of_detail.set('level_of_detail', 2, false)
 video.fidelity.set('fidelity', 2, false)
 -- The renderer's whole look: remastered unless chosen, the original's one click away
-check("the Video tab has Look, Remastered unless chosen", video.remaster_look and video.remaster_look.default, 'remastered')
+check("the Remastered tab has Look, Remastered unless chosen", video.remaster_look and video.remaster_look.default, 'remastered')
 video.remaster_look.set('remaster_look', 'original', false)
 check("Look Original gives the renderer's original look", moho64ui_Looks().originalLook, true)
 video.remaster_look.set('remaster_look', 'remastered', false)
 check("and back", moho64ui_Looks().originalLook, false)
 -- The graphics API: Direct3D 12 unless chosen (Chris's choice), or Vulkan
-check("the Video tab has Graphics API, Direct3D 12 unless chosen", video.remaster_graphics_api and video.remaster_graphics_api.default, 'd3d12')
+check("the Remastered tab has Graphics API, Direct3D 12 unless chosen", video.remaster_graphics_api and video.remaster_graphics_api.default, 'd3d12')
 check("the pictures are drawn with Direct3D 12 at the start", moho64ui_Looks().vulkan, false)
 video.remaster_graphics_api.set('remaster_graphics_api', 'vulkan', false)
 check("Vulkan chosen: the next picture is drawn with Vulkan", moho64ui_Looks().vulkan, true)
 video.remaster_graphics_api.set('remaster_graphics_api', 'd3d12', false)
 check("and back", moho64ui_Looks().vulkan, false)
 -- The frame rate: vertical sync unless chosen (Chris's choice), uncapped, or a cap
-check("the Video tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
+check("the Remastered tab has Frame Rate, vertical sync unless chosen", video.remaster_frame_rate and video.remaster_frame_rate.default, 'vsync')
 do  -- (as the profile has it: the suite's copy is Chris's, who may have chosen another)
     local chosen = (import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}).remaster_frame_rate or 'vsync'
     check("the window keeps to the screen's rate at the start, unless the profile chose otherwise", moho64ui_Looks().verticalSync, chosen == 'vsync')
@@ -279,7 +368,7 @@ check("uncapped has no shortest frame", moho64ui_Looks().frameMs, 0)
 video.remaster_frame_rate.set('remaster_frame_rate', 'vsync', false)
 check("and back to vertical sync", moho64ui_Looks().verticalSync, true)
 -- Low Latency (the renderer's latency limiter, render 0ed9975): on unless chosen, in no preset level
-check("the Video tab has Low Latency, on unless chosen", video.remaster_low_latency and video.remaster_low_latency.default, 1)
+check("the Remastered tab has Low Latency, on unless chosen", video.remaster_low_latency and video.remaster_low_latency.default, 1)
 check("the window's pictures are told so at the start", moho64ui_Looks().lowLatency, true)
 video.remaster_low_latency.set('remaster_low_latency', 0, false)
 check("Low Latency off in the menu reaches the program", moho64ui_Looks().lowLatency, false)

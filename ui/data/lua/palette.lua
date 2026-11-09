@@ -167,20 +167,25 @@ local function Gather()
         end
     end)
     if not ok then WARN("FA Remastered: the command palette: the key actions: " .. tostring(err)) end
-    -- the Options dialog's options, each with its tab
+    -- the Options dialog's options, each with its tab and the section (the header row above it) it is in; the
+    -- Remastered tab's "Go to Section" and Video's signpost to that tab are left out (they are ways round the dialog)
     ok, err = pcall(function()
         local O = import("/lua/options/options.lua")
         local current = import("/lua/options/optionslogic.lua").GetCurrent() or {}
         for _, tabKey in O.optionsOrder do
             local tab = O.options[tabKey]
             if tab and tab.items then
+                local section = nil
                 for index, item in tab.items do
-                    if item.type ~= 'header' and item.title and item.key then
+                    if item.type == 'header' then
+                        section = item.title and LOC(item.title) or nil
+                    elseif item.title and item.key and not item.remasterNotSearched then
                         local name = LOC(item.title)
                         local ok2, value = pcall(OptionValueText, item, current)
                         Add(entries, { kind = 'option', id = 'option:' .. item.key, name = name, tabKey = tabKey,
-                            tab = LOC(tab.title), optionKey = item.key, row = index, value = ok2 and value or nil },
-                            name, { item.key, LOC(tab.title) })
+                            tab = LOC(tab.title), section = section, optionKey = item.key, row = index,
+                            value = ok2 and value or nil },
+                            name, { item.key, LOC(tab.title), section })
                     end
                 end
             end
@@ -271,8 +276,9 @@ end
 local function DetailOf(e)
     if e.kind == 'action' then return e.category end
     if e.kind == 'option' then
-        if e.value then return "Options > " .. e.tab .. "  |  " .. e.value end
-        return "Options > " .. e.tab
+        local where = "Options > " .. e.tab .. (e.section and (" > " .. e.section) or "")
+        if e.value then return where .. "  |  " .. e.value end
+        return where
     end
     if e.kind == 'console' then
         if e.varKind then return e.varKind .. " = " .. (e.value or "?") end

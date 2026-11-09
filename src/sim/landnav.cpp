@@ -526,6 +526,17 @@ void PathQueue(Sim& sim, PathTraveler* t) {
 }
 void PathCancel(Sim& sim, PathTraveler* t) {
   HPathTables& T = Tables(sim);
+  // The cancel also empties the finder's list of recent start boxes (+0x68): ResetPathState 0x5ad9c0 unlinks the
+  // finder (0x5ad9e4..0x5ada03) and calls the list clear 0x5aaf60 (0x5ada05..0x5ada08) whether or not a search was
+  // pending; the finder's own cancel 0x5aa550 does the same (0x5aa573..0x5aa576). So a new goal (SetGoal), an idle
+  // navigator (MakeIdle) or an emptied continuation starts the next continuations' "interesting" area afresh, and a
+  // waiting follower's RequestPath (no QueueSearch, so no clear there) after a new goal has none. Seen: FAF 3840 pro
+  // replay 4v4_setons_1 6125, army 1's 0x100038: its mode-3 continuation at 3843 (goal set at 3831, a waiting
+  // follower's request at 3832) still had the start boxes of its 3571 and 3617 continuations in ours, searched level
+  // 0 around them and spliced 38 cells (24 left at 3977, the original's 12); 2v2_3 7586, army 2's 0x2000be: ours' old
+  // boxes made level-0 steps down to (348,448), the original's route left at (352,456). (The traveler's own field:
+  // set at once, as the search's other inputs.)
+  t->boxes.clear();
   if (tl_navTurn && sim.DeferringScripts()) return sim.DeferAction([&T, t] { T.Cancel(t); });
   T.Cancel(t);
 }

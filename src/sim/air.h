@@ -187,6 +187,7 @@ void AirAbort(Sim& sim, Unit* u);
 bool AirNavArrival(Sim& sim, Unit* u);  // true: Execute re-aimed at its destination entity and returned
 // CUnitMotion::Stop 0x6b8460 with no point: the target is where the aircraft is now.
 void AirStopHere(Sim& sim, Unit* u);
+void AirSteeringGone(Sim& sim, Unit* u);  // KillCleanup deleted the steering: its Stop (the motion's target = here)
 // Unit::UpdateSpeedThroughStatus 0x6ac940 for aircraft: call at the exe's event points only (air_nav.md 5).
 void AirSpeedThroughEvent(Sim& sim, Unit* u);
 // CAiNavigatorAir::SetSpeedThroughGoal 0x5a5080: the steering's "last waypoint in the goal" (vt+0x28, 1) and its

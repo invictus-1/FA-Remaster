@@ -164,7 +164,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   has the focus. A search line near the top (`ui/data/lua/palette.lua`, of the game's own controls); typing filters,
   as it is typed, the console's commands and variables (`moho64ui_ConsoleNames()`: the original's 435 and ours, a
   variable's value beside it), every key action of the game's key map (the key it is bound to now beside it) and every
-  option of the Options dialog (its tab and value): the whole name, its beginning or a word's beginning first, then
+  option of the Options dialog (its tab, its section and value; a section's name finds its options): the whole name, its beginning or a word's beginning first, then
   the query's words at words' beginnings, anywhere, without separators, the words' first letters; of equal ones the
   key actions, the options, the console's names. At most 12 rows; Up / Down, Enter, Tab completes a console name,
   Escape or a click outside closes, its own key too (`keymap.cpp` KeyMapKeyDown lets that one key through its search
@@ -215,8 +215,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and travel in the game's options as `RemasterDayStart`, `RemasterDayLength`, `RemasterWeather`.
   Unless chosen otherwise a game has the map's own light, as the original (Chris's choice). The
   weather is ONE choice, so kinds that exclude each other (rain and snow) cannot be had together.
-  The program's own looks are options of each player instead (Chris, 2026-10-15), in the Video
-  tab of the game's Options menu (`ui/data/hook/lua/options/options.lua`, a hook file):
+  The program's own looks are options of each player instead (Chris, 2026-10-15), in the
+  Remastered tab of the game's Options menu, after Video (`ui/data/hook/lua/options/options.lua`, a
+  hook file; since 2026-11-08 their own tab, in eight sections under the game's header rows, a
+  "Go to Section" drop-down first, the tab buttons narrowed for five by
+  `ui/data/hook/lua/ui/dialogs/options.lua`; Video is the game's own again with a "Show" button to
+  the tab; docs/ui-options-layout.md):
   Remastered Effects (on / the original's), Effects Quality (full, three quarters, half), Shell
   Tracers (on / the original's plain line), Rich Ground on Remastered Maps, Tracks in Snow. They
   send console commands (`remaster_effects`, `remaster_effects_quality`, `remaster_tracers`,
@@ -299,11 +303,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   scene's samples, from the next picture made; `GetAntiAliasingOptions` gives 2 and 4), Level Of
   Detail (model detail 0.5 / 0.75 / 1), and Fidelity Presets sets them together as in the
   original. A player who has never chosen starts at the highest (the hook raises these items'
-  defaults); `LookSettings` keeps them, the picture follows. "Look" in the same tab
+  defaults); `LookSettings` keeps them, the picture follows. "Look" in the Remastered tab
   (`remaster_look`: Remastered / Original; Chris's rule that every new look is a player's option,
   the original's way included): the renderer's whole look at once (World::look: lighting, sky,
   water, ground shading, unit shaders, glow, the build look), from the next frame; the effects,
-  tracers, day, weather, map edge and rich ground keep their own options. "Graphics API" in the same tab
+  tracers, day, weather, map edge and rich ground keep their own options. "Graphics API" in that tab
   (`remaster_graphics_api`, Chris, 2026-10-15): Direct3D 12 by default, or Vulkan
   (WorldPicture::SetVulkan before Open; the game's picture, the menu's and its background), from
   the next map loaded. Bloom Render and Bloom Intensity (`ren_bloom`, `ren_BloomBlurKernelScale`)
@@ -561,7 +565,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   parts that do not depend on the player's settings, 1.6 over the whole lobby screen. That
   confirms how combo boxes, sliders, tabs, scrollbars and the edit field draw. The item list's
   drawing is now read from the original (the highlighted row's band is the font's height, one
-  pixel less than the row).
+  pixel less than the row). (Since 2026-11-08 the options dialog's tab bar differs by design: five
+  tabs of 145 instead of four of 178, our Remastered tab.)
 - Mouse input (`maui/input.*`): an event goes to the control holding the input capture, or to the
   control under the cursor (highest Depth among those not hidden, with hit testing on, containing
   the point), as the original's event table through the script's `HandleEvent`, and up to the

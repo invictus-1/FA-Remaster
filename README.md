@@ -31,7 +31,8 @@ mainly for me, shared in case it's useful or fun for someone else.
 3. **The same game, sharper, and your choice.** The original's artwork, icons, interface and sounds.
    Every new look is an option: you can switch between old and new, and pick and choose what you want.
 
-Local play (a skirmish against AI) comes first. Multiplayer comes after it (see below).
+FA Remastered is for solo play: skirmishes against AI, replays, mods and, later, the campaign. For online
+games, use FAF (see Multiplayer below).
 
 ## Where it stands (November 2026)
 
@@ -39,7 +40,9 @@ All sixteen test replays play out **identically to the original, to their last b
 on every beat, every army's economy, and every random draw in the same order. Thirteen of them are
 games made for the tests; the other three are high-level multiplayer games from FAF's replay vault, an
 18-minute 2v2 on Funeral Plains, a 20-minute 1v1 on Abhor and a 31-minute 4v4 on Seton's Clutch with
-eight players, the last of them identical to its final beat since 1 November 2026.
+eight players, the last of them identical to its final beat since 1 November 2026. Twenty-two more
+high-level games from FAF's vault (1v1 to 6v6) are being matched now: two of them play out identically
+through their whole recordings, and the other twenty match for their first 10 to 18 minutes so far.
 
 A skirmish can be started from the game's own main menu and lobby. It runs in the new simulation, is
 drawn by the new renderer inside the game's own interface, and can be played: select, order, build,
@@ -56,7 +59,7 @@ The work runs in three tracks that share this repository, plus one outside it:
 |---|---|---|---|
 | Simulation | `src/` | `moho64` | Plays whole AI games headless; 16 of 16 replays identical to the original to the last beat; big battles on several cores |
 | Renderer | `render/` | `moho64view` | Direct3D 12 and Vulkan; ground, water and a real ocean, units, effects, shadows; day and night, weather, lamps on units |
-| Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays, two-player network games |
+| Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays |
 | Remastered art | not in this repository | – | Remade models of every UEF unit and building, remade effects, and a remade Seton's Clutch, made separately |
 
 ## What is new, and how to switch it
@@ -235,7 +238,8 @@ watched while it plays the replay, to see what it does at that beat.
 | Multiplayer 4v4, Seton's Clutch (31 minutes) | 18,601 | **identical to the end** |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
-order. About thirty more multiplayer replays follow, from 1v1 to 6v6.
+order. Beyond these sixteen, twenty-two more high-level FAF games (1v1 to 6v6) are being matched, each
+fix read from the original and proven against all of them; see "Where it stands" above.
 
 Where the original's own behaviour is broken and fixing it does no harm, the engine may fix it in
 new games, never while a replay plays. Every such case is listed in
@@ -250,9 +254,10 @@ recomputes every one of them and compares. In big battles this is on by default;
 would cost more than it saves, keep it off. Every replay must play identically on one core and on all
 of them. Details: [docs/multicore.md](docs/multicore.md).
 
-The bigger step is in work: a **parallel order** for new games, a deterministic order of our own made
+New games go further: they use a **parallel order** by default, a deterministic order of our own made
 for many cores (the same result on any number of cores and on every machine), while replays of the
-original keep the original's exact order. It will be a lobby option. Design:
+original always keep the original's exact order. The lobby's **Simulation Order** option chooses it:
+Remastered (default, many cores) or Original (the original's order, one core at a time). Design:
 [docs/parallel-mode.md](docs/parallel-mode.md).
 
 ### Our own AI
@@ -342,13 +347,13 @@ machine or a Mac, so read this as "may work, expect problems":
 
 ## Multiplayer
 
-Local play comes first: I play solo, so that is what this project is built for, and multiplayer has
-the lowest priority. The foundations are in: two or more players can play one game together over a
-LAN or the internet, between copies of FA Remastered. Every player runs the same beats with the same
-orders, with the original's half-second order delay, its rules on who may command which units, and a
-check every 50 beats that the games still agree (when they do not, the program says which part of the
-game differs). FA Remastered cannot connect to FAF's servers or lobbies.
-Details: [docs/ui-net-game.md](docs/ui-net-game.md).
+FA Remastered is a solo project: there is no multiplayer, and none is planned. For online games, use
+FAF (Forged Alliance Forever), which has the community, the servers and its own engine work. FA
+Remastered cannot connect to FAF's servers or lobbies.
+
+An early LAN game between copies of FA Remastered was built along the way, and its code is still in
+the repository ([docs/ui-net-game.md](docs/ui-net-game.md)), but it is frozen and unsupported. The
+simulation stays exactly repeatable all the same, because replays, the tests and the AI work need it.
 
 The engine is MIT licensed, and anyone who wants to build on it is welcome to.
 

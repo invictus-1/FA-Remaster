@@ -120,6 +120,9 @@ class UserState {
     std::function<std::string()> currentReplay;
     // Whether a launched game is loading (the front end's WorldIsLoading(); unset: never).
     std::function<bool()> worldLoading;
+    // The main menu's flight as it stands, pushed as a table (moho64ui_MenuFlight, for tests: app/menu_flight.h
+    // PushInfo); unset: moho64ui_MenuFlight returns nil.
+    std::function<void(lua_State* L)> menuFlightInfo;
     // The scripts' clock (CurrentTime, GetSystemTimeSeconds) runs on while a frame's scripts run, as the
     // original's GetSystemTimer does (FA exe 0x955730, which both read): on in a live window; off in a test
     // run, whose clock goes in fixed frame steps.
@@ -553,7 +556,7 @@ int ScreenOfModeKey(const std::string& key, int ownAdapter);
 // 0x8d37c0; FAF's options.lua sends it whenever the primary's choice changes). Each gives its default.
 void SetupPrimaryAdapterSettings(lua_State* L);
 void SetupSecondaryAdapterSettings(lua_State* L, bool windowed);
-// The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
+// The program's own looks, each a player's choice in the game's Options menu (Remastered tab; Chris,
 // 2026-10-15: "The new looks will go into options menu for each player"). The options send them
 // as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,
 // remaster_rich_ground, remaster_snow_tracks; keymap.cpp), and the game's picture takes them
@@ -659,6 +662,13 @@ struct LookSettings {
   // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:
   // the simulation keeps its army colours, so a replay is the same with it on or off.
   int colorVision = 0;
+  // Menu Background (ours, the Interface tab; Chris approved 2026-11-08, docs/ui-menuflight.md): what plays behind the
+  // main menu, 0 Remastered Flight (the live battle over Seton's Clutch Remastered: app/menu_flight.h, the default),
+  // 1 Original Dusk (the menu's background as before: stock Seton's in the evening), 2 Still (one picture, the lightest).
+  // Menu Battle Sound: the flight's battle heard from afar (true: Distant) or not (false, the default: music only, the
+  // original's menu). Consoles remaster_menu_background flight|dusk|still, remaster_menu_sound off|distant.
+  int menuBackground = 0;
+  bool menuBattleSound = false;
   // cam_DefaultMiniLOD (the minimap's mesh level; FAF's minimap.lua and multifunction.lua set it from the profile's
   // "Disable meshes", disableMinimapMesh, ticked by default: ConExecute("cam_DefaultMiniLOD 0"), else "... 1.8"): not 0,
   // the minimap stamps the script's meshes (pings, beacons) under its icons (the renderer's SetMinimapMeshes, render
@@ -788,7 +798,7 @@ const std::string* CustomNameOf(lua_State* L, uint32_t id);
 std::string SelectionSetsText(lua_State* L, uint32_t id);
 bool AnyCustomNames(lua_State* L);
 bool AnySelectionSets(lua_State* L);
-// The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
+// The frame rate the player's options ask for. Ours: "Frame Rate" in the Remastered tab (Chris,
 // 2026-10-15, via the renderer track: "have options for all and default is vsync on"):
 // remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"
 // (SC_VerticalSync) and "Frametime" (SC_FrameTimeClamp, the shortest frame in milliseconds),

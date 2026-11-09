@@ -31,6 +31,7 @@
 
 #include "app/backdrop.h"
 #include "app/game_session.h"
+#include "app/menu_flight.h"
 #include "app/interface_scripts.h"
 #include "app/window.h"
 #include "core/crash.h"
@@ -111,6 +112,9 @@ bool fullScreen = false;          // --fullscreen: the live window fills the mai
 std::string secondWindowArg;
 bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
+// --menu-flight: the main menu's flight's battle (app/menu_flight.h) without a window, no picture (tests); in a live
+// window it comes with the background (the option Menu Background).
+bool menuFlightHeadless = false;
 // --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
 // 0: the hour stands still> / --weather <kind> (changing, cold, dry, none, clear, cloudy, overcast,
 // rain, storm, fog, snow) / --no-weather: the day and the weather in the picture of a game whose
@@ -312,6 +316,7 @@ int main(int argc, char** argv) {
     else if (a == "--second-window") secondWindowArg = next();
     else if (a == "--backdrop") wantBackdrop = 1;
     else if (a == "--no-backdrop") wantBackdrop = 0;
+    else if (a == "--menu-flight") menuFlightHeadless = true;
     else if (a == "--day-weather") sky.startHour = 9;
     else if (a == "--day") sky.startHour = static_cast<float>(std::atof(next().c_str()));
     else if (a == "--day-length") sky.dayLengthSeconds = static_cast<float>(std::atof(next().c_str()));
@@ -572,8 +577,28 @@ int main(int argc, char** argv) {
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
   std::unique_ptr<ui::Backdrop> backdrop;
-  if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && sessionIn.empty() && !noWorld) {
-    backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
+  // The main menu's flight (app/menu_flight.h): with the background in a live window shown by the renderer (its Flight
+  // mode, the option Menu Background), or without a window for tests (--menu-flight: its battle alone, no picture).
+  std::unique_ptr<ui::MenuFlight> menuFlight;
+  const bool backdropWanted = (wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && sessionIn.empty() && !noWorld;
+  if ((backdropWanted && windowed && directWindow) || (menuFlightHeadless && !windowed)) {
+    menuFlight = std::make_unique<ui::MenuFlight>(&vfs, gameHookDirs);
+    session.menuFlight = menuFlight.get();
+    cfg.menuFlightInfo = [&menuFlight, &backdrop, &session](lua_State* L) {
+      menuFlight->PushInfo(L);
+      session.PushWindowInfo(L);  // (the window's picture: the hand-over to a game, the kept first frame, the world's switches)
+      lua_pushstring(L, "mode");
+      lua_pushstring(L, backdrop ? ui::Backdrop::ModeName(backdrop->mode()) : "none");
+      lua_rawset(L, -3);
+    };
+  }
+  // (its mode as the player's option has it, once known: GameSession::FollowMenuMode; the flight's until then)
+  auto backdropMode = [&menuFlight]() {
+    const int option = ui::Looks().menuBackground;
+    return !menuFlight || option == 1 ? ui::Backdrop::Mode::Dusk : option == 2 ? ui::Backdrop::Mode::Still : ui::Backdrop::Mode::Flight;
+  };
+  if (backdropWanted) {
+    backdrop = std::make_unique<ui::Backdrop>(&vfs, backdropMode());
     cfg.backdrop = backdrop.get();
     session.menuBackdrop = backdrop.get();
   }
@@ -777,6 +802,9 @@ int main(int argc, char** argv) {
                               "ConExecute('SC_AntiAliasingSamples ' .. tostring(o.antialiasing or 4))",
                               "=(anti-aliasing at start-up)"))
     Logf(LogLevel::Warning, "moho64ui: the anti-aliasing option could not be read at the start");
+  // (the flight's session described in the front end's state, its scenario run there as a launch's is: once; a PC
+  // without SETONS_R falls back to Dusk, GameSession::FollowMenuMode)
+  if (ok && menuFlight) menuFlight->Describe(front->L());
   beginBackdrop();
   if (ok && o.stage != "userinit") ok = front->StartMainScript();
   // The game's own command line with /map <name> or /scenario <file> (after "--"): that map is
@@ -840,7 +868,7 @@ int main(int argc, char** argv) {
     if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
       session.menuBackdrop = nullptr;
       backdrop.reset();
-      backdrop = std::make_unique<ui::Backdrop>(&vfs, "/maps/SCMP_009/SCMP_009.scmap");
+      backdrop = std::make_unique<ui::Backdrop>(&vfs, backdropMode());
       cfg.backdrop = backdrop.get();
       session.menuBackdrop = backdrop.get();
       beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
@@ -1269,6 +1297,7 @@ int main(int argc, char** argv) {
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
+    hooks.framePeriod = [&]() { return session.MenuFramePeriod(); };  // (the menu's flight: at most 60 frames a second)
     // (the hold ends at the top of the frame after the one its beat was reached in: that frame still showed the picture)
     hooks.held = [&]() {
       if (session.RewindArrived()) finishRewind();
@@ -1321,6 +1350,28 @@ int main(int argc, char** argv) {
                              // first front end's too, before any game)
                              static const int captureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
                              if (!game && !gameSeen && !session.Loading() && ++frontFrames == captureAt) session.CaptureWindow(windowCapture + "_front.png");
+                             // (the main menu's flight at battle ticks: MOHO64UI_MENUFLIGHT_CAPTURES=600,1500,2050 gives
+                             // <prefix>_flight_<tick>.png for each, its first loop)
+                             if (menuFlight && !game && !session.Loading()) {
+                               static std::vector<int> flightAt = [] {
+                                 std::vector<int> at;
+                                 const char* list = std::getenv("MOHO64UI_MENUFLIGHT_CAPTURES");
+                                 for (const char* c = list; c && *c;) {
+                                   at.push_back(std::atoi(c));
+                                   c = std::strchr(c, ',');
+                                   if (c) ++c;
+                                 }
+                                 return at;
+                               }();
+                               for (int& t : flightAt)
+                                 if (t > 0 && menuFlight->loops() == 0 && menuFlight->tick() >= static_cast<uint32_t>(t) &&
+                                     menuFlight->state() == ui::MenuFlight::State::Running) {
+                                   session.CaptureWindow(windowCapture + "_flight_" + std::to_string(t) + ".png");
+                                   Logf(LogLevel::Info, "moho64ui: the menu's flight captured at tick %u", menuFlight->tick());
+                                   t = 0;
+                                   break;
+                                 }
+                             }
                              if (game && ++capturedFrames == captureAt) session.CaptureWindow(windowCapture + "_game.png"), gameSeen = true;
                              if (!game && gameSeen && !session.Rewinding() && ++menuFrames == 300) session.CaptureWindow(windowCapture + "_menu.png");
                              if (!game && session.Loading() && ++loadingFrames == 90) session.CaptureWindow(windowCapture + "_loading.png");
@@ -1364,6 +1415,15 @@ int main(int argc, char** argv) {
       if (session.RewindArrived()) finishRewind();
       if (session.Rewinding() && game) heldUiSeconds += seconds;
       if (!(session.Rewinding() && !game)) shown->Frame(seconds);  // (a jump back held: not the front end from before)
+      // (--menu-flight: the main menu's battle while no game is there, as the window's menu would show it; its end
+      // starts it over at once, nothing to cover)
+      if (menuFlight && !game && !session.Loading() && !session.running() && !startingUp) {
+        using FS = ui::MenuFlight::State;
+        if (menuFlight->state() == FS::Idle) menuFlight->Begin();
+        menuFlight->WaitLoaded();  // (its load waited for: these frames go faster than the PC's clock, a test's waits count them)
+        menuFlight->Advance(seconds, true);
+        if (menuFlight->state() == FS::Ended) menuFlight->Restart();
+      }
       session.Advance(seconds);
       listen();
       sounds.Update(static_cast<float>(seconds));

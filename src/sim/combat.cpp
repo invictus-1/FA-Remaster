@@ -543,7 +543,14 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // already stepped in this beat is aimed at where the beat began with it (ours: its held shape).
     const Vec3& cp = e->shapeHeld ? e->shapePos : e->position;
     const Quat& cq = e->shapeHeld ? e->shapeOri : e->orientation;
-    if (e->kind == Entity::Kind::Projectile && e->blueprint) return Add(cp, RotateM(cq, e->bpCenter));
+    // A prop the same (0x679d19: the entity's blueprint, +0x6c: CollisionOffsetX, SizeY x 0.5 + CollisionOffsetY,
+    // CollisionOffsetZ turned by the committed orientation and added to the place; no scale). Seen: setons_1 6486, army
+    // 0's ACU (uel0001, RightZephyr) shooting the prop 0x2ff0017e: the original's solver (probe v3840i_s1_aim) aims at
+    // (480.8622, 19.46288, 544.7604), ours at the prop's origin (480.865265, 19.4129715, 544.76001); our laser flew 7 mm
+    // under the terrain in its 6493 step and hit there (impact 6494, one OnImpact Random too many), the original's hit
+    // the terrain at 6497 (probe v3840i_s1_impact).
+    if ((e->kind == Entity::Kind::Projectile || e->kind == Entity::Kind::Prop) && e->blueprint)
+      return Add(cp, RotateM(cq, e->bpCenter));
     return cp;
   }
   return NaNVec();
@@ -3266,6 +3273,7 @@ void KillCleanupTick(Sim& sim) {
     UnitMotion& m = u->motion;
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
     EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
+    AirSteeringGone(sim, u);  // (the steering's dtor stops an aircraft's motion where it stands)
     m.spline.clear();
     ++m.splineVersion;
     m.splineIdx = 0;
@@ -3609,6 +3617,14 @@ void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
+// The entity the attack task hands the navigator's SetDestUnit: the task target's own (CAiTarget +0x64), which for an
+// order on a jammer's fake blip is the fake, not its unit (see AttackUpdate).
+const Entity* AttackDestEntity(Sim& sim, const AiTarget& target, const Entity* e) {
+  if (target.fakeId)
+    if (const Entity* f = sim.FindEntity(target.fakeId)) return f;
+  return e;
+}
+
 void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
   {
     static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
@@ -3742,7 +3758,11 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     // destination on the dead unit's blip, and the air SetTarget turns the facing toward it before the task ends.
     // Seen: Experimental2 1310, a Tempest's drones whose target died at 1309 turned toward the dead ship's place;
     // ours took the goal cell of its aim bone (another facing for the hover after the abort).
-    AttackSetDestUnit(sim, u, e);
+    // An order on a jammer's FAKE blip holds the fake (the task's copy of cmd+0x11c, AiTarget::fakeId): the navigator
+    // gets the fake entity, at its offset from the unit. Seen (oracle probe v3840k_44_dest): FAF 3840 pro replay 4v4_4
+    // 6367, army 4's bomber 0x400034 takes its queued Attack on a fake blip of army 7's ship 0x700025: the original's
+    // SetDestUnit (from 0x5f3327) gets blip 0x30700084 at (71.76, 20, 496.69); ours flew at the ship (58.01, 514.42).
+    AttackSetDestUnit(sim, u, AttackDestEntity(sim, target, e));
   } else {
     AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
   }
@@ -3752,8 +3772,16 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 // UpdateAttacker 0x5f3450
 void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (u->weapons.empty()) return;
-  if (!(u->desiredTarget.type == target.type && u->desiredTarget.entityId == target.entityId &&
-        (target.type != 2 || u->desiredTarget == target))) {
+  // The test is CAiTarget 0x5e2d40 on the attacker's desired target (vt+0x24) and the task's: both must hold an entity
+  // (the weak link +4) and the two entities' ids (+0x68) must agree; a target without an entity, a GROUND target, is
+  // never the same, so each call gives it to the attacker again (SetDesiredTarget 0x5d75b0: every weapon's target
+  // cleared, 0x5d7625). Seen (probe v3840j_44_mm): 4v4_4 6267, army 1's artillery 0x100058 on a ground Attack it cannot
+  // reach (6266: no ballistic solution, canReach 0): the acquire's code 6 takes a unit (FindBestEnemy, 0x5d94e9), the
+  // attack task's chase is in reach and calls this, and SetDesiredTarget clears it again (0x5d762a), so the beat's aim
+  // has no target and canReach is 1 for the next acquire (code 1, the ground target, engaged): the original solves
+  // only on even beats and stays. Ours found the same target, kept the unit target, failed to solve every beat and
+  // walked off at 6269.
+  if (!(target.type == 1 && u->desiredTarget.type == 1 && u->desiredTarget.entityId == target.entityId)) {
     SetDesiredTarget(sim, u, target);
     t.adata->listening = true;
     u->attackStateSignal = false;
@@ -3969,7 +3997,7 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         Vec3 cell;
         if (FormationGoalOfForm(*fc, u, &cell)) AttackSetPosGoal(sim, u, cell);
       } else {
-        AttackSetDestUnit(sim, u, e);
+        AttackSetDestUnit(sim, u, AttackDestEntity(sim, target, e));
       }
       d.lastPos = tp;
       return 1;

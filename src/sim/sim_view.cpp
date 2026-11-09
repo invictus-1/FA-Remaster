@@ -382,6 +382,8 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.id = p->id;
     if (p->blueprint) v.blueprint = p->blueprint->id;
     v.army = p->army ? p->army->index : 0;
+    if (p->launcher) v.launcher = p->launcher->id;  // (entities stay allocated until the Sim ends, damage.cpp)
+    v.muzzleBone = p->muzzleBone;
     v.position[0] = p->position.x;
     v.position[1] = p->position.y;
     v.position[2] = p->position.z;

@@ -2133,6 +2133,19 @@ bool IsZero(const Vec3& v) { return vm::BitsZero(v); }
 bool Cat(Sim& sim, const Unit* u, const char* c) { return u && BpInCategory(sim, u->blueprint, c); }
 bool Mobile(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
 bool Moved(const Unit* u) { return !vm::SameBits(u->position, u->lastPosition); }
+// The guard dtor's test reads both as COMMITTED transforms (Entity +0xac and +0xc8, written only by AdvanceCoords in
+// step 13): "moved between the last two AdvanceCoords", also when asked inside the entity pass after the unit has taken
+// its step (a Lua callback of a shell's impact). Then the committed position is what the step started from
+// (lastPosition) and the one before it is prevLastPosition; between beats (a stream order's clear) every move is
+// committed. Seen: 4v4_2 6415, FAF's shield.lua:606 (a shell hitting the mobile shield 0x30001a) clears its guard
+// 0x300034, which stood still in x and z but settled one ulp in y during 6414: the original's dtor 0x611850 compares
+// 6414's end with 6413's, finds a move and aborts the navigator (probe v3840i_42_nav: AbortMove from 0x611974 ->
+// NavigatorMakeIdle -> ResetPathState at 6415), so the path of the guard's goal of 6414 is dropped and the next Guard's
+// own path starts the unit at 6418; ours compared 6415's end with 6414's, kept the path and drove off at 6416.
+bool MovedCommitted(const Sim& sim, const Unit* u) {
+  if (sim.coordsPending && u->lastPosTick == sim.tick()) return !vm::SameBits(u->lastPosition, u->prevLastPosition);
+  return !vm::SameBits(u->position, u->lastPosition);
+}
 const NamedFootprint& Fp(const Unit* u) { return Footprint(*u->blueprint); }
 
 // RUnitBlueprint::GetSkirtRect 0x51ec50 at (x, z)
@@ -3618,7 +3631,7 @@ void EndGuard(Sim& sim, Unit* U, BuildTask& t) {
   // (+0xb4 != +0xd0, 0x4f0a50). No goal test: an aircraft re-targets the point one second ahead. Seen (MP3 487):
   // Cybran build drones (POD) circling a finished mex; their guard ends and the original's targets jump to the
   // 1-s-ahead point while ours, without a goal, flew on to the old one.
-  if (U->motion.bp && U->motion.bp->mobile() && Moved(U)) MotionStop(U);
+  if (U->motion.bp && U->motion.bp->mobile() && MovedCommitted(sim, U)) MotionStop(U);
   AirSpeedThroughEvent(sim, U);
 }
 

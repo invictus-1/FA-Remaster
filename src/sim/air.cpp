@@ -2316,6 +2316,19 @@ void AirStopHere(Sim& sim, Unit* u) {
   if (u->motion.air) Stop(sim, u, nullptr);
 }
 
+// Unit::KillCleanup 0x6a8790 deletes the steering (unit+0x550, 0x6a881c..0x6a8832); its dtor 0x5d2920 calls
+// CAiSteeringImpl::Stop 0x5d35e0 (0x5d295a), which ends with CUnitMotion::Stop 0x6b8460(motion, 0) (0x5d3675): the
+// motion's target becomes where the unit stands (GetPosition, vt+0x14: the committed transform; the cleanup runs before
+// AdvanceCoords) and an AIR unit's landing layer becomes Air. Seen (probe v3840j_24_stop): 2v2_4 6467, army 3's idle
+// aircraft 0x300036 hovering landed, killed by Lua at 6467: the steering's Stop comes from 0x5d295f in that beat and
+// 6468's air step starts with the target (841.4907, 14.66512, 250.1), its own place (no horizontal drift: d.x 0);
+// ours kept the target of its last Stop (y 24.98) and drifted 0.000122 in x.
+void AirSteeringGone(Sim& sim, Unit* u) {
+  if (!u->motion.air) return;
+  const Vec3 c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
+  Stop(sim, u, &c);
+}
+
 // The navigator's SetGoal 0x5a4c60: SetMotionTarget 0x5a4a90 = CUnitMotion::SetTarget at once, status 2. Ours takes
 // a goal up in the unit's motion step of the beat it was given in (a.pending, AirMotionTick).
 void TakePendingGoal(Sim& sim, Unit* u) {
