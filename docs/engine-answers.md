@@ -4,6 +4,29 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+## ui request 56 E1: the menu's live battle as a sandbox session (2026-11-09) - yes on all three
+
+The ui's headless run (2026-11-09, main 28dfeee3 era) answers it:
+1. **A normal session:** two Human armies, no command source, Victory "sandbox", an empty command stream runs as an
+   ordinary session (as a game with `--session ui/data/menuflight/menu_session.lua --seed 1108`, and in the menu
+   runner with focus army -1). Fingerprints equal over 2453 lines on 1 and 8 sim threads; markers first loss 266,
+   nuke launch 1729, impact 2047, end 2400.
+2. **A scenario script outside /maps** loads (`/moho64ui/menuflight/menu_battle.lua`).
+3. **The calls** (InitializeArmies, ForkThread, CreateUnitHPR, IssueAggressiveMove, IssueNuke, GiveNukeSiloAmmo) behave
+   as in any game: they are the same sim functions the replays prove against the original; nothing in our sim treats
+   a sandbox session differently. So the menu runs a real sim: it costs a sim's CPU while the menu is up.
+
+Two things the ui found, both on the engine's list:
+- (a) A scenario script's globals live in `ScenarioInfo.Env` (FAF's simInit `doscript`), so a host `lua_getglobal`
+  of one hit the sim's unknown-global guard as an UNPROTECTED error: exit code 1 with nothing in the log. The ui reads
+  through `_G` with a raw get now. Engine to do: make that guard's error reach the log (and protected where the host
+  calls in), so a mistake there is never a silent exit.
+- (b) A GameConfig whose ScenarioFile lies outside /maps makes CurrentMapDir that file's folder, so the map's own
+  prop blueprints (SETONS_R's tree groups) were not found. The ui sets CurrentMapDir = '/maps/SETONS_R' before each
+  load, which is right for now; the engine checks how the original derives it.
+
+E2 (a restart that keeps the loaded rules, ~1.2 s a loop) stays open and optional; ask when the menu needs it.
+
 ## 2026-11-05 16:13, visuals: the duplicate unit id wes0401 (Antares Gemini vs Wyvern Ultimina)
 
 Done in the local Antares mod fix (outside the repository, it carries other people's mod data): Antares Unit Pack's
