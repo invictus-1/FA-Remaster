@@ -179,6 +179,14 @@ class MeshRenderer {
   // The quality setting: scales that wish. 1 is full quality; 0.5 suits a slower card; a very large
   // value forces every model's finest level.
   float detail = 1;
+  // (level band) A unit whose size sat at the border of two levels went back and forth between them as it walked or the
+  // camera moved a little, its outline and its shadow with it. So a keyed model (a unit, a shell: what the frame before
+  // knew) leaves its level only once its size is this share past the border: finer from 1 + levelBand of it, coarser
+  // from 1 - levelBand. The scene's passes and the shadows' each keep their own level (the shadows wish for less). 0:
+  // as it was, the level by the size alone. `levelChanges`: how many times a keyed model's level in the scene changed
+  // from one frame to the next, counted over the run.
+  float levelBand = 0.1f;
+  int levelChanges = 0;
   float minPixels = 1.5f;         // smaller than this on screen: not drawn (a strategic icon's job)
   float shadowMinPixels = 12;     // smaller than this: casts no shadow
   float shadowDetail = 0.25f;     // shadows are drawn from coarser levels: this share of the triangles
@@ -312,7 +320,15 @@ class MeshRenderer {
     uint8_t flags = 0;  // Cull's
     uint32_t key = 0;   // Add's
     uint32_t mark = 0;  // MarkLast's (hidden outlines)
+    // (level band) the level it was drawn at in the frame before and in this one, by the scene's passes [0] and by the
+    // shadows' [1]; 255: not known
+    uint8_t levelWas[2] = {255, 255};
+    uint8_t levelNow[2] = {255, 255};
   };
+  // (level band) every keyed model's levels of the frame before by its key: an open table (key << 16 | the scene's level
+  // << 8 | the shadows'; 0: free), made anew by Begin from the frame's entries.
+  std::vector<uint64_t> levelsBefore_;
+  static size_t LevelSlot(uint32_t key, size_t room) { return (key * 0x9e3779b1u >> 7) & (room - 1); }
   Entry MakeEntry(const Model* model, const Mat4& world, Vec3 teamColor, float built, const Vec3* tint, const float* treads = nullptr) const;
   // (rows go to `out`: rowsOut_, or with motion on a copy kept on the processor first)
   void BuildRows(Entry* entry, float* out);

@@ -2287,7 +2287,10 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         Vec3 facing = AttachFacing(O, u);
         AirSetFacing(u, facing);
         Vec3 F = Forward(u->orientation);
-        if (F.x * facing.x + F.y * facing.y + F.z * facing.z <= 0.95f && u->layer != "Land") return kTaskRunning;
+        // 0x621d2a..0x621d68: dot = (z + y) + x, `comiss dot, 0.95; ja`: aligned only above 0.95, a NaN is not
+        // aligned (READ, not run: order audit D2.3; before: (x + y) + z, and a NaN attached)
+        const float dot = (facing.z * F.z + facing.y * F.y) + facing.x * F.x;
+        if (!(dot > 0.95f) && u->layer != "Land") return kTaskRunning;
         AirSetFacing(u, Vec3{});
         AirSetLandHeight(u, std::numeric_limits<float>::infinity());
         if (TransportAttach(sim, O, u)) {
@@ -2338,6 +2341,7 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
 
 void EndRefuel(Sim& sim, Unit* u, TransportTaskData& d) {
   EndChild(sim, u, d);
+  u->navIgnoreFormation = false;  // dtor 0x6210cd..0x6210e1: IgnoreFormation(false) (order audit D2.2)
   SetState(u, US("ForceSpeedThrough"), false);
   SetState(u, US("Refueling"), false);
   AirSpeedThroughEvent(sim, u);  // refuel task dtor
@@ -3864,6 +3868,13 @@ BuildTask* StartPodTask(Sim& sim, Unit* u, const UnitCommand& c) {
   return static_cast<BuildTask*>(sim.Own(std::move(t)));
 }
 
+// The patrol task (0x61c1a5..0x61c1b7) and the guard task (0x6145ac..0x6145be) reset the reservations of the
+// platform FindPlatform gave them (its transport's vt+0x80), before IssueRefuelTask. READ, not run: order audit
+// D2.6; before, ours went straight to the refuel task.
+void TransportResetReservation(Unit* P) {
+  if (P && P->transport) ResetReservation(*P->transport);
+}
+
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P) {
   if (!P || P->dead || P->beingBuilt || !P->transport || !P->transport->isAirStaging) return nullptr;
   auto t = std::make_unique<BuildTask>();
@@ -3873,6 +3884,10 @@ BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P) {
   d->kind = kRefuel;
   d->transport = EntityRef(P);
   d->isCarrier = InCat(sim, P, "CARRIER");
+  // ctor 0x62102d..0x621041: the navigator's IgnoreFormation(true) (vt+0x30); the dtor (EndRefuel) turns it off,
+  // whatever it was before (an attack task's `true` is wiped). READ, not run: order audit D2.2; before, ours
+  // never touched the flag for a refuel, so a formation's member could be steered to its slot instead.
+  u->navIgnoreFormation = true;
   SetState(u, US("Refueling"), true);
   AirSpeedThroughEvent(sim, u);  // refuel task ctor
   t->tdata = d;
@@ -3885,6 +3900,9 @@ Unit* FindPlatform(Sim& sim, Unit* plane) {
   if (!plane || plane->dead || !plane->motion.bp || plane->motion.bp->motionType != kMotionAir) return nullptr;
   lua_State* L = sim.L();
   if (!GetAirBp(L, *plane->blueprint).canFly) return nullptr;
+  // 0x62f0ae..0x62f0d7: a plane that is its own formation leader (u+0x584 resolves to itself) finds none (READ,
+  // not run: order audit D2.7; inferred to bite seldom: the link is set for form commands only)
+  if (plane->formLeader && plane->formLeader == EntityRef(plane)) return nullptr;
   if (plane->fuelRatio < 0) return nullptr;
   if (!(LiveCommandCaps(L, plane) & 0x400000u)) return nullptr;  // RULEUCC_Dock
   bool need = 0.2f > plane->fuelRatio || 0.75f > plane->health / plane->maxHealth;

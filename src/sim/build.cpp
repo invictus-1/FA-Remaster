@@ -3536,6 +3536,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       break;
     case 3: {
       if (Unit* P = FindPlatform(sim, U)) {
+        TransportResetReservation(P);  // 0x6145ac..0x6145be, before 0x614170
         GuardAbort(U);
         child = MakeRefuelTask(sim, U, P);
         toGuard = false;

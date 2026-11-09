@@ -41,6 +41,9 @@
 //           is its ren_DecalFadeFraction, 0.5 the stock game's, 0.25 FAF's (without it: as before, the last fifth)
 // --lod-scale <s>  [lodscale] the camera's LOD scale (Camera::lodScale, the original's cam_SetLOD): 0.7 FAF's Level of
 //           Detail "Extreme", finer levels from 1 / 0.7 farther (without it: 1)
+// --level-band <share>  (level band) how far past the border of two levels of detail a unit's size must be before it
+//           changes its level (MeshRenderer::levelBand; without it 0.1, 0: no band, as it was); with it placed units
+//           are held as the game's are, and the run's last line counts how often a unit's level changed
 // --lights <n>  n small coloured lights circling the spot placed units stand at (to see and to measure them)
 // --ghost <blueprint>,<x>,<z>,<size x>,<size z>[,blocked]  [glitches] a building's ghost there (World::ghosts) with the outline of
 //           its site round it, 4 pixels wide, as the interface sets them while it is placed (green; red when `blocked`); may
@@ -1108,6 +1111,7 @@ struct Options {
   bool bars = false;                    // --bars
   float shotLight = 1;                  // --shot-light
   int shots = 0;                        // --shots
+  float levelBand = -1;                 // --level-band (-1: the renderer's)
   std::string animate;                  // --animate: an .sca file of the game's
   float animateAt = -1;                 // ... and where in it (0..1); below 0: it plays
   int selfDestructAt = 0, selfDestructArmy = 1;  // --self-destruct
@@ -1617,6 +1621,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--decal-range") o->decalRange = static_cast<float>(atof(v));
     else if (a == "--decal-fade") o->decalFade = static_cast<float>(atof(v));  // [decalfade]
     else if (a == "--lod-scale") o->lodScale = static_cast<float>(atof(v));    // [lodscale]
+    else if (a == "--level-band") o->levelBand = static_cast<float>(atof(v));  // (level band)
     else if (a == "--trail") o->trail.push_back(v);
     else if (a == "--emit-scale") o->emitScale = static_cast<float>(atof(v));
     else if (a == "--detail") o->detail = static_cast<float>(atof(v));
@@ -2665,6 +2670,7 @@ int main(int argc, char** argv) {
   world.reflection = opt.reflection;
   world.hide = opt.hide;
   world.meshes.detail = opt.detail;
+  if (opt.levelBand >= 0) world.meshes.levelBand = std::min(opt.levelBand, 0.5f);  // (level band)
   world.icons.scale = opt.iconScale;
   if (opt.iconFade >= 0) world.icons.fadeShare = std::min(opt.iconFade, 0.9f);  // [iconzoom] --icon-fade
   world.ao.strength = opt.ao;
@@ -4408,7 +4414,9 @@ int main(int argc, char** argv) {
         belt = world.machinery.PoseUnit(fu, *u.model, u.position, Quat{}, std::string(), &pose);
       }
       const bool posed = pose.nowCount > 0 || pose.nextCount > 0;
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr);
+      // ((level band) with --level-band keyed, as the game's units are: the band holds them and their changes are counted)
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr,
+                 nullptr, nullptr, opt.levelBand >= 0 ? placedId : 0);
       meshes.Belt(belt);
       if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)
       world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0], placedId, u.building);
@@ -4802,6 +4810,7 @@ int main(int argc, char** argv) {
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
       if (haveMap) printf("; ground: %d patches, %d triangles, %d changes by the game", terrain->drawnPatches, terrain->drawnTriangles, world.groundChanges);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
+      if (opt.levelBand >= 0) printf("; %d changes of level", meshes.levelChanges);  // (level band)
       if (iconsOn) printf("; %d icons", icons.drawn);
       if (particles.liveParticles || particles.liveEmitters)
         printf("; %d particles of %d emitters (%d quiet), %.2f ms", particles.liveParticles, particles.liveEmitters, particles.quietEmitters, particles.cpuMs);
