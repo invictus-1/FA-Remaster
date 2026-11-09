@@ -1127,6 +1127,8 @@ struct Options {
   std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
   std::string stream;                  // [streamplay] --stream: a played session's orders (the interface host's --replay-out)
   std::vector<std::string> ourMods;    // [streamplay] --our-mods: the engine's own mods' folders (';' between)
+  std::vector<std::string> simMounts;  // [menumount] --mount <folder>=<place>: more folders in the simulation's files
+  std::string simMapDir;               // [menumount] --map-dir </maps/x>: the map folder whose blueprints the rules load
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, remasters, place, crowd;
   bool placeAlone = false;  // --place-alone
@@ -1360,6 +1362,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--seed") o->seed = static_cast<unsigned>(strtoul(v, nullptr, 0));
     else if (a == "--mod-uids") o->modUids = v;
     else if (a == "--stream") o->stream = v;  // [streamplay]
+    else if (a == "--mount") o->simMounts.push_back(v);  // [menumount]
+    else if (a == "--map-dir") o->simMapDir = v;
     else if (a == "--our-mods") {             // [streamplay]
       const std::string list = v;
       for (size_t at = 0; at <= list.size();) {
@@ -2066,6 +2070,8 @@ int main(int argc, char** argv) {
     setup.seed = opt.seed;
     setup.stream = opt.stream;    // [streamplay]
     setup.ourMods = opt.ourMods;
+    setup.mounts = opt.simMounts;  // [menumount]
+    setup.mapDir = opt.simMapDir;
     setup.maps = opt.maps;
     setup.selfDestructAt = static_cast<uint32_t>(std::max(opt.selfDestructAt, 0));
     setup.selfDestructArmy = opt.selfDestructArmy;
