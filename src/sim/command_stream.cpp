@@ -618,7 +618,8 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       if (!sim.CheatsEnabled()) break;  // 0x749a93
       int top = lua_gettop(L);
       lua_pushcfunction(L, ScriptTraceback);
-      lua_getglobal(L, fn.c_str());
+      lua_pushstring(L, fn.c_str());  // (raw: an unknown name must not raise outside the pcall below)
+      lua_rawget(L, LUA_GLOBALSINDEX);
       if (!PushSerializedLua(L, arg)) lua_pushnil(L);
       prof::NextSource(prof::kSimCallback);  // (MOHO64_PROFILE only)
       if (lua_pcall(L, 1, 0, top + 1) != 0)

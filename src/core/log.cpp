@@ -1,8 +1,14 @@
 #include "core/log.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <mutex>
+#include <vector>
+
+#include "core/build_stamp.h"
 
 namespace moho {
 namespace {
@@ -21,10 +27,56 @@ const char* Prefix(LogLevel level) {
 }
 }  // namespace
 
-void LogOpenFile(const std::string& path) {
+bool LogOpenFile(const std::string& path) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_file) std::fclose(g_file);
   g_file = std::fopen(path.c_str(), "wb");
+  return g_file != nullptr;
+}
+
+std::string LogOpenDefault(const std::string& folder, const std::string& program, int keep) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path dir = fs::u8path(folder);
+  fs::create_directories(dir, ec);
+  // this program's earlier logs there: <program>_YYYYMMDD_HHMMSS.log exactly (the name holds the time, so the
+  // names' order is the logs' age)
+  const std::string head = program + "_";
+  auto ours = [&](const std::string& n) {
+    if (n.size() != head.size() + 19 || n.compare(0, head.size(), head) != 0 || n.compare(n.size() - 4, 4, ".log") != 0) return false;
+    for (size_t i = 0; i < 15; ++i) {
+      const char c = n[head.size() + i];
+      if (i == 8 ? c != '_' : (c < '0' || c > '9')) return false;
+    }
+    return true;
+  };
+  std::vector<std::string> old;
+  for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const auto u = it->path().filename().u8string();
+    std::string n(u.begin(), u.end());
+    if (ours(n)) old.push_back(std::move(n));
+  }
+  std::sort(old.begin(), old.end());
+  const size_t stay = keep > 1 ? static_cast<size_t>(keep - 1) : 0;
+  for (size_t i = 0; i + stay < old.size(); ++i) {
+    fs::remove(dir / fs::u8path(old[i]), ec);
+    fs::remove(dir / fs::u8path(old[i].substr(0, old[i].size() - 4) + ".dmp"), ec);
+  }
+  // (two starts within one second: the later one takes the next free second's name)
+  std::string name;
+  const std::time_t now = std::time(nullptr);
+  for (int k = 0; k < 30; ++k) {
+    const std::time_t t = now + k;
+    char stamp[32] = "";
+    if (const std::tm* tm = std::localtime(&t)) std::strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", tm);
+    name = head + stamp + ".log";
+    if (!fs::exists(dir / fs::u8path(name), ec)) break;
+  }
+  const auto u = (dir / fs::u8path(name)).u8string();
+  const std::string path(u.begin(), u.end());
+  if (!LogOpenFile(path)) return std::string();
+  LogWrite(LogLevel::Info, program + ": build " + BuildStamp());
+  return path;
 }
 
 void LogSetEcho(bool echo) { g_echo = echo; }

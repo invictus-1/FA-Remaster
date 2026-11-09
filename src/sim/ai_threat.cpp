@@ -100,6 +100,9 @@ struct InfluenceMap {
 struct ThreatBp {
   float air = 0, surface = 0, sub = 0, economy = 0;
   bool mobile = false, canFly = false;
+  // The update's four category tests of this blueprint, each asked once (-1: not asked yet). A category's mask is
+  // made on its first use and never changes after (combat.cpp BpCategoryMask), so the first answer is every answer.
+  mutable int8_t cat[4] = {-1, -1, -1, -1};
 };
 }  // namespace
 
@@ -296,6 +299,14 @@ void UpdateBlipPosition(Sim& sim, InfluenceMap& m, uint32_t id, Vec3 pos, const 
   InsertEntry(sim, m, id, pos, bp);
 }
 
+// BpInCategory for one of the update's four categories (k), through the blueprint's cache (tb = BpOf(bp); a blip
+// without a blueprint has the shared empty one, which is not written: BpInCategory answers false for it).
+bool InCat(Sim& sim, const ThreatBp& tb, const BlueprintInfo* bp, int k, const char* name) {
+  if (!bp) return false;
+  if (tb.cat[k] < 0) tb.cat[k] = BpInCategory(sim, bp, name) ? 1 : 0;
+  return tb.cat[k] != 0;
+}
+
 // A blip's recon flags for army index a (the original's blip+0x4c4 per-army entries, +4 flags): a real blip's are
 // its unit's (Unit::recon), a jammer's fake keeps its own.
 uint8_t BlipFlags(const ReconBlip* b, int a) {
@@ -359,16 +370,16 @@ void Update(Sim& sim, InfluenceMap& m) {
         if (bp.canFly) s.f[kAir] += total;
         else if (e.layer == 1) s.f[kLand] += total;                                    // Land
         else if (e.layer == 8 || e.layer == 2 || e.layer == 4) s.f[kNaval] += total;  // Water, Seabed, Sub
-      } else if (BpInCategory(sim, e.bp, kMex)) {
+      } else if (InCat(sim, bp, e.bp, 0, kMex)) {
         s.f[kStructures] += total;
       } else {
         s.f[kStructuresNotMex] += total;
         s.f[kStructures] += total;
       }
       if (e.identified) {
-        if (BpInCategory(sim, e.bp, kExperimentalCat)) s.f[kExperimental] += total;
-        if (BpInCategory(sim, e.bp, kCommand)) s.f[kCommander] += total;
-        if (BpInCategory(sim, e.bp, kArtilleryCat)) s.f[kArtillery] += total;
+        if (InCat(sim, bp, e.bp, 1, kExperimentalCat)) s.f[kExperimental] += total;
+        if (InCat(sim, bp, e.bp, 2, kCommand)) s.f[kCommander] += total;
+        if (InCat(sim, bp, e.bp, 3, kArtilleryCat)) s.f[kArtillery] += total;
         s.f[kAntiAir] = s.f[kAntiAir] + air;
         s.f[kAntiSurface] = s.f[kAntiSurface] + surf;
         s.f[kAntiSub] = s.f[kAntiSub] + sub;

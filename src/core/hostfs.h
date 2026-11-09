@@ -52,7 +52,11 @@ std::vector<std::string> Glob(std::string_view pattern);
 bool WildcardMatch(std::string_view pattern, std::string_view name);
 
 std::optional<std::string> ReadFile(std::string_view path);
+// False when the file could not be made, the disk took fewer bytes than given, or the close failed.
 bool WriteFile(std::string_view path, std::string_view data);
+// Renames `from` to `to` in one step, replacing `to` when it exists (the whole old file or the whole new one is
+// there, never half of each). Both on one drive. False when it failed; `from` then stays.
+bool ReplaceFile(std::string_view from, std::string_view to);
 
 // The folder of the running program (forward slashes, UTF-8), "" when the system does not say.
 std::string ProgramFolder();

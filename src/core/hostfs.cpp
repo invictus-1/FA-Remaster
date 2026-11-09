@@ -318,9 +318,24 @@ bool WriteFile(std::string_view path, std::string_view data) {
 #endif
   FILE* f = std::fopen(clean.c_str(), "wb");
   if (!f) return false;
-  std::fwrite(data.data(), 1, data.size(), f);
-  std::fclose(f);
-  return true;
+  // a full disk shows as a short write or as a failed close (the last block is written there): both are a failure
+  const bool wrote = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+  const bool closed = std::fclose(f) == 0;
+  return wrote && closed;
+}
+
+bool ReplaceFile(std::string_view from, std::string_view to) {
+  std::string a = CleanPath(from), b = CleanPath(to);
+#ifndef _WIN32
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    a = HostSpelling(a);
+    b = HostSpelling(b);
+  }
+#endif
+  std::error_code ec;
+  fs::rename(fs::u8path(a), fs::u8path(b), ec);  // replaces an existing `to` on every system
+  return !ec;
 }
 
 }  // namespace moho::hostfs
