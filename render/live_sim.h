@@ -40,6 +40,12 @@ class LiveSim {
     // variant at /mods/m28-variant), mounted where the init file did not (else beside the program, or one up).
     std::string stream;
     std::vector<std::string> ourMods;
+    // [menumount] (the interface's request 49 R4: its menu flight's battle in the viewer) more folders mounted into the
+    // simulation's files, each "<folder>=<place>" (e.g. the interface's data at /moho64ui, where a session's scenario
+    // may lie); and the map folder whose own blueprints the rules load (PreGameData.CurrentMapDir), where the session's
+    // scenario file lies elsewhere than its map (empty: the scenario file's folder, as a lobby sets it).
+    std::vector<std::string> mounts;
+    std::string mapDir;
     uint32_t seed = 0;      // a new game's random seed; 0: taken from the clock
     std::vector<std::string> maps;  // more folders of map folders, mounted at /maps beside what the init file mounts
     // For tests of a new game: at this beat the army's first unit (its commander) destroys itself at once,
