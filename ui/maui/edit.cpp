@@ -114,6 +114,10 @@ class Edit : public Control {
   float CharAdvance(int index) const { return Advance(Utf8Sub(text, index, 1)); }
   std::string Shown() const { return Utf8Sub(text, clipOffset, visible); }
   std::string Selection() const { return Utf8Sub(text, selStart, selEnd - selStart); }
+  // Copy and cut with nothing selected leave the clipboard as it is (they emptied it; the review of 2026-11-09).
+  void CopySelection() const {
+    if (selEnd > selStart) CopyToClipboard(Selection());
+  }
 
   // self:OnTextChanged(newText, oldText); a change made from inside that callback does not call
   // it again (the original's guard at +0x190).
@@ -310,7 +314,7 @@ class Edit : public Control {
         return;
       case kDelete:
         if (e.shift) {
-          CopyToClipboard(Selection());
+          CopySelection();
         } else if (e.ctrl) {
           int n = NextWordStart(text, caret) - caret;
           if (n) MoveSelectionRight(n);
@@ -368,18 +372,18 @@ class Edit : public Control {
         return;
       case kInsert:
         if (e.shift) ReplaceSelection(L, ClipboardText());
-        else if (e.ctrl) CopyToClipboard(Selection());
+        else if (e.ctrl) CopySelection();
         return;
       default:
         break;
     }
     if (e.ctrl) {
       if (key == 3) {  // Ctrl+C
-        CopyToClipboard(Selection());
+        CopySelection();
       } else if (key == 22) {  // Ctrl+V
         ReplaceSelection(L, ClipboardText());
       } else if (key == 24) {  // Ctrl+X
-        CopyToClipboard(Selection());
+        CopySelection();
         DeleteSelection(L, true);
       }
       return;

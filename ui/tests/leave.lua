@@ -19,5 +19,9 @@ ForkThread(function()
     -- The window is resized during the game: the front end that comes back must have the new
     -- size (with --dump-ui the host's last lines then say "head 0: 1600x900").
     moho64ui_Resize(1600, 900)
+    -- A game left while paused (the game menu pauses a skirmish): the sound categories FAF's OnPause pauses must
+    -- not stay paused in the front end (the host logs "paused categories resumed at the session's end").
+    PauseSound("World", true)
+    PauseSound("Music", true)
     ExitGame()
 end)

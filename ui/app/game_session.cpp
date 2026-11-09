@@ -2090,7 +2090,10 @@ void GameSession::End() {
     keepMap_ = keepMenuMap_ = false;
     EndRewind();
   }
-  if (sounds) sounds->StopWorld();
+  if (sounds) {
+    sounds->StopWorld();
+    if (int n = sounds->ResumeAll()) Logf(LogLevel::Info, "moho64ui: sound: %d paused categor%s resumed at the session's end", n, n == 1 ? "y" : "ies");
+  }
   onSync = nullptr;
   takeOrders = nullptr;
   net_.reset();  // (its connections close: the other players hear us gone)

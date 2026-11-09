@@ -67,6 +67,10 @@ class SoundSystem {
   bool SetVolume(const std::string& category, float volume);
   bool GetVolume(const std::string& category, float* volume) const;
   bool Pause(const std::string& category, bool pause);
+  // Every category's pause mark off; how many were on. A session's end calls it: FAF's scripts pause "World",
+  // "Music" and "VO" with the game (gamemain.lua OnPause) and resume them only from OnResume, which a game left
+  // while paused never reaches, so the menu's music and the next game stayed silent (the review of 2026-11-09).
+  int ResumeAll();
   const std::vector<Category>& categories() const { return categories_; }
 
   // --- the world's sounds: what the simulation's scripts play at a place ---
