@@ -130,7 +130,7 @@ float CloudNear(float3 p, float h, bool frayed, float erode, float keep) {
     float erode = 1 - (1 - zoomLook.x) * (1 - zoomLook.z * middle), keep = zoomLook.y * lerp(1, zoomLook.w, middle);
     int steps = int(cloudLook.y);
     float dt = (t1 - t0) / steps;
-    float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
+    float3 body = skyMoon.w > 0.5 ? skyMoon.xyz : skyBody.xyz;  // (as the clouds' own march)
     float c = dot(d, body);
     float phase = lerp(Phase(c, -0.15), Phase(c, 0.65), 0.5);
     float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
