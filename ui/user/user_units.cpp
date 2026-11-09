@@ -1679,30 +1679,41 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // ChooseFormation 0x8384c0 takes the end of each unit's queue when it has one): the mean is the formation's
   // centre, and the first point of a patrol.
   float mean[2] = {0, 0};
-  // With Shift, the selection's rule as the original has it (0x81e050, called at 0x820bd7 and 0x820ced): ONE unit whose
-  // queue ends in a Patrol (0x10) or a FormPatrol (0x12) and the whole selection gets the new point alone; and a
-  // patrol's first point is then the place of the last queued order of the last unit that has one (queueEnd), the
-  // mean of the units' places only when none has. (Until 2026-11-09 ours took the mean of queue ends and places: two
-  // units, one with a move queued to a place, and the patrol began half way between that place and the other unit.)
-  bool queuedPatrol = false;
-  bool hasQueueEnd = false;
-  float queueEnd[2] = {0, 0};
+  // With Shift, the original decides for the whole selection (0x81e050, called at 0x820bd7 and 0x820ced): ONE unit
+  // whose queue ends in a Patrol (0x10) or a FormPatrol (0x12) and every unit gets the new point alone; a patrol's
+  // first point is otherwise the place of the last queued order of the last unit that has one, the mean of the
+  // units' places only when none has. (OURS, Chris 2026-11-09: decided PER UNIT. The units whose queue ends in a
+  // patrol (patrolEnds) get the new point alone; the others get a first point too, by the same rule among
+  // themselves (startEnd, else startMean). In the original a unit without a patrol, selected beside one that has
+  // one, got a single patrol point: a patrol of one place. A selection of one kind behaves as the original's.)
+  std::vector<uint32_t> patrolEnds;
+  bool hasStartEnd = false;
+  float startEnd[2] = {0, 0}, startMean[2] = {0, 0};
+  int startCount = 0;
   for (const UserUnit* u : units) {
     float at[2] = {u->view.position[0], u->view.position[2]};
+    bool endsInPatrol = false, hasEnd = false;
     if (!clear) {
       UnitStateView st;
       if (StateOf(L, u, &st)) {
         const std::vector<CommandView>& q = st.hasFactoryQueue ? st.factoryQueue : st.queue;
         if (!q.empty() && q.back().hasPosition) {
           at[0] = q.back().position[0], at[1] = q.back().position[2];
-          queueEnd[0] = at[0], queueEnd[1] = at[1], hasQueueEnd = true;
+          hasEnd = true;
         }
-        if (!q.empty() && (q.back().type == static_cast<int>(CommandType::Patrol) || q.back().type == static_cast<int>(CommandType::FormPatrol))) queuedPatrol = true;
+        endsInPatrol = !q.empty() && (q.back().type == static_cast<int>(CommandType::Patrol) || q.back().type == static_cast<int>(CommandType::FormPatrol));
       }
+    }
+    if (endsInPatrol) {
+      patrolEnds.push_back(u->view.id);
+    } else {
+      if (hasEnd) startEnd[0] = at[0], startEnd[1] = at[1], hasStartEnd = true;
+      startMean[0] += at[0], startMean[1] += at[1], ++startCount;
     }
     mean[0] += at[0], mean[1] += at[1];
   }
   if (!units.empty()) mean[0] /= static_cast<float>(units.size()), mean[1] /= static_cast<float>(units.size());
+  if (startCount > 0) startMean[0] /= static_cast<float>(startCount), startMean[1] /= static_cast<float>(startCount);
   // Ctrl with more than one unit: an attack on a unit goes as FormAttack (SCommandModeData::HandleEvent 0x81fe4c;
   // FAF's exe leaves a Move as it is: its 0x82074d skips the original's FormMove).
   if (ctrl && units.size() > 1 && type == CommandType::Attack && entity != 0xffffffffu) {
@@ -1770,19 +1781,28 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
     Store(L).sent.push_back(e);
   }
   // A Patrol goes as two points (0x820c4e, 0x820c91; factories 0x820d64, as the replays hold them): first where the
-  // units are (the mean above, on the ground), clearing the queue unless Shift; then the target, queued. With Shift
-  // after a patrol already queued, only the target.
-  if ((type == CommandType::Patrol || type == CommandType::FormPatrol) && !queuedPatrol) {
+  // units are (on the ground), clearing the queue unless Shift; then the target, queued. With Shift, a unit whose
+  // queue ends in a patrol gets only the target (per unit: the note at patrolEnds above).
+  std::vector<uint32_t> startOthers, startFactories;
+  if (type == CommandType::Patrol || type == CommandType::FormPatrol) {
+    auto fresh = [&](uint32_t id) { return std::find(patrolEnds.begin(), patrolEnds.end(), id) == patrolEnds.end(); };
+    for (uint32_t id : others)
+      if (fresh(id)) startOthers.push_back(id);
+    for (uint32_t id : factories)
+      if (fresh(id)) startFactories.push_back(id);
+  }
+  if ((type == CommandType::Patrol || type == CommandType::FormPatrol) && (patrolEnds.empty() || !startOthers.empty() || !startFactories.empty())) {
     StreamIssueData start = d, startRally = rally;
     float ground = y;
-    const float* from = hasQueueEnd ? queueEnd : mean;  // (hasQueueEnd only with Shift; without, mean = the places' mean)
+    // (hasStartEnd only with Shift; without, startMean = the mean of the units' places, as `mean`)
+    const float* from = hasStartEnd ? startEnd : startCount > 0 ? startMean : mean;
     if (const auto& height = UserState::From(L)->config().groundHeight) ground = height(from[0], from[1]);
     start.target.type = startRally.target.type = 2;
     start.target.pos.x = startRally.target.pos.x = from[0];
     start.target.pos.y = startRally.target.pos.y = ground;
     start.target.pos.z = startRally.target.pos.z = from[1];
-    if (!others.empty()) IssueToUnits(L, others, start, clear);
-    if (!factories.empty()) IssueRallyToUnits(L, factories, startRally, clear);
+    if (!startOthers.empty()) IssueToUnits(L, startOthers, start, clear);
+    if (!startFactories.empty()) IssueRallyToUnits(L, startFactories, startRally, clear);
     clear = false;
   }
   // (none at all: a building order with nothing selected, above; a structure's Guard goes out also when only
