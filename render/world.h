@@ -77,6 +77,7 @@
 #include "stream_water.h"  // [stream]
 #include "sunlight.h"  // [sunlight]
 #include "sun_mask.h"  // [shadowmask]
+#include "surround.h"  // (surround)
 #include "terrain.h"
 #include "textures.h"
 #include "unit_wear.h"
@@ -432,6 +433,10 @@ class World {
   // only a faint soft shadow along the edge) and land far off round the horizon (beyond_land.h, `distantLand`). Modern
   // look; off by default.
   bool beyondLand = false;
+  // (surround) With the world beyond the edge, on a map that brings a sculpted surround (x_surround.json beside its
+  // x.scmap; surround.h): that land is drawn past the map's edges, not the map laid out again mirrored. Read the first
+  // time it is wanted. Modern look; off by default (the first surround is a block-out).
+  bool mapSurround = false;
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;
@@ -1452,6 +1457,8 @@ class World {
   bool horizonWeather = false;
   Horizon horizon;
   BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
+  Surround surround;       // (surround) the map's own sculpted land past its edges (mapSurround)
+  bool surroundTried_ = false;  // (looked for, for the map open)
 
   // [seasons] The season the map is drawn in (seasons.h; Chris, 2026-10-18: a player's option): taken in when a map is
   // opened (Open: its ground's materials, its ground cover and its props, where the map's remap.json lists them), so a

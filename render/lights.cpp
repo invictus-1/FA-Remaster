@@ -258,7 +258,7 @@ void Lights::Build(View* view) {
   };
   merged = 0;
   if (lay()) {
-    // [unitfx] Crowded squares (Chris, 2026-10-21: "shadow squares" when the Izanagi fires its missiles and guns: a hundred
+    // [unitfx] Crowded squares (Chris, 2026-10-21: "shadow squares" when a private mod's flagship fires its missiles and guns: a hundred
     // and more shots' glows and hits' flashes where its salvos land, up to 192 lights reaching one square). A square keeps
     // only the kMostInSquare lights that light it most, so where its neighbour keeps a light it does not, the pool of light
     // steps at the square's edge. Where squares are that crowded, the lights that crowd them are first merged: lights to

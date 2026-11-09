@@ -81,6 +81,10 @@ class BeyondLand {
   // for a side picture): the land made for the map the first time it is wanted, and its colours from the map's ground
   // (that dispatches, so outside a pass).
   void Prepare(gfx::Device* device, bool on, Terrain& terrain);
+  // The map's colours where its ground is low by the water, level, high and steep (4 x 1, as stored), for what else
+  // lies beyond the map and is coloured from it (the map's surround, surround.h): made the first time it is asked for
+  // once a map is open (it dispatches: between passes); none where it cannot be made.
+  gfx::Texture Palette(gfx::Device* device, Terrain& terrain);
   // Into the scene's pass, after what stands on the map and before the clouds and the sky (the small lights bound).
   bool On() const { return now_; }
   void Draw(const View& view);
@@ -94,10 +98,11 @@ class BeyondLand {
   gfx::Buffer vertices_, indices_;
   gfx::Texture heights_, palette_;
   uint32_t indexCount_ = 0;
-  bool made_ = false, tried_ = false, failed_ = false, paletteMade_ = false, now_ = false;
+  bool made_ = false, tried_ = false, failed_ = false, paletteMade_ = false, paletteTried_ = false, now_ = false;
   int rings_ = 0, round_ = 0;              // the ring's points: out from the map, and round it
   float middle_[2] = {0, 0};               // the map's middle (world x, z)
   float inner_ = 1, outer_ = 2;            // the innermost and outermost rings' radius
+  float madeReach_ = 0;                    // how far out the ground went when it was made (made again when that changes)
   float sea_ = 0, top_ = 0, start_ = 0;    // the sea's level, the highest the land may rise over it, where it may begin
   float mapSize_[2] = {1, 1};
   // what is read of the map when it is opened (Forget): whether one is, its seed, its highest ground over the sea, and
