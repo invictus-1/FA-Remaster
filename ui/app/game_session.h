@@ -173,7 +173,8 @@ class GameSession {
     // machinery: no frame, the land and sea go on past the edge, greyed out where units cannot
     // go, no haze over it) or "frame" (the original's frame of machinery round the map, nothing
     // past it). Chris, 2026-10-14, chose between the two: "for default have option 2", the land
-    // beyond; the original's frame stays a choice.
+    // beyond; the original's frame stays a choice. Or "surround" (2026-11-09, World::mapSurround):
+    // as "beyond", with the land sculpted for the map past its edges where the map brings one.
     std::string edge = "beyond";
   };
   Sky sky;

@@ -60,6 +60,10 @@ table.insert(globalOpts, 4, {
     values = {
         { text = "No Machinery", help = "The land and sea go on past the map's edge, greyed out where units cannot go", key = 'beyond' },
         { text = "Machinery", help = "The frame of machinery round the map, as in the original game", key = 'frame' },
+        -- (the renderer's request 62, Chris 2026-11-09: land sculpted for the map past its edges, in place of the map
+        -- laid out again mirrored; a map without one is drawn as No Machinery. Not the default: the first one, Seton's
+        -- Clutch Remastered's, is plain ground until the visuals track's detail pass)
+        { text = "Sculpted Land", help = "The map's own land past its edge, on maps that bring it (Seton's Clutch Remastered); other maps as No Machinery", key = 'surround' },
     },
 })
 

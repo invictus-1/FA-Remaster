@@ -120,7 +120,7 @@ bool menuFlightHeadless = false;
 // rain, storm, fog, snow) / --no-weather: the day and the weather in the picture of a game whose
 // configuration does not say (a game from the lobby says: its options RemasterDayStart,
 // RemasterDayLength, RemasterWeather). Without them such a game has the map's own fixed light.
-// --map-edge frame|beyond: likewise the map's edge (RemasterMapEdge); without it, "beyond".
+// --map-edge frame|beyond|surround: likewise the map's edge (RemasterMapEdge); without it, "beyond".
 ui::GameSession::Sky sky;
 // --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
 // (maps in the making). --remasters <folder> (may be given more than once): the remastered units' own files, one

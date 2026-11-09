@@ -3,6 +3,29 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 62 (render/REQUESTS.md): the map's own land past its edge as a third Map Edge choice (2026-11-09)
+
+Built. The lobby's "Map Edge" option (`RemasterMapEdge`) has a third value:
+
+| Text | Key | What the session sets on the World |
+|---|---|---|
+| No Machinery (default, unchanged) | `'beyond'` | `worldBeyond = true`, `frame = false`, `mapSurround = false` |
+| Machinery | `'frame'` | `worldBeyond = false`, `frame = true`, `mapSurround = false` |
+| Sculpted Land (new) | `'surround'` | `worldBeyond = true`, `frame = false`, `mapSurround = true` |
+
+- `beyondHaze` stays false in all three, as before.
+- The default stays `'beyond'`, as you asked (the surround is a block-out until the visuals track's detail pass; the
+  default is Chris's word). The main menu's flight keeps `'beyond'` too (`ui/data/menuflight/menu_session.lua`).
+- The option's help text says it applies on maps that bring such land (Seton's Clutch Remastered) and that other maps
+  are drawn as No Machinery; that fallback is yours (`mapSurround` with no usable surround file).
+- `--map-edge frame|beyond|surround` is the same for a game given with `--session`. The session logs which one:
+  `session: the map's edge: no machinery, the map's own sculpted land beyond (where it has one)`.
+- Where: `ui/data/hook/lua/ui/lobby/lobbyOptions.lua`, `ui/app/game_session.cpp` (`SkyOnWorld`, the option's read).
+- Tested: `ui/tests/lobby.lua` (the third value's key, the default still `'beyond'`), a SETONS_R game and a game on a
+  map without a surround, both with `--map-edge surround` (219 checks each, 0 failed). Not looked at in a window by
+  me: the picture is your check.
+- If the default should change later, or the menu's flight should show the land, say so: one line each.
+
 ## engine (by message, aicore's phase 6): our AI's per-slot options RemasterAggression and RemasterEconomy, with personality and teacher mode (2026-10-30, ui 04a689a)
 
 Built, all four together (none had a slot control before). Every slot's PlayerOptions carries them, so they reach the
