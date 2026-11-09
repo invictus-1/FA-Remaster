@@ -104,6 +104,11 @@ class SimFrames {
   // move), turns it from the one beat's direction to the other's, moves a beam's ends with it, and turns and sizes the
   // scripts' entities as it moved them. false: as it was (a test's "before").
   bool shellBlend = true;
+  // (far step) A unit that was teleported or set elsewhere by a script (Warp) was drawn flying there for a beat, and
+  // what goes by its drawn place with it. A unit farther than this from where it was a beat before (world units for
+  // each beat between the two; the fastest aircraft do about 3) is not drawn on the way: it stands as before for the
+  // first half of the beat and at its new place for the second (BlendUnits' farStep). 0: as it was.
+  float farStep = 10;
 
  private:
   struct Beat_ {

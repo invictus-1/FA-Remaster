@@ -114,6 +114,9 @@
 // --shells-as-before  (shell curve) with a game: shells, beams and the scripts' entities between two beats as they were
 //           drawn before (on along the first beat's speed; SimFrames::shellBlend). --shell-log <file>: every frame a line
 //           per shell ("s <beat> <id> <x> <y> <z>") and per beam ("b <beat> <id> <start> <end>") as drawn
+// --far-step <units>  (far step) with a game: a unit farther than this from where it was a beat before is set there, not
+//           drawn on the way (a teleport, a script's Warp; SimFrames::farStep, 10). 0: every unit is moved, as it was.
+//           --unit-log <file>: every frame a line per unit ("u <beat> <id> <x> <y> <z>") as drawn
 // --fight-scan <beats>  [rbench] with a game: every that many beats (on the way to --tick too) where the most shots are
 //           in flight (as --find fight), printed: to find a battle's moment and place for a benchmark's camera
 // --hitch-log [ms]  [hitches] every frame that took longer than ms from the last one's end (25 unless given), or loaded or
@@ -893,6 +896,8 @@ struct Options {
   bool fixedStep = false;               // --fixed-step [wakes]
   bool shellBlend = true;               // --shells-as-before (shell curve)
   std::string shellLog;                 // --shell-log (shell curve)
+  float farStep = -1;                   // --far-step (far step; -1: the frames' own)
+  std::string unitLog;                  // --unit-log (far step)
   bool hullWashOld = false;             // [livewash] --hull-wash old
   float stormFoam = 1;                  // [stormfoam] --storm-foam
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
@@ -1397,6 +1402,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--simlog") o->simLog = v;
     else if (a == "--shell-log") o->shellLog = v;  // (shell curve)
+    else if (a == "--far-step") o->farStep = static_cast<float>(atof(v));  // (far step)
+    else if (a == "--unit-log") o->unitLog = v;  // (far step)
     else if (a == "--tick") o->tick = atof(v);
     else if (a == "--lamp-scale") o->lampScale = static_cast<float>(std::max(atof(v), 0.0));  // [unit lamps]
     else if (a == "--size") {
@@ -2142,6 +2149,7 @@ int main(int argc, char** argv) {
     setup.lua = opt.luaOrders;      // [r7] --orders
     live.SetFocusArmy(opt.focus);
     live.SetShellBlend(opt.shellBlend);  // (shell curve)
+    if (opt.farStep >= 0) live.SetFarStep(opt.farStep);  // (far step)
     picture.SetVulkan(opt.vulkan);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
@@ -3676,6 +3684,14 @@ int main(int argc, char** argv) {
           for (const FrameBeam& beam : frame.beams)
             fprintf(log, "b %.4f %u %.4f %.4f %.4f %.4f %.4f %.4f\n", playTick, beam.id, beam.start[0], beam.start[1],
                     beam.start[2], beam.end[0], beam.end[1], beam.end[2]);
+          fflush(log);
+        }
+      }
+      if (!opt.unitLog.empty() && !liveBusy) {  // (far step) --unit-log: where each unit is drawn, frame by frame
+        static FILE* log = fopen(opt.unitLog.c_str(), "w");
+        if (log) {
+          for (const FrameUnit& u : frame.units)
+            fprintf(log, "u %.4f %u %.4f %.4f %.4f\n", playTick, u.id, u.position[0], u.position[1], u.position[2]);
           fflush(log);
         }
       }
