@@ -715,6 +715,7 @@
 //           along the ground and that high over them, looking at them; pace 0 calm .. 1 active
 //           Key G switches the cinematic camera off (the game's camera goes on from where it was, eased) and on.
 // --cine-haze <n>  with a time of day, the least haze a cinematic camera sees (World::cinematicHaze, 0.0004; 0 none)
+// --haze-mist <0..2>  [hazeamt] how much of the clear weather's haze and mist shows (World::hazeMist; 1 as made, 0 clear air)
 // --dof f[,focus]  the lens's depth of field (World::lens) at aperture f/f, focused at `focus` world units from the
 //           eye, or (0 or not given) auto-focused on what is at the picture's middle, eased; --dof-scale <metres a
 //           world unit stands for> (0.125: smaller blurs more), --dof-seconds <the auto-focus's easing> (0.4), --dof-largest <the widest
@@ -755,6 +756,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "marks.h"
 #include "bp_reader.h"
 #include "cpu_times.h"
 #include "hitch_log.h"  // [hitches]
@@ -823,6 +825,7 @@ struct Options {
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
+  bool marks = false;                   // --marks: how full each fixed room got, printed at the end (marks.h)
   int timingsFrom = 2;                  // --timings-from
   std::string timingsCsv;               // [rbench] --timings-csv
   int fightScan = 0;                    // [rbench] --fight-scan
@@ -1162,6 +1165,7 @@ struct Options {
   std::string cinePath;
   float cineFollow[3] = {0, 0, -1};  // --cine-follow distance,height[,pace]
   float cineHaze = -1;               // --cine-haze
+  float hazeMist = -1;               // --haze-mist [hazeamt]
   float dof = 0, dofFocus = 0, dofScale = -1, dofSeconds = -1, dofLargest = -1;
   std::string photo;
   float photoScale = 2;
@@ -1192,6 +1196,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
+    else if (a == "--marks") o->marks = true;
     else if (a == "--hitch-log") {  // [hitches] [ms]
       o->hitchLog = 25;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->hitchLog = atof(argv[++i]);
@@ -1811,6 +1816,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasCine = true;
     } else if (a == "--cine-haze") {
       o->cineHaze = static_cast<float>(atof(v));
+    } else if (a == "--haze-mist") {  // [hazeamt]
+      o->hazeMist = static_cast<float>(atof(v));
     } else if (a == "--dof") {
       if (sscanf(v, "%f,%f", &o->dof, &o->dofFocus) < 1) return false;
     } else if (a == "--dof-scale") o->dofScale = static_cast<float>(atof(v));
@@ -1927,6 +1934,13 @@ int main(int argc, char** argv) {
     return 2;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
+  // (--marks: printed when main ends, after the world and the device, which tell what they still held, are gone)
+  render::Marks().wanted = opt.marks;
+  struct MarksAtEnd {
+    ~MarksAtEnd() {
+      if (render::Marks().wanted) render::PrintMarks(stdout);
+    }
+  } marksAtEnd;
   gSceneSamples = opt.fsr3 ? 1 : opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;  // (FSR 3: one sample a pixel)
   std::string error;
   // an automatic run (--frames) must give the same picture whatever the person at the machine is
@@ -2622,6 +2636,7 @@ int main(int argc, char** argv) {
   if (opt.iconFade >= 0) world.icons.fadeShare = std::min(opt.iconFade, 0.9f);  // [iconzoom] --icon-fade
   world.ao.strength = opt.ao;
   if (opt.cineHaze >= 0) world.cinematicHaze = opt.cineHaze;  // --cine-haze
+  if (opt.hazeMist >= 0) world.hazeMist = opt.hazeMist;  // --haze-mist [hazeamt]
   if (opt.dof > 0) {  // --dof: the lens's depth of field
     world.lens.on = true;
     world.lens.fNumber = opt.dof;
@@ -3445,7 +3460,7 @@ int main(int argc, char** argv) {
           if (e.key == kKeyPlus) playSpeed = std::min(playSpeed * 2, 64.0);
           if (e.key == kKeyMinus) playSpeed = std::max(playSpeed / 2, 0.125);
           if (e.key == kKeyPageDown) playTick += 100;
-          if (e.key == kKeyPageUp) playTick -= 100;
+          if (e.key == kKeyPageUp) playTick = std::max(playTick - 100, 0.0);  // (never before the start: a live game is run to it as an unsigned beat)
           if (e.key == kKeyHome && haveRecording) playTick = recording.FirstTick();
           if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;

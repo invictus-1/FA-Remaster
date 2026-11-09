@@ -247,6 +247,12 @@ struct ProjectileView {
   uint32_t id = 0;
   std::string blueprint;  // the projectile blueprint's id (its path)
   int army = 0;           // 1-based, 0 = none
+  // Who fired it: the entity id of its launcher (a unit; for a shell that a shell threw, the first shell's
+  // launcher), 0xffffffff when it has none. The launcher may be dead by now: the id is still its own. And the
+  // index, in the launcher's skeleton, of the bone it left from when a weapon launched it from a muzzle
+  // (UnitWeapon:CreateProjectile), -1 otherwise (render/REQUESTS.md 60).
+  uint32_t launcher = 0xffffffffu;
+  int muzzleBone = -1;
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second

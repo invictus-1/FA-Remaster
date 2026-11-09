@@ -684,7 +684,7 @@ bool Horizon::Begin(const MapData& map, float reach, const Weather& weather, flo
   // in fog, and in the cold
   const float cold = std::max(weather.snowLying, weather.cold ? 0.6f : 0.0f);
   const float dawn = rise(4, 5.5f, weather.hour) * (1 - rise(8, 10.5f, weather.hour));
-  const float fogAmount = sea && fog ? std::clamp(0.15f + 0.5f * weather.mist + 0.25f * dawn + 0.3f * cold + 0.35f * weather.fog + 0.1f * weather.wet, 0.0f, 1.0f) : 0.0f;
+  const float fogAmount = sea && fog ? std::clamp(0.15f * weather.haze + 0.5f * weather.mist + 0.25f * dawn * weather.haze + 0.3f * cold + 0.35f * weather.fog + 0.1f * weather.wet, 0.0f, 1.0f) : 0.0f;
   fogNow = fogAmount;
   // showers: in rain and snow, more and stronger the harder it falls, a few under heavy cloud
   const float showerAmount = showers ? std::max({weather.rain, 0.85f * weather.snow, 0.5f * std::clamp((weather.cloudCover - 0.55f) * 1.6f, 0.0f, 1.0f)}) : 0.0f;

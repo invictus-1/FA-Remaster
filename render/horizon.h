@@ -46,6 +46,7 @@ class Horizon {
     float rain = 0, snow = 0;  // what falls (0..1)
     float fog = 0, wet = 0;    // how thick the air is, how wet the ground (0..1)
     float mist = 0;            // the mist on low ground this frame (World::mistNow)
+    float haze = 1;            // [hazeamt] the player's amount of haze (World::hazeMist): the standing fog banks by it
     float cloudCover = 0.3f;
     bool cold = false;         // a cold climate
     uint32_t seed = 1;         // the weather's seed (World::weatherSeed)

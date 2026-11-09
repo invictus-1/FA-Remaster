@@ -471,7 +471,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   std::memcpy(k.up, u4, sizeof k.up);
   std::memcpy(k.ahead, a4, sizeof k.ahead);
   // this frame's place inside each cell's depth: the golden ratio's steps, which spread evenly over frames
-  k.up[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
+  k.up[3] = std::fmod(static_cast<float>(frame_ % 610) * 0.6180339887f, 1.0f);  // (610: a Fibonacci number, so the wrap is near seamless and the float keeps its fraction)
   k.ahead[3] = haveLast_ ? std::clamp(unjittered ? std::min(keep, keepUpscaled) : keep, 0.0f, 0.98f) : 0.0f;  // ([airjitter])
   // [glitches] (letGo) less of last frame kept while the camera moves, and two places a cell then
   bool moving = false;
@@ -495,8 +495,8 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.cells[2] = static_cast<float>(depth_);
   k.range[0] = closest;
   k.range[1] = std::log(farthestNow / closest);
-  k.range[2] = std::max(dust, 0.0f);
-  k.range[3] = std::max(lampsInAir, 0.0f);
+  k.range[2] = DustNow();  // ([hazeamt])
+  k.range[3] = std::max(lampsInAir, 0.0f) / std::min(DustShare(), 1.0f);
   k.lastViewProj = lastViewProj_;
   const Vec3 eye = camera.Eye();
   k.lastEye[0] = lastEye_.x;
@@ -507,7 +507,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.lastRange[1] = floor;
   k.lastRange[2] = 1 / std::max(thinsOver, 1.0f);
   k.lastRange[3] = std::max(lampGlowInAir, 0.0f);
-  k.points[0] = std::max(pointsInAir, 0.0f);
+  k.points[0] = std::max(pointsInAir, 0.0f) / std::min(DustShare(), 1.0f);
   // (airfix) the ground, where the cells' air ends
   const bool ground = heights && heightUnit > 0 && mapWidth > 0 && mapHeight > 0;
   k.ground[0] = ground ? heightUnit : 0.0f;

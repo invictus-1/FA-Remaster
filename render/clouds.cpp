@@ -615,7 +615,7 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
       zoomedNow_ = false;
     }
   }
-  k.ahead[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
+  k.ahead[3] = std::fmod(static_cast<float>(frame_ % 610) * 0.6180339887f, 1.0f);  // (as the air's: the float keeps its fraction)
   k.size[0] = static_cast<float>(width_);
   k.size[1] = static_cast<float>(height_);
   k.size[3] = haveLast_ ? std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 0.97f) : 0.0f;

@@ -130,6 +130,7 @@ bool Effects::AttachPoint(const Frame& frame, uint32_t entity, int bone, Vec3* p
     Vec3 unitPosition = V(unit->position);
     Quat unitOrientation = Q(unit->orientation);
     const Model* model = remembered ? *remembered : nullptr;
+    if (!frame.blueprints || unit->blueprint >= frame.blueprints->size()) return false;  // (a frame taken mid-change)
     const std::string& blueprint = (*frame.blueprints)[unit->blueprint];
     auto loadModel = [&] {
       if (model) return;
@@ -329,6 +330,10 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
         ++curvesSet;
       }
     } else if (event.name == "AttachBeamToEntity") {  // a beam made without a place gets one
+      if (e.attached) {  // (hung on something before: that one let go of, as End does)
+        auto h = hanging_.find(e.entity);
+        if (h != hanging_.end() && --h->second <= 0) hanging_.erase(h);
+      }
       e.entity = event.entity;
       e.bone = event.bone;
       e.attached = true;

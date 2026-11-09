@@ -308,6 +308,22 @@ bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<Mod
       bone = static_cast<char>(to[static_cast<uint8_t>(bone)]);
     }
     vertices = renumbered.data();
+  } else if (!skeleton.empty() && skeleton.size() < 256) {
+    // (the bytes go to the card as they are, and its shader adds them to the unit's first row unchecked: a vertex that
+    // names a bone past the skeleton's last - a damaged or hand-edited file - would take another unit's bones. Such
+    // vertices are put on the first bone.)
+    const size_t at = offsetof(ScmVertex, bones);
+    bool past = false;
+    for (int64_t i = 0; i < vertexCount && !past; ++i)
+      past = static_cast<uint8_t>(vertices[static_cast<size_t>(i) * sizeof(ScmVertex) + at]) >= skeleton.size();
+    if (past) {
+      renumbered.assign(vertices, static_cast<size_t>(vertexCount) * sizeof(ScmVertex));
+      for (int64_t i = 0; i < vertexCount; ++i) {
+        char& bone = renumbered[static_cast<size_t>(i) * sizeof(ScmVertex) + at];
+        if (static_cast<uint8_t>(bone) >= skeleton.size()) bone = 0;
+      }
+      vertices = renumbered.data();
+    }
   }
   if (boneBoxes) {  // (battle scars, unit_wear.h: which bone's part of the model a hit lies on)
     boneBoxes->assign(std::max<size_t>(skeleton.size(), 1), Model::BoneBox{});
@@ -1007,6 +1023,9 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
         if (of->ok) {
           *m = *of;  // (the same buffers and textures)
           m->scale = scale;
+          // (a level's number stands for the level AND the model's scale wherever a drawn thing is kept by it: its own here,
+          // as FromDisplay gives a model made from another's levels)
+          for (ModelLod& lod : m->lods) lod.serial = NextLodSerial();
         }
       }
     }

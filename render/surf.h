@@ -85,8 +85,13 @@ float SurfOffset(float2 xz) {
   return 0.55 * sin(dot(xz, float2(0.0211, 0.0137))) + 0.35 * sin(dot(xz, float2(-0.0173, 0.0291)) + 1.7) +
          0.20 * sin(dot(xz, float2(0.047, -0.031)) + 4.1);
 }
+// Which crest of the thousand `n` is: the phase starts over at a thousand cycles (Surf::Update), and what a crest is like
+// is by this, so that the crests before and after that moment are the same ones (they were by `n` itself: every wave
+// on the map changed its size and its white at once, each seventy-five minutes to two hours).
+float SurfCrest(float n) { return n - 1000 * floor(n / 1000); }
 // How big one wave is (0.3 .. 1): `n` which crest (counted as the phase is), at a place; bigger ones come in sets.
 float SurfStrength(float n, float2 xz) {
+  n = SurfCrest(n);
   float s = 0.5 + 0.5 * sin(n * 0.897 + dot(xz, float2(0.013, 0.009)));
   float t = 0.5 + 0.5 * sin(n * 2.31 + dot(xz, float2(-0.029, 0.041)) + 2.0);
   return 0.3 + 0.7 * (0.65 * s * s + 0.35 * t);
@@ -138,7 +143,7 @@ float SurfStretchValue(SurfStretch s, uint salt) {
               lerp(SurfHash01(s.cell + int2(0, 1), salt), SurfHash01(s.cell + int2(1, 1), salt), s.share.x), s.share.y);
 }
 // How big wave `n` is on a stretch, against the map's (0.6 .. 1.4): the waves of a set do not break alike all along a shore.
-float SurfStretchSize(SurfStretch s, float n) { return 0.6 + 0.8 * SurfStretchValue(s, uint(int(n)) * 2u + 7u); }
+float SurfStretchSize(SurfStretch s, float n) { return 0.6 + 0.8 * SurfStretchValue(s, uint(int(SurfCrest(n))) * 2u + 7u); }
 
 // The surf at a place on the water (or on the beach just above it).
 struct SurfHere {
@@ -230,13 +235,18 @@ SurfHere SurfAt(float2 xz, float grain, float level, float2 mapSize, float4 area
   // changing); between the waves a little old foam lies, the more the rougher the sea
   // (the streaks: a noise fine across the shore, by the distance from it, and coarse along it)
   float streakShown = saturate(1.5 - grain * 6);  // (streaks finer than about two pixels: their mean)
-  float streaks = lerp(0.5, CloudNoise(float3(xz * 0.6, d * 3.2 + look.y * 0.4)), streakShown);
+  float streakAt = d * 3.2 + look.y * 0.4;
+  float streakNoise = CloudNoise(float3(xz * 0.6, streakAt));
+  // (the phase starts over at a thousand cycles: over the last two and a half the streaks go over to those of its start)
+  float streakOver = saturate((look.y - 997.5) / 2.5);
+  if (streakOver > 0) streakNoise = lerp(streakNoise, CloudNoise(float3(xz * 0.6, streakAt - 400)), streakOver);
+  float streaks = lerp(0.5, streakNoise, streakShown);
   // ([coast] its foot ragged by the streaks: a ruled edge else, the white band cut out with scissors)
   float faceWhite = face ? smoothstep(1 - fw, 1 - fw * 0.45, w + (streaks - 0.5) * fw * 0.5) : 0;
   float trail = face ? 0 : exp(-w * lerp(8, 6, rough)) * (0.25 + 1.2 * streaks);  // [coast] (in a storm 4.5: the trails ran together)
   // (each wave breaks along stretches of its crest, not all of it: by a noise of its own along the shore)
   float crestN = face ? n + 1 : n;
-  float stretches = saturate(CloudNoise(float3(xz * 0.15, crestN * 0.71)) * 2.4 - 0.5);
+  float stretches = saturate(CloudNoise(float3(xz * 0.15, SurfCrest(crestN) * 0.71)) * 2.4 - 0.5);
   // ([coast] and right up to the shore, where it was left out: every wave broke there all along the coast, an even white
   // edge; nor does every wave break white: the smaller ones of a set run in unbroken, `breaks`, but in a storm nearly all)
   float breaks = saturate((S - 0.25 * (1 - rough)) * 2.5);

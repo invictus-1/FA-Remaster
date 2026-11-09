@@ -238,6 +238,7 @@ struct FrameGeneration::Impl {
   Constants fi{};
   uint64_t dispatchCount = 0;
   bool toldSize = false;
+  int failedWidth = 0, failedHeight = 0, failedWait = 0;  // (the size its pictures could not be made for, and the frames until the next try)
 
   template <typename F>
   void EachTexture(F f) {  // the pictures made for a size
@@ -387,6 +388,12 @@ void FrameGeneration::Run(const Inputs& in, gfx::Texture output, int displayWidt
 
   // the pictures, made again for another display size or a larger size drawn (new contexts of AMD's: everything
   // starts over, as after a reset)
+  // (their pictures could not be made for this size a moment ago, the card out of memory: not asked for again every
+  // frame, dozens of large targets made and let go each time, but once in 300 frames)
+  if (m->failedWait > 0 && displayWidth == m->failedWidth && displayHeight == m->failedHeight) {
+    --m->failedWait;
+    return;
+  }
   bool remade = false;
   if (displayWidth != m->width || displayHeight != m->height || in.renderWidth > m->maxRenderWidth || in.renderHeight > m->maxRenderHeight ||
       !m->previousSource) {
@@ -446,7 +453,11 @@ void FrameGeneration::Run(const Inputs& in, gfx::Texture output, int displayWidt
     bool all = true;
     m->EachTexture([&](gfx::Texture& t) { all = all && t; });
     if (!all) {
-      fprintf(stderr, "render: FSR 3 frame generation: its pictures could not be made for %dx%d (drawn %dx%d)\n", w, h, rw, rh);
+      if (m->failedWidth != w || m->failedHeight != h)  // (said once a size)
+        fprintf(stderr, "render: FSR 3 frame generation: its pictures could not be made for %dx%d (drawn %dx%d)\n", w, h, rw, rh);
+      m->failedWidth = w;
+      m->failedHeight = h;
+      m->failedWait = 300;
       m->ReleaseTextures(d);
       return;
     }

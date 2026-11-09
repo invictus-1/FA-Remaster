@@ -229,12 +229,13 @@ void HiddenOutlines::Masks(MeshRenderer* meshes, const View& screen, gfx::Textur
   drawn = false;
   if (!marked || !mask_ || !lay_ || !sceneDepth || !meshes->MarkedDrawn()) return;
   const int w = screen.width, h = screen.height;
-  if (w != width_ || h != height_ || !masks_[0]) {
+  if (w != width_ || h != height_ || !masks_[0] || !masks_[1] || !depth_) {  // (any one not made: tried again, not drawn into)
     for (gfx::Texture& t : masks_) {
       if (t) device_->Destroy(t);
       t = {};
     }
     if (depth_) device_->Destroy(depth_);
+    depth_ = {};
     gfx::TargetDesc td;
     td.width = w;
     td.height = h;
