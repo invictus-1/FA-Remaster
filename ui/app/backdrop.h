@@ -80,6 +80,10 @@ class Backdrop : public BackdropSource {
   // interface); else the camera and the moment (`tick`, as WorldPicture takes it) to draw the
   // map from, at the window's `width` x `height`.
   bool TakeView(const render::WorldPicture& picture, int width, int height, render::Camera* camera, double* tick);
+  // The movie showed since the last TakeView (the main menu is up), without taking it (the flight's kept first frame is
+  // shown there while no world is: GameSession::GiveBackdrop).
+  bool ShownThisFrame() const { return shownThisFrame_; }
+  void EndFrame() { shownThisFrame_ = false; }  // (the frame drawn: a showing not taken by TakeView is not the next frame's)
   // The background's look on a picture just opened with the map: the evening, a low sun, some clouds.
   static void Dress(render::WorldPicture& picture);
   // End it (a game is starting: it has its own picture; or the scene's samples change): its own

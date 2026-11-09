@@ -1,8 +1,9 @@
 -- The Options dialog with our Remastered tab (Chris, 2026-11-08; docs/ui-options-layout.md): five tab buttons narrowed
 -- to fit the panel (ui/data/hook/lua/ui/dialogs/options.lua), the chosen one's lit picture as wide, each label inside
 -- its button; the Remastered tab's 51 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
--- Soak too: a slider and a toggle), "Go to Section" scrolling to a header, Video's "Show" button choosing the
--- Remastered tab, a hover on one of our titles showing its tip; OK saving what the preset set. In the front end:
+-- Soak too: a slider and a toggle) and showing Custom once one of them is changed by hand, "Go to Section" scrolling to
+-- a header, Video's "Show" button choosing the Remastered tab, a hover on one of our titles showing its tip; OK saving
+-- what the preset set. In the front end:
 --   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --lua ui/tests/options_tabs.lua
 --            --frames 300 --log out.log [--screenshot x.png -- /optcase top|water|video]
 -- With /optcase the dialog is left open for the picture: the Remastered tab's top (top), scrolled to Water (water),
@@ -141,6 +142,23 @@ ForkThread(function()
     Choose('remaster_preset', 0)
     set = WorkingSet() or {}
     check("Off: Unit Glow at Night 100, the original look", tostring(set.remaster_unit_glow) .. " " .. tostring(set.remaster_look), "100 original")
+
+    -- a look of the preset changed by hand: the preset shows Custom, as the game's Fidelity Presets do (its own setting of
+    -- the looks, sliders too, leaves it as chosen; a look chosen as the level has it changes nothing)
+    local function Preset() local c = Item('remaster_preset').control return c.keyMap[c:GetItem()] end
+    Choose('remaster_preset', 4)
+    check("Ultra chosen: its own setting of the looks (Sharpen's and Unit Glow's sliders too) leaves it Ultra", Preset(), 4)
+    Choose('remaster_atmosphere', 1)
+    check("Atmosphere chosen as Ultra has it: still Ultra", Preset(), 4)
+    Choose('remaster_atmosphere', 0)
+    check("Atmosphere turned off by hand: the preset shows Custom", Preset(), 5)
+    check("and the dialog's working set has Custom", (WorkingSet() or {}).remaster_preset, 5)
+    Choose('remaster_preset', 3)
+    check("High chosen: High again, Atmosphere on", Preset() .. " " .. tostring((WorkingSet() or {}).remaster_atmosphere), "3 1")
+    local sharpen = Item('remaster_sharpen').control
+    sharpen:SetValue(20)
+    sharpen:OnValueSet(sharpen:GetValue())
+    check("Sharpen's slider let go of at 20 by hand (High: 50): Custom", Preset(), 5)
     Choose('remaster_preset', 1)
 
     -- Go to Section
