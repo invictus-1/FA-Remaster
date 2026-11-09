@@ -380,6 +380,7 @@ float Surf::Offset(float x, float z) {
 }
 
 float Surf::Strength(float n, float x, float z) {
+  n -= 1000 * std::floor(n / 1000);  // (which crest of the thousand: the shader's SurfCrest)
   const float s = 0.5f + 0.5f * std::sin(n * 0.897f + x * 0.013f + z * 0.009f);
   const float t = 0.5f + 0.5f * std::sin(n * 2.31f - x * 0.029f + z * 0.041f + 2.0f);
   // [coast] times the stretch's own size of wave n

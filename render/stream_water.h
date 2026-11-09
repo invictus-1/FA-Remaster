@@ -92,6 +92,9 @@ class StreamWater {
   // sun's and the lamps' shadow maps and the small lights bound as for the sea. `standing`: whether the prop of that key
   // is still there (the game may remove scenery). `whiteWater`: [stream mouth] the white water alone (after the sea; `behind`
   // is not read), else the water alone (before the sea).
+  // Is any of the streams' water in `view` (`standing` as Draw's)? Where none is, the host need not copy the scene for
+  // them to see through to.
+  bool InView(const View& view, const std::function<bool(uint32_t)>& standing) const;
   void Draw(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth, gfx::Texture heights, float heightUnit,
             float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing, bool whiteWater = false);
 

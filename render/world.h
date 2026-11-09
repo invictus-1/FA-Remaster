@@ -1050,6 +1050,7 @@ class World {
     uint32_t stamp = 0;
   };
   std::unordered_map<uint32_t, HullSeen> hullsSeen_;
+  uint32_t hullsSwept_ = 0;  // (the frame its forgotten ones were last looked for)
   Ranges ranges;          // range rings, each group as one outline (set ranges.groups)
   PlacedMeshes placedDraw;  // what of `placed` is not an ordinary lit model
   OrderLines orders;        // the order lines while Shift is held (order_lines.h: the host sets orders.legs, marks)

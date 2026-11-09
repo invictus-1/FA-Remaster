@@ -537,6 +537,8 @@ void World::RestartGame() {
   impactBornNext_.clear();
   moving_.clear();
   hullsSeen_.clear();
+  deaths_.clear();  // [fogglow] (the new game hands the same unit numbers out again: none of them has died in it)
+  deathsTold_.clear();
   leftSlabs_.clear();
   buildingNow_.clear();
   remembered_.clear();
@@ -803,9 +805,11 @@ void World::ListHull(uint32_t id, const Model* model, Vec3 position, const Quat&
   const Vec3 forward = Rotate(orientation, {0, 0, 1});
   water.ocean.AddHull(middle.x, middle.z, forward.x, forward.z, (model->boundsMax.z - model->boundsMin.z) * 0.46f * model->scale,
                       (model->boundsMax.x - model->boundsMin.x) * 0.46f * model->scale, seen.speed, rode);
-  // (those not seen for a while forgotten)
-  if (hullsSeen_.size() > 256)
+  // (those not seen for a while forgotten: looked for once in a while, not for every ship of a large navy)
+  if (hullsSeen_.size() > 256 && frameStamp_ - hullsSwept_ >= 120) {
+    hullsSwept_ = frameStamp_;
     for (auto it = hullsSeen_.begin(); it != hullsSeen_.end();) it = frameStamp_ - it->second.stamp > 600 ? hullsSeen_.erase(it) : std::next(it);
+  }
 }
 
 bool World::RideWaves(const Model* model, Vec3* position, Quat* orientation, Ocean::Bob* rode, float* sunk) const {
@@ -1072,8 +1076,11 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
 // starts as the rule has it (a unit just built lights at once, as before).
 void World::FlushLamps() {
   if (steadyLamps) {
-    const float step = lampClock_ < 0 ? 1.0f : std::clamp(static_cast<float>(time_ - lampClock_), 0.0f, 0.1f) * 4.0f;
-    lampClock_ = time_;
+    // (a side picture with its own time - the minimap's ground at time 0 - moves no lamp's level and leaves the game's
+    // clock alone: the game's next frame would step by the whole way back from it)
+    const bool aside = sidePicture && !extraView;
+    const float step = aside ? 0.0f : lampClock_ < 0 ? 1.0f : std::clamp(static_cast<float>(time_ - lampClock_), 0.0f, 0.1f) * 4.0f;
+    if (!aside) lampClock_ = time_;
     ++lampStamp_;
     std::vector<uint32_t> order(pendingLamps_.size());
     for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
@@ -1376,6 +1383,9 @@ float World::AdvanceWeather(float time, double clock) {
     fog = now.fog;
     if (climateNow == Climate::Autumn) fog = std::max(fog, AutumnMorningFog(weatherSeed, timeOfDay));  // [seasons] (its mornings' fog)
   }
+  // (a side picture with its own time - the minimap's ground at time 0 - shows the weather as it is and moves nothing on:
+  // with the clock set to its time the game's next frame took half a second of rain, snow and covered tracks in one step)
+  if (sidePicture && !extraView) return 0;
   const float dt = weatherTime_ < 0 ? 0 : std::clamp(time - weatherTime_, 0.0f, 0.5f);
   weatherTime_ = time;
   wet = std::clamp(wet + dt / 15 * SetIn(rain) - dt / 120 * (1 - SetIn(rain)), 0.0f, 1.0f);  // ([onset] by how far it has set in)
@@ -2974,6 +2984,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     for (const FrameUnit& u : frame.units)
       if (u.dead && deathsTold_.insert(u.id).second)
         deaths_.push_back({{u.position[0], u.position[1], u.position[2]}, clock_, u.recon == 0xff || u.Seen() || (u.recon & 0x10) != 0});
+    // (a clock that went back - a replay run again from an earlier moment: the units that died after it live again, and
+    // die again to be told)
+    if (std::any_of(deaths_.begin(), deaths_.end(), [&](const KnownDeath& d) { return clock_ < d.when - 1; })) deathsTold_.clear();
     deaths_.erase(std::remove_if(deaths_.begin(), deaths_.end(), [&](const KnownDeath& d) { return clock_ - d.when > 60 || clock_ < d.when - 1; }),
                   deaths_.end());
     if (deathsTold_.size() > 8192) deathsTold_.clear();
@@ -3242,7 +3255,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // fog shows no life bar, only its name and owner on hover; its work and its shield are not the army's to know either)
     const float health = photo ? photo->health : u.health, maxHealth = photo ? photo->maxHealth : u.maxHealth;
     if (!blip && !blueprint.empty() && (u.Seen() || photo) && !allHidden) {
-      const StrategicIcons::Kind* kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
+      // (the kind as looked up once for the blueprint above, where it was found)
+      const StrategicIcons::Kind* kind = u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr;
+      if (!kind) kind = icons.ForBlueprint(models.UnitBlueprintPath(blueprint));
       const bool own = focusArmy < 0 || static_cast<int>((u.id >> 20) & 0xff) == focusArmy;
       const float away = Length(position - view.eye);
       const bool isSelected = !selected.empty() && selected.count(u.id) != 0;
@@ -3415,6 +3430,11 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       } else if (const WearLook* w = WearOf(u.id, model)) {
         meshes.Wear(*w);
       }
+      // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
+      // an enemy's in sight - and finished; never a building drawn as it was remembered. Before its veil: MarkLast marks
+      // the model added last, and the veil, see-through, writes no outline: a veiled unit had none.)
+      if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
+        MarkOutline(model, drawAt, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (veiled) {  // ([stealthlook] its veil, after its wear: Wear takes the model added last)
         const Vec3 tint{0.35f, 0.62f, 0.78f};
         // ([veilshake] no key of its own: Chris's second test, 2026-11-04, "stealth overlay shakes units and structures up and
@@ -3427,10 +3447,6 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         meshes.Add(model, Mat4::FromTRS(drawAt, drawTurn, model->scale * 1.035f), color, 1.375f, &pose, &tint, nullptr, 0);
         meshes.SeeThroughGhost();
       }
-      // (its outline where it is hidden, hidden_outlines.h: only what the player may see of it now - his own, an ally's,
-      // an enemy's in sight - and finished; never a building drawn as it was remembered)
-      if (outlinesNow_ && u.Seen() && !asRemembered && fractionComplete >= 1 && !allHidden)
-        MarkOutline(model, drawAt, IconColor(u.Army(), color), building, u.id, u.blueprint < iconKinds_.size() ? iconKinds_[u.blueprint] : nullptr);
       if (u.fractionComplete >= 1 && u.Seen() && !cloaked) AddLamps(model, drawAt, drawTurn, &pose, &color, u.id, building);  // ([stealthlook] a cloaked one: none)  // ([lift] riding the waves with it)
       // (movement dust: what the army sees moving raises dust, spray or contrails)
       if (dustNow_ && u.Seen() && !asRemembered && fractionComplete >= 1) dust.AddUnit(u.id, blueprint, model, position, orientation);
@@ -3807,7 +3823,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
 void World::PressUnit(const FrameUnit& u, const Frame& frame, const std::string& blueprint, const Model* model, Vec3 position, const Quat& orientation) {
   if (blueprint.empty() || !model || !model->ok) return;
   // (a walker by the bones that stand for its feet, where its pose has them)
-  const std::string path = models.UnitBlueprintPath(blueprint);
+  const std::string& path = models.UnitBlueprintPath(blueprint);
   Vec3 feet[8];
   float turns[8] = {};  // [hdprints] (how far each foot is turned from the unit's way, from its rest: its own sole turned with it)
   int footCount = 0;
@@ -3955,22 +3971,29 @@ void World::PreparePlants() {
   if (!meshes.PreparePlants()) return;
   if (groundCover && grassMade_) grass.PreparePlants();
   std::vector<float> boxes;
+  // (the field's square: only what stands in it presses. The boxes were once taken in the order the models were added, the
+  // first 256 of the whole map, and the field's own cull came after: in a large game the units under the camera were
+  // past the 256th, and pressed nothing. No square: the camera too far for anything to be pressed, no boxes at all.)
+  float square[4];
+  const bool field = plantLife.FieldSquare(camera, square);
   // (a model's box on the ground, from its bounds, turned as it is: `row0..2` the world matrix's top three rows)
   auto press = [&](const Model* model, const float* row0, const float* row1, const float* row2) {
     const Vec3 lo = model->boundsMin, hi = model->boundsMax;
     const float cx = 0.5f * (lo.x + hi.x), cz = 0.5f * (lo.z + hi.z);
     const float x = row0[0] * cx + row0[2] * cz + row0[3], z = row2[0] * cx + row2[2] * cz + row2[3];
-    const float bottom = row1[0] * cx + row1[1] * lo.y + row1[2] * cz + row1[3];
-    if (bottom > GroundHeight(x, z) + 1.0f) return;  // (in the air)
     // (its forward and sideways ways on the ground, and its half length and width in the world)
     const Vec3 forward{row0[2], row1[2], row2[2]}, side{row0[0], row1[0], row2[0]};
+    const float halfLength = 0.5f * (hi.z - lo.z) * Length(forward) * 0.95f, halfWidth = 0.5f * (hi.x - lo.x) * Length(side) * 0.95f;
+    const float r = halfLength + halfWidth;
+    if (x + r < square[0] || z + r < square[1] || x - r > square[2] || z - r > square[3]) return;  // (not in the field)
+    const float bottom = row1[0] * cx + row1[1] * lo.y + row1[2] * cz + row1[3];
+    if (bottom > GroundHeight(x, z) + 1.0f) return;  // (in the air)
     const float flat = std::sqrt(forward.x * forward.x + forward.z * forward.z);
     if (flat < 1e-5f) return;
-    boxes.insert(boxes.end(), {x, z, forward.x / flat, forward.z / flat, 0.5f * (hi.z - lo.z) * Length(forward) * 0.95f,
-                               0.5f * (hi.x - lo.x) * Length(side) * 0.95f, 0, 0});
+    boxes.insert(boxes.end(), {x, z, forward.x / flat, forward.z / flat, halfLength, halfWidth, 0, 0});
   };
-  meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
-    if (scenery || !model || !model->ok || model->lods.empty() || boxes.size() >= 8 * 256) return;
+  if (field) meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float*, bool scenery) {
+    if (scenery || !model || !model->ok || model->lods.empty()) return;
     const ModelLod& l = model->lods[0];
     if (l.glass || l.shield || l.impact || l.frame || l.nuke || l.fades || l.unlit || l.shell) return;  // (light, not a body)
     press(model, row0, row1, row2);
@@ -3978,8 +4001,7 @@ void World::PreparePlants() {
   // [groundfix] the game's wrecks are scenery (left out above), yet a wreck lies on what grows under it: each unit's wreck
   // in the squares under the field presses it as a unit's box does, for as long as it lies (gone, reclaimed: the plants
   // rise again). Through the props' squares, not every made prop: a game breaks its tree groups up into thousands.
-  float square[4];
-  if (!propCells_.empty() && plantLife.FieldSquare(camera, square)) {
+  if (!propCells_.empty() && field) {
     const int cx0 = std::clamp(static_cast<int>((square[0] - propReach_) / kPropCell), 0, propCellsX_ - 1);
     const int cz0 = std::clamp(static_cast<int>((square[1] - propReach_) / kPropCell), 0, propCellsZ_ - 1);
     const int cx1 = std::clamp(static_cast<int>((square[2] + propReach_) / kPropCell), 0, propCellsX_ - 1);
@@ -3987,12 +4009,24 @@ void World::PreparePlants() {
     for (int cz = cz0; cz <= cz1; ++cz)
       for (int cx = cx0; cx <= cx1; ++cx)
         for (uint32_t id : propCells_[static_cast<size_t>(cz) * static_cast<size_t>(propCellsX_) + static_cast<size_t>(cx)].made) {
-          if (boxes.size() >= 8 * 256) break;
           auto made = madeProps_.find(id);
           if (made == madeProps_.end() || !made->second.unitWreck || !made->second.model || !made->second.model->ok) continue;
           const Mat4& m = made->second.world;
           press(made->second.model, m.m[0], m.m[1], m.m[2]);
         }
+  }
+  // (more in the field than the pass takes, PlantLife::kMostBoxes: the nearest to the field's middle are kept)
+  if (boxes.size() > 8 * static_cast<size_t>(PlantLife::kMostBoxes)) {
+    const float mx = 0.5f * (square[0] + square[2]), mz = 0.5f * (square[1] + square[3]);
+    std::vector<std::pair<float, uint32_t>> order(boxes.size() / 8);
+    for (size_t i = 0; i < order.size(); ++i) {
+      const float dx = boxes[i * 8] - mx, dz = boxes[i * 8 + 1] - mz;
+      order[i] = {dx * dx + dz * dz, static_cast<uint32_t>(i)};
+    }
+    std::nth_element(order.begin(), order.begin() + PlantLife::kMostBoxes, order.end());
+    std::vector<float> kept(8 * static_cast<size_t>(PlantLife::kMostBoxes));
+    for (int i = 0; i < PlantLife::kMostBoxes; ++i) std::copy_n(&boxes[order[i].second * 8], 8, &kept[static_cast<size_t>(i) * 8]);
+    boxes.swap(kept);
   }
   plantLife.WatchBlasts(blasts, clock_, decals.groundHeight);
   particles.HotEmitters(camera.target, 64, &plantFires_);
@@ -4223,6 +4257,7 @@ void World::Render() {
     CpuTimes::Part("bones posed");
     meshes.Prepare(views);
   }
+  sight.Upload();  // (the fog of war's picture, where a new grid came since the last frame: sight.h)
   if (!extraView) PreparePlants();  // [plants] ([views] the first view's press and burns kept for the others) (plants that react: what presses and burns them; it draws and dispatches, before the scene's pass)
   if ((rayView || bounceNow_ || reflectNow_ || lightRaysNow_) && RaysReady()) {  // the ray tracing scene, from the models just prepared
     Stage("ray tracing scene");
@@ -4634,13 +4669,17 @@ void World::Render() {
     skyDraw.Draw(view, camera, skyLight, haveMap_ ? sky_ : gfx::Texture{}, clouds.Picture());  // where nothing solid is
     if (streamNow_) {  // [stream] the streams as water (stream_water.h): over what is solid, under the sea, seeing through to a copy
       Stage("stream water");
-      if (post.CopyBehind()) {
+      // (only with a stream in the view: the whole scene was copied for them every frame, anywhere on a map that has one)
+      const std::function<bool(uint32_t)> standing = [this](uint32_t key) { return key < props_.size() && props_[key].model != nullptr; };
+      if (!streams.InView(view, standing)) {
+        streams.drawn = streams.triangles = 0;
+      } else if (post.CopyBehind()) {
         post.BeginColorOnly();
         lights.Bind();
         device_->SetTexture(kShadowMapSlot, shadows.Map());
         device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
         streams.Draw(view, camera, post.Behind(), post.Depth(), terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width),
-                     static_cast<float>(map.height), [this](uint32_t key) { return key < props_.size() && props_[key].model != nullptr; });
+                     static_cast<float>(map.height), standing);
         post.ContinueScene();
         lights.Bind();
       }
@@ -4721,7 +4760,9 @@ void World::Render() {
       grass.DrawMotion(view, motion.Texture(), post.Depth(), motion.Now(), motion.Before(), motion.TimeBefore());
     if (leavesNow_ && motionView != 4)  // [groundfix] the falling leaves' own motion, over it
       leaves.DrawMotion(view, motion.Texture(), post.Depth(), motion.Now(), motion.Before(), terrain.HeightTexture(), terrain.HeightUnit());
-    post.KeepOpaque();  // (the solid scene and the water, for the upscaler's reactive mask)
+    // (the solid scene and the water, for the upscaler's reactive mask: only where something reads it, the upscaler or
+    // the mask's own view; the motion alone, for the blur or the generated frames, copied the whole scene for nothing)
+    if (temporalNow_ || motionView == 5) post.KeepOpaque();
     post.ContinueScene();
     lights.Bind();
   }
