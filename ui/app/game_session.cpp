@@ -736,9 +736,9 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
 // Shadows and Ground Detail; no Weather Effects (its weather is fixed and fair). Ray Tracing as the player has it: what
 // is fixed when a map opens (the renderer's answer to ui request 49, R2: ray tracing's shaders, with the texture detail
 // and the season, which BeginWindowMap gives) is the game's, so that a game on SETONS_R can take the flight's world over
-// (KeepMenuMap); its lighter look comes after the swap from setters that act per frame only (FlightFrameLooks). The
-// world's own switches as the player has them (WorldLooks, the map's `before`: battle effects, energy shields ...). The
-// upscaler and the effects' quality as a picture starts (StartAfresh).
+// (KeepMenuMap); its menu look (the player's, without weather effects and frame generation) comes after the swap from
+// setters that act per frame only (FlightFrameLooks). The world's own switches as the player has them (WorldLooks, the
+// map's `before`: battle effects, energy shields ...). The upscaler and the effects' quality as a picture starts (StartAfresh).
 void FlightLooks(render::WorldPicture& p, std::function<void(render::World&)>* before) {
   const LookSettings looks = Looks();
   p.HoldLooks(true);
@@ -749,15 +749,16 @@ void FlightLooks(render::WorldPicture& p, std::function<void(render::World&)>* b
   p.SetGroundDetail(looks.groundDetail);
   *before = [looks](render::World& w) { WorldLooks(w, looks, true); };
 }
-// The flight's lighter look once its world shows (after SwapMap or RestartMap, nothing held), by setters the renderer
-// names as acting per frame (R2): ray tracing off (its bounce light, reflections and the small lights' shadows stop at
-// once, render/world_picture.h SetRayReflections; the shaders built at the opening stay, world_picture.cpp gRayShaders =
-// the load's `rays`, so a game taking the world over turns it on again: INFERRED from ApplyBundlesTo, no renderer test of
-// off-and-on on one map), no Weather Effects; the player's Atmosphere, Soft Shadows and Ground Detail (also as a game's
-// world after the menu's flight laid the picture's own back: a swap behind a game's world gives StartAfresh's first).
+// The flight's look once its world shows (after SwapMap or RestartMap, nothing held), by setters the renderer names as
+// acting per frame (R2): the PLAYER'S looks, ray tracing included (the renderer's R4 at 4K, 2026-11-09: full looks
+// 8.0 / 10.0 ms median / p95 over the whole battle, the lighter look 6.4 / 7.7, "keep the player's full looks: 8 ms is
+// far inside a 60 cap"; a weak card follows the player's own preset); its ray tracing off-then-on on one world gives
+// full ray tracing again (the renderer confirmed, world.cpp World::Begin). No Weather Effects (the flight's weather is
+// fixed) and no frame generation; the player's Atmosphere, Soft Shadows and Ground Detail (also as a game's world after
+// the menu's flight laid the picture's own back: a swap behind a game's world gives StartAfresh's first).
 void FlightFrameLooks(render::WorldPicture& p) {
   const LookSettings looks = Looks();
-  p.SetRayTracing(false);
+  p.SetRayTracing(looks.rayTracing);
   p.SetWeatherEffects(false);
   p.SetFrameGeneration(false);
   p.SetAtmosphere(looks.atmosphere);
@@ -3002,10 +3003,10 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   ++mapsBegun_;
   {
     // (what it opens with that stays until the next opening: a game's as the player has them; the menus' the player's
-    // Texture Detail, the summer, ray tracing only for the flight's)
+    // Texture Detail, the flight's the player's Season (MenuSeason) and its ray tracing, the dusk background's the summer)
     const LookSettings looks = Looks();
     const bool rays = (game || map == MenuFlight::kMap) && looks.rayTracing && p.RayTracingSupported();
-    wp.pendingWith = WindowPicture::OpenedWith{looks.textureDetail, game && looks.season == 1 ? 1 : 0, rays};
+    wp.pendingWith = WindowPicture::OpenedWith{looks.textureDetail, game ? (looks.season == 1 ? 1 : 0) : MenuSeason(map), rays};
   }
   Logf(LogLevel::Info, "moho64ui: the window's picture opens %s behind (%s)", map.c_str(), game ? "the game's map" : "the menus' background");
 #else
@@ -3187,7 +3188,7 @@ void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
     return;
   }
   flightGiven_ = false;
-  FlightFrameLooks(p);  // (its lighter look, per frame only: the map stays as a game would open it)
+  FlightFrameLooks(p);  // (its menu look, per frame only: the map stays as a game would open it)
   p.SetFocusArmy(0);
   p.SetLifeBars(false);
   p.SetSelectionMarks(false);
@@ -3625,7 +3626,7 @@ void GameSession::OpenPicture() {
       // session given to the picture as after a swap. If the renderer cannot (no world, a photo being made), the map is
       // opened again below, as for a game loaded before the window, and swapped in once ready (OpenPictureIfDue).
       // A game launched from the main menu on its flight's map (KeepMenuMap) likewise: the flight's world taken over,
-      // the game's looks laid back on it first (the flight's lighter look, its evening and its picture's settings go).
+      // the game's looks laid back on it first (the flight's menu look, its evening and its picture's settings go).
       keepMap_ = false;
       const bool fromMenu = keepMenuMap_;
       keepMenuMap_ = false;
