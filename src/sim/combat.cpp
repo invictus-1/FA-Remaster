@@ -543,7 +543,14 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // already stepped in this beat is aimed at where the beat began with it (ours: its held shape).
     const Vec3& cp = e->shapeHeld ? e->shapePos : e->position;
     const Quat& cq = e->shapeHeld ? e->shapeOri : e->orientation;
-    if (e->kind == Entity::Kind::Projectile && e->blueprint) return Add(cp, RotateM(cq, e->bpCenter));
+    // A prop the same (0x679d19: the entity's blueprint, +0x6c: CollisionOffsetX, SizeY x 0.5 + CollisionOffsetY,
+    // CollisionOffsetZ turned by the committed orientation and added to the place; no scale). Seen: setons_1 6486, army
+    // 0's ACU (uel0001, RightZephyr) shooting the prop 0x2ff0017e: the original's solver (probe v3840i_s1_aim) aims at
+    // (480.8622, 19.46288, 544.7604), ours at the prop's origin (480.865265, 19.4129715, 544.76001); our laser flew 7 mm
+    // under the terrain in its 6493 step and hit there (impact 6494, one OnImpact Random too many), the original's hit
+    // the terrain at 6497 (probe v3840i_s1_impact).
+    if ((e->kind == Entity::Kind::Projectile || e->kind == Entity::Kind::Prop) && e->blueprint)
+      return Add(cp, RotateM(cq, e->bpCenter));
     return cp;
   }
   return NaNVec();
