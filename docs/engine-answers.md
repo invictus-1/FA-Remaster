@@ -294,9 +294,9 @@ Ours does the same with a pending flag (`Entity::refreshUI`) and the beat's copy
 FAF calls RequestRefreshUI when an enhancement finishes, so read `refreshUI` in the beat's views and rebuild the unit's
 panel then.
 
-## visuals (by message, 2026-10-21): the Izanagi holding still while Divine Judgment fires — answered
+## visuals (by message, 2026-10-21): a private mod's air experimental holding still while its main weapon fires — answered
 
-Chris's design: the Izanagi (MIA0401, a winged air unit) stops and holds in the air for the bow opening, the 3 s
+Chris's design: a private mod's air experimental (a winged air unit) stops and holds in the air for the bow opening, the 3 s
 charge and the beam (about 9 s), preferably CZAR-like, then flies on as a bomber. Helper ct read the exe and tested in
 ours (headless, with mod_r2 read in place).
 
@@ -376,7 +376,7 @@ Helper ct read each item in the exe. Only item 1 needed engine code.
     `Writer.WarpEntity(id, q.w, q.x, q.y, q.z, cursorX, cursorY, cursorZ)` with its current orientation (any y).
   - Show the sim's prints, and let UserSync's `print` reach the screen as the console overlay does.
 
-**2. The Izanagi's area of effect: its blueprint.** DamageRadius was 0 on its guns and missiles, and FAF's
+**2. The private air experimental's area of effect: its blueprint.** DamageRadius was 0 on its guns and missiles, and FAF's
 Projectile.DoDamage calls DamageArea only above 0. Visuals' mod_r2 sets 2.5 / 2 / 1 / 0.5, and our DamageArea (as
 0x737680) hits units in each radius. Measured against 98 enemy tanks: 0.5 PD 431 hits, 1 Rippers 2912, 2 missiles
 320, 2.5 casemates 322.
@@ -541,7 +541,7 @@ cause. The interface now writes the build's commit into every game's .seed file.
   answered the default. New in the views (13a6e16): `UnitStateView::stats`, every number stat a unit's scripts set,
   sorted by name. The original's GetStat (0x8c3160) reads an object kept on the user unit (+0x148); that it is
   the synced copy of the sim unit's stats is inferred. The interface's GetStat reads `stats` now.
-- Chris's Mitsurugi drones cost 0 mass, so every kill was a full level for them; on Chris's choice they are now
+- The drones of Chris's private mod cost 0 mass, so every kill was a full level for them; on Chris's choice they are now
   excluded from veterancy (visuals: General.ExcludeFromVeterancy).
 
 **2. The T2 missile launcher: the original's behaviour.**

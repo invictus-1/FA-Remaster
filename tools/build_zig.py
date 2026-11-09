@@ -50,7 +50,9 @@ def main():
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
     os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
-    common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
+    # -mcpu=x86_64_v2: SSE4.2 and POPCNT, every processor since about 2009 (Chris, 2026-11-09; the README names it).
+    # The results are the same as the plain x86-64 build's (the gate), the sim's beat about 2.7% shorter.
+    common = ["-O2", "-mcpu=x86_64_v2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     lua_inc = ["-I", os.path.join(ROOT, "third_party", "lua")]
     zlib_inc = ["-I", os.path.join(ROOT, "third_party", "zlib")]
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]

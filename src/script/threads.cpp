@@ -361,12 +361,15 @@ void ThreadScheduler::Step(Thread& t) {
   // yield(0) / WaitTicks(0): the task runs again at once, in the same dispatch. The count is an integer: a
   // fraction below 1 is 0 too (seen: FAF's Projectile.RetargetThread does WaitTicks(0.5) and the original has
   // already set the new lifetime in the Lua pass in which that thread first runs)
-  if (static_cast<int>(n) <= 0) {
+  // (a number outside the int range, WaitTicks(math.huge), is undefined to cast: it waits as long as an int can;
+  // a NaN counts as 0)
+  const int ticks = n != n ? 0 : n >= 2147483647.0 ? 2147483647 : n <= -2147483648.0 ? -2147483647 - 1 : static_cast<int>(n);
+  if (ticks <= 0) {
     t.wakeTick = tick_;
     t.again = true;
     return;
   }
-  int wait = static_cast<int>(n) - 1;
+  int wait = ticks - 1;
   if (wait < 1) wait = 1;
   t.wakeTick = tick_ + static_cast<uint32_t>(wait);
 }

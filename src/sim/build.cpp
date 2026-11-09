@@ -236,7 +236,7 @@ bool LocationIsFree(Sim& sim, const BlueprintInfo& bp, const UnitBpData& d, floa
   // clears Land+Seabed / Water where a structure holds the land / water grid over the footprint (0x720e58..
   // 0x720eba; GetRectOr 0x8d8460). No BuildOnLayerCaps, flatness, deposit or skirt test on this path. Our
   // occupancy grid does not tell land structures from water ones: a structure there clears both (as SquadFitsAt).
-  // Seen (Skirmish): M28AI asks brain:CanBuildStructureAt('mis0401', ...) (a Mitsurugi naval experimental it takes
+  // Seen (Skirmish): M28AI asks brain:CanBuildStructureAt with a mod's naval experimental (a unit, which it takes
   // as its size-11 "building") on land; the original answers false, ours took the structure path and said true,
   // so M28's buildable-location lists differed from 2.2 s on.
   // (sim/placement_test.h, read from the running simulation)
