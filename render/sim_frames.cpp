@@ -801,7 +801,7 @@ bool SimFrames::UnitAt(double tick, uint32_t id, float position[3], float orient
   if (!u) return false;
   std::vector<FrameUnit> blended;
   const FrameUnit* v = b && t > 0 ? find(b->units) : nullptr;
-  BlendUnits(u, 1, v, v ? 1 : 0, t, &blended, 0);  // (the same blend as the frame's)
+  BlendUnits(u, 1, v, v ? 1 : 0, t, &blended, 0, b ? farStep * static_cast<float>(b->tick - a.tick) : 0);  // (the same blend as the frame's)
   std::memcpy(position, blended[0].position, sizeof blended[0].position);
   std::memcpy(orientation, blended[0].orientation, sizeof blended[0].orientation);
   return true;
@@ -830,7 +830,7 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   if (b) out->bones.insert(out->bones.end(), b->bones.begin(), b->bones.end());
   out->blend = t;
   BlendUnits(a.units.data(), a.units.size(), b ? b->units.data() : nullptr, b ? b->units.size() : 0, t, &out->units,
-             static_cast<uint32_t>(a.bones.size()));
+             static_cast<uint32_t>(a.bones.size()), b ? farStep * static_cast<float>(b->tick - a.tick) : 0);
   // projectiles: between this beat and the next (a beat is a tenth of a second)
   out->projectiles = a.projectiles;
   const float span = b ? 0.1f * static_cast<float>(b->tick - a.tick) : 0;  // seconds from this beat to the next

@@ -290,7 +290,10 @@ struct Frame {
 // in `b`, or is another unit there (ids are reused), stays as it is in `a`.
 // Bones: a unit keeps `a`'s span and gets, as its next span, `b`'s moved by `nextBoneOffset` (where
 // the caller puts `b`'s bones in the frame's list behind `a`'s); without `b`, its own span again.
+// (far step) `farStep` > 0: a unit that is farther than this from where it was a beat before (world units) was not
+// moved there but set there (a teleport, a script's Warp): it is not drawn on the way between, it stands as in `a`
+// for the first half of the beat and as in `b` for the second, bones and all. 0: every unit is moved, as it was.
 void BlendUnits(const FrameUnit* a, size_t countA, const FrameUnit* b, size_t countB, float t, std::vector<FrameUnit>* out,
-                uint32_t nextBoneOffset = 0);
+                uint32_t nextBoneOffset = 0, float farStep = 0);
 
 }  // namespace render
