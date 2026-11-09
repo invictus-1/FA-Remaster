@@ -11,6 +11,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "draw/draw.h"
 #include "maui/lazyvar.h"
@@ -187,9 +188,19 @@ class UiManager {
 
   // Make the root frame of each head the way the original does (0x7961b0): an instance of the
   // script class Frame from /lua/maui/frame.lua, then Left = Top = 0, Width and Height = the
-  // head's size in pixels.
-  bool CreateRootFrames(lua_State* L, int width, int height);
-  void Resize(int width, int height);
+  // head's size in pixels. One frame per entry of `sizes` (width, height), head 0 first: the
+  // original's UI manager makes one per head of its device (0x84cc50: CMauiFrame::Create at
+  // 0x84cdfc in a loop over [ctx+0x38], each sized by its own head's virtual +0x198,
+  // 0x84ceae..0x84cf3d), so each head is its own space from 0,0 at its own size. Returns the
+  // number of the head whose frame could not be made, or -1 when all were.
+  int CreateRootFrames(lua_State* L, const std::vector<std::pair<int, int>>& sizes);
+  // A head's frame takes a new size (head 0 without `head`).
+  void Resize(int width, int height) { Resize(0, width, height); }
+  void Resize(int head, int width, int height);
+  // A head's window changed its size (IUIManager::OnResize 0x84cfc0, READ): with a frame for that head, the frame
+  // takes the size (CMauiFrame::SetBounds 0x796550), then uimain.OnApplicationResize(head, width, height)
+  // (MAUI_OnApplicationResize 0x83d9c0: FAF's deselects).
+  void OnResize(lua_State* L, int head, int width, int height);
   Frame* GetFrame(int head) const;
   int NumFrames() const { return static_cast<int>(frames_.size()); }
   bool initialized() const { return !frames_.empty(); }
@@ -197,6 +208,7 @@ class UiManager {
   void Update(lua_State* L, float seconds);
   // Draw a head's controls onto a target, in the original's order.
   void Render(lua_State* L, DrawTarget& target, int head);
+  int renderingHead = 0;  // (the head Render draws now: a picture over the whole of head 1 is not offered to the card)
   // Log the tree of every head: one line per control with its class, name, rectangle, depth and state.
   void Dump() const;
   int CountControls() const;
@@ -211,7 +223,11 @@ class UiManager {
   // view the mouse is in, 0x871171): the place under the mouse is asked of it (GetMouseWorldPos 0x842c30 reads +0x4b4;
   // over the minimap it is the minimap's place). Null: none yet, or it died (maui/worldview.cpp CursorView).
   Control* cursorView = nullptr;
-  float mouseX = 0, mouseY = 0;            // where the mouse was last reported
+  float mouseX = 0, mouseY = 0;            // where the mouse was last reported, in mouseHead's pixels
+  // The head the mouse was last reported on (UiEvent::head): each head's frame is its own space from 0,0, so mouseX
+  // and mouseY are that head's pixels. INFERRED (the original: one event mapper per head window, its own root frame
+  // at [mapper+0x2c], 0x7a4ab2).
+  int mouseHead = 0;
   int draggerRef = LUA_NOREF;              // the active dragger's script table (PostDragger), if any
   int draggerKey = 0;                      // the key code whose release ends it
   Control* engineDragger = nullptr;        // a control dragging by itself (an edit field's mouse selection)
@@ -232,11 +248,12 @@ class UiManager {
 
  private:
   std::vector<Frame*> frames_;
-  int width_ = 0, height_ = 0;
+  std::vector<std::pair<int, int>> sizes_;  // each head's size in pixels (its frame's), head 0 first
 
  public:
-  int width() const { return width_; }
-  int height() const { return height_; }
+  // A head's size in pixels (head 0 without `head`; 0 for a head that has none).
+  int width(int head = 0) const { return head >= 0 && head < static_cast<int>(sizes_.size()) ? sizes_[static_cast<size_t>(head)].first : 0; }
+  int height(int head = 0) const { return head >= 0 && head < static_cast<int>(sizes_.size()) ? sizes_[static_cast<size_t>(head)].second : 0; }
   // The mouse at the screen's edge moves the view (set by a host whose window fills the screen
   // and keeps the mouse inside; in a window on the desktop the mouse just leaves).
   bool edgeScroll = false;

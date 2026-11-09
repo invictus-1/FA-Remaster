@@ -331,6 +331,7 @@ static void resize (lua_State *L, Table *t, int nasize, int nhsize) {
   int oldhsize = t->lsizenode;
   Node *nold;
   Node temp[1];
+  luaC_logfull(L, t);  /* (moho64: its slots move; a logged re-traversal scans it all) */
   if (oldhsize)
     nold = t->node;  /* save old hash ... */
   else {  /* old hash is `dummynode' */
@@ -463,6 +464,7 @@ static TObject *newkey (lua_State *L, Table *t, const TObject *key) {
       /* yes; move colliding node into free position */
       while (othern->next != mp) othern = othern->next;  /* find previous */
       othern->next = n;  /* redo the chain with `n' in place of `mp' */
+      luaC_logslot(L, t, gval(n));  /* (moho64: the moved node's new place) */
       *n = *mp;  /* copy colliding node into free pos. (mp->next also goes) */
       mp->next = NULL;  /* now `mp' is free */
       setnilvalue(gval(mp));
@@ -474,6 +476,7 @@ static TObject *newkey (lua_State *L, Table *t, const TObject *key) {
       mp = n;
     }
   }
+  luaC_logslot(L, t, gval(mp));  /* (moho64: the new key's slot) */
   setobj2t(gkey(mp), key);  /* write barrier */
   luaC_barriert(L, t);
   lua_assert(ttisnil(gval(mp)));
@@ -564,8 +567,10 @@ TObject *luaH_set (lua_State *L, Table *t, const TObject *key) {
   const TObject *p = luaH_get(t, key);
   t->flags = 0;
   t->wstamp++;  /* (moho64: the caller stores into the slot returned) */
-  if (p != &luaO_nilobject)
+  if (p != &luaO_nilobject) {
+    luaC_logslot(L, t, p);
     return cast(TObject *, p);
+  }
   else {
     if (ttisnil(key)) luaG_runerror(L, "table index is nil");
     else if (ttisnumber(key) && nvalue(key) != nvalue(key))
@@ -578,8 +583,10 @@ TObject *luaH_set (lua_State *L, Table *t, const TObject *key) {
 TObject *luaH_setnum (lua_State *L, Table *t, int key) {
   const TObject *p = luaH_getnum(t, key);
   t->wstamp++;  /* (moho64: the caller stores into the slot returned) */
-  if (p != &luaO_nilobject)
+  if (p != &luaO_nilobject) {
+    luaC_logslot(L, t, p);
     return cast(TObject *, p);
+  }
   else {
     TObject k;
     setnvalue(&k, cast(lua_Number, key));

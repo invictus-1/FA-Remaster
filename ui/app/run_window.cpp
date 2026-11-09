@@ -35,6 +35,12 @@ class PerfStats {
     ring_[at_++ % kRing] = static_cast<float>(frameMs);
     if (count_ < kRing) ++count_;
   }
+  // [head2] A frame shown with the renderer's second window on: whether the renderer drew that window in it (its swap
+  // chain had a picture free: WorldPicture::SecondWindowDrawnLastFrame). The frame line says how often a second.
+  void NoteSecondWindow(bool drawn) {
+    secondOn_ = true;
+    secondDrawn_ += drawn ? 1 : 0;
+  }
   void NoteParts(double scriptMs, double drawMs, double hostMs, double showMs) {
     auto smooth = [](double& v, double x) { v = v > 0 ? v * 0.95 + x * 0.05 : x; };
     smooth(script_, scriptMs), smooth(draw_, drawMs), smooth(host_, hostMs), smooth(show_, showMs);
@@ -42,6 +48,9 @@ class PerfStats {
   void Draw(SoftwareTarget& target, const WindowHooks& hooks, lua_State* interfaceL) {
     const auto now = Clock::now();
     if (now - second_ >= std::chrono::seconds(1)) {  // (the beats and the memory once a second)
+      const double passed = std::chrono::duration<double>(now - second_).count();
+      secondRate_ = secondOn_ && passed < 5 ? secondDrawn_ / passed : -1;  // ([head2] the second window's pictures a second)
+      secondOn_ = false, secondDrawn_ = 0;
       const FrameTimes& t = Times();
       beats_ = t.beats - before_.beats;
       simMs_ = beats_ ? (t.simBeats - before_.simBeats) * 1000.0 / beats_ : 0;
@@ -67,6 +76,10 @@ class PerfStats {
     else
       std::snprintf(buf, sizeof buf, "frame %.2f ms (%.0f a second)   95%% %.2f   99%% %.2f   longest %.2f", at(0.5), drawn,
                     at(0.95), at(0.99), sorted.empty() ? 0.0f : sorted.back());
+    if (secondRate_ >= 0) {  // ([head2] how often the renderer drew the second head's window, over the last second)
+      const size_t used = std::strlen(buf);
+      std::snprintf(buf + used, sizeof buf - used, "   window 2: %.0f a second", secondRate_);
+    }
     lines.push_back(buf);
     std::snprintf(buf, sizeof buf, "interface: scripts %.2f   drawing %.2f   the host %.2f   showing %.2f ms", script_, draw_, host_, show_);
     lines.push_back(buf);
@@ -111,6 +124,9 @@ class PerfStats {
       if (logLines) {
         Logf(LogLevel::Info, "moho64ui: overlay: %s", lines.front().c_str());  // (the frame line: drawn / shown frames)
         for (const std::string& l : layerLines_) Logf(LogLevel::Info, "moho64ui: overlay: %s", l.c_str());
+        std::vector<std::string> picture;  // (the world's picture's first line: its card time, both windows' views in it)
+        if (hooks.statsLines) hooks.statsLines(&picture);
+        if (!picture.empty()) Logf(LogLevel::Info, "moho64ui: overlay: %s", picture.front().c_str());
       }
     }
     lines.insert(lines.end(), layerLines_.begin(), layerLines_.end());
@@ -139,6 +155,9 @@ class PerfStats {
   FrameTimes before_;
   int beats_ = 0;
   double simMs_ = 0, pictureMs_ = 0, soundMs_ = 0, memoryMB_ = 0;
+  bool secondOn_ = false;    // ([head2] NoteSecondWindow since the last whole second)
+  int secondDrawn_ = 0;
+  double secondRate_ = -1;   // (-1: no second window drawn by the renderer)
   struct LayerSum {
     trace::Layer layer = trace::Layer::Ui;
     double ms = 0, maxMs = 0;
@@ -188,7 +207,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   Window window;
   Window::Callbacks cb;
   // (hooks.held: the window holds its picture; the state shown gets no input, and a resize only makes the target anew)
-  bool holding = false, resizeOwed = false;
+  bool holding = false, resizeOwed = false, resizeOwed1 = false;
   cb.mouseMove = [&](const UiEvent& e) {
     if (!holding) MouseMove(current().L(), current().ui(), e);
   };
@@ -206,7 +225,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (w == target->Width() && h == target->Height()) return;
     target = std::make_unique<SoftwareTarget>(w, h);
     if (holding) resizeOwed = true;
-    else current().ui().Resize(w, h);
+    else current().ui().OnResize(current().L(), 0, w, h);  // (its frame, then uimain.OnApplicationResize: IUIManager::OnResize)
   };
   // (With hooks the window first stays hidden: the world's picture may be opened on it at once,
   // which takes seconds, and a window shown but not answering would be marked so by the system.)
@@ -222,6 +241,78 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.Show();
   }
   NoteWindowScreen(window);
+  // [head2] The second head's window (DisplayMode::heads, main.cpp's head rule; docs/ui-dualscreen.md 3.3): owned by
+  // the main one and never activated (the keys stay with the main window: the original's keys are global), full screen
+  // on the Secondary Adapter's screen, or the test window (framed, on the primary's screen). Its mouse is head 1's (its
+  // own pixels, UiEvent::head); the wheel over it is handed to it by the main window; the mouse lock holds the mouse in
+  // the rectangle round both. It is shown by the renderer's second window (hooks.secondOpened: GameSession::
+  // UseSecondWindow, the renderer's answer to ui request 48): head 1's interface as its layer (hooks.secondLayer, drawn
+  // only where it changed, transparent where CameraHead2's world view is) and the world views of head 1 under it, drawn
+  // by the one picture of the world with the first window's frame. Without it (--gdi, no renderer, or it failed) by the
+  // plain copy (Window::Present), shown when it changed: FAF's logo in the menus, the loading splash, and in a game the
+  // frame of CameraHead2's world view, whose world stays black. SDL: UNTESTED (window_sdl.cpp).
+  const DisplayMode& startMode = Display();
+  std::unique_ptr<Window> window2;
+  std::unique_ptr<SoftwareTarget> target1;
+  RecordingTarget recorder1;
+  IncrementalPainter painter1;
+  long long shown1 = 0;
+  int sinceShown1 = 0;
+  bool rendered2 = false;             // (head 1 shown by the renderer's second window now)
+  long long drawn2 = 0, frames2 = 0;  // (frames shown with it on, and those it was drawn in: the log's line at the end)
+  if (startMode.heads >= 2 && startMode.secondWidth > 0 && startMode.secondHeight > 0) {
+    Window::Callbacks cb1;
+    auto onHead1 = [](UiEvent e) {
+      e.head = 1;
+      return e;
+    };
+    cb1.mouseMove = [&, onHead1](const UiEvent& e) {
+      if (!holding) MouseMove(current().L(), current().ui(), onHead1(e));
+    };
+    cb1.mouseButton = [&, onHead1](const UiEvent& e, bool pressed, bool dbl) {
+      if (!holding) MouseButton(current().L(), current().ui(), onHead1(e), pressed, dbl);
+    };
+    cb1.mouseWheel = [&, onHead1](const UiEvent& e) {
+      if (!holding) MouseWheel(current().L(), current().ui(), onHead1(e));
+    };
+    cb1.key = cb.key;  // (keys are global; it never has the keyboard, but should the system give it a key)
+    cb1.resized = [&](int w, int h) {
+      if (target1 && w == target1->Width() && h == target1->Height()) return;
+      target1 = std::make_unique<SoftwareTarget>(w, h);
+      painter1.Invalidate();
+      // (the renderer's second window: the new layer at once, so that it never reads the old one's pixels; its size
+      // resizes that window's swap chain)
+      if (rendered2 && hooks.secondLayer) hooks.secondLayer(*target1, IntRect{0, 0, w, h});
+      if (holding) resizeOwed1 = true;
+      else current().ui().OnResize(current().L(), 1, w, h);
+    };
+    target1 = std::make_unique<SoftwareTarget>(startMode.secondWidth, startMode.secondHeight);
+    window2 = std::make_unique<Window>();
+    window2->owner = window.Handle();
+    window2->noActivate = true;
+    Window::Screen on2;
+    const bool full2 = !startMode.secondWindowTest && ScreenOf(startMode.secondScreen, &on2);
+    if (window2->Create(startMode.secondWidth, startMode.secondHeight, "FA Remastered - second head", cb1, full2, true, full2 ? &on2 : nullptr)) {
+      window.partner = window2.get(), window2->partner = &window;
+      int w2 = startMode.secondWidth, h2 = startMode.secondHeight;
+      window2->ClientSize(&w2, &h2);
+      rendered2 = hooks.secondOpened && hooks.secondOpened(window2->Handle(), w2, h2);
+      Logf(LogLevel::Info, "moho64ui: window 2 (the second head): %s %dx%d; %s",
+           full2 ? ("full screen on screen " + std::to_string(startMode.secondScreen + 1) + ",").c_str() : "a framed window of", w2, h2,
+           rendered2 ? "shown by the renderer's second window (head 1's world view drawn there)"
+                     : "head 1's interface by the plain copy, its world view black (no renderer's second window)");
+    } else {
+      Logf(LogLevel::Warning, "moho64ui: window 2 (the second head) did not open: head 1 is not shown");
+      window2.reset();
+    }
+  }
+  // (MOHO64UI_SECOND_CAPTURE=<file.png>: head 1's picture as window 2 shows it, saved at the frame MOHO64UI_CAPTURE_FRAME,
+  // 300 unless given: for checks)
+  const char* secondCapture = std::getenv("MOHO64UI_SECOND_CAPTURE");
+  const int secondCaptureAt = std::getenv("MOHO64UI_CAPTURE_FRAME") ? std::atoi(std::getenv("MOHO64UI_CAPTURE_FRAME")) : 300;
+  // ("+N": the Nth frame of a game's interface shown)
+  const bool secondCaptureInGame = std::getenv("MOHO64UI_CAPTURE_FRAME") && std::getenv("MOHO64UI_CAPTURE_FRAME")[0] == '+';
+  int gameFrames = 0;
   // The mouse pointer: the texture the scripts last set, as the system's own pointer.
   std::string pointerTexture, pointersShown;
   int pointerX = 0, pointerY = 0;
@@ -234,11 +325,14 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (pointerKnown && texture == pointerTexture && hotX == pointerX && hotY == pointerY && hidden == pointerHidden) return;
     pointerKnown = true, pointerTexture = texture, pointerX = hotX, pointerY = hotY, pointerHidden = hidden;
     window.HidePointer(hidden);
+    if (window2) window2->HidePointer(hidden);  // ([head2] the same pointer over both windows)
     if (hidden) return;
     static const Image none;
     const Image& image = texture.empty() ? none : LoadTexture(ScriptState::From(user.L())->vfs(), texture);
     bool made = image.valid() && window.SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY);
     if (!made) window.SetPointer(nullptr, 0, 0, 0, 0);
+    if (window2 && !(made && window2->SetPointer(image.pixels.data(), image.width, image.height, hotX, hotY)))
+      window2->SetPointer(nullptr, 0, 0, 0, 0);
     // For the log: which pointers the run showed (an animated one counts once, by its first picture).
     std::string name = texture.substr(texture.find_last_of('/') + 1);
     size_t dash = name.find_last_of('-');
@@ -389,7 +483,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         hostDrawn = IntRect{0, 0, target->Width(), target->Height()};
         if (resizeOwed && (current().ui().width() != target->Width() || current().ui().height() != target->Height()))
           current().ui().Resize(target->Width(), target->Height());
-        resizeOwed = false;
+        if (resizeOwed1 && target1 && (current().ui().width(1) != target1->Width() || current().ui().height(1) != target1->Height()))
+          current().ui().Resize(1, target1->Width(), target1->Height());
+        resizeOwed = resizeOwed1 = false;
+        painter1.Invalidate();
       }
       double dt = std::chrono::duration<double>(now - last).count();  // (since the last frame shown)
       last = now;
@@ -486,19 +583,75 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       hostSeconds += std::chrono::duration<double>(Clock::now() - te).count();
       renderSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       const auto tp = Clock::now();
+      // [head2] Head 1's interface, drawn only where it changed: with the renderer's second window over a transparent
+      // background (its world view's picture under it, premultiplied as the first window's layer), handed over before
+      // the present, which shows both windows; else over black, copied to window 2 after the present.
+      IntRect changed1;
+      if (window2 && target1) {
+        MOHO_LAYER_ZONE(Ui, "ui: the second head's interface");
+        const bool second = direct && hooks.secondOn && hooks.secondOn();
+        if (second != rendered2) {  // (the window's picture made anew, failed, or its second window opened later)
+          rendered2 = second;
+          painter1.Invalidate();
+          Logf(LogLevel::Info, "moho64ui: window 2: head 1 %s (frame %d)",
+               second ? "shown by the renderer's second window" : "shown by the plain copy (no renderer's second window)", frames);
+        }
+        const uint32_t clear1 = second ? 0x00000000u : 0xff000000u;
+        UserState& user1 = current();  // (eachFrame may have replaced the state shown)
+        if (incremental) {
+          recorder1.Begin(target1->Width(), target1->Height());
+          user1.ui().Render(user1.L(), recorder1, 1);
+          changed1 = painter1.Paint(recorder1.commands(), *target1, clear1, IntRect{});
+        } else {
+          target1->Clear(clear1);
+          user1.ui().Render(user1.L(), *target1, 1);
+          changed1 = IntRect{0, 0, target1->Width(), target1->Height()};
+        }
+        if (second) {
+          hooks.secondLayer(*target1, changed1);
+          if (shown1++ == 0) Logf(LogLevel::Info, "moho64ui: window 2: head 1's first layer given to the renderer (frame %d)", frames);
+        }
+      }
+      const auto tShow = Clock::now();  // (head 1's drawing counts in the frame's showing part, as before)
       {
         MOHO_LAYER_ZONE(Ui, "ui: present (the world, the screen's wait)");
         if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
         else window.Present(*target);
       }
-      presentSeconds += std::chrono::duration<double>(Clock::now() - tp).count();
+      presentSeconds += std::chrono::duration<double>(Clock::now() - tShow).count();
+      // [head2] Without the renderer's second window: head 1's interface (drawn before the present, above) into window 2
+      // by the plain copy, shown when it changed (and once a second, for a window uncovered meanwhile).
+      if (window2 && target1 && !rendered2 && (!changed1.empty() || ++sinceShown1 >= 60)) {
+        window2->Present(*target1);
+        sinceShown1 = 0;
+        if (shown1++ == 0) Logf(LogLevel::Info, "moho64ui: window 2: head 1's first picture shown (frame %d)", frames);
+      }
+      // (the check's picture of window 2: the renderer's read-back of its next picture shown, the world views and the
+      // layer; by the plain copy, head 1's interface as drawn)
+      if (current().gameInterface) ++gameFrames;
+      if (window2 && target1 && secondCapture && (secondCaptureInGame ? gameFrames : frames + 1) == secondCaptureAt) {
+        if (rendered2 && hooks.secondCapture && hooks.secondCapture(secondCapture))
+          Logf(LogLevel::Info, "moho64ui: window 2: its next picture shown is read back for %s", secondCapture);
+        else if (target1->SavePng(secondCapture)) Logf(LogLevel::Info, "moho64ui: window 2: head 1's interface saved as %s", secondCapture);
+        else Logf(LogLevel::Warning, "moho64ui: window 2: cannot write %s", secondCapture);
+      }
       updatePointer(current());
-      window.HoldPointer(current().ui().holdPointer);  // while the camera is dragged or turned
+      {  // while the camera is dragged or turned, in the window the mouse is in ([head2] the second head's: window 2)
+        const bool hold = current().ui().holdPointer;
+        const bool onHead1 = window2 && current().ui().mouseHead == 1;
+        window.HoldPointer(hold && !onHead1);
+        if (window2) window2->HoldPointer(hold && onHead1);
+      }
       drawSeconds += std::chrono::duration<double>(Clock::now() - t0).count();
       auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double>(b - a).count() * 1000.0; };
       stats.NoteParts(ms(now, t0), ms(t0, te), ms(te, tp), ms(tp, Clock::now()));
       parts.scripts = ms(now, t0), parts.drawing = ms(t0, te), parts.host = ms(te, tp), parts.showing = ms(tp, Clock::now());
       ++frames;
+    }
+    if (rendered2 && hooks.secondDrawn) {  // ([head2] whether the renderer drew the second window in this frame's present)
+      const bool drawn = hooks.secondDrawn();
+      ++frames2, drawn2 += drawn ? 1 : 0;
+      stats.NoteSecondWindow(drawn);
     }
     MOHO_FRAME_MARK;  // (one shown frame)
     if (hooks.catchingUp && hooks.catchingUp()) steadyFrames = 0;
@@ -511,6 +664,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       statsFrom = frames;
       frameMs.clear();
       busyFrames = 0;
+      drawn2 = frames2 = 0;  // ([head2] counted as the frames are)
     }
     {
       const auto shownAt = Clock::now();
@@ -609,6 +763,16 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
          now.heldPictures - timesBefore.heldPictures, counted);
   }
   if (!pointersShown.empty()) Logf(LogLevel::Info, "moho64ui: window: mouse pointers shown: %s", pointersShown.c_str());
+  if (window2) {
+    Logf(LogLevel::Info, "moho64ui: window 2: %lld pictures of head 1's interface %s in %d frames (%lld of %lld drawn whole)", shown1,
+         frames2 ? "given to the renderer" : "shown", frames, painter1.fullFrames, painter1.frames);
+    if (frames2 > 0)
+      Logf(LogLevel::Info, "moho64ui: window 2: the renderer drew it in %lld of %lld counted frames shown with it on (%.0f%%; %.0f a second)", drawn2,
+           frames2, 100.0 * static_cast<double>(drawn2) / static_cast<double>(frames2),
+           total > 0 ? static_cast<double>(drawn2) / total : 0.0);
+    if (hooks.secondClosing) hooks.secondClosing();  // (the renderer's second window goes before window 2 does)
+    window.partner = nullptr;
+  }
   LogDrawProfile();
   return frames;
 }

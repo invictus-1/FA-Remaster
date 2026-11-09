@@ -24,6 +24,17 @@ do
         for _, field in kFields do
             Prefs.SetToCurrentProfile(field, keys[field])
         end
+        -- FAF's map has none of this program's own actions (the bookmarks, the camera spots, ...): they come into it
+        -- where their key is free, and the note of the own actions the saved map has seen starts again. (Chris's test
+        -- of 2026-11-08: after the import Ctrl-Shift-B and Alt-1..9 did nothing: the dialog's save had noted every own
+        -- action as seen, so none was added to the imported map; keymapper.lua's GetUserKeyMap.)
+        if keys.UserKeyMap then
+            local map = {}
+            for key, action in keys.UserKeyMap do map[key] = action end
+            import('/lua/keymap/keymapper.lua').RemasterAddOwnKeys(map)
+            Prefs.SetToCurrentProfile('UserKeyMap', map)
+        end
+        Prefs.SetToCurrentProfile('UserKeyMapRemasterActions', nil)
     end
 
     function CreateUI()

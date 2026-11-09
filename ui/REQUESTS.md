@@ -1259,6 +1259,15 @@ DONE 2026-11-07: engine batch 100 (the nav mesh built in BeginSession; answer in
 (beats 1-29 run in the load) + 0f92b45b (the map handed the session at tick 0). Launch to screen 9.8 / 11.3 s (was
 13.1 / 11.9 s); held past the load 0.07-0.10 s (was 2.1-2.3 s).
 
+### 56. The menu's live battle: a sandbox session with no AI and no commands (2026-11-08, not blocking)
+From the interface chat. Chris approved (2026-11-08) a live menu background: a staged, deterministic battle on
+SETONS_R behind the main menu (docs/ui-menuflight.md). The ui runs its own scenario (script under /moho64ui, two
+Human armies, focusArmy -1, Victory "sandbox", an empty command stream; a tick storyboard with CreateUnitHPR, orders,
+GiveNukeSiloAmmo + IssueNuke). No change to src/sim. Asked (E1): (1) does such a session run as a normal one, (2) does a
+scenario script outside /maps load, (3) anything in our sim that makes those calls differ from the original's? The ui
+tries it headless first and sends you the result; mainly so you know the menu runs a sim. Later, optional (E2): a
+restart keeping the loaded rules (about 1.2 s per loop).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2413,6 +2422,15 @@ options) is mine; what I need from you is in docs/ui-dualscreen.md section 4 (a 
 - Stats: window 2's card time separately (to measure only; optimise at the end).
 I build and test the interface side headless meanwhile (two root frames, CameraHead2's view, input by head). A test
 mode opens window 2 framed on the same screen, so no second monitor is needed for your checks either.
+
+### 49. The menu's live flight: a smooth looping camera path, a menu look, RestartMap for another session (2026-11-08, not blocking)
+From the interface chat; your recommendation (A), Chris's yes. Design: docs/ui-menuflight.md section 3.
+- R1: CinePath::loop (a smooth seam from the last key to the first; your offer). Until then At(fmod(t, Length())).
+- R2: which of WorldPicture's look setters are per-frame (safe to change for the menu and back for a game on the same
+  open map) and which are fixed at Open? A bundled SetMenuLook(bool) is welcome if it keeps to the per-frame ones.
+- R3: is RestartMap valid when the next session is a DIFFERENT one on the same map (another army list, mods,
+  faction remasters), so a game on SETONS_R takes over the menu's open map? If not, the ui reopens the map as today.
+- R4: once the ui has the session, scenario and path files, your cost measurement at 4K (full looks vs menu look).
 
 ## To the visuals track
 

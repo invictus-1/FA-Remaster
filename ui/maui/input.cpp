@@ -63,15 +63,17 @@ void Collect(Control* c, std::vector<Control*>& out) {
 Control* TopmostIn(Control* root, float x, float y);
 
 // Where a mouse event goes (FA exe 0x7a4a77..0x7a4b12). Without input capture: the control under
-// the cursor on the frame. With it: the control under the cursor among the capturing control and
-// everything below it, and when the cursor is over none of those, the capturing control itself.
+// the cursor on the frame of the head the event is on (the event mapper's own root frame, [mapper+0x2c] at 0x7a4ab2;
+// INFERRED: one mapper per head window, so head 1's window hits head 1's frame in its own pixels). With it: the
+// control under the cursor among the capturing control and everything below it, and when the cursor is over none of
+// those, the capturing control itself; the capture stack is one for every head (0x10bdbac, 0x7a4a77).
 Control* Target(UiManager& ui, const UiEvent& e) {
   if (!ui.inputCapture.empty()) {
     Control* capture = ui.inputCapture.back();
     Control* hit = TopmostIn(capture, e.x, e.y);
     return hit ? hit : capture;
   }
-  return ControlAt(ui, 0, e.x, e.y);
+  return ControlAt(ui, e.head, e.x, e.y);
 }
 
 // The cursor moved onto another control: the old one hears MouseExit, the new one MouseEnter.
@@ -295,7 +297,7 @@ void UiManager::PostEngineDragger(lua_State* L, Control* control, int key) {
 }
 
 void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
-  ui.mouseX = e.x, ui.mouseY = e.y;
+  ui.mouseX = e.x, ui.mouseY = e.y, ui.mouseHead = e.head;
   if (ui.engineDragger) {
     ui.engineDragger->DragMove(L, e);
     return;
@@ -313,7 +315,7 @@ void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
 
 void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doubleClick) {
   e.keyCode = ButtonKeyCode(e);
-  ui.mouseX = e.x, ui.mouseY = e.y;
+  ui.mouseX = e.x, ui.mouseY = e.y, ui.mouseHead = e.head;
   if (!pressed && ui.draggerKey == e.keyCode && ui.engineDragger) {
     Control* c = ui.engineDragger;
     ui.engineDragger = nullptr;
@@ -347,30 +349,33 @@ void MouseWheel(lua_State* L, UiManager& ui, UiEvent e) {
 
 namespace {
 
-UiEvent EventAt(lua_State* L, int xIdx) {
+// (a test function's event at the numbers at xIdx, xIdx + 1; on the head at headIdx when a number is there, else 0)
+UiEvent EventAt(lua_State* L, int xIdx, int headIdx = 0) {
   UiEvent e;
   e.x = static_cast<float>(luaL_checknumber(L, xIdx));
   e.y = static_cast<float>(luaL_checknumber(L, xIdx + 1));
+  if (headIdx > 0 && lua_isnumber(L, headIdx)) e.head = static_cast<int>(lua_tonumber(L, headIdx));
   return e;
 }
 
-// moho64ui_Resize(width, height): the head takes a new size, as when the window is resized. The
-// host's own function for tests.
+// moho64ui_Resize(width, height [, head]): the head (the first without `head`) takes a new size, as when its window is
+// resized (UiManager::OnResize: its frame, then uimain.OnApplicationResize). The host's own function for tests.
 int l_Resize(lua_State* L) {
-  UserState::From(L)->ui().Resize(static_cast<int>(luaL_checknumber(L, 1)), static_cast<int>(luaL_checknumber(L, 2)));
+  UserState::From(L)->ui().OnResize(L, static_cast<int>(luaL_optnumber(L, 3, 0)), static_cast<int>(luaL_checknumber(L, 1)),
+                                    static_cast<int>(luaL_checknumber(L, 2)));
   return 0;
 }
 int l_MouseMove(lua_State* L) {
-  MouseMove(L, UserState::From(L)->ui(), EventAt(L, 1));
+  MouseMove(L, UserState::From(L)->ui(), EventAt(L, 1, 3));
   return 0;
 }
 
-// moho64ui_MouseButton(button, pressed, x, y [, modifiers]): button is "Left", "Middle" or
+// moho64ui_MouseButton(button, pressed, x, y [, modifiers [, head]]): button is "Left", "Middle" or
 // "Right"; modifiers names any of Shift, Ctrl, Alt, and "Double" for the second press of a double click
 int l_MouseButton(lua_State* L) {
   std::string button = luaL_checkstring(L, 1);
   bool pressed = lua_toboolean(L, 2) != 0;
-  UiEvent e = EventAt(L, 3);
+  UiEvent e = EventAt(L, 3, 6);
   e.left = button == "Left";
   e.middle = button == "Middle";
   e.right = button == "Right";
@@ -384,9 +389,9 @@ int l_MouseButton(lua_State* L) {
   return 0;
 }
 
-// moho64ui_MouseWheel(x, y, notches): the wheel turned at a place; positive is away from the user
+// moho64ui_MouseWheel(x, y, notches [, head]): the wheel turned at a place; positive is away from the user
 int l_MouseWheel(lua_State* L) {
-  UiEvent e = EventAt(L, 1);
+  UiEvent e = EventAt(L, 1, 4);
   e.wheelDelta = 120;
   e.wheelRotation = static_cast<int>(luaL_checknumber(L, 3)) * 120;
   MouseWheel(L, UserState::From(L)->ui(), e);
@@ -394,8 +399,8 @@ int l_MouseWheel(lua_State* L) {
 }
 
 int l_ControlAt(lua_State* L) {
-  UiEvent e = EventAt(L, 1);
-  PushObject(L, ControlAt(UserState::From(L)->ui(), 0, e.x, e.y));
+  UiEvent e = EventAt(L, 1, 3);
+  PushObject(L, ControlAt(UserState::From(L)->ui(), e.head, e.x, e.y));
   return 1;
 }
 
@@ -434,6 +439,13 @@ int l_WindowFocus(lua_State* L) {
   return 0;
 }
 
+// moho64ui_EdgeScroll(on): the screen's edge moves the main view, as a full-screen window sets it (UiManager::
+// edgeScroll; run_window.cpp sets it every frame of a live window). For tests without a window.
+int l_EdgeScroll(lua_State* L) {
+  UserState::From(L)->ui().edgeScroll = lua_toboolean(L, 1) != 0;
+  return 0;
+}
+
 // moho64ui_Type(text): the characters of an ASCII text typed one after the other.
 int l_Type(lua_State* L) {
   std::string text = luaL_checkstring(L, 1);
@@ -455,6 +467,7 @@ void RegisterInputBindings(lua_State* L) {
   lua_register(L, "moho64ui_Key", l_Key);
   lua_register(L, "moho64ui_Type", l_Type);
   lua_register(L, "moho64ui_WindowFocus", l_WindowFocus);
+  lua_register(L, "moho64ui_EdgeScroll", l_EdgeScroll);
 }
 
 }  // namespace moho::ui

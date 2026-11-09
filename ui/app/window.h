@@ -15,7 +15,7 @@
 
 namespace moho::ui {
 
-class Window {  // (the host's one window)
+class Window {  // (the host's window: one, or with the second head two, docs/ui-dualscreen.md 3.3)
  public:
   struct Callbacks {
     std::function<void(const UiEvent&)> mouseMove;
@@ -117,6 +117,17 @@ class Window {  // (the host's one window)
   bool lockMouse = false;
   void LockMouse(bool lock);
   void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
+  // [head2] The second head's window (set before Create): `owner` the main window's handle (owned: not in the taskbar
+  // nor the alt-tab list, it rises with its owner), `noActivate` (WS_EX_NOACTIVATE: a click on it leaves the keyboard
+  // with the main window, so the keys keep working while the mouse is on head 1: the original's keys are global, input.h
+  // KeyEvent). `partner` (on the main window): the other head's window, whose screen the mouse may go to while it is
+  // kept inside (the lock is the bounding rectangle of both) and which a wheel over it is handed to.
+  void* owner = nullptr;
+  bool noActivate = false;
+  Window* partner = nullptr;
+  // Whether this window or its partner is the one in front (the original's WindowIsForeground 0x79cb10: the foreground
+  // window against its heads' windows).
+  bool InFront() const;
 };
 
 class UserState;
@@ -153,6 +164,19 @@ struct WindowHooks {
   // Whether the renderer's frame generation makes a picture between each two drawn this frame (the statistics then
   // count the shown ones too); unset: never.
   std::function<bool()> frameGenerationOn;
+  // [head2] The second head's window (run_window.cpp opens it after `opened`; docs/ui-dualscreen.md 3.3): `secondOpened`
+  // hears its handle (as `opened`'s) and size and answers whether the renderer shows it (GameSession::UseSecondWindow);
+  // `secondOn`: whether it does now (the window's picture may be made anew, or fail); `secondLayer`: head 1's interface
+  // (transparent where its world view's picture shows) with the part drawn anew, given before `present`, which shows
+  // both windows; `secondDrawn`: the renderer drew it in the last `present`; `secondCapture`: its next picture shown
+  // saved as a PNG (checks); `secondClosing`: before the window goes. Unset, or `secondOn` false: head 1's interface goes
+  // to the window by the plain copy (Window::Present), its world view black.
+  std::function<bool(void* handle, int width, int height)> secondOpened;
+  std::function<bool()> secondOn;
+  std::function<void(const SoftwareTarget& interfaceLayer, const IntRect& changed)> secondLayer;
+  std::function<bool()> secondDrawn;
+  std::function<bool(const std::string& path)> secondCapture;
+  std::function<void()> secondClosing;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,

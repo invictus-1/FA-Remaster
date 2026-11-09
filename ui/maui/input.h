@@ -28,6 +28,9 @@ struct UiEvent {
   bool shift = false, ctrl = false, alt = false;
   bool left = false, middle = false, right = false;
   bool repeat = false;  // a key down that comes from the key being held
+  // The head (screen) a mouse event happened on: x and y are in that head's pixels, its root frame's space from 0,0
+  // (each head its own, FA exe 0x84ceae..0x84cf3d). 0 for the first; key events have none.
+  int head = 0;
 };
 
 // self:HandleEvent(event) on one control: true when the script handled it.
@@ -71,8 +74,9 @@ void PushEventTable(lua_State* L, Control* c, const UiEvent& e);
 void WindowFocus(lua_State* L, UiManager& ui, bool inFront);
 
 // The host's own debugging functions for tests (not engine functions of the original):
-// moho64ui_MouseMove(x, y), moho64ui_MouseButton(button, pressed, x, y), moho64ui_ControlAt(x, y),
-// moho64ui_Key(code [, "Shift Ctrl Alt"]), moho64ui_Type(text), moho64ui_WindowFocus(inFront).
+// moho64ui_MouseMove(x, y [, head]), moho64ui_MouseButton(button, pressed, x, y [, modifiers [, head]]),
+// moho64ui_MouseWheel(x, y, notches [, head]), moho64ui_ControlAt(x, y [, head]), moho64ui_Resize(width, height
+// [, head]), moho64ui_Key(code [, "Shift Ctrl Alt"]), moho64ui_Type(text), moho64ui_WindowFocus(inFront).
 void RegisterInputBindings(lua_State* L);
 
 }  // namespace moho::ui

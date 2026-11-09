@@ -106,6 +106,9 @@ int capturedFrames = 0, menuFrames = 0, loadingFrames = 0, frontFrames = 0, jump
 bool jumpHalf = false;
 bool gameSeen = false;
 bool fullScreen = false;          // --fullscreen: the live window fills the main screen, without a frame
+// --second-window WxH (or MOHO64UI_SECOND_WINDOW=WxH): the second head as a framed window of that size on the primary's
+// screen, also beside a windowed primary (tests, a PC with one screen: DisplayMode::secondWindowTest). Ours.
+std::string secondWindowArg;
 bool modeGiven = false;           // --fullscreen or --size: the command line chose the display mode (DisplayMode)
 int wantBackdrop = -1;            // --backdrop / --no-backdrop: the menu's moving background (by itself: in a live window)
 // --day-weather (a game starts at nine in the morning) / --day <hour> / --day-length <game seconds,
@@ -306,6 +309,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-world") noWorld = true;
     else if (a == "--no-sound") noSound = true;
     else if (a == "--fullscreen") fullScreen = windowed = modeGiven = true;
+    else if (a == "--second-window") secondWindowArg = next();
     else if (a == "--backdrop") wantBackdrop = 1;
     else if (a == "--no-backdrop") wantBackdrop = 0;
     else if (a == "--day-weather") sky.startHour = 9;
@@ -618,9 +622,18 @@ int main(int argc, char** argv) {
   // and the window opens on the screen chosen (the original's device took adapter 0 only).
   // MOHO64UI_SCREENS=2560x1440@240,1920x1080@60 (tests without a window): those screens, side by
   // side, in place of the PC's; MOHO64UI_SECOND_HEAD=1: the Secondary Adapter lists the screens.
+  // [head2] The Secondary Adapter lists the other screens (on a PC with two or more: keymap.cpp
+  // SetupSecondaryAdapterSettings) where the second head's world can be shown: the renderer's picture in the window
+  // (built with it, a window, not --gdi), whose second window draws it (the renderer's answer to ui request 48: Direct3D
+  // 12 and Vulkan both). Not probed here: the second window is made only once a second head is chosen; should it not
+  // open, the log says why and head 1 shows its interface without the world (GameSession::UseSecondWindow). INFERRED rule
+  // (ours): the original lists adapter 1's modes whenever the PC has one.
   ui::DisplayMode& display = ui::Display();
   display.overridden = windowed && modeGiven;
   display.secondHeadShown = std::getenv("MOHO64UI_SECOND_HEAD") != nullptr && std::string(std::getenv("MOHO64UI_SECOND_HEAD")) == "1";
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (windowed && directWindow) display.secondHeadShown = true;
+#endif
   display.screens.clear();
   if (const char* fake = std::getenv("MOHO64UI_SCREENS")) {
     int x = 0;
@@ -695,14 +708,60 @@ int main(int argc, char** argv) {
            width, height, fullScreen ? (" on screen " + std::to_string(display.screen + 1)).c_str() : "");
     }
     // The Secondary Adapter: the original opens a second head on that screen, both heads in full screen
-    // (CScApp::CreateDevice 0x8d0712: secondary_adapter not "disabled" and primary_adapter not "windowed"; the
-    // second head's mode from secondary_adapter, 0x8d08b3). Not shown here yet (DisplayMode::secondScreen).
+    // (CScApp::CreateDevice 0x8d0712: secondary_adapter not "disabled" (0x8d0721..0x8d0755) and primary_adapter not
+    // "windowed" (0x8d075a..0x8d0793); the second head added at 0x8d07e8, its mode from secondary_adapter, 0x8d08b3;
+    // both full screen, 0x8d082e / 0x8d0838). Decided once here, as the original makes its device once (the option is
+    // restart = true): a second head when the PC has 2 screens or more, the Secondary Adapter names one of them other
+    // than the primary's, and the primary is full screen; it is that screen's own size (a full screen here never
+    // switches the screen's mode). Else one head, and the log says which condition failed (docs/ui-dualscreen.md 3.2).
+    // Without a window no second window opens: one head unless MOHO64UI_HEADS=2 (tests: MOHO64UI_HEAD1_SIZE=WxH, else
+    // head 0's size). The test window (--second-window / MOHO64UI_SECOND_WINDOW=WxH): head 1 a framed window of that
+    // size on the primary's screen, whatever the option and the primary.
     const int second = ui::ScreenOfModeKey(secondary, 1);
     display.secondScreen = -1;
-    if (second >= 0 && !primaryWindowed && second < static_cast<int>(display.screens.size()) && second != display.screen) {
+    display.heads = 1;
+    display.secondWindowTest = false;
+    std::string noSecond;  // (why there is none, when the option asks for one)
+    std::string word = secondary;
+    for (char& c : word) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    if (word == "DISABLED" || word == "OVERRIDDEN") {
+    } else if (second < 0) {
+      noSecond = "the Secondary Adapter names no screen (" + secondary + ")";
+    } else if (primaryWindowed) {
+      noSecond = "the primary is windowed (the original's rule: a second head only beside a full screen)";
+    } else if (display.screens.size() < 2) {
+      noSecond = "the PC has one screen";
+    } else if (second >= static_cast<int>(display.screens.size())) {
+      noSecond = "the Secondary Adapter's screen " + std::to_string(second + 1) + " is not there";
+    } else if (second == display.screen) {
+      noSecond = "the Secondary Adapter names the primary's own screen";
+    } else {
       display.secondScreen = second;
-      Logf(LogLevel::Info, "moho64ui: the Secondary Adapter names screen %d: a second head is not shown yet (one root frame)", second + 1);
+      if (!windowed) noSecond = "the Secondary Adapter names screen " + std::to_string(second + 1) + ", but there is no window";
     }
+    auto sizeOf = [](const char* text, int* w, int* h) {
+      return text && std::sscanf(text, "%dx%d", w, h) == 2 && *w > 0 && *h > 0;
+    };
+    const char* testWindow = !secondWindowArg.empty() ? secondWindowArg.c_str() : std::getenv("MOHO64UI_SECOND_WINDOW");
+    int w1 = 0, h1 = 0;
+    if (windowed && testWindow && sizeOf(testWindow, &w1, &h1)) {
+      display.heads = 2, display.secondWindowTest = true, display.secondWidth = w1, display.secondHeight = h1;
+      Logf(LogLevel::Info, "moho64ui: a second head: a framed window of %dx%d on the primary's screen (the test window)", w1, h1);
+    } else if (!windowed && std::getenv("MOHO64UI_HEADS") && std::string(std::getenv("MOHO64UI_HEADS")) == "2") {
+      if (!sizeOf(std::getenv("MOHO64UI_HEAD1_SIZE"), &w1, &h1)) w1 = width, h1 = height;
+      display.heads = 2, display.secondWidth = w1, display.secondHeight = h1;
+      Logf(LogLevel::Info, "moho64ui: a second head of %dx%d without a window (MOHO64UI_HEADS=2)", w1, h1);
+    } else if (display.secondScreen >= 0 && windowed) {
+      const ui::DisplayScreen& s = display.screens[static_cast<size_t>(display.secondScreen)];
+      display.heads = 2, display.secondWidth = s.width, display.secondHeight = s.height;
+      Logf(LogLevel::Info,
+           "moho64ui: a second head: full screen on screen %d, %dx%d at %d pictures a second (its world view's picture waits "
+           "for the renderer's second window: its interface only)",
+           display.secondScreen + 1, s.width, s.height, s.rate);
+    }
+    if (display.heads < 2 && !noSecond.empty()) Logf(LogLevel::Info, "moho64ui: no second head: %s", noSecond.c_str());
+    cfg.heads = display.heads, cfg.head1Width = display.secondWidth, cfg.head1Height = display.secondHeight;
+    front->SetSecondHead(cfg.heads, cfg.head1Width, cfg.head1Height);
   }
   // The player's options take effect at the start, as in the original (its app start-up runs
   // /lua/options/optionslogic.lua's Apply: StartupHelpers::OPTIONS_Apply, FA exe 0x8c6cf0, called
@@ -771,6 +830,11 @@ int main(int argc, char** argv) {
   // The front end's state stays as it is and is no longer shown.
   std::unique_ptr<ui::UserState> game;
   ui::UserState* shown = front.get();
+  // The heads' sizes the state shown has now, for the states made next (a window may have been resized).
+  auto takeHeadSizes = [&]() {
+    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+    if (cfg.heads >= 2 && shown->ui().width(1) > 0) cfg.head1Width = shown->ui().width(1), cfg.head1Height = shown->ui().height(1);
+  };
   // A new front end, its main menu up (after a game is left, or when a launch did not load).
   auto freshFrontEnd = [&]() {
     if ((wantBackdrop == 1 || (wantBackdrop < 0 && windowed)) && !noWorld) {
@@ -870,7 +934,7 @@ int main(int argc, char** argv) {
       // PreGameData file stays the replay's own.)
       const bool held = session.Rewinding();
       if (!held) {
-        cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+        takeHeadSizes();
         ui::SavePreferencesOf(front->L());  // (DoPreload writes the preferences first: the game's state reads them)
       }
       texturePrefetch.Join();  // (long done: nothing else reads the file system's list while it changes)
@@ -967,7 +1031,7 @@ int main(int argc, char** argv) {
     lap("(start: the beat waited for, the menu's background stopped)");
     // (A new state is made for the size the head has NOW: the window may have been resized. Held, a jump back: the
     // game's size as it was left; a resize meanwhile reaches the new state when it is first shown, run_window.cpp.)
-    if (!session.Rewinding()) cfg.width = shown->ui().width(), cfg.height = shown->ui().height();
+    if (!session.Rewinding()) takeHeadSizes();
     ui::UserState::Config gameCfg = cfg;
     gameCfg.bootScript = "/lua/SessionInit.lua";
     gameCfg.modUids = session.modUids();
@@ -1112,7 +1176,7 @@ int main(int argc, char** argv) {
   };
   auto rewind = [&]() {
     session.WaitForWorker();
-    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now: the new state's)
+    takeHeadSizes();  // (the heads' sizes now: the new state's)
     if (game) ui::SavePreferencesOf(game->L());
     shown = front.get();
     game.reset();
@@ -1144,7 +1208,7 @@ int main(int argc, char** argv) {
       return;
     }
     session.WaitForWorker();  // (the game's state goes and a new one may come: not while a beat runs)
-    cfg.width = shown->ui().width(), cfg.height = shown->ui().height();  // (the head's size now)
+    takeHeadSizes();  // (the heads' sizes now)
     if (game) ui::SavePreferencesOf(game->L());  // (what the game changed: the next front end reads the file)
     shown = front.get();
     game.reset();
@@ -1186,6 +1250,13 @@ int main(int argc, char** argv) {
       hooks.direct = [&]() { return session.DrawsToWindow(); };
       hooks.present = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.PresentToWindow(layer, changed); };
       hooks.waitForFrame = [&]() { session.WaitForNextFrame(); };
+      // [head2] The second head's window: the renderer's second window on the window's picture (GameSession)
+      hooks.secondOpened = [&](void* handle, int w, int h) { return session.UseSecondWindow(handle, w, h); };
+      hooks.secondOn = [&]() { return session.SecondWindowOn(); };
+      hooks.secondLayer = [&](const ui::SoftwareTarget& layer, const ui::IntRect& changed) { session.GiveSecondLayer(layer, changed); };
+      hooks.secondDrawn = [&]() { return session.SecondWindowDrawnLastFrame(); };
+      hooks.secondCapture = [&](const std::string& path) { return session.CaptureSecondWindow(path); };
+      hooks.secondClosing = [&]() { session.CloseSecondWindow(); };
       // The game's beats on a thread of their own, the window showing the world meanwhile
       // (MOHO64UI_BEATS_HERE=1: on this thread, as before).
       session.beatsOnThread = std::getenv("MOHO64UI_BEATS_HERE") == nullptr;

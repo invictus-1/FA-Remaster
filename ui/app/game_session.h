@@ -283,6 +283,22 @@ class GameSession {
   // window's size, transparent where the world shows) over it. `changed`: the part of `target`
   // drawn anew since the last call (a picture new or of another size takes all of it).
   void PresentToWindow(const SoftwareTarget& target, const IntRect& changed);
+  // [head2] The second head's window (the original's head 1, docs/ui-dualscreen.md; run_window.cpp opens it after the
+  // first): the renderer's second window on the window's picture (WorldPicture::UseSecondWindow, the renderer's answer
+  // to ui request 48), now and on every picture made after (EnsureWindowPicture). True when it is on; false (logged with
+  // the renderer's reason): the host shows head 1's interface itself (the plain copy, its world black).
+  // `handle` as `window`'s (an HWND on Windows; elsewhere the Window, whose Vulkan surface is asked for).
+  bool UseSecondWindow(void* handle, int width, int height);
+  void CloseSecondWindow();  // (before that window goes)
+  bool SecondWindowOn() const;
+  // Head 1's interface for the second window (as PresentToWindow's `target` for the first: premultiplied, transparent
+  // where its world view's picture shows, `changed` the part drawn anew), given before PresentToWindow, which shows both
+  // windows. False: not taken (no second window on).
+  bool GiveSecondLayer(const SoftwareTarget& target, const IntRect& changed);
+  bool SecondWindowDrawnLastFrame() const;  // (the last PresentToWindow drew it: the statistics)
+  // (checks) The second window's next picture shown, read back by the renderer (CaptureNextSecondWindowFrame) and saved
+  // as a PNG; false: no second window on.
+  bool CaptureSecondWindow(const std::string& path);
   // Once a frame, before its input is read: the renderer's wait for the frame's time with Low Latency on
   // (WorldPicture::WaitForNextFrame on the picture about to be shown; FramePacing::lowLatency).
   void WaitForNextFrame();
@@ -547,6 +563,8 @@ class GameSession {
   void OpenPicture();
   bool pictureDue_ = false;
   std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
+  std::string capture2To_;            // ([head2] the second window's next picture shown is saved here: CaptureSecondWindow)
+  std::vector<uint8_t> capture2Rgba_;  // (what the renderer reads it back into)
   void ViewerControls(const std::string& orders);  // the player's pause / resume / end while a replay plays
   bool replayEndAsked_ = false;  // (the viewer's End Replay: the replay's game ends in its next beat)
   Vfs* vfs_;
@@ -563,6 +581,9 @@ class GameSession {
   struct WindowPicture;
   std::unique_ptr<WindowPicture> windowPicture_;
   bool windowPictureFailed_ = false;
+  // [head2] The second window asked for (UseSecondWindow; nullptr: none) and its size as last given.
+  void* window2_ = nullptr;
+  int window2W_ = 0, window2H_ = 0;
   bool EnsureWindowPicture(bool remake);
   void BeginWindowMap(bool game, const std::string& map);  // (the game's map or the menus' background's, behind)
   void ServeWindowMap();

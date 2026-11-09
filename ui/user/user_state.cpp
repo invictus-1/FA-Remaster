@@ -323,6 +323,11 @@ void UserState::SetHeadSize(int width, int height) {
   ui_->Resize(width, height);
 }
 
+void UserState::SetSecondHead(int heads, int width, int height) {
+  config_.heads = heads, config_.head1Width = width, config_.head1Height = height;
+  if (heads >= 2) ui_->Resize(1, width, height);
+}
+
 int UserState::PrecompileScripts(const char* const* names, size_t count) {
   lua_State* L = state_->L();
   const int top = lua_gettop(L);
@@ -372,6 +377,7 @@ void UserState::LinkSession(const Config& links) {
   config_.net = links.net;
   config_.multiplayer = links.multiplayer;
   SetHeadSize(links.width, links.height);
+  SetSecondHead(links.heads, links.head1Width, links.head1Height);
 }
 
 bool UserState::StartMainScript() {
@@ -386,8 +392,11 @@ bool UserState::StartMainScript() {
   lua_newtable(L);
   lua_rawset(L, -3);
   lua_setglobal(L, "__EngineStats");
-  if (!ui_->CreateRootFrames(L, config_.width, config_.height)) {
-    Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", 0);
+  // (a root frame per head: 0x84cdfc in a loop over the device's heads; head 1 the original's second head, DisplayMode)
+  std::vector<std::pair<int, int>> sizes{{config_.width, config_.height}};
+  if (config_.heads >= 2) sizes.push_back({config_.head1Width, config_.head1Height});
+  if (const int failed = ui_->CreateRootFrames(L, sizes); failed >= 0) {
+    Logf(LogLevel::Error, "CUIManager::Init - unable to create root frame for head %d.", failed);
     return false;
   }
   if (!CallUiMain("SetupUI")) return false;

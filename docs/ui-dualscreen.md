@@ -387,3 +387,88 @@ E. Chris's own look (two 4K screens, 240 / 160 Hz): goes on the ONE playtest lis
   renderer to confirm with his frame statistics.
 - Whether head 1 should also get FAF's minimap or other panels: FAF puts none there; keep as FAF (Chris's "original's
   way included"; a richer head 1 could be a later player option).
+
+---
+
+## 8. What is built (2026-11-08, ui helper "dualhead"; steps 1-5 and 8 of section 5)
+
+- `DisplayMode::heads`, `secondWidth/secondHeight`, `secondWindowTest` (user_state.h); main.cpp's head rule (3.2)
+  decides once at the start and logs `no second head: <why>` (the Secondary Adapter names no screen / the primary is
+  windowed / the PC has one screen / its screen is not there / it names the primary's own screen / there is no
+  window). Test switches: `--second-window WxH` or `MOHO64UI_SECOND_WINDOW=WxH` (a framed window on the primary's
+  screen, with a window only); headless `MOHO64UI_HEADS=2` + `MOHO64UI_HEAD1_SIZE=WxH` (no window). Condition (d)
+  of 3.2 (the renderer's window picture) is NOT applied: without the renderer's second window head 1 shows its
+  interface by the plain copy anyway.
+- `UiManager::CreateRootFrames(L, sizes)` (a frame per head at its own size), `Resize(head, w, h)`,
+  `width(head)/height(head)`, `OnResize(L, head, w, h)` = the frame, then `uimain.OnApplicationResize(head, w, h)`
+  (READ: IUIManager::OnResize 0x84cfc0 -> CMauiFrame::SetBounds 0x796550, MAUI_OnApplicationResize 0x83d9c0); the
+  window's resize and `moho64ui_Resize(w, h [, head])` go through it. Every UserState makes `Config::heads` frames.
+- Input: `UiEvent::head`, `UiManager::mouseHead`; `Target` hits the event's head's frame, the capture stack stays
+  global; test functions take a head (`moho64ui_MouseMove(x, y, head)`, `MouseButton(b, p, x, y, mods, head)`,
+  `MouseWheel(x, y, n, head)`, `ControlAt(x, y, head)`, `PixelAt(x, y, head)`, `InterfacePng(file, head)`), and
+  `moho64ui_EdgeScroll(on)`. Edge pan only with the mouse on head 0. The world views' mouse tests (PointedView,
+  the path preview's cursor, GetRightMouseButtonOrder) and MouseInView go by the mouse's head.
+- World views: `GatherViews` walks the other heads' frames; their views get `WorldViewSpec::window = 1` in
+  `g_viewsGiven` (`moho64ui_Views()` reports `window`). Without the renderer's second window (headless, `--gdi`, or
+  it failed) they are NOT given to the source: a head-1 view has no picture (EnsurePicture false; only a selection box
+  is drawn in it) and its picking is the plain view from above (ProjectPoint / Unproject / UnitNearPlace). With it,
+  see part 2 below.
+- `UI_TrackUnit <camera> ...` built (READ 0x834460: TargetNothing / GetTargetEntity / TargetEntities with the
+  selection); `cam_SetLOD CameraHead2` worked already.
+- Window: `Window::owner`, `noActivate` (WS_EX_NOACTIVATE, owned), `partner` (the mouse lock clips to the rectangle
+  round both windows; the wheel over the partner is handed to it), `InFront()` (either window); a press on window 2
+  while none of ours is in front brings the main one forward. RunWindow opens window 2 (full screen on the
+  Secondary Adapter's screen, or the test window), routes its mouse to head 1, draws head 1 into its own target
+  (recorder + incremental painter) and shows it by `Window::Present` when it changed (and once a second); the pointer
+  and the held pointer on both. `MOHO64UI_SECOND_CAPTURE=<png>` saves head 1's picture at frame
+  `MOHO64UI_CAPTURE_FRAME` (300). SDL: events go to their window by `windowID` (`SDL_WINDOW_NOT_FOCUSABLE` for
+  window 2; the mouse grab is off with two windows) - UNTESTED.
+- Options: `moho64ui_Looks()` gives `heads`, `secondWidth`, `secondHeight`. (The list's rule: part 2.)
+- Test: `ui/tests/dualhead.lua` (cases front, game, one).
+
+### Part 2 (2026-11-08, ui helper "dualhead2"; steps 6-8 with the renderer's second window, render f31424b4 + bbed51c0)
+
+- GameSession: `UseSecondWindow(handle, w, h)` (RunWindow's `hooks.secondOpened`, once window 2 is open) asks the
+  window's picture for `WorldPicture::UseSecondWindow` (Win32 HWND; SDL: `UseSecondHostSurface` with window 2's
+  Vulkan surface, UNTESTED), at once on the picture there is and again before Open on every picture made after
+  (EnsureWindowPicture: the Graphics API or the anti-aliasing changed). Failure: a warning with `SecondWindowError()`,
+  and head 1 stays on the plain copy. `CloseSecondWindow` (`hooks.secondClosing`) at RunWindow's end, before window 2
+  goes. `GiveSecondLayer` = `SetSecondInterfaceLayer` with the changed part (all of it the first time and after a
+  change of size, as GiveLayer); a resize of window 2 hands the new target over at once (the renderer never reads a
+  freed one), and its size resizes the second swap chain (the renderer's rule).
+- RunWindow: head 1's interface is now drawn BEFORE the present: with the renderer's second window over a
+  transparent background (premultiplied, as head 0's layer) and given as layer 1; the present (`DrawToWindow`) shows
+  both windows. Without it (`hooks.secondOn` false: `--gdi`, no picture, it failed) over black and copied to window 2
+  after the present (part 1's plain copy). A change between the two (a picture made anew) repaints head 1 whole and
+  logs it.
+- World views: while `WorldSource::SecondWindowOn()` (GameSession::Picture: the window's picture with its second
+  window on), `GatherViews` puts the head-1 views into the picture's views after head 0's (before the follow camera's
+  inset), kind Split, `window = 1`, rect in head 1's pixels: `Picture::SetViews` passes `PictureView::window`. Their
+  EnsurePicture goes through the main view (as the split screen's right view), so they get a view number, and every
+  pick on head 1 (select, box select, the unit under the mouse, right-click orders, GetMouseWorldPos, UnProject,
+  Project, the marks' ETAs and names) goes through the renderer's ViewProject / ViewGroundAt / ViewUnitAt /
+  ViewUnitsIn by that number: the perspective picture. The plain view from above stays only where no picture is.
+  `moho64ui_Views()` entries say `given` (handed to the source); `moho64ui_ViewNumber(view)` -> its view number (-1:
+  no picture) and whether the second window is on.
+- Options (3.4, step 8): `DisplayMode::secondHeadShown` = the renderer's picture in a window (built with it,
+  `--window`/`--fullscreen`, not `--gdi`) or `MOHO64UI_SECOND_HEAD=1`; the Secondary Adapter then lists the other
+  screens on a PC with 2+ (one screen: Disabled alone). Not probed at the start: the second window is only made once
+  a second head is chosen (it needs the window). INFERRED, ours. Headless runs (the suite's screens / lobby) have no
+  window, so their expectations are unchanged.
+- Statistics: the overlay's frame line ends with `window 2: N a second` (how often `SecondWindowDrawnLastFrame`
+  was true over the last second; in the log with `MOHO64UI_OVERLAY_LOG=1`), and the run's end logs `window 2: the
+  renderer drew it in D of F counted frames shown with it on (P%; N a second)`.
+- Check picture: `MOHO64UI_SECOND_CAPTURE=<png>` with the renderer's second window saves window 2's next picture
+  shown, read back by the renderer (`CaptureNextSecondWindowFrame`, render bbed51c0), else head 1's interface;
+  `MOHO64UI_CAPTURE_FRAME=+N` counts the frames of a game's interface (plain N: all frames).
+- Test: `dualhead.lua` case `window` (live window `--size 1280x720`, `MOHO64UI_SECOND_WINDOW=960x540`, a game; ends
+  itself after 15 s of numbers) and `windowone` (the same with one head, for the numbers). The headless `game` case
+  now also checks that head 1's view is not given and has no picture there.
+- Measured (2026-11-08, framed test windows 1280x720 + 960x540 on one screen, vsync off, pinned to CPUs 16-31, the PC
+  shared with another test run, so rough): window 2 drawn in 67-84% of frames (about 115-150 a second at 150-200
+  frames a second); window 0's frame to frame 5.94 ms (middle) with head 1 against 3.03 ms without it, the difference
+  in the renderer's DrawToWindow (the second view's preparing, drawing and card time; showing 4.21 against 1.89 ms a
+  frame). Not optimised (Chris: optimise at the end; 4.4's `every` / a lower scale for window 1 are the levers).
+- Not done: 3.3's WM_DISPLAYCHANGE handling (head 1's screen gone, or the primary moved onto it: nothing hides
+  window 2 yet), the `/dual` command line, a full-screen second head on a real second screen (not tried: the checks
+  use the framed test window on one screen), the SDL path (compiled only).

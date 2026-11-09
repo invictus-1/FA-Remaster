@@ -2413,7 +2413,7 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other) {
 // AirTransportUnit.OnMotionHorzEventChange ('Stopped' -> navigator:AbortMove, in the transport's motion), and the
 // original's interceptor still follows its slot in that beat and stops following only at 2214. So it runs in the
 // navigators' stage (LandNavTickUnits), after AirNavArrival, not in the motion pass.
-void AirFormationFollow(Sim& sim, Unit* u) {
+void AirFormationFollow(Sim& sim, Unit* u, bool deferred) {
   if (!u->motion.air || u->fractionComplete < 1.0f) return;
   AirMotion& a = A(u);
   if (!(a.steering && a.inFormation) || u->navIgnoreFormation || (u->navigator && u->navigator->ignoreFormation) ||
@@ -2424,8 +2424,26 @@ void AirFormationFollow(Sim& sim, Unit* u) {
   Unit* L = le && le->kind == Entity::Kind::Unit ? static_cast<Unit*>(le) : nullptr;
   if (f && L && L != u) {
     // (another unit in parallel order's navigators' stage: its status as the stage began, step 5.3)
-    bool good = SeesNavSnapshot(L) ? (L->motion.air ? L->snapAirSteering : L->snapNavStatus == 2)
-                                   : (L->motion.air ? A(L).steering : LandNavStatus(L) == 2);
+    // The leader's navigator vt+0x28 HasGoodPath (0x5a4df0): an air leader's is its status 2 (0x5a4e50), a land
+    // leader's is its PATH navigator's state 5 (CAiNavigatorLand::HasGoodPath 0x5a3eb0), not its status: a land
+    // leader whose search runs (state 3), or that follows a slot itself (6), is not followed. Seen: FAF 3840 pro
+    // replay 4v4_3 6300, army 2's aircraft 0x200030 / 0x200047 guard the tank 0x20000f, which got a Move at 6298;
+    // their guard's follow goals of 6299 stand in the original at 6300 (the tank's path arrives only in its path
+    // queue, after their navigators: inferred); ours took the guard formation's slots, the tank's status being 2.
+    // The original runs each army's path queue at the end of that army's stage (beat_order.md 2.4); ours runs them
+    // all after the last army (LandNavStageEnd). So a land leader of an EARLIER army whose search is under way (path
+    // state 3 / 4) has its path already delivered when the original asks; this turn waits for our path queues.
+    // Seen: 6v6_2 5461, army 7's aircraft 0x700004 guards army 3's commander 0x300000, re-ordered at 5460: the
+    // original follows the slot at 5461.
+    if (!deferred && !SeesNavSnapshot(L) && !L->motion.air && L->army && u->army && L->army->index < u->army->index) {
+      const int st = LandNavPathState(L);
+      if (st == 3 || st == 4) {
+        sim.airFollowDeferred.push_back(EntityRef(u));
+        return;
+      }
+    }
+    bool good = SeesNavSnapshot(L) ? (L->motion.air ? L->snapAirSteering : L->snapNavGoodPath)
+                                   : (L->motion.air ? A(L).steering : LandNavHasGoodPath(L));
     if (good) {
       a.curTarget = u->formSlot;
       SetTarget(sim, u, u->formSlot, Vec3{}, 0);
@@ -2434,6 +2452,15 @@ void AirFormationFollow(Sim& sim, Unit* u) {
     a.inFormation = false;
     a.curTarget = a.goal;
     SetTarget(sim, u, a.goal, Vec3{}, 0);
+  }
+}
+
+void AirFormationFollowDeferred(Sim& sim) {
+  std::vector<uint32_t> v;
+  v.swap(sim.airFollowDeferred);
+  for (uint32_t h : v) {
+    Entity* e = sim.FindEntity(h);
+    if (e && e->kind == Entity::Kind::Unit) AirFormationFollow(sim, static_cast<Unit*>(e), true);
   }
 }
 

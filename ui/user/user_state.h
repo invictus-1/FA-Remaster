@@ -125,6 +125,10 @@ class UserState {
     // run, whose clock goes in fixed frame steps.
     bool liveClock = false;
     int width = 1920, height = 1080;    // the head's size in pixels
+    // The heads (root frames) the state makes at StartMainScript: 1, or 2 with the original's second head (its device's
+    // head 1: DisplayMode::heads, main.cpp), head 1 then of head1Width x head1Height pixels.
+    int heads = 1;
+    int head1Width = 0, head1Height = 0;
     // The script that sets the state up: the front end's, or /lua/SessionInit.lua for the state
     // a game's interface runs in (the original makes a new state for every session, FA exe 0x885de0).
     std::string bootScript = "/lua/userInit.lua";
@@ -274,6 +278,9 @@ class UserState {
   // The head's size, also before the main script makes the root frames (the display mode the
   // player's option chose at the start).
   void SetHeadSize(int width, int height);
+  // The second head (Config::heads, head1Width, head1Height), also before the main script makes the root frames:
+  // `heads` 1 or 2 (a frame made already stays: GetNumRootFrames does not change within a state).
+  void SetSecondHead(int heads, int width, int height);
   // A session's state made on the loading thread (main.cpp: with the simulation, before the load is through) gets
   // the session's links when it is handed over: `links`' waitForBeat, groundHeight, beatRunning, gameTime,
   // commandSource, ownArmy, world, pace and timeline, and its head size (the window may have been resized meanwhile).
@@ -514,11 +521,22 @@ struct DisplayMode {
   std::vector<DisplayScreen> screens;
   int screen = 0;
   // The Secondary Adapter's screen the program started with (-1: disabled, or a window: the original opens a
-  // second head only in full screen, CScApp::CreateDevice 0x8d0712..0x8d08fe). Not shown yet: the second head's
-  // world view needs a second picture of the renderer's (ui/README.md, the display mode).
+  // second head only in full screen, CScApp::CreateDevice 0x8d0712..0x8d08fe).
   int secondScreen = -1;
-  // Whether the Secondary Adapter's list offers the other screens: only where a second head can be shown (off:
-  // "Disabled" alone, as on a PC with one screen). MOHO64UI_SECOND_HEAD=1 turns it on, for tests.
+  // The heads the program runs with, decided once at the start as the original's device is made once
+  // (docs/ui-dualscreen.md 3.2; main.cpp): 1, or 2 with the second head, a window of its own of secondWidth x
+  // secondHeight (the second screen's own size: full screen there; or the test window below). Every interface state
+  // makes a root frame per head. Window 2 is shown by the renderer's second window (its world view drawn there: the
+  // renderer's answer to ui request 48); without it (--gdi, or it failed) head 1's interface only, its world view black.
+  int heads = 1;
+  int secondWidth = 0, secondHeight = 0;
+  // MOHO64UI_SECOND_WINDOW=WxH / --second-window WxH (tests, and a PC with one screen): head 1 is a framed window of
+  // that size on the primary's screen, also beside a windowed primary. Ours.
+  bool secondWindowTest = false;
+  // Whether the Secondary Adapter's list offers the other screens (where the PC has two screens or more; one screen:
+  // "Disabled" alone, as the original with one adapter): where the renderer's second window can show the second head's
+  // world (the renderer's picture in a window, not --gdi: main.cpp). MOHO64UI_SECOND_HEAD=1 turns it on also without
+  // (tests: headless runs have no window).
   bool secondHeadShown = false;
   // The screen the live window is on (its middle), as last looked at (after it opened and after each change of
   // mode); -1 without a window.
@@ -885,6 +903,8 @@ void CineCameraCommand(lua_State* L, const std::string& value);
 void CinePhotoCommand(lua_State* L);
 // cam_SetLOD <camera> <scale> (worldview.cpp): the LOD scale of a camera, as the original's console command sets it.
 void CameraLodCommand(lua_State* L, const std::string& rest);
+// UI_TrackUnit <camera> ... (worldview.cpp): each named camera follows the selection, or lets go (the original's).
+void TrackUnitCommand(lua_State* L, const std::string& rest);
 // The photo mode (worldview.cpp; ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look
 // 7). The console's remaster_photo_mode [on|off] (no word: it turns over; the key "Photo mode", Alt-P at first), in a
 // game or a replay: a free camera, the picture's own time of day, weather and lens, and photos up to four times the

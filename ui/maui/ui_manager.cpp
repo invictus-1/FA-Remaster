@@ -84,43 +84,71 @@ UiManager::~UiManager() {
   }
 }
 
-bool UiManager::CreateRootFrames(lua_State* L, int width, int height) {
-  width_ = width;
-  height_ = height;
-  int top = lua_gettop(L);
-  lua_pushcfunction(L, ScriptTraceback);
-  lua_getglobal(L, "import");
-  lua_pushstring(L, "/lua/maui/frame.lua");
-  bool ok = lua_pcall(L, 1, 1, top + 1) == 0;
-  if (ok) {
-    lua_pushstring(L, "Frame");
-    lua_gettable(L, -2);
-    ok = lua_pcall(L, 0, 1, top + 1) == 0;
-  }
-  Frame* frame = ok ? dynamic_cast<Frame*>(GetObject(L, -1)) : nullptr;
-  if (!frame) {
-    Logf(LogLevel::Warning, "Error in CMauiFrame::Create(): %s",
-         !ok && lua_isstring(L, -1) ? lua_tostring(L, -1) : "the Frame class did not make a frame");
+int UiManager::CreateRootFrames(lua_State* L, const std::vector<std::pair<int, int>>& sizes) {
+  for (size_t i = 0; i < sizes.size(); ++i) {
+    const int head = static_cast<int>(i);
+    Resize(head, sizes[i].first, sizes[i].second);  // (the size is the head's before its frame is there)
+    int top = lua_gettop(L);
+    lua_pushcfunction(L, ScriptTraceback);
+    lua_getglobal(L, "import");
+    lua_pushstring(L, "/lua/maui/frame.lua");
+    bool ok = lua_pcall(L, 1, 1, top + 1) == 0;
+    if (ok) {
+      lua_pushstring(L, "Frame");
+      lua_gettable(L, -2);
+      ok = lua_pcall(L, 0, 1, top + 1) == 0;
+    }
+    Frame* frame = ok ? dynamic_cast<Frame*>(GetObject(L, -1)) : nullptr;
+    if (!frame) {
+      Logf(LogLevel::Warning, "Error in CMauiFrame::Create(): %s",
+           !ok && lua_isstring(L, -1) ? lua_tostring(L, -1) : "the Frame class did not make a frame");
+      lua_settop(L, top);
+      return head;
+    }
     lua_settop(L, top);
-    return false;
+    frame->head = static_cast<int>(frames_.size());
+    frame->renderPass = 8;  // (UIRP_PostGlow: 0x84ce94, after CMauiFrame::Create; every control made on it takes it)
+    frames_.push_back(frame);
+    Resize(frame->head, sizes[i].first, sizes[i].second);
   }
-  lua_settop(L, top);
-  frame->head = static_cast<int>(frames_.size());
-  frame->renderPass = 8;  // (UIRP_PostGlow: 0x84ce94, after CMauiFrame::Create; every control made on it takes it)
-  frames_.push_back(frame);
-  Resize(width, height);
-  return true;
+  return -1;
 }
 
-void UiManager::Resize(int width, int height) {
-  width_ = width;
-  height_ = height;
-  for (Frame* f : frames_) {
+void UiManager::Resize(int head, int width, int height) {
+  if (head < 0) return;
+  if (sizes_.size() <= static_cast<size_t>(head)) sizes_.resize(static_cast<size_t>(head) + 1, {0, 0});
+  sizes_[static_cast<size_t>(head)] = {width, height};
+  if (Frame* f = GetFrame(head)) {
     f->left.Set(0.0f);
     f->top.Set(0.0f);
     f->width.Set(static_cast<float>(width));
     f->height.Set(static_cast<float>(height));
   }
+}
+
+void UiManager::OnResize(lua_State* L, int head, int width, int height) {
+  if (!GetFrame(head)) {  // (the original: nothing without that head's frame, 0x84cfcf; ours keeps the size for when it comes)
+    Resize(head, width, height);
+    return;
+  }
+  Resize(head, width, height);
+  const int top = lua_gettop(L);
+  lua_pushcfunction(L, ScriptTraceback);
+  lua_getglobal(L, "import");
+  lua_pushstring(L, "/lua/ui/uimain.lua");
+  bool ok = lua_pcall(L, 1, 1, top + 1) == 0;
+  if (ok) {
+    lua_pushstring(L, "OnApplicationResize");
+    lua_gettable(L, -2);
+    if (lua_isfunction(L, -1)) {
+      lua_pushnumber(L, head);
+      lua_pushnumber(L, width);
+      lua_pushnumber(L, height);
+      ok = lua_pcall(L, 3, 0, top + 1) == 0;
+    }
+  }
+  if (!ok) LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+  lua_settop(L, top);
 }
 
 Frame* UiManager::GetFrame(int head) const {
@@ -203,6 +231,12 @@ class AlphaScaledTarget : public DrawTarget {
 void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
   Frame* frame = GetFrame(head);
   if (!frame) return;
+  struct HeadDrawn {  // (renderingHead while this head draws)
+    int& at;
+    int was;
+    ~HeadDrawn() { at = was; }
+  } headDrawn{renderingHead, renderingHead};
+  renderingHead = head;
   if (controlsAlpha != 1.0f) {
     AlphaScaledTarget scaled(target, controlsAlpha);
     const float keep = controlsAlpha;
@@ -367,7 +401,7 @@ void DumpControl(const Control* c, int indent) {
 
 void UiManager::Dump() const {
   for (Frame* f : frames_) {
-    Logf(LogLevel::Info, "ui: head %d: %dx%d", f->head, width_, height_);
+    Logf(LogLevel::Info, "ui: head %d: %dx%d", f->head, width(f->head), height(f->head));
     DumpControl(f, 0);
   }
   Logf(LogLevel::Info, "ui: %d controls", CountControls());
@@ -562,34 +596,40 @@ int l_Describe(lua_State* L) {
   return 1;
 }
 
-// moho64ui_PixelAt(x, y): not an engine function of the original. The host's own function for tests:
-// the first head's controls drawn now over a clear picture (no world, no mouse pointer), and the colour
-// of the pixel at (x, y) as "aarrggbb"; nil outside the head.
+// moho64ui_PixelAt(x, y [, head]): not an engine function of the original. The host's own function for tests:
+// the head's controls (the first head's without `head`) drawn now over a clear picture (no world, no mouse pointer),
+// and the colour of the pixel at (x, y) as "aarrggbb"; nil outside the head.
 int l_PixelAt(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   const int x = static_cast<int>(luaL_checknumber(L, 1)), y = static_cast<int>(luaL_checknumber(L, 2));
-  if (x < 0 || y < 0 || x >= ui.width() || y >= ui.height()) {
+  const int head = static_cast<int>(luaL_optnumber(L, 3, 0));
+  if (x < 0 || y < 0 || x >= ui.width(head) || y >= ui.height(head)) {
     lua_pushnil(L);
     return 1;
   }
-  SoftwareTarget target(ui.width(), ui.height());
+  SoftwareTarget target(ui.width(head), ui.height(head));
   target.Clear(0);
-  ui.Render(L, target, 0);
+  ui.Render(L, target, head);
   char buf[16];
-  std::snprintf(buf, sizeof buf, "%08x", target.pixels()[static_cast<size_t>(y) * static_cast<size_t>(ui.width()) + static_cast<size_t>(x)]);
+  std::snprintf(buf, sizeof buf, "%08x", target.pixels()[static_cast<size_t>(y) * static_cast<size_t>(ui.width(head)) + static_cast<size_t>(x)]);
   lua_pushstring(L, buf);
   return 1;
 }
 
-// moho64ui_InterfacePng(file): not an engine function of the original. The host's own function for tests, as
-// moho64ui_PixelAt draws: the first head's controls drawn now over black (no world, no mouse pointer), saved as a PNG
-// picture at the host path `file`; true when written.
+// moho64ui_InterfacePng(file [, head]): not an engine function of the original. The host's own function for tests, as
+// moho64ui_PixelAt draws: the head's controls (the first head's without `head`) drawn now over black (no world, no
+// mouse pointer), saved as a PNG picture at the host path `file`; true when written.
 int l_InterfacePng(lua_State* L) {
   UiManager& ui = UserState::From(L)->ui();
   const std::string file = luaL_checkstring(L, 1);
-  SoftwareTarget target(ui.width(), ui.height());
+  const int head = static_cast<int>(luaL_optnumber(L, 2, 0));
+  if (ui.width(head) <= 0 || ui.height(head) <= 0) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  SoftwareTarget target(ui.width(head), ui.height(head));
   target.Clear(0xff000000u);
-  ui.Render(L, target, 0);
+  ui.Render(L, target, head);
   lua_pushboolean(L, target.SavePng(file));
   return 1;
 }

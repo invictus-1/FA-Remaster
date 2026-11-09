@@ -181,7 +181,10 @@ SDL_DisplayID DisplayOf(const Window::Screen& s) {
 
 }  // namespace
 
+std::map<uint32_t, Window*>& SdlWindows();  // (below: the windows by their id)
+
 Window::~Window() {
+  if (sdl_) SdlWindows().erase(SDL_GetWindowID(Sdl(sdl_)));
   KeepMouseInside(false);
   for (auto& entry : pointers_)
     if (entry.second) SDL_DestroyCursor(static_cast<SDL_Cursor*>(entry.second));
@@ -204,12 +207,14 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   const SDL_DisplayID display = full && on ? DisplayOf(*on) : 0;
   if (full && !display) flags |= SDL_WINDOW_FULLSCREEN;
   if (!show) flags |= SDL_WINDOW_HIDDEN;
+  if (noActivate) flags |= SDL_WINDOW_NOT_FOCUSABLE;  // ([head2] the second head's: the keyboard stays with the main window)
   SDL_Window* w = SDL_CreateWindow(title, width, height, flags);
   if (!w) {
     Logf(LogLevel::Warning, "moho64ui: the window did not open (SDL: %s)", SDL_GetError());
     return false;
   }
   sdl_ = w;
+  SdlWindows()[SDL_GetWindowID(w)] = this;
   if (display) {
     SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
     SDL_SetWindowFullscreenMode(w, nullptr);
@@ -344,7 +349,14 @@ void Window::LockMouse(bool lock) {
 }
 
 void Window::KeepMouseInside(bool keep) {
-  if (sdl_) SDL_SetWindowMouseGrab(Sdl(sdl_), keep);
+  // ([head2] SDL holds the mouse in one window: with the other head's window beside it the mouse is left free, so that
+  // it can go over to head 1. UNTESTED.)
+  if (sdl_) SDL_SetWindowMouseGrab(Sdl(sdl_), keep && !partner);
+}
+
+bool Window::InFront() const {
+  auto focused = [](void* w) { return w && (SDL_GetWindowFlags(Sdl(w)) & SDL_WINDOW_INPUT_FOCUS) != 0; };
+  return focused(sdl_) || (partner && focused(partner->sdl_));
 }
 
 bool Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY) {
@@ -398,35 +410,66 @@ bool Window::HeldMove(int, int, float* x, float* y) {
   return false;
 }
 
+// [head2] SDL's windows by their id: each event goes to the Window it names (the second head's window has its own
+// callbacks, head 1); an event that names none, or a window not ours, to the window pumping. UNTESTED (no Linux / Mac
+// here, and the Windows test build has not been run with two windows).
+std::map<uint32_t, Window*>& SdlWindows() {
+  static std::map<uint32_t, Window*> windows;
+  return windows;
+}
+
+namespace {
+uint32_t WindowIdOf(const SDL_Event& ev) {
+  switch (ev.type) {
+    case SDL_EVENT_MOUSE_MOTION: return ev.motion.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: return ev.button.windowID;
+    case SDL_EVENT_MOUSE_WHEEL: return ev.wheel.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP: return ev.key.windowID;
+    case SDL_EVENT_TEXT_INPUT: return ev.text.windowID;
+    default: return ev.type >= SDL_EVENT_WINDOW_FIRST && ev.type <= SDL_EVENT_WINDOW_LAST ? ev.window.windowID : 0;
+  }
+}
+}  // namespace
+
 bool Window::Pump() {
-  auto key = [&](const UiEvent& e) { return callbacks.key ? callbacks.key(e) : false; };
   SDL_Event ev;
   while (SDL_PollEvent(&ev)) {
+    Window* to = this;
+    if (const uint32_t id = WindowIdOf(ev)) {
+      auto found = SdlWindows().find(id);
+      if (found != SdlWindows().end()) to = found->second;
+    }
+    Window& w = *to;
+    auto key = [&](const UiEvent& e) { return w.callbacks.key ? w.callbacks.key(e) : false; };
     switch (ev.type) {
       case SDL_EVENT_QUIT:
-      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         closed = true;
+        break;
+      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:  // (the second head's window closes with the program, not by itself)
+        if (!w.noActivate) closed = true;
         break;
       case SDL_EVENT_MOUSE_MOTION: {
         UiEvent e = MouseEvent(ev.motion.x, ev.motion.y);
-        if (holding_) {
-          heldX_ += ev.motion.xrel, heldY_ += ev.motion.yrel;
-          e.x = heldX_, e.y = heldY_;
+        if (w.holding_) {
+          w.heldX_ += ev.motion.xrel, w.heldY_ += ev.motion.yrel;
+          e.x = w.heldX_, e.y = w.heldY_;
         }
-        if (callbacks.mouseMove) callbacks.mouseMove(e);
+        if (w.callbacks.mouseMove) w.callbacks.mouseMove(e);
         break;
       }
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
       case SDL_EVENT_MOUSE_BUTTON_UP: {
         const bool pressed = ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
         UiEvent e = MouseEvent(ev.button.x, ev.button.y);
-        if (holding_) e.x = heldX_, e.y = heldY_;
+        if (w.holding_) e.x = w.heldX_, e.y = w.heldY_;
         e.left = ev.button.button == SDL_BUTTON_LEFT;  // for a button event: the button it is about
         e.middle = ev.button.button == SDL_BUTTON_MIDDLE;
         e.right = ev.button.button == SDL_BUTTON_RIGHT;
         if (!e.left && !e.middle && !e.right) break;
         SDL_CaptureMouse(pressed);
-        if (callbacks.mouseButton) callbacks.mouseButton(e, pressed, pressed && ev.button.clicks == 2);
+        if (w.callbacks.mouseButton) w.callbacks.mouseButton(e, pressed, pressed && ev.button.clicks == 2);
         break;
       }
       case SDL_EVENT_MOUSE_WHEEL: {
@@ -434,7 +477,7 @@ bool Window::Pump() {
         const float y = ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -ev.wheel.y : ev.wheel.y;
         e.wheelRotation = static_cast<int>(std::lround(y * 120.0f));  // away from the user is positive
         e.wheelDelta = 120;                                           // one notch, as Windows'
-        if (e.wheelRotation && callbacks.mouseWheel) callbacks.mouseWheel(e);
+        if (e.wheelRotation && w.callbacks.mouseWheel) w.callbacks.mouseWheel(e);
         break;
       }
       case SDL_EVENT_KEY_DOWN: {
@@ -443,8 +486,8 @@ bool Window::Pump() {
         const int code = KeycodeMSWToMaui(vk);
         UiEvent down = KeyEventOf(EventType::KeyDown, code ? code : vk, vk);
         down.repeat = ev.key.repeat;
-        keyDownHandled = key(down);
-        if (keyDownHandled) break;
+        w.keyDownHandled = key(down);
+        if (w.keyDownHandled) break;
         // The characters Windows makes of a key itself (the system's text input brings the others).
         const bool ownCharacter = code == 127 || (code >= 312 && code <= 325) || (code >= 342 && code <= 365);
         if (ownCharacter) key(KeyEventOf(EventType::Char, code, vk));
@@ -460,22 +503,22 @@ bool Window::Pump() {
         break;
       }
       case SDL_EVENT_TEXT_INPUT:
-        if (keyDownHandled) {  // its key down was handled: the character is swallowed
-          keyDownHandled = false;
+        if (w.keyDownHandled) {  // its key down was handled: the character is swallowed
+          w.keyDownHandled = false;
           break;
         }
         for (int ch : Characters(ev.text.text)) key(KeyEventOf(EventType::Char, ch, ch));
         break;
       case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-        if (callbacks.resized && ev.window.data1 > 0 && ev.window.data2 > 0) callbacks.resized(ev.window.data1, ev.window.data2);
+        if (w.callbacks.resized && ev.window.data1 > 0 && ev.window.data2 > 0) w.callbacks.resized(ev.window.data1, ev.window.data2);
         break;
       case SDL_EVENT_WINDOW_FOCUS_GAINED:  // in front: the mouse stays inside a full screen (if the player locks it)
-        if (fullScreen) KeepMouseInside(lockMouse);
-        if (callbacks.focus) callbacks.focus(true);
+        if (w.fullScreen) w.KeepMouseInside(w.lockMouse);
+        if (w.callbacks.focus) w.callbacks.focus(true);
         break;
       case SDL_EVENT_WINDOW_FOCUS_LOST:
-        KeepMouseInside(false);
-        if (callbacks.focus) callbacks.focus(false);  // (the keys held: input.h WindowFocus)
+        w.KeepMouseInside(false);
+        if (w.callbacks.focus) w.callbacks.focus(false);  // (the keys held: input.h WindowFocus)
         break;
       default:
         break;

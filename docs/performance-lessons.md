@@ -113,6 +113,15 @@ Safe directions, each validated by the gate:
 - **Method and field lookup caching** for hot binding calls, as long as results and side effects are identical.
 - **GC:** keep the collection schedule the original uses. GC timing can affect weak tables and finalizer order, which
   can affect results. Optimize allocation volume, not collection timing.
+  Measured 2026-11-07 (e1e, parallel order, 16 threads): the incremental collector (`third_party/lua/lgcinc.c`) is
+  7.7% of a variant-B1 beat and 12.9% of a B3-16k beat, nearly all of it marking, and nearly all of that two pieces of
+  bookkeeping, not the marking itself: `regraytables` walked every waiting thread each time the gray list ran empty
+  (B3: ~24 k threads, ~73% of the marking), and a table written while black was re-scanned in full every beat it was
+  written (variant B1: 1.6 G slots in 12000 beats for ~9 M stores, ~85% of the marking). Both are now exact: the
+  waiting threads sit in a deque that keeps the list's order (`MOHO64_GC_VERIFYORDER=1` checks it), and a re-traversal
+  looks at the logged written slots only, in the full scan's order, charged the same units (`MOHO64_GC_VERIFYLOG=1`
+  checks it). What did NOT pay: changing the pace (`MOHO64_GC_PAUSE`: erratic, up to 2.7 times the memory, and it moves
+  weak tables), software prefetch in the marking (8% slower on B1), skipping unchanged tables (under 1%).
 - Every Lua change must keep float semantics, `%.14g` number formatting and table iteration order bit-identical.
 
 ### 4.2a Port Luau's techniques, not Luau
@@ -128,6 +137,9 @@ order of effort:
 3. **Inline caches for field access:** cache, per instruction, the slot where a constant string key (e.g.
    `self.Health`, `unit.Blueprint`) was last found, and verify the cache is still valid before using it. Invalidate
    when the table's layout changes. This is a large share of Luau's speed on object-style code like FA's unit scripts.
+   Measured for `__index` chains (e1e 2026-11-07, exact, keyed on `Table::wstamp`): a per-instruction cache made the
+   variant B1's AI Lua 2.2% SLOWER, a state-wide direct-mapped one 1.0% faster; FA's chains are one level into a class
+   table that is already in the cache, so a walk costs only ~5-7 ns more than a hit. Dropped.
 4. **Specialized instructions:** add internal opcodes for very common patterns (field load with a constant key, method
    call `obj:Method()`, numeric `for` loops with constant steps), emitted by our compiler. Bytecode is internal to us,
    so this is free to change as long as results match.
