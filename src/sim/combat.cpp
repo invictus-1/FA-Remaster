@@ -3617,6 +3617,14 @@ void AttackSetPosGoal(Sim& sim, Unit* u, const Vec3& p) {
   AttackSetGoalRect(sim, u, cx, cz, cx + 1, cz + 1);
 }
 // CAiNavigatorLand::SetDestUnit 0x5a4180: a 1x1 goal at (fistp(e.x - 0.5), fistp(e.z - 0.5))
+// The entity the attack task hands the navigator's SetDestUnit: the task target's own (CAiTarget +0x64), which for an
+// order on a jammer's fake blip is the fake, not its unit (see AttackUpdate).
+const Entity* AttackDestEntity(Sim& sim, const AiTarget& target, const Entity* e) {
+  if (target.fakeId)
+    if (const Entity* f = sim.FindEntity(target.fakeId)) return f;
+  return e;
+}
+
 void AttackSetDestUnit(Sim& sim, Unit* u, const Entity* e) {
   {
     static const long dbgGoal = getenv("MOHO64_DEBUG_ATTACKGOAL") ? atol(getenv("MOHO64_DEBUG_ATTACKGOAL")) : -1;
@@ -3750,7 +3758,11 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
     // destination on the dead unit's blip, and the air SetTarget turns the facing toward it before the task ends.
     // Seen: Experimental2 1310, a Tempest's drones whose target died at 1309 turned toward the dead ship's place;
     // ours took the goal cell of its aim bone (another facing for the hover after the abort).
-    AttackSetDestUnit(sim, u, e);
+    // An order on a jammer's FAKE blip holds the fake (the task's copy of cmd+0x11c, AiTarget::fakeId): the navigator
+    // gets the fake entity, at its offset from the unit. Seen (oracle probe v3840k_44_dest): FAF 3840 pro replay 4v4_4
+    // 6367, army 4's bomber 0x400034 takes its queued Attack on a fake blip of army 7's ship 0x700025: the original's
+    // SetDestUnit (from 0x5f3327) gets blip 0x30700084 at (71.76, 20, 496.69); ours flew at the ship (58.01, 514.42).
+    AttackSetDestUnit(sim, u, AttackDestEntity(sim, target, e));
   } else {
     AttackSetPosGoal(sim, u, has ? TargetPos(sim, target, false) : d.lastPos);  // (0x5f3332: the flag clear too)
   }
@@ -3985,7 +3997,7 @@ int AttackStep(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         Vec3 cell;
         if (FormationGoalOfForm(*fc, u, &cell)) AttackSetPosGoal(sim, u, cell);
       } else {
-        AttackSetDestUnit(sim, u, e);
+        AttackSetDestUnit(sim, u, AttackDestEntity(sim, target, e));
       }
       d.lastPos = tp;
       return 1;
