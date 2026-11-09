@@ -1892,7 +1892,7 @@ void RegisterKeyMapBindings(lua_State* L) {
   lua_register(L, "moho64ui_ConsoleNames", l_ConsoleNames);
   lua_register(L, "moho64ui_Looks", l_LooksForTests);
   // moho64ui_RayTracingSupported() -> true or false once a picture of the renderer has opened and said whether
-  // the graphics card can ray trace, nil before (the Video tab's Ray Tracing: one state, greyed, where it cannot).
+  // the graphics card can ray trace, nil before (the Remastered tab's Ray Tracing: one state, greyed, where it cannot).
   lua_register(L, "moho64ui_RayTracingSupported", [](lua_State* S) -> int {
     const int known = Looks().rayTracingSupported;
     if (known < 0) lua_pushnil(S);

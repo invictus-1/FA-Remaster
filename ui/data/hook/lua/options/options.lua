@@ -1,9 +1,10 @@
--- FA Remastered: the program's own looks as options of each player, in the Video tab of the
--- game's Options menu (this file is a hook: the program reads it after the game's
+-- FA Remastered: the program's own looks as options of each player, in the Remastered tab of the
+-- game's Options menu, after Video (this file is a hook: the program reads it after the game's
 -- /lua/options/options.lua, which stays as it is). Each sends a console command the program
 -- takes (ui/user/keymap.cpp, LookSettings); the game's picture follows at once. They are only
 -- seen: nothing in the simulation depends on them. Chris, 2026-10-15: "The new looks will go
--- into options menu for each player".
+-- into options menu for each player"; 2026-11-08, the menu grown big: their own tab, in sections
+-- (docs/ui-options-layout.md; the tab buttons narrowed for five: ui/data/hook/lua/ui/dialogs/options.lua).
 local function Look(command)
     return function(key, value, startup)
         ConExecute(command .. " " .. tostring(value))
@@ -83,7 +84,19 @@ local function SetRemasterPreset(control, level)
     if not values then return end  -- (Custom)
     local logic = import("/lua/options/optionslogic.lua")
     for key, value in values do
-        logic.SetValue(key, value, true)
+        local item = logic.FindOptionItem(key)
+        if item and item.type == 'slider' then
+            -- (a slider's SetValue with skipUpdate does nothing, and without it only moves the thumb: FAF's slider
+            -- change and maui/slider.lua SetValue; the dialog's working set takes a slider's value in its
+            -- OnValueSet, as when the mouse lets go of it. Before 2026-11-08 the levels never reached Sharpen
+            -- and Unit Glow at Night.)
+            if item.control and not IsDestroyed(item.control) then
+                item.control:SetValue(value)
+                item.control:OnValueSet(item.control:GetValue())
+            end
+        else
+            logic.SetValue(key, value, true)
+        end
     end
 end
 
@@ -95,7 +108,7 @@ end
 -- change nothing being passed over (High after Ray Tracing went: it is Ultra without it). A level only ever lowers:
 -- what the player has set lower than the level has stays as he set it (each value the lesser of his and the level's;
 -- his Original Look stays), so from Custom the levels are tried from Ultra down. The Remastered Preset then names the
--- level the looks match, or Custom (as the Video tab would show them).
+-- level the looks match, or Custom (as the Remastered tab would show them).
 function RemasterLowerStep(current)
     local rayTracing = moho64ui_RayTracingSupported() ~= false
     local function Counts(key) return rayTracing or key ~= 'remaster_ray_tracing' end
@@ -151,6 +164,7 @@ local looks = {
     {
         title = "Frame Rate",
         key = 'remaster_frame_rate',
+        tip = "How often a new picture is drawn. Vertical Sync: in step with the screen's refresh, no tearing. Uncapped: as fast as the PC can. 60, 120, 144: at most that many frames a second.",
         type = 'toggle',
         default = 'vsync',
         set = Look("remaster_frame_rate"),
@@ -205,6 +219,7 @@ local looks = {
         -- the build look; effects, tracers, the day, weather, map edge and rich ground stay apart.)
         title = "Look",
         key = 'remaster_look',
+        tip = "The remastered picture as a whole (lighting, sky, water, ground shading, the units' shading and glow, the build look), or the original game's. Effects, tracers, the day, the weather and rich ground keep their own options.",
         type = 'toggle',
         default = 'remastered',
         set = Look("remaster_look"),
@@ -219,6 +234,7 @@ local looks = {
         -- (Chris, 2026-10-15: a choice, Direct3D 12 by default; from the next map loaded)
         title = "Graphics API",
         key = 'remaster_graphics_api',
+        tip = "Draws with Direct3D 12 or Vulkan. Applies from the next map loaded.",
         type = 'toggle',
         default = 'd3d12',
         set = Look("remaster_graphics_api"),
@@ -232,6 +248,7 @@ local looks = {
     {
         title = "Upscaling (FSR 1)",
         key = 'remaster_upscale',
+        tip = "Draws the world smaller and scales it up to the screen with AMD FSR 1: a higher frame rate for a softer picture. Off: drawn at the screen's own size.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_upscale"),
@@ -444,6 +461,7 @@ local looks = {
     {
         title = "Remastered Effects",
         key = 'remaster_effects',
+        tip = "The remastered effects (explosions, smoke, fire, build effects), or the original game's.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_effects"),
@@ -457,6 +475,7 @@ local looks = {
     {
         title = "Effects Quality",
         key = 'remaster_effects_quality',
+        tip = "How many particles the effects throw out: all of them, three quarters or half. Less is faster in big battles.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_effects_quality"),
@@ -471,6 +490,7 @@ local looks = {
     {
         title = "Shell Tracers",
         key = 'remaster_tracers',
+        tip = "Tank shells drawn as hot tracers, or as the original game's plain line.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_tracers"),
@@ -484,6 +504,7 @@ local looks = {
     {
         title = "Rich Ground on Remastered Maps",
         key = 'remaster_rich_ground',
+        tip = "The richer ground of FA Remastered's own remastered maps. Off: their ground as plain as the original's.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_rich_ground"),
@@ -497,6 +518,7 @@ local looks = {
     {
         title = "Tracks in Snow",
         key = 'remaster_snow_tracks',
+        tip = "Units tread tracks into lying snow.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_snow_tracks"),
@@ -816,8 +838,101 @@ for _, item in looks do
         end })
     end
 end
-for _, item in looks do
-    table.insert(options.video.items, item)
+
+-- The Remastered tab (Chris, 2026-11-08: the Video tab "getting kinda big ... keep the same theme/look"; the layout:
+-- docs/ui-options-layout.md, its recommendation (a)): the looks above in sections under the game's own header rows (FAF's
+-- Gameplay and Interface tabs have them), from the screen down to the picture's finish. The first section's six are
+-- the ones no preset level touches; every key a level sets is below the preset on this same tab, as the dialog needs
+-- (optionslogic.SetValue changes only an option whose control is on the page shown). The prefs keep the options as one
+-- flat table, not per tab (optionslogic.GetCurrent), so a player's values stay as they were. A look named in no
+-- section goes under a last header "More" (none today: ui/tests/lobby.lua keeps it so).
+local remasterSections = {
+    { "Display & Performance", { 'remaster_frame_rate', 'remaster_low_latency', 'remaster_graphics_api', 'remaster_upscale',
+                                 'remaster_temporal_upscale', 'remaster_frame_generation' } },
+    { "Preset", { 'remaster_preset', 'remaster_look' } },
+    { "Sky & Light", { 'remaster_atmosphere', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky',
+                       'remaster_soft_shadows', 'remaster_ray_tracing' } },
+    { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
+                            'remaster_weather_effects', 'remaster_season' } },
+    { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak' } },
+    { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
+                            'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway' } },
+    { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour',
+                               'remaster_hidden_outlines', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look',
+                               'remaster_stealth_veil' } },
+    { "Picture & Camera", { 'remaster_photo_look', 'remaster_sharpen', 'remaster_lens' } },
+}
+local function Header(title)  -- (the game's header row: its box unseen, only its title; "expected everywhere": FAF's)
+    return { title = title, type = 'header', default = '', key = '' }
+end
+do
+    local byKey, placed = {}, {}
+    for _, item in looks do byKey[item.key] = item end
+    local items, headerRows, states = {}, {}, {}
+    -- "Go to Section" (Chris's "drop down menus that open up different remaster options"): the game's own drop-down,
+    -- its choice scrolls the tab to that section's header; it hides nothing (the presets and the command palette
+    -- need every row there). Nothing of it is applied (no set); each time the tab is made it shows the first section.
+    local gotoItem = {
+        title = "Go to Section",
+        key = 'remaster_goto_section',
+        tip = "Scrolls this tab to the chosen section.",
+        type = 'toggle',
+        default = 1,
+        remasterNotSearched = true,  -- (the command palette leaves it out: ui/data/lua/palette.lua)
+        custom = { states = states },
+        update = function(control, value)
+            local row = headerRows[value]
+            -- the combo's group, the row's box, the dialog's grid (FAF's CreateOption)
+            local grid = row and control:GetParent() and control:GetParent():GetParent()
+            grid = grid and grid:GetParent()
+            if grid and grid.ScrollSetTop then grid:ScrollSetTop('Vert', row) end
+        end,
+    }
+    gotoItem.init = function()
+        if gotoItem.change and gotoItem.control then gotoItem.change(gotoItem.control, 1, true) end
+    end
+    table.insert(items, gotoItem)
+    local function Section(title, keys)
+        table.insert(items, Header(title))
+        table.insert(states, { text = title, key = table.getn(states) + 1 })
+        headerRows[table.getn(states)] = table.getn(items)
+        for _, item in keys do
+            table.insert(items, item)
+            placed[item.key] = true
+        end
+    end
+    for _, section in remasterSections do
+        local keys = {}
+        for _, key in section[2] do
+            if byKey[key] and not placed[key] then table.insert(keys, byKey[key]) end
+        end
+        Section(section[1], keys)
+    end
+    local more = {}
+    for _, item in looks do
+        if not placed[item.key] then table.insert(more, item) end
+    end
+    if table.getn(more) > 0 then Section("More", more) end
+    options.remaster = { title = "Remastered", key = 'remaster', items = items }
+    local at = table.getn(optionsOrder) + 1
+    for i, key in optionsOrder do
+        if key == 'video' then at = i + 1 end
+    end
+    table.insert(optionsOrder, at, 'remaster')
+end
+
+-- The tab the Options dialog shows chosen, as a click on its button chooses it (Video's "Show" button; the command
+-- palette finds the buttons the same way). A frame later: the button that asks is a row of the page this replaces.
+function RemasterShowOptionsTab(key)
+    local tabData = options[key]
+    ForkThread(function()
+        WaitFrames(1)
+        local tab = false
+        GetFrame(0):ApplyFunction(function(control)
+            if not tab and control.tabData == tabData and control.OnClick and not control:IsHidden() then tab = control end
+        end)
+        if tab then tab:OnClick() end
+    end)
 end
 
 -- Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours, where the player sees them, from a
@@ -844,6 +959,8 @@ function RemasterRecolourScoreBoard()  -- (also for the tests)
         end
     end
 end
+-- (ours under a header of their own: after FAF's last header, "Casting tools", they looked as if they belonged to it)
+table.insert(options.ui.items, Header("FA Remastered"))
 table.insert(options.ui.items, {
     title = "Colour Vision",
     key = 'remaster_color_vision',
@@ -939,6 +1056,19 @@ for i = table.getn(options.video.items), 1, -1 do
         table.remove(options.video.items, i)
     end
 end
+-- Video is the game's own again; where our looks were, a signpost to their tab (the game's 'button' row)
+table.insert(options.video.items, Header("FA Remastered"))
+table.insert(options.video.items, {
+    title = "Picture options: the Remastered tab",
+    key = 'remaster_show_tab',
+    tip = "FA Remastered's own picture options (the Remastered Preset, sky, water, effects, units and more) are in the Remastered tab, next to this one.",
+    type = 'button',
+    default = 0,
+    remasterNotSearched = true,
+    set = function(key, value, startup) end,
+    update = function(control, value) RemasterShowOptionsTab('remaster') end,
+    custom = { text = "Show" },
+})
 
 -- The Fidelity Presets as the game's, but without Render Sky (left out above), and with Bloom
 -- Render on at High and Ultra: the glow belongs to the full modern look (the game's presets turn
@@ -982,6 +1112,8 @@ end
 -- The simulation's order for a new game that has no lobby (a campaign operation; the lobby's own option
 -- "Simulation Order" decides for a skirmish or a network game): Chris, 2026-10-31, multicore option 2, our own order for
 -- new games by default. Read at the launch (ui/app/game_session.cpp LaunchSinglePlayer). Replays play in their own.
+-- (under a header of its own, as ours in the Interface tab: after FAF's "Cursor features" it looked as one of them)
+table.insert(options.gameplay.items, Header("FA Remastered"))
 table.insert(options.gameplay.items, {
     title = "Simulation Order for New Games",
     key = 'remaster_sim_order',
@@ -995,3 +1127,23 @@ table.insert(options.gameplay.items, {
         },
     },
 })
+
+-- Our options' tips in the game's tooltip table: FAF's dialog shows only Tooltips["options_" .. key]
+-- (/lua/ui/help/tooltips.lua; its CreateOption, Tooltip.CreateMouseoverDisplay) and never an item's `tip`, so until
+-- 2026-11-08 hovering one of ours showed its key and "No Description". An entry already there (a later FAF's) is kept.
+do
+    local ok, tips = pcall(import, '/lua/ui/help/tooltips.lua')
+    tips = ok and tips and tips.Tooltips
+    if tips then
+        for _, tabKey in optionsOrder do
+            for _, item in (options[tabKey] and options[tabKey].items) or {} do
+                if item.tip and type(item.key) == 'string' and string.find(item.key, '^remaster_')
+                    and not tips['options_' .. item.key] then
+                    tips['options_' .. item.key] = { title = item.title, description = item.tip }
+                end
+            end
+        end
+    else
+        WARN("FA Remastered: the options' tips: no tooltip table")
+    end
+end

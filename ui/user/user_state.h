@@ -553,7 +553,7 @@ int ScreenOfModeKey(const std::string& key, int ownAdapter);
 // 0x8d37c0; FAF's options.lua sends it whenever the primary's choice changes). Each gives its default.
 void SetupPrimaryAdapterSettings(lua_State* L);
 void SetupSecondaryAdapterSettings(lua_State* L, bool windowed);
-// The program's own looks, each a player's choice in the game's Options menu (Video tab; Chris,
+// The program's own looks, each a player's choice in the game's Options menu (Remastered tab; Chris,
 // 2026-10-15: "The new looks will go into options menu for each player"). The options send them
 // as console commands (remaster_effects, remaster_effects_quality, remaster_tracers,
 // remaster_rich_ground, remaster_snow_tracks; keymap.cpp), and the game's picture takes them
@@ -788,7 +788,7 @@ const std::string* CustomNameOf(lua_State* L, uint32_t id);
 std::string SelectionSetsText(lua_State* L, uint32_t id);
 bool AnyCustomNames(lua_State* L);
 bool AnySelectionSets(lua_State* L);
-// The frame rate the player's options ask for. Ours: "Frame Rate" in the Video tab (Chris,
+// The frame rate the player's options ask for. Ours: "Frame Rate" in the Remastered tab (Chris,
 // 2026-10-15, via the renderer track: "have options for all and default is vsync on"):
 // remaster_frame_rate vsync | uncapped | <frames a second>. The game's own two, "Vertical Sync"
 // (SC_VerticalSync) and "Frametime" (SC_FrameTimeClamp, the shortest frame in milliseconds),

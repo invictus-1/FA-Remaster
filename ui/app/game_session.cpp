@@ -67,7 +67,7 @@ extern const char kBuildCommit[];
 
 #ifdef MOHO64UI_WORLD_PICTURE
 namespace {
-// The player's looks that are the world's own switches (the Options menu's Video tab), on `w`: each frame on the
+// The player's looks that are the world's own switches (the Options menu's Remastered tab), on `w`: each frame on the
 // world shown (Picture::SetScene), and on a game's world before it opens behind the window's picture (BeginWindowMap's
 // `before`: what its opening and its unseen first frames make is then made for them). `photoLook`: the Photographic
 // Look's grade set too (on a change only: Named sets the grade, the eye and lens keep theirs).
@@ -617,7 +617,7 @@ struct GameSession::Picture : WorldSource {
     // The icons on the resource deposits from far up (the renderer's World::depositIcons, its "resource icons"): the
     // main view's EnableResourceRendering (off, for one, while an operation's cinematic plays: FAF's gamemain.NISMode).
     if (render::World* w = picture.world()) w->depositIcons = scene.resourceIcons;
-    // The player's own looks (the Options menu's Video tab), when they change.
+    // The player's own looks (the Options menu's Remastered tab), when they change.
     const LookSettings& looks = Looks();
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
@@ -2714,7 +2714,7 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   auto made = std::make_unique<WindowPicture>();
   made->vulkan = vulkan, made->samples = samples;
   made->picture.SetVulkan(vulkan);                                  // (the player's Graphics API)
-  made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Video tab's Low Latency, before Open)
+  made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Remastered tab's Low Latency, before Open)
   UseGameWindow(made->picture, window);
   if (window2_) UseSecondOn(made->picture, window2_, window2W_, window2H_);  // ([head2] made with the device)
   std::string error;
@@ -2726,7 +2726,7 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   if (window2_ && !made->picture.SecondWindowOn())
     Logf(LogLevel::Warning, "moho64ui: the renderer's second window did not open (%s): head 1's interface is shown by the plain copy, its world black",
          made->picture.SecondWindowError().c_str());
-  Looks().rayTracingSupported = made->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
+  Looks().rayTracingSupported = made->picture.RayTracingSupported() ? 1 : 0;  // (the Remastered tab's Ray Tracing)
   windowPicture_ = std::move(made);
   Logf(LogLevel::Info, "moho64ui: the window's picture (no map yet) opened in %.2f s",
        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
@@ -2761,7 +2761,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     // on), and SwapMap lays them on: the game's first frame no longer makes them (1.3-1.6 s before).
     const LookSettings looks = Looks();
     p.SetTextureDetail(looks.textureDetail);  // (the game's Texture Detail)
-    p.SetSeason(looks.season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
+    p.SetSeason(looks.season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Remastered tab's Season)
     p.HoldLooks(true);
     PictureLooks(p, looks);  // (ray tracing too: the surfaces' shaders made for reflections as the map opens, render request 31)
     const Sky sky = skyNow_;
@@ -3123,14 +3123,14 @@ void GameSession::OpenPicture() {
   }
   pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
   pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
-  pic->picture.SetLowLatency(Pacing().lowLatency);  // (the Video tab's Low Latency)
-  pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Video tab's Season)
+  pic->picture.SetLowLatency(Pacing().lowLatency);  // (the Remastered tab's Low Latency)
+  pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Remastered tab's Season)
   // (Ray Tracing before Open: the surfaces' shaders are made for reflections when the map opens; the
   // renderer's request 31 follow-up. The first frame's looks block sets it again, harmlessly.)
   pic->picture.SetRayTracing(Looks().rayTracing);
   std::string error;
   if (pic->picture.Open(vfs_, map_, &error)) {
-    Looks().rayTracingSupported = pic->picture.RayTracingSupported() ? 1 : 0;  // (the Video tab's Ray Tracing)
+    Looks().rayTracingSupported = pic->picture.RayTracingSupported() ? 1 : 0;  // (the Remastered tab's Ray Tracing)
     DressGamePicture(*pic);
     picture_ = std::move(pic);
     Logf(LogLevel::Info, "moho64ui: session: the world's picture is open, %.2f s", secs(t3, std::chrono::steady_clock::now()));
