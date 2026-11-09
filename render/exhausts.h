@@ -1,5 +1,5 @@
-// (unitsfx) Exhausts that look real (Chris's playthrough of 20 October, item 8: "thrusters on Izanagi need to be more
-// integrated and look much more realistic"; the visuals session's look for the Izanagi's drives, her
+// (unitsfx) Exhausts that look real (Chris's playthrough of 20 October, item 8: "thrusters on [a private mod's
+// flagship] need to be more integrated and look much more realistic"; the visuals session's look for its drives, her
 // visuals\renderer_reply_lod.md section 62). A player's option of the modern look (World::realExhausts, viewer
 // --exhausts), off by default; off, every exhaust is the game's flat band as before.
 //

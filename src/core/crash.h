@@ -17,6 +17,16 @@ namespace moho {
 
 void InstallCrashHandler();
 
+// What a crash leaves for the player to send, beside the lines above (Windows; elsewhere this does nothing). Call
+// it after InstallCrashHandler, when the log's name is known.
+//   dumpFile (UTF-8; "" = none): a crash also writes a small memory dump there (every thread's stack and registers;
+//     dbghelp.dll, a part of Windows, loaded here and not at the crash) and says so in the log:
+//     "crash: dump written to <file>". It opens in WinDbg or Visual Studio with the build's .pdb.
+//   messageBox: a crash then shows one window that names the log file and the dump (for the programs with a
+//     window; the headless program never asks for it, a test run must not wait for a click).
+// Every crash also names the build: "crash: build <core/build_stamp.h>".
+void CrashSetReport(const char* logFile, const char* dumpFile, bool messageBox);
+
 // The beat the crash line names (the running simulation's tick; the host sets it after each beat if it wants it
 // named, else "tick ?").
 extern volatile int64_t g_crashTick;

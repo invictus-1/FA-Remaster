@@ -27,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/build_stamp.h"
 #include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/fpenv.h"
@@ -86,6 +87,7 @@ struct Options {
   bool checkLua = false;
   bool rules = false;
   bool quiet = false;
+  bool crashTest = false;  // --crash-test: fault on purpose after start-up (tools/paths_test.py reads the report)
   std::string replay;   // --sim <replay>: start that session headless
   std::string session;  // --session <file>: start the session a lobby's game configuration describes
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
@@ -1852,6 +1854,10 @@ int main(int argc, char** argv) {
     std::string a = argv[i];
     auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
     if (a == "--init") o.init = next();
+    else if (a == "--version") {  // which build this is (core/build_stamp.h)
+      std::printf("moho64 %s\n", BuildStamp());
+      return 0;
+    }
     else if (a == "--drive") {
       std::string v = next();  // c=/path
       if (v.size() > 2 && v[1] == '=') hostfs::MapDrive(v[0], v.substr(2));
@@ -1865,6 +1871,7 @@ int main(int argc, char** argv) {
       if (eq != std::string::npos) o.folders[v.substr(0, eq)] = v.substr(eq + 1);
     } else if (a == "--mods") o.modsFile = next();
     else if (a == "--log") o.logFile = next();
+    else if (a == "--crash-test") o.crashTest = true;
     else if (a == "--check-lua") o.checkLua = true;
     else if (a == "--rules") o.rules = true;
     else if (a == "--quiet") o.quiet = true;
@@ -1945,9 +1952,17 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (!o.logFile.empty()) LogOpenFile(o.logFile);
+  if (!o.logFile.empty() && !LogOpenFile(o.logFile))
+    std::fprintf(stderr, "moho64: cannot write the log file %s (is its folder there?); going on without it\n", o.logFile.c_str());
   if (o.quiet) LogSetEcho(false);
   InstallCrashHandler();  // a crash writes its place and stack to the log (core/crash.h)
+  // ... and, with a log file, a memory dump beside it (<log>.dmp); never a window: a test run must not wait
+  if (!o.logFile.empty()) CrashSetReport(o.logFile.c_str(), (o.logFile + ".dmp").c_str(), false);
+  if (o.crashTest) {  // the crash report's own test: a write to an address that is no memory
+    Logf(LogLevel::Info, "moho64: --crash-test: faulting on purpose");
+    volatile uintptr_t nowhere = 16;
+    *reinterpret_cast<volatile int*>(nowhere) = 1;
+  }
   if (o.init.empty()) {
     std::fprintf(stderr, "usage: moho64 --init <init.lua> [--drive c=/dir] [--mods uids.txt] [--check-lua] [--rules]\n");
     return 2;
@@ -1959,6 +1974,10 @@ int main(int argc, char** argv) {
   std::vector<std::string> uids;
   if (!o.modsFile.empty()) {
     std::ifstream f(o.modsFile);
+    if (!f) {  // played on, this was a different game than the one asked for
+      Logf(LogLevel::Error, "moho64: cannot read the mods file %s", o.modsFile.c_str());
+      return 1;
+    }
     std::string line;
     while (std::getline(f, line)) {
       while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();

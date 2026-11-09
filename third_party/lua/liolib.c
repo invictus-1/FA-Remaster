@@ -209,7 +209,7 @@ static int io_open (lua_State *L) {
 
 
 static int io_popen (lua_State *L) {
-#if !USE_POPEN
+#if 1  /* moho64: never a child process, on any platform (was: !USE_POPEN) */
   luaL_error(L, "`popen' not supported");
   return 0;
 #else
@@ -224,7 +224,7 @@ static int io_popen (lua_State *L) {
 
 static int io_tmpfile (lua_State *L) {
   FILE **pf = newfile(L);
-  *pf = tmpfile();
+  *pf = NULL;  /* moho64: scripts write no files (as the fopen hook: script_state.cpp) */
   return (*pf == NULL) ? pushresult(L, 0, NULL) : 1;
 }
 
@@ -550,7 +550,10 @@ static void createmeta (lua_State *L) {
 */
 
 static int io_execute (lua_State *L) {
-  lua_pushnumber(L, system(luaL_checkstring(L, 1)));
+  /* moho64: a script (a mod, a map, a blueprint file) never runs a program on the player's PC. The function stays
+     registered, so the state's objects, their serials and the heap are what they were. Answers as a failed call. */
+  luaL_checkstring(L, 1);
+  lua_pushnumber(L, -1);
   return 1;
 }
 
@@ -569,7 +572,7 @@ static int io_rename (lua_State *L) {
 
 
 static int io_tmpname (lua_State *L) {
-#if !USE_TMPNAME
+#if 1  /* moho64: no host file names for scripts (was: !USE_TMPNAME) */
   luaL_error(L, "`tmpname' not supported");
   return 0;
 #else
@@ -583,7 +586,9 @@ static int io_tmpname (lua_State *L) {
 
 
 static int io_getenv (lua_State *L) {
-  lua_pushstring(L, getenv(luaL_checkstring(L, 1)));  /* if NULL push nil */
+  /* moho64: a script does not read the player's environment (and a sim script must not depend on the machine) */
+  luaL_checkstring(L, 1);
+  lua_pushnil(L);
   return 1;
 }
 
@@ -729,8 +734,8 @@ static int io_setloc (lua_State *L) {
 
 
 static int io_exit (lua_State *L) {
-  exit(luaL_optint(L, 1, EXIT_SUCCESS));
-  return 0;  /* to avoid warnings */
+  /* moho64: a script does not end the program (no message, nothing saved); it gets a script error instead */
+  return luaL_error(L, "os.exit is not available to scripts");
 }
 
 static const luaL_reg syslib[] = {

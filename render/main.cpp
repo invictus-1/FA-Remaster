@@ -662,6 +662,9 @@
 //           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
 //           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
 //           end, hills, mountains, islands, farLand, snowline, softness, reach)
+// --surround  (surround) with the world beyond the map's edge, on a map that brings a sculpted surround (x_surround.json
+//           beside its x.scmap): that land drawn past the map's edges, not the map laid out again mirrored
+//           (World::mapSurround, surround.h; modern look)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -1067,6 +1070,7 @@ struct Options {
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
+  bool surround = false;  // --surround
   bool beyondLand = false;              // --beyond-land (beyondland)
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
@@ -1341,7 +1345,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
     else if (a == "--fog-old") o->fogOld = true;  // [weather]
     else if (a == "--fog-even") o->fogEven = true;  // [mistpatch]
-    else if (a == "--beyond-land") o->beyondLand = true;  // (beyondland)
+    else if (a == "--beyond-land") o->beyondLand = true;
+    else if (a == "--surround") o->surround = true;  // (beyondland)
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -2491,7 +2496,8 @@ int main(int argc, char** argv) {
   if (opt.jobsAwake >= 0) Jobs::awakeMicroseconds = opt.jobsAwake;
   world.frame = opt.frame;
   world.beyondHaze = opt.beyondHaze;
-  world.beyondLand = opt.beyondLand;  // (beyondland)
+  world.beyondLand = opt.beyondLand;
+  world.mapSurround = opt.surround;  // (beyondland)
   if (!opt.beyondLandLook.empty()) {
     std::string why;
     if (!world.distantLand.Set(opt.beyondLandLook, &why)) {

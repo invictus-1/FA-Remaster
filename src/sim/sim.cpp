@@ -924,8 +924,8 @@ namespace {
 // each start and given to the sim state alone (ScriptState::SetExtraHooks): one more hook folder after the init
 // file's (FAF's /schook) and before the mods' hooks, as the game takes a hook folder. Nothing is mounted: the
 // game's file system stays as the host made it (the interface host's is shared with its other threads).
-std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
-  std::map<std::string, ScriptState::ExtraHook> hooks;
+// The fixes' hook folder, or empty when there is none.
+std::string FixesHookFolder() {
   std::string folder;
   if (const char* d = getenv("MOHO64_FIXES_DIR"); d && *d) {
     folder = d;
@@ -934,11 +934,13 @@ std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
       if (folder.empty() && hostfs::IsDirectory(c + "/hook")) folder = c;
   }
   const std::string root = folder.empty() ? std::string() : hostfs::Resolve(folder + "/hook");
-  if (root.empty() || !hostfs::IsDirectory(root)) {
-    Logf(LogLevel::Warning, "moho64: the engine's script fixes are on, but their folder (data/fixes/hook) is not beside the "
-                            "program or one folder up (MOHO64_FIXES_DIR names it): the game's scripts run unfixed");
-    return hooks;
-  }
+  return !root.empty() && hostfs::IsDirectory(root) ? root : std::string();
+}
+
+std::map<std::string, ScriptState::ExtraHook> FixesHooks() {
+  std::map<std::string, ScriptState::ExtraHook> hooks;
+  const std::string root = FixesHookFolder();
+  if (root.empty()) return hooks;  // (Sim::Start refuses a game with the fixes on and no folder)
   namespace fs = std::filesystem;
   std::error_code ec;
   const fs::path base = fs::u8path(root);
@@ -1556,6 +1558,14 @@ bool Sim::Start(const SessionDescription& session) {
   focusArmy = session.focusArmy;
   isReplay = session.replay;
   fixes = FixesFor(session);
+  // A game with the fixes on and no fix files is a broken install, not a game to play unfixed (Chris, 2026-11-09):
+  // it does not start, and says why. MOHO64_FIXES=0 plays without them on purpose.
+  if (fixes && FixesHookFolder().empty()) {
+    Logf(LogLevel::Error, "moho64: the engine's script fixes are on, but their folder (data/fixes/hook) is not beside the "
+                          "program or one folder up (MOHO64_FIXES_DIR names it). The install is incomplete: the game "
+                          "does not start. (MOHO64_FIXES=0 plays without the fixes.)");
+    return false;
+  }
   // The beat's order (docs/parallel-mode.md 5)
   {
     int version = 0;

@@ -7,6 +7,7 @@
 #include <initializer_list>
 
 #include "core/backtrace.h"
+#include "core/build_stamp.h"
 #include "core/log.h"
 
 #if defined(_WIN32)
@@ -50,6 +51,50 @@ void TickText(char* out, size_t n) {
 }
 
 #if defined(_WIN32)
+
+// The crash report's parts (CrashSetReport), all made ready before any crash: the handler allocates nothing.
+wchar_t g_dumpFileW[1024] = L"";
+char g_dumpFile[1024] = "";
+wchar_t g_logFileW[1024] = L"";
+bool g_messageBox = false;
+// dbghelp's MiniDumpWriteDump and user32's MessageBoxW, found at CrashSetReport (no link dependency on either)
+using DumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, int, void*, void*, void*);
+using BoxFn = int(WINAPI*)(HWND, LPCWSTR, LPCWSTR, UINT);
+DumpFn g_writeDump = nullptr;
+BoxFn g_box = nullptr;
+
+#pragma pack(push, 4)
+struct DumpExceptionInfo {  // dbghelp.h's MINIDUMP_EXCEPTION_INFORMATION (packed to 4 there)
+  DWORD threadId;
+  EXCEPTION_POINTERS* pointers;
+  BOOL clientPointers;
+};
+#pragma pack(pop)
+
+// The dump and the window, after the crash's lines are in the log. `ep` is null for an abort.
+void Report(EXCEPTION_POINTERS* ep) {
+  bool dumped = false;
+  if (g_writeDump && g_dumpFileW[0]) {
+    HANDLE f = CreateFileW(g_dumpFileW, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+      DumpExceptionInfo info{GetCurrentThreadId(), ep, FALSE};
+      // 0x1000 MiniDumpWithThreadInfo | 0x40 MiniDumpWithIndirectlyReferencedMemory: the stacks, the registers and
+      // the memory the stacks point at; a few MB
+      dumped = g_writeDump(GetCurrentProcess(), GetCurrentProcessId(), f, 0x1040, ep ? &info : nullptr, nullptr, nullptr) != 0;
+      CloseHandle(f);
+    }
+    if (dumped) Line("crash: dump written to %s", g_dumpFile);
+    else Line("crash: the dump %s could not be written", g_dumpFile);
+    LogFlush();
+  }
+  if (g_messageBox && g_box) {
+    wchar_t text[2600];
+    _snwprintf(text, 2600, L"The game has stopped because of a fault in the program.\n\nTo report it, please send:\n\n%ls%ls%ls",
+               g_logFileW[0] ? g_logFileW : L"(no log file was open)", dumped ? L"\n" : L"", dumped ? g_dumpFileW : L"");
+    text[2599] = 0;
+    g_box(nullptr, text, L"FA Remastered", 0x10 | 0x10000 | 0x40000);  // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+  }
+}
 
 const char* ExceptionName(DWORD code) {
   switch (code) {
@@ -131,7 +176,9 @@ LONG WINAPI OnException(EXCEPTION_POINTERS* ep) {
   const int n = CaptureFrames(fr, 48);
   for (int i = 0; i < n; ++i) Line("crash: frame %d +0x%llx", i, static_cast<unsigned long long>(ImageOffset(fr[i])));
 #endif
+  Line("crash: build %s", BuildStamp());
   LogFlush();
+  Report(ep);
   InterlockedExchange(&g_inCrash, 0);
   return g_previous ? g_previous(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
@@ -144,7 +191,9 @@ void OnAbort(int) {
   void* fr[48];
   const int n = CaptureFrames(fr, 48);
   for (int i = 0; i < n; ++i) Line("crash: frame %d +0x%llx", i, static_cast<unsigned long long>(ImageOffset(fr[i])));
+  Line("crash: build %s", BuildStamp());
   LogFlush();
+  Report(nullptr);
 }
 
 #elif defined(__linux__)
@@ -166,6 +215,7 @@ void OnSignal(int sig, siginfo_t* si, void* uc) {
   void* fr[64];
   const int n = CaptureFrames(fr, 64);
   for (int i = 0; i < n; ++i) Line("crash: frame %d +0x%llx", i, static_cast<unsigned long long>(ImageOffset(fr[i])));
+  Line("crash: build %s", BuildStamp());
   LogFlush();
   // SA_RESETHAND: returning re-runs the fault (or abort re-raises) with the default action
 }
@@ -173,6 +223,29 @@ void OnSignal(int sig, siginfo_t* si, void* uc) {
 #endif
 
 }  // namespace
+
+void CrashSetReport(const char* logFile, const char* dumpFile, bool messageBox) {
+#if defined(_WIN32)
+  g_logFileW[0] = 0;
+  if (logFile && logFile[0]) MultiByteToWideChar(CP_UTF8, 0, logFile, -1, g_logFileW, 1024);
+  g_logFileW[1023] = 0;
+  std::snprintf(g_dumpFile, sizeof g_dumpFile, "%s", dumpFile ? dumpFile : "");
+  g_dumpFileW[0] = 0;
+  if (g_dumpFile[0]) MultiByteToWideChar(CP_UTF8, 0, g_dumpFile, -1, g_dumpFileW, 1024);
+  g_dumpFileW[1023] = 0;
+  if (g_dumpFileW[0] && !g_writeDump)
+    if (HMODULE m = LoadLibraryW(L"dbghelp.dll"))
+      g_writeDump = reinterpret_cast<DumpFn>(reinterpret_cast<void*>(GetProcAddress(m, "MiniDumpWriteDump")));
+  g_messageBox = messageBox;
+  if (messageBox && !g_box)
+    if (HMODULE m = LoadLibraryW(L"user32.dll"))
+      g_box = reinterpret_cast<BoxFn>(reinterpret_cast<void*>(GetProcAddress(m, "MessageBoxW")));
+#else
+  (void)logFile;
+  (void)dumpFile;
+  (void)messageBox;
+#endif
+}
 
 void InstallCrashHandler() {
 #if defined(_WIN32)

@@ -2335,14 +2335,16 @@ void EndRefuel(Sim& sim, Unit* u, TransportTaskData& d) {
   SetState(u, US("ForceSpeedThrough"), false);
   SetState(u, US("Refueling"), false);
   AirSpeedThroughEvent(sim, u);  // refuel task dtor
+  Unit* P = UnitRef(sim, d.transport);
+  const bool live = P && !P->dead && P->transport;
+  const bool carrier = live && InCat(sim, P, "CARRIER");
   if (d.slotHeld) {
     AirSetLandHeight(u, std::numeric_limits<float>::infinity());
-    Unit* P = UnitRef(sim, d.transport);
-    if (P && !P->dead && P->transport) {
-      if (!InCat(sim, P, "CARRIER")) RemovePickupUnit(sim, *P->transport, u, true);
-      else ResetReservation(*P->transport);
-    }
+    if (live && !carrier) RemovePickupUnit(sim, *P->transport, u, true);  // 0x621103..0x62114b
   }
+  // 0x62114d..0x621205: a live carrier's reservation is reset after and outside the slot block (+0x38), so also when
+  // the refuel ends without a held slot (a full carrier given up, a preamble failure, the order cleared while waiting)
+  if (carrier) ResetReservation(*P->transport);
   // (no detach: an aircraft whose refuel ends early stays docked, as in the original)
 }
 

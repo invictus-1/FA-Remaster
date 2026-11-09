@@ -45,11 +45,18 @@ bool Vfs::Mount(const std::string& hostPath, const std::string& mountPoint) {
   if (fs::is_directory(fs::u8path(resolved), ec)) {
     mounts_.push_back(std::move(m));
     std::vector<std::pair<std::string, FileRef>> found;
-    for (auto it = fs::recursive_directory_iterator(fs::u8path(resolved), fs::directory_options::skip_permission_denied, ec);
+    // A file's path below the folder: the walk hands out every path as the folder's own path plus the names below
+    // it, so the part after the folder is the answer. fs::relative gives the same names but looks both paths up on
+    // the disk first (it opened the file and the folder once per file: most of the time of mounting the mod
+    // folders). It stays as the fallback for a path that does not start with the folder's.
+    const fs::path root = fs::u8path(resolved);
+    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
       if (ec) break;
       if (!it->is_regular_file(ec)) continue;
-      auto relu = fs::relative(it->path(), fs::u8path(resolved), ec).generic_u8string();
+      fs::path below = it->path().lexically_relative(root);
+      if (below.empty() || *below.begin() == ".." || *below.begin() == ".") below = fs::relative(it->path(), root, ec);
+      auto relu = below.generic_u8string();
       std::string rel(relu.begin(), relu.end());
       FileRef ref;
       ref.mount = idx;

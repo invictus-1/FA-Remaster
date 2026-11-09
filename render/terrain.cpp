@@ -2869,7 +2869,7 @@ void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
   const Level& T = levels_[static_cast<size_t>(top)];
   // the map, and (not into shadow maps) the eight copies of it round it that the ground beyond
   // its edge is made of
-  const int round = beyondReach > 0 && (!shadowPass || beyondToo) ? 1 : 0;
+  const int round = beyondReach > 0 && beyondCopies && (!shadowPass || beyondToo) ? 1 : 0;
   for (tileZ_ = -round; tileZ_ <= round; ++tileZ_)
     for (tileX_ = -round; tileX_ <= round; ++tileX_)
       for (int iz = 0; iz < T.nz; ++iz)
@@ -2887,7 +2887,7 @@ void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
   c.params[0] = 65535.0f * m.heightScale;
   c.params[1] = shaderKind_ == 1 ? 1.0f : 0.0f;
   c.params[2] = shaderKind_ == 2 ? 1.0f : 0.0f;
-  c.params[3] = beyondReach > 0 ? 1.0f : 0.0f;
+  c.params[3] = beyondReach > 0 && beyondCopies ? 1.0f : 0.0f;
   c.specularColor[0] = m.lighting.specular.x;
   c.specularColor[1] = m.lighting.specular.y;
   c.specularColor[2] = m.lighting.specular.z;

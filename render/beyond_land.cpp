@@ -423,13 +423,46 @@ bool BeyondLand::MakePipelines() {
     fprintf(stderr, "render: the land far off cannot be drawn: %s\n", error.c_str());
     return false;
   }
-  gfx::ComputeDesc cd;
-  cd.name = "the land far off: the map's colours";
-  const std::string palette = std::string(kViewShaderBlock) + kPalette;
-  cd.source = palette;
-  palettePass_ = device_->CreateCompute(cd, &error);
-  if (!palettePass_) fprintf(stderr, "render: the land far off takes plain colours: %s\n", error.c_str());
   return true;
+}
+
+gfx::Texture BeyondLand::Palette(gfx::Device* device, Terrain& terrain) {
+  if (paletteMade_ || !read_) return palette_;
+  paletteMade_ = true;  // (once: it dispatches)
+  device_ = device;
+  if (!paletteTried_) {
+    paletteTried_ = true;
+    gfx::ComputeDesc cd;
+    cd.name = "the land beyond the map: the map's colours";
+    const std::string palette = std::string(kViewShaderBlock) + kPalette;
+    cd.source = palette;
+    std::string error;
+    palettePass_ = device_->CreateCompute(cd, &error);
+    if (!palettePass_) fprintf(stderr, "render: the land beyond the map takes plain colours: %s\n", error.c_str());
+  }
+  if (!palettePass_) return {};
+  const gfx::Texture colours = terrain.GroundColours();
+  if (colours) {
+    gfx::TargetDesc td;
+    td.storage = true;
+    td.width = 4;
+    td.height = 1;
+    td.format = gfx::Format::RGBA16F;
+    palette_ = device_->CreateTarget(td);
+  }
+  if (palette_) {
+    PaletteConstants c = {{sea_, highest_, terrain.HeightUnit(), 0}};
+    device_->SetPipeline(palettePass_);
+    device_->SetConstants(1, &c, sizeof c);
+    device_->SetTexture(0, colours);
+    device_->SetTexture(1, terrain.HeightTexture());
+    device_->SetStorage(0, palette_);
+    device_->Dispatch(1);
+    device_->SetStorage(0, {});
+    device_->SetTexture(0, {});
+    device_->SetTexture(1, {});
+  }
+  return palette_;
 }
 
 void BeyondLand::Prepare(gfx::Device* device, bool on, Terrain& terrain) {
@@ -441,34 +474,22 @@ void BeyondLand::Prepare(gfx::Device* device, bool on, Terrain& terrain) {
     failed_ = !MakePipelines();
     if (failed_) return;
   }
+  if (made_ && madeReach_ != terrain.beyondReach) {
+    // (the ground beyond the edge now goes out another distance: the map's sculpted surround on or off, surround.h)
+    for (gfx::Buffer* b : {&vertices_, &indices_})
+      if (*b) device_->Destroy(*b);
+    if (heights_) device_->Destroy(heights_);
+    vertices_ = indices_ = {};
+    heights_ = {};
+    indexCount_ = 0;
+    made_ = false;
+  }
   if (!made_) {
     Make(terrain.beyondReach);
+    madeReach_ = terrain.beyondReach;
     made_ = true;
   }
-  if (!paletteMade_ && palettePass_ && heights_) {  // (once: it dispatches)
-    paletteMade_ = true;
-    const gfx::Texture colours = terrain.GroundColours();
-    if (colours) {
-      gfx::TargetDesc td;
-      td.storage = true;
-      td.width = 4;
-      td.height = 1;
-      td.format = gfx::Format::RGBA16F;
-      palette_ = device_->CreateTarget(td);
-    }
-    if (palette_) {
-      PaletteConstants c = {{sea_, highest_, terrain.HeightUnit(), 0}};
-      device_->SetPipeline(palettePass_);
-      device_->SetConstants(1, &c, sizeof c);
-      device_->SetTexture(0, colours);
-      device_->SetTexture(1, terrain.HeightTexture());
-      device_->SetStorage(0, palette_);
-      device_->Dispatch(1);
-      device_->SetStorage(0, {});
-      device_->SetTexture(0, {});
-      device_->SetTexture(1, {});
-    }
-  }
+  if (heights_) Palette(device, terrain);
   now_ = indexCount_ > 0;
 }
 

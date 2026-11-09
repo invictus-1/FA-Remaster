@@ -329,6 +329,9 @@ Not yet: saved games.
 
 **Windows (x64)** is the platform in daily use, and the only one tested.
 
+**Processor:** any 64-bit processor from about 2009 on (Intel Nehalem, AMD Bulldozer or newer). The
+program is built for the `x86-64-v2` level (SSE4.2, POPCNT) and will not start on older ones.
+
 **Linux and macOS: support exists in parts, untested.** Nobody working on the project has a Linux
 machine or a Mac, so read this as "may work, expect problems":
 

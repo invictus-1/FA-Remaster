@@ -61,7 +61,8 @@ def main():
     target = ["-target", "x86_64-windows-gnu"]
     objdir = os.path.join(a.out, "obj")
     os.makedirs(objdir, exist_ok=True)
-    common = ["-O2"] + ([] if a.no_debug else ["-g"])
+    # -mcpu=x86_64_v2, as the engine's build (tools/build_zig.py): SSE4.2 and POPCNT, every processor since about 2009
+    common = ["-O2", "-mcpu=x86_64_v2"] + ([] if a.no_debug else ["-g"])
     # render/ itself is not on the include path: its files include each other by plain name, and a
     # header there must never stand in for a system header of the same name
     includes = ["-I", os.path.join(ROOT, "src"), "-I", os.path.join(ROOT, "third_party", "lua"),

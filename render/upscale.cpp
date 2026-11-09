@@ -1,5 +1,6 @@
 #include "upscale.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -53,10 +54,25 @@ AF4 FsrRcasLoadF(ASU2 p) { return picture.Load(int3(p, 0)); }
 void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) {}
 )hlsl";
 const char kRcasMain[] = R"hlsl(
+uint DitherMix(uint x) {
+  x = (x ^ (x >> 16)) * 0x6b43a9b5u;
+  x = (x ^ (x >> 13)) * 0x9e2d61f3u;
+  x = (x ^ (x >> 15)) * 0x4cf5ad43u;
+  return x ^ (x >> 16);
+}
 float4 PS(float4 at : SV_Position) : SV_Target {
   AF1 r, g, b;
   FsrRcasF(r, g, b, AU2(at.xy), con0);
-  return float4(r, g, b, 1);
+  float3 c = float3(r, g, b);
+  [branch] if (con1.x != 0) {  // (dither, as post.cpp's ScreenNoise: con1.x its size, con1.y the frame's number)
+    uint2 p = uint2(at.xy);
+    uint3 n;
+    n.x = DitherMix(p.x + DitherMix(p.y + DitherMix(con1.y)));
+    n.y = DitherMix(n.x);
+    n.z = DitherMix(n.y);
+    c = saturate(c + ((float3(n & 0xffffu) + float3(n >> 16)) / 65535.0 - 1) * asfloat(con1.x));
+  }
+  return float4(c, 1);
 }
 )hlsl";
 
@@ -71,17 +87,18 @@ bool Upscaler::Init(std::string* error) {
   pd.cull = gfx::Cull::None;
   pd.depthTest = pd.depthWrite = false;
   pd.depthTarget = false;
-  pd.colorFormat = gfx::Format::RGBA8;
+  pd.colorFormat = gfx::Format::RGBA16F;  // (dither: the 256 levels only at the screen)
   easu_ = device_->CreatePipeline(pd, error);
   if (!easu_) return false;
   pd.name = "FSR 1, sharpening (RCAS)";
   pd.vertexSource = pd.pixelSource = rcas;
+  pd.colorFormat = gfx::Format::RGBA8;
   pd.depthTarget = true;  // (into the window's pass)
   rcas_ = device_->CreatePipeline(pd, error);
   return static_cast<bool>(rcas_);
 }
 
-void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth, int outHeight) {
+void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth, int outHeight, float dither, float time) {
   if (!upscaled_ && failedWait_ > 0 && outWidth == width_ && outHeight == height_) {  // (could not be made a moment ago)
     --failedWait_;
     return;
@@ -91,7 +108,7 @@ void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth
     gfx::TargetDesc td;
     td.width = outWidth;
     td.height = outHeight;
-    td.format = gfx::Format::RGBA8;
+    td.format = gfx::Format::RGBA16F;
     upscaled_ = device_->CreateTarget(td);
     width_ = outWidth;
     height_ = outHeight;
@@ -115,6 +132,8 @@ void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth
 
   uint32_t sharp[16] = {};
   FsrRcasCon(sharp, sharpness);
+  std::memcpy(sharp + 4, &dither, sizeof dither);  // (con1.x; no dither is all bits 0)
+  sharp[5] = static_cast<uint32_t>((time * 7.3f - std::floor(time * 7.3f)) * 65536.0f);
   gfx::PassDesc window;
   window.window = true;
   window.clearColor = false;

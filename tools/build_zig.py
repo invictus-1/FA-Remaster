@@ -18,7 +18,7 @@ Same sources and flags as CMakeLists.txt (C++20, -ffp-contract=off -fno-fast-mat
 static link on Windows). Incremental: an object is rebuilt when its source or any header under src/ or
 third_party/ is newer (headers are not tracked per file: touching one header rebuilds everything).
 """
-import argparse, concurrent.futures as cf, glob, os, subprocess, sys
+import argparse, concurrent.futures as cf, glob, os, subprocess, sys, time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # The profiler build's settings (--tracy; docs/profiling.md), the same for every file of the program: Tracy's client
@@ -30,6 +30,20 @@ TRACY_DEFINES = ["-DTRACY_ENABLE", "-DTRACY_ON_DEMAND", "-DTRACY_ONLY_LOCALHOST"
 
 def zig(*args):
     return [sys.executable, "-m", "ziglang", *args]
+
+
+def build_stamp():
+    """The commit ("+changes" with uncommitted changes), the build's time and the processor level, for the exe."""
+    def git(*args):
+        try:
+            r = subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True, timeout=30)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    commit = git("rev-parse", "--short=8", "HEAD") or "no commit"
+    if commit != "no commit" and git("status", "--porcelain", "--untracked-files=no"):
+        commit += "+changes"
+    return commit + ", built " + time.strftime("%Y-%m-%d %H:%M") + ", x86-64-v2"
 
 
 def main():
@@ -50,7 +64,9 @@ def main():
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
     os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
-    common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
+    # -mcpu=x86_64_v2: SSE4.2 and POPCNT, every processor since about 2009 (Chris, 2026-11-09; the README names it).
+    # The results are the same as the plain x86-64 build's (the gate), the sim's beat about 2.7% shorter.
+    common = ["-O2", "-mcpu=x86_64_v2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     lua_inc = ["-I", os.path.join(ROOT, "third_party", "lua")]
     zlib_inc = ["-I", os.path.join(ROOT, "third_party", "zlib")]
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]
@@ -73,9 +89,11 @@ def main():
         cxxflags += ["-I", os.path.join(ROOT, "third_party", "tracy")]
         add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"),
             ["-std=c++20", "-w", "-I", os.path.join(ROOT, "third_party", "tracy")] + tracy, True)
+    stamp_src = os.path.join(ROOT, "src", "core", "build_stamp.cpp")
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
-            add(f, cxxflags, True)
+            # the build's identity (core/build_stamp.h): that one file is compiled on every build
+            add(f, cxxflags + (['-DMOHO64_BUILD_STAMP="' + build_stamp() + '"'] if f == stamp_src else []), True)
     # the interface's network transport (ui/net/: no interface dependencies), for --net's two-copy lockstep tests
     netflags = cxxflags + ["-I", os.path.join(ROOT, "ui")]
     for n in ("socket", "message", "connector_tcp", "connector_udp", "beat_exchange_net"):
@@ -86,7 +104,7 @@ def main():
 
     newest_header = max(os.path.getmtime(h) for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/net/*.h")
                         for h in glob.glob(os.path.join(ROOT, pat), recursive=True))
-    todo = [j for j in jobs if not os.path.exists(j[1]) or
+    todo = [j for j in jobs if j[0] == stamp_src or not os.path.exists(j[1]) or
             os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
     print(f"build_zig: {len(todo)} of {len(jobs)} objects to compile, {a.jobs} jobs, target {target or 'native'}")
     failed = []
@@ -102,6 +120,8 @@ def main():
     exe = os.path.join(a.out, "moho64.exe" if windows else "moho64")
     link = zig("c++", *tflag, *common, "-o", exe, *[j[1] for j in jobs])
     link += ["-lshell32", "-lws2_32", "-static"] if windows else ["-lm", "-lpthread"]
+    if windows:  # file names in UTF-8 whatever the PC's code page (src/app/utf8.manifest)
+        link.append(os.path.join(ROOT, "src", "app", "utf8.rc"))
     if a.tracy:
         link += ["-ldbghelp", "-ladvapi32", "-luser32", "-lsecur32"] if windows else ["-ldl"]
     r = subprocess.run(link, capture_output=True, text=True)

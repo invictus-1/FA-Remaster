@@ -90,25 +90,52 @@ float SoftSunShadow(float3 s, int i, float texel, float step) {
 
 // 1 in sunlight, 0 in shadow, by the shadow maps alone. `normal` is the surface's (the lookup is moved a little
 // along it, which keeps a lit surface from shadowing itself).
+// The first of the sun's maps from `first` on that holds the place (-1: none), and the place in it (`s`: x, y in the map, z
+// its depth).
+int CascadeOf(float3 world, float3 normal, int first, out float3 s) {
+  for (int i = first; i < int(cascadeCount); ++i) {
+    float texel = cascadeTexel[i];
+    s = mul(shadowMatrix[i], float4(world + normal * (texel * 1.5) + sunDirection * (texel * 1.0), 1)).xyz;
+    if (all(s.xy > 0.02) && all(s.xy < 0.98) && s.z > 0 && s.z < 1) return i;
+  }
+  s = 0;
+  return -1;
+}
+// The shadow at a place in map `i`.
+float CascadeShadow(float3 s, int i) {
+  uint mapWidth, mapHeight, mapLayers;  // (the maps' size is a setting)
+  shadowMaps.GetDimensions(mapWidth, mapHeight, mapLayers);
+  float step = 1.0 / float(mapWidth);
+  [branch] if (softShadows.x > 0.5) return SoftSunShadow(s, i, cascadeTexel[i], step);
+  float lit = 0;
+  for (int y = -1; y <= 1; ++y)
+    for (int x = -1; x <= 1; ++x)
+      lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + float2(x, y) * step, i), s.z);
+  return lit / 9.0;
+}
+// (cascade fade) A map's texel and its filters' width are 3.2 times the one's before it: where a map ended and the next
+// began, a line lay across the shadows (sharp on its near side, blurred on its far side), and past the last map the
+// shadows ended at a line. So over the outer tenth of a map (kCascadeBand of its picture; shadows.cpp draws what casts
+// there into the next map too) its shadow `lit` goes over into the next map's, read there as well, and the last map's
+// into sunlight.
+static const float kCascadeBand = 0.048;
+float CascadeFaded(float3 world, float3 normal, int i, float3 s, float lit) {
+  float own = (min(min(s.x, 1 - s.x), min(s.y, 1 - s.y)) - 0.02) / kCascadeBand;
+  [branch] if (own < 1) {
+    float3 q;
+    int j = CascadeOf(world, normal, i + 1, q);
+    float next = 1;
+    [branch] if (j >= 0) next = CascadeShadow(q, j);
+    lit = lerp(next, lit, own * own * (3 - 2 * own));
+  }
+  return lit;
+}
 float SunShadowMaps(float3 world, float3 normal) {
   if (shadowsOn < 0.5) return 1;
-  for (int i = 0; i < int(cascadeCount); ++i) {
-    float texel = cascadeTexel[i];
-    float3 p = world + normal * (texel * 1.5) + sunDirection * (texel * 1.0);
-    float3 s = mul(shadowMatrix[i], float4(p, 1)).xyz;
-    if (all(s.xy > 0.02) && all(s.xy < 0.98) && s.z > 0 && s.z < 1) {
-      float lit = 0;
-      uint mapWidth, mapHeight, mapLayers;  // (the maps' size is a setting)
-      shadowMaps.GetDimensions(mapWidth, mapHeight, mapLayers);
-      float step = 1.0 / float(mapWidth);
-      [branch] if (softShadows.x > 0.5) return SoftSunShadow(s, i, texel, step);
-      for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-          lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + float2(x, y) * step, i), s.z);
-      return lit / 9.0;
-    }
-  }
-  return 1;
+  float3 s;
+  int i = CascadeOf(world, normal, 0, s);
+  if (i < 0) return 1;
+  return CascadeFaded(world, normal, i, s, CascadeShadow(s, i));
 }
 
 // Smoke's shadow (smoke.h; World::litSmoke, smokeShadows): what of the sun's light comes through the smoke on

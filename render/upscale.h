@@ -16,10 +16,11 @@ class Upscaler {
  public:
   explicit Upscaler(gfx::Device* device) : device_(device) {}
   bool Init(std::string* error);
-  // `picture` (RGBA8 as a screen shows it, `inWidth` x `inHeight`) up to `outWidth` x `outHeight`: into a
+  // `picture` (half floats, as a screen shows it, `inWidth` x `inHeight`) up to `outWidth` x `outHeight`: into a
   // target of its own, then sharpened into the window's pass, which is left begun (more may be drawn on
-  // top of it).
-  void Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth, int outHeight);
+  // top of it). `dither`: the noise added at that last write, in the screen's 0..1 (post.cpp, ScreenNoise; 0: none),
+  // new with `time`.
+  void Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth, int outHeight, float dither = 0, float time = 0);
   // FSR's sharpening: 0 the sharpest, each step of one half as sharp ("stops"); AMD suggests 0.2.
   float sharpness = 0.25f;
 

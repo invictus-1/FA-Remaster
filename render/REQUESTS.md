@@ -34,6 +34,53 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking)
+
+**Who says:** Chris, 2026-11-09: "sculpt an entire terrain outside the map so the map actually looks like it exists vs
+emptiness or a mirrored exterior outside of the map square." His rule: new looks are options.
+
+**What there is (render 55bf8e12):** `World::mapSurround` (bool, false by default). With it, and the world beyond the edge
+on (`World::worldBeyond`, the modern look), a map that brings a sculpted surround (`<map stem>_surround.json` beside its
+.scmap; today only SETONS_R) has that ground drawn past its four edges in place of the map laid out again mirrored. A map
+without one, or the world beyond the edge off, is drawn exactly as before (checked: 0 pixels differ).
+
+**The ask:** a third value for the map-edge option (today: ends at the edge / the map laid out again), for example
+"Sculpted land (where the map has it)", that sets `mapSurround = true` and `worldBeyond = true`. Which is the default is
+Chris's word; the surround is a block-out today (plain ground, no trees yet), so I would leave the default as it is until
+the visuals track's detail pass.
+
+**Costs, measured (1920 x 1080, SETONS_R, all looks):** the first frame with it on reads the heights (about 30 ms) and
+makes its ground (about 20 ms), once a map; each frame after it is cheaper than the mirrored copies (ground pass 0.62 ms
+against 1.19 with the camera at 700; 0.45 against 0.58 over the whole map).
+
+## 61. To the VISUALS track: the surround's first drawing, and what it shows of the block-out (2026-11-09; not blocking)
+
+**Drawn (render 55bf8e12, viewer `--surround`):** your `SETONS_R_surround.json` + heights, 695,552 triangles in 484 parts,
+finer near the map. The edge matches: the heights along the map's four edges are 0.00 apart from the map's own on all
+2048 samples I compare (I take the surround toward the map's edge over the first 16 world units anyway, and a curtain
+hangs from the map's own edge heights, so your item 4, the map's own border jumps, shows no gap). Pictures:
+`_scratch/render/surround/seam_far.png` (noon), `whole.png`, `edge_n.png`, `edge_w.png`, `corner_se.png`, `dusk.png`,
+`night.png`, `rain.png`.
+
+**What reads wrong, yours:**
+1. **Every shore is one step.** The heights go from 17.70 to 15.12 between two neighbouring samples wherever land meets
+   the water (5,296 such crossings; one place: world x -10, z -652; picture `_scratch/render/surround/crop_saw.png`). At
+   2 world units a sample that is drawn as a staircase along every coast. Wanted: a shore that slopes over several
+   samples (a beach above the water and a sea floor going down under it over 10 to 20 world units), as the map's own
+   shores do.
+2. **Nothing grows on it.** The map's trees and scenery stop at the edge, so the edge still reads as a line from above.
+   For your detail pass, what I can draw with the least new work, in this order: (a) a decor file in the map's own decor
+   format for the surround (`<stem>_surround_decor.bin`, same blueprint table; I draw it with the same instancing, lowest
+   level of detail past about 300 units), dense within 150 units of the edge and thinning out; (b) a forest mask
+   (8-bit, same samples as the heights) that I shade as canopy where no single tree is worth drawing.
+3. **The ground is plain beside the map's.** I colour it from the map's own ground by height and slope (low by the
+   water, level, high, steep); the steep class comes out as pale patches. A mask picture would do better than my
+   guess: 4 channels at the heights' samples (or half), each the share of one of the map's own layers (name the layer
+   per channel in the json's "masks"), and I draw the map's own layer textures by it. Tell me the layers you pick.
+
+**Not yet on my side (so you do not sculpt for it):** the surround's hills cast no shadow onto the map and are not in
+the water's reflections or the ray-traced scene; that is my follow-up.
+
 ## 60. To the ENGINE track: the weapons test, the renderer's side, and two fields it would need (2026-11-09, Chris; not blocking)
 
 **Who says:** Chris, 2026-11-09: "a full unit test for pitch, yaw etc. to make sure all new units shoot and perform
@@ -245,8 +292,8 @@ the run-to-run noise.
 
 ## 47. To the VISUALS track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
-Chris played `Open-Game-Izanagi-Tour-Snow.bat` (SETONS_R, weather "cold"; log `_scratch\ui\game_tour_izanagi_snow.log`,
-replay `_scratch\ui\replay_tour_izanagi_snow.*`); his pictures are on his Desktop. His opening words: "massive improvement
+Chris played the snow tour launcher of a private mod's flagship (SETONS_R, weather "cold"; log the ui's tour log,
+replay the ui's tour replay); his pictures are on his Desktop. His opening words: "massive improvement
 from before ... nothing crazy", and item 7: "The new nuke is fucking amazing when com dies." Yours (his words in quotes):
 1. Item 1 ("invis rocks.png", two red circles: the big rock formations on the cliff by the sea): "those are still
    invisible behind either we remove or better integrate. I lean more on remove cause the small bundle of silver rocks
@@ -258,20 +305,20 @@ from before ... nothing crazy", and item 7: "The new nuke is fucking amazing whe
    down to a card, in the cover json. The renderer makes the cover draw them as models with a seamless change of level
    by distance (Chris's second ask: "at a distance they are low res like units then close up they are higher res so it
    just doesn't appear"; pictures "First distance no plants.png" / "Second distanace plants.png").
-3. Item 5, the Izanagi: "The main front doesn't animate and close it just disappears and the main laser appears too we
+3. Item 5, the private flagship: "The main front doesn't animate and close it just disappears and the main laser appears too we
    need an animation of it opening and closing." And: "the Aoe on the guns/missiles is practicaslly non existant we
    need some aoe on the weapons that fit the weapon type" (its blueprint's DamageRadius; the engine checks the sim
    applies it). (Its shadow squares when it fires are the renderer's.)
-4. Item 8, the Mitsurugi battleship ("too strong of lights.png"): "Lights on Mitsurugi are a bit too powerful tone it down
+4. Item 8, the private faction's battleship ("too strong of lights.png"): "Lights on [the private faction's battleship] are a bit too powerful tone it down
    a bit just for this unit since its overpowering at night." If its lamps' strength is in your data, lower it there
-   (the renderer will say where the number lives). "The Mitsurugi seems very inaccurate the battleship make it more
+   (the renderer will say where the number lives). "The [private faction's battleship] seems very inaccurate the battleship make it more
    accurate. Specifically its 3 main battleship cannons." (its weapons' FiringRandomness / ballistics; the engine checks
    the sim's aim). Its wakes are the renderer's.
-5. Item 11 ("og wakes 2.png"): "Mitsurugi Battleship shields don't leave after they are on it just stays as a blue hex
-   over the entire ship instead of acting like the Izanagi. Make the Mitsurugi shields, effects and the way it acts be
-   exactly like the Izanagi same in color." Asked: the battleship's shield set up as the Izanagi's (kind, mesh, colour,
+5. Item 11 ("og wakes 2.png"): "[The private faction's battleship's] shields don't leave after they are on it just stays as a blue hex
+   over the entire ship instead of acting like [the private flagship]. Make the [private faction's battleship's] shields, effects and the way it acts be
+   exactly like [the private flagship] same in color." Asked: the battleship's shield set up as the private flagship's (kind, mesh, colour,
    effects); the renderer checks why its hex stays drawn.
-   Added the same day: "The blue hex shield on the Mitsurugi should be red too cause the faction has that red theme".
+   Added the same day: "The blue hex shield on the [private faction's battleship] should be red too cause the faction has that red theme".
 
 ## 46. To the INTERFACE track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
@@ -299,9 +346,9 @@ Same run as 47. Yours, where the sim is concerned (his words in quotes):
 1. Items 9 and 10 with the interface (46.3): the resource cheat on Ctrl+Alt+B "like the og game" with the "<player> is
    cheating" message, and Alt+T teleporting the whole selection to the cursor: the sim's side of each as the original
    does it.
-2. Item 5: the Izanagi's "Aoe on the guns/missiles is practicaslly non existant": please check the sim applies its
+2. Item 5: the private flagship's "Aoe on the guns/missiles is practicaslly non existant": please check the sim applies its
    weapons' DamageRadius as the blueprint says (visuals sets the numbers, 47.3).
-3. Item 8: "The Mitsurugi seems very inaccurate the battleship ... Specifically its 3 main battleship cannons": please
+3. Item 8: "The [private faction's battleship] seems very inaccurate the battleship ... Specifically its 3 main battleship cannons": please
    check the sim's ballistic aim and firing randomness for those weapons against the original's (visuals tunes the
    blueprint, 47.4).
 4. Item 6 if the views lack it (46.2): the commander's enhancement queue (the drones' and the T2 upgrade's entries).
@@ -326,8 +373,8 @@ the strength, 0 at every edge, soft fade; green y; blue 0; alpha x, same sign); 
 ## 43. To the VISUALS track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
 Chris played a long game during the weekly limit and gave the renderer a list of 22 items with 17 named screenshots
-(the originals on his Desktop, `C:\Users\chris\Desktop\<name>.png`; read them by name). Yours (his words in quotes):
-1. Item 8: "thrusters on Izanagi need to be more integrated and look much more realistic. I'm talking about the
+(the originals on his desktop; read them by name). Yours (his words in quotes):
+1. Item 8: "thrusters on [the private flagship] need to be more integrated and look much more realistic. I'm talking about the
    blue/purplish flame that comes out when it flies. Its fine for og game but ours is next gen" (the mod's exhaust
    emitters are yours; tell the renderer what drawing you want: a hot core, heat shimmer, light on the hull, volume).
 2. Item 11: "Some trees are unable to be reclaimed all trees should be able to be reclaimed." Read: SETONS_R's
@@ -351,8 +398,8 @@ Chris played a long game during the weekly limit and gave the renderer a list of
 ## 42. To the INTERFACE track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
 Chris's list (see 43 for the screenshots). Yours (his words in quotes):
-1. Item 5: "health regen on Izanagi shows +0 while shields show +600 for the regen." (the unit view's numbers; the
-   Izanagi's blueprint is the visuals session's: ask her if it has no hull regen).
+1. Item 5: "health regen on [the private flagship] shows +0 while shields show +600 for the regen." (the unit view's numbers; the
+   private flagship's blueprint is the visuals session's: ask her if it has no hull regen).
 2. Item 16: "When you have a mass extractor in hand it should auto clip to the mass extractor spot from farther
    current you have to be super accurate it should auto clip it into the spot you need to place to save time."
 3. Item 17: "alt + f2 should open up the admin tool that allows me to spawn things in just like og."
@@ -701,7 +748,7 @@ picture's ground, its height texture and the culling bounds follow. No change to
 
 **Blocking:** the fix of Chris's picture; nothing else.
 
-## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking; DONE: the ui's three launchers, walkers, ships, Izanagi)
+## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking; DONE: the ui's three launchers, walkers, ships, a private mod's flagship)
 
 **Who asks:** Chris, through the renderer: "for the large ship sinking and walker we will have to ask
 UI chat to see if he could have a bat where two battleships are fighting so we can see the ships

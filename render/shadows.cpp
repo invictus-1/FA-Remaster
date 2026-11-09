@@ -85,6 +85,10 @@ static bool SeenFromSun(const View& view, float floor, Vec3 right, Vec3 up, floa
   return std::isfinite(box[0]) && std::isfinite(box[1]) && std::isfinite(box[2]) && std::isfinite(box[3]);
 }
 
+// (cascade fade) The outer band of a cascade over which the shaders go over into the next one (lighting.h, kCascadeBand:
+// 0.048 of its map), as a share of its radius.
+static const float kFadeBand = 0.096f;
+
 void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
   const Vec3 L = Normalize(sunDirection);
   // the sun's axes: it looks along -L
@@ -163,7 +167,7 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
       draws_[i] = false;
       nearerX = k.x;
       nearerY = k.y;
-      nearerHalf = radius * 0.96f - 6 * texel - slack;
+      nearerHalf = radius * (0.96f - kFadeBand) - 6 * texel - slack;
       nearerSlack = slack;
       continue;
     }
@@ -223,10 +227,11 @@ void Shadows::Place(const Camera& camera, Vec3 sunDirection, View* view) {
       p.size = size_;
     }
     // the scene's shaders read a cascade inside 0.02 .. 0.98 of its map and look a few texels around ([cardcost] and,
-    // while far cascades are kept, the slack this one may move by while the one after it is kept)
+    // while far cascades are kept, the slack this one may move by while the one after it is kept); (cascade fade) and
+    // over its outer tenth they read the next one as well, which so draws what casts there
     nearerX = x;
     nearerY = y;
-    nearerHalf = radius * 0.96f - 6 * texel - slack;
+    nearerHalf = radius * (0.96f - kFadeBand) - 6 * texel - slack;
     nearerSlack = slack;
   }
   view->constants.cascadeCount = static_cast<float>(count_);

@@ -77,6 +77,11 @@ std::unique_ptr<ZipArchive> ZipArchive::Open(const std::string& hostPath) {
       cdOffset = U64(z64 + 48);
     }
   }
+  // (sizes from a damaged or hostile file: the directory lies inside the file, an entry takes at least 46 bytes)
+  if (cdSize > size || cdOffset > size - cdSize || count > cdSize / 46) {
+    std::fclose(f);
+    return nullptr;
+  }
   std::vector<unsigned char> cd(static_cast<size_t>(cdSize));
   if (!ReadAt(f, cdOffset, cd.data(), cd.size())) {
     std::fclose(f);
@@ -103,6 +108,7 @@ std::unique_ptr<ZipArchive> ZipArchive::Open(const std::string& hostPath) {
     size_t x = p + 46 + nameLen, xend = x + extraLen;
     while (x + 4 <= xend && xend <= cd.size()) {
       uint16_t id = U16(&cd[x]), len = U16(&cd[x + 2]);
+      if (x + 4 + len > xend) break;  // (a field that runs past the extra area: not read)
       if (id == 0x0001) {
         size_t q = x + 4;
         if (en.size == 0xFFFFFFFF && q + 8 <= x + 4 + len) { en.size = U64(&cd[q]); q += 8; }
@@ -127,6 +133,14 @@ std::optional<std::string> ZipArchive::Read(const Entry& en) const {
     return std::nullopt;
   }
   uint64_t dataOff = en.localHeaderOffset + 30 + U16(lh + 26) + U16(lh + 28);
+  // (sizes from a damaged or hostile file: the data lies inside the file, and deflate never grows a block more than
+  // 1032 times)
+  const uint64_t fileSize = FileSize(f);
+  if (dataOff > fileSize || en.compressedSize > fileSize - dataOff ||
+      (en.method == 8 && en.size / 1032 > en.compressedSize + 1)) {
+    std::fclose(f);
+    return std::nullopt;
+  }
   std::string comp(static_cast<size_t>(en.compressedSize), '\0');
   if (!comp.empty() && !ReadAt(f, dataOff, comp.data(), comp.size())) {
     std::fclose(f);
