@@ -245,8 +245,8 @@ the run-to-run noise.
 
 ## 47. To the VISUALS track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
-Chris played `Open-Game-Izanagi-Tour-Snow.bat` (SETONS_R, weather "cold"; log `_scratch\ui\game_tour_izanagi_snow.log`,
-replay `_scratch\ui\replay_tour_izanagi_snow.*`); his pictures are on his Desktop. His opening words: "massive improvement
+Chris played the snow tour launcher of a private mod's flagship (SETONS_R, weather "cold"; log the ui's tour log,
+replay the ui's tour replay); his pictures are on his Desktop. His opening words: "massive improvement
 from before ... nothing crazy", and item 7: "The new nuke is fucking amazing when com dies." Yours (his words in quotes):
 1. Item 1 ("invis rocks.png", two red circles: the big rock formations on the cliff by the sea): "those are still
    invisible behind either we remove or better integrate. I lean more on remove cause the small bundle of silver rocks
@@ -258,20 +258,20 @@ from before ... nothing crazy", and item 7: "The new nuke is fucking amazing whe
    down to a card, in the cover json. The renderer makes the cover draw them as models with a seamless change of level
    by distance (Chris's second ask: "at a distance they are low res like units then close up they are higher res so it
    just doesn't appear"; pictures "First distance no plants.png" / "Second distanace plants.png").
-3. Item 5, the Izanagi: "The main front doesn't animate and close it just disappears and the main laser appears too we
+3. Item 5, the private flagship: "The main front doesn't animate and close it just disappears and the main laser appears too we
    need an animation of it opening and closing." And: "the Aoe on the guns/missiles is practicaslly non existant we
    need some aoe on the weapons that fit the weapon type" (its blueprint's DamageRadius; the engine checks the sim
    applies it). (Its shadow squares when it fires are the renderer's.)
-4. Item 8, the Mitsurugi battleship ("too strong of lights.png"): "Lights on Mitsurugi are a bit too powerful tone it down
+4. Item 8, the private faction's battleship ("too strong of lights.png"): "Lights on [the private faction's battleship] are a bit too powerful tone it down
    a bit just for this unit since its overpowering at night." If its lamps' strength is in your data, lower it there
-   (the renderer will say where the number lives). "The Mitsurugi seems very inaccurate the battleship make it more
+   (the renderer will say where the number lives). "The [private faction's battleship] seems very inaccurate the battleship make it more
    accurate. Specifically its 3 main battleship cannons." (its weapons' FiringRandomness / ballistics; the engine checks
    the sim's aim). Its wakes are the renderer's.
-5. Item 11 ("og wakes 2.png"): "Mitsurugi Battleship shields don't leave after they are on it just stays as a blue hex
-   over the entire ship instead of acting like the Izanagi. Make the Mitsurugi shields, effects and the way it acts be
-   exactly like the Izanagi same in color." Asked: the battleship's shield set up as the Izanagi's (kind, mesh, colour,
+5. Item 11 ("og wakes 2.png"): "[The private faction's battleship's] shields don't leave after they are on it just stays as a blue hex
+   over the entire ship instead of acting like [the private flagship]. Make the [private faction's battleship's] shields, effects and the way it acts be
+   exactly like [the private flagship] same in color." Asked: the battleship's shield set up as the private flagship's (kind, mesh, colour,
    effects); the renderer checks why its hex stays drawn.
-   Added the same day: "The blue hex shield on the Mitsurugi should be red too cause the faction has that red theme".
+   Added the same day: "The blue hex shield on the [private faction's battleship] should be red too cause the faction has that red theme".
 
 ## 46. To the INTERFACE track: from Chris's test run of 21 October (2026-10-21, not blocking)
 
@@ -299,9 +299,9 @@ Same run as 47. Yours, where the sim is concerned (his words in quotes):
 1. Items 9 and 10 with the interface (46.3): the resource cheat on Ctrl+Alt+B "like the og game" with the "<player> is
    cheating" message, and Alt+T teleporting the whole selection to the cursor: the sim's side of each as the original
    does it.
-2. Item 5: the Izanagi's "Aoe on the guns/missiles is practicaslly non existant": please check the sim applies its
+2. Item 5: the private flagship's "Aoe on the guns/missiles is practicaslly non existant": please check the sim applies its
    weapons' DamageRadius as the blueprint says (visuals sets the numbers, 47.3).
-3. Item 8: "The Mitsurugi seems very inaccurate the battleship ... Specifically its 3 main battleship cannons": please
+3. Item 8: "The [private faction's battleship] seems very inaccurate the battleship ... Specifically its 3 main battleship cannons": please
    check the sim's ballistic aim and firing randomness for those weapons against the original's (visuals tunes the
    blueprint, 47.4).
 4. Item 6 if the views lack it (46.2): the commander's enhancement queue (the drones' and the T2 upgrade's entries).
@@ -326,8 +326,8 @@ the strength, 0 at every edge, soft fade; green y; blue 0; alpha x, same sign); 
 ## 43. To the VISUALS track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
 Chris played a long game during the weekly limit and gave the renderer a list of 22 items with 17 named screenshots
-(the originals on his Desktop, `C:\Users\chris\Desktop\<name>.png`; read them by name). Yours (his words in quotes):
-1. Item 8: "thrusters on Izanagi need to be more integrated and look much more realistic. I'm talking about the
+(the originals on his desktop; read them by name). Yours (his words in quotes):
+1. Item 8: "thrusters on [the private flagship] need to be more integrated and look much more realistic. I'm talking about the
    blue/purplish flame that comes out when it flies. Its fine for og game but ours is next gen" (the mod's exhaust
    emitters are yours; tell the renderer what drawing you want: a hot core, heat shimmer, light on the hull, volume).
 2. Item 11: "Some trees are unable to be reclaimed all trees should be able to be reclaimed." Read: SETONS_R's
@@ -351,8 +351,8 @@ Chris played a long game during the weekly limit and gave the renderer a list of
 ## 42. To the INTERFACE track: from Chris's playthrough of 19 October (2026-10-20, not blocking)
 
 Chris's list (see 43 for the screenshots). Yours (his words in quotes):
-1. Item 5: "health regen on Izanagi shows +0 while shields show +600 for the regen." (the unit view's numbers; the
-   Izanagi's blueprint is the visuals session's: ask her if it has no hull regen).
+1. Item 5: "health regen on [the private flagship] shows +0 while shields show +600 for the regen." (the unit view's numbers; the
+   private flagship's blueprint is the visuals session's: ask her if it has no hull regen).
 2. Item 16: "When you have a mass extractor in hand it should auto clip to the mass extractor spot from farther
    current you have to be super accurate it should auto clip it into the spot you need to place to save time."
 3. Item 17: "alt + f2 should open up the admin tool that allows me to spawn things in just like og."
@@ -701,7 +701,7 @@ picture's ground, its height texture and the culling bounds follow. No change to
 
 **Blocking:** the fix of Chris's picture; nothing else.
 
-## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking; DONE: the ui's three launchers, walkers, ships, Izanagi)
+## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking; DONE: the ui's three launchers, walkers, ships, a private mod's flagship)
 
 **Who asks:** Chris, through the renderer: "for the large ship sinking and walker we will have to ask
 UI chat to see if he could have a bat where two battleships are fighting so we can see the ships
