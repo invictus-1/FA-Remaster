@@ -131,6 +131,7 @@ groupshared uint pairHalves[8][8];  // (each pixel's half, for the buffer's word
       [unroll] for (int k = 0; k < 16; ++k) lit += shadowMaps.SampleCmpLevelZero(samplerShadow, float3(s.xy + mul(r, kShadowDisc[k]) * spread, cascade), s.z);
       value = lit / 16;
     }
+    value = CascadeFaded(P, N, cascade, s, value);  // (cascade fade, as SunShadowMaps has it)
   } else if (valid) {
     value = SunShadowMaps(P, N);
   }
