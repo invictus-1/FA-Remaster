@@ -831,38 +831,119 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   out->blend = t;
   BlendUnits(a.units.data(), a.units.size(), b ? b->units.data() : nullptr, b ? b->units.size() : 0, t, &out->units,
              static_cast<uint32_t>(a.bones.size()));
-  // projectiles fly on along their velocity for the part of the beat that has passed (a beat is a tenth of a second)
+  // projectiles: between this beat and the next (a beat is a tenth of a second)
   out->projectiles = a.projectiles;
-  const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
-  // [shellstop] the next beat's shells that have hit (stopped where they hit), by id: one that hits within this beat is
-  // moved toward its hit, not on along its velocity past it (Chris's 2026-11-08 test: an ACU's bolt drawn up to two units
-  // past the unit it hit, then snapping back)
-  std::unordered_map<uint32_t, const FrameProjectile*> hitNext;
-  if (b)
-    for (const FrameProjectile& n : b->projectiles)
-      if (n.stopped) hitNext[n.id] = &n;
-  for (FrameProjectile& p : out->projectiles) {
-    const auto hit = p.stopped ? hitNext.end() : hitNext.find(p.id);
-    for (int k = 0; k < 3; ++k) {
-      // (not one that has hit: it stands where it hit until its script ends it next beat; moved on
-      // with the speed it came with, it was drawn through what it hit, a tank's shell up to two and
-      // a half units: Chris's "some go through the acu")
-      if (hit != hitNext.end()) p.position[k] += (hit->second->position[k] - p.position[k]) * t;
-      else if (!p.stopped) p.position[k] += p.velocity[k] * ahead;
-      p.size[k] += p.growth[k] * ahead;
+  const float span = b ? 0.1f * static_cast<float>(b->tick - a.tick) : 0;  // seconds from this beat to the next
+  const float ahead = t * span;
+  // each of this beat's projectiles in the next beat, found once per pair of beats
+  if (b && (shellPair_[0] != a.tick || shellPair_[1] != b->tick || shellNext_.size() != a.projectiles.size() ||
+            shellPairCount_ != b->projectiles.size())) {
+    std::unordered_map<uint32_t, int32_t> at;
+    at.reserve(b->projectiles.size());
+    for (size_t n = 0; n < b->projectiles.size(); ++n) at.emplace(b->projectiles[n].id, static_cast<int32_t>(n));
+    shellNext_.assign(a.projectiles.size(), -1);
+    for (size_t n = 0; n < a.projectiles.size(); ++n) {
+      const auto found = at.find(a.projectiles[n].id);
+      if (found != at.end()) shellNext_[n] = found->second;
     }
+    shellPair_[0] = a.tick;
+    shellPair_[1] = b->tick;
+    shellPairCount_ = b->projectiles.size();
+  }
+  for (size_t n = 0; n < out->projectiles.size(); ++n) {
+    FrameProjectile& p = out->projectiles[n];
+    const FrameProjectile* next = nullptr;
+    if (b && !p.stopped) {
+      const int32_t at = shellNext_[n];
+      if (at >= 0 && static_cast<size_t>(at) < b->projectiles.size() && b->projectiles[at].id == p.id) next = &b->projectiles[at];
+    }
+    if (next && next->stopped) {
+      // [shellstop] one that hits within this beat (the next beat has it stopped where it hit) is moved toward its
+      // hit, not on along its velocity past it (Chris's 2026-11-08 test: an ACU's bolt drawn up to two units past the
+      // unit it hit, then snapping back)
+      for (int k = 0; k < 3; ++k) p.position[k] += (next->position[k] - p.position[k]) * t;
+    } else if (next && shellBlend) {
+      // (shell curve) the next beat has it flying: the curve through both places that leaves with this beat's speed
+      // and arrives with the next's, so that it is where the game has it at each beat and turns smoothly between
+      // them. Only where both speeds fit the way it went (each between half and twice it, and along it): one a
+      // script moves or sets down elsewhere goes straight.
+      float way[3], out0[3], in1[3], way2 = 0, out2 = 0, in2 = 0, outAlong = 0, inAlong = 0;
+      for (int k = 0; k < 3; ++k) {
+        way[k] = next->position[k] - p.position[k];
+        out0[k] = p.velocity[k] * span;
+        in1[k] = next->velocity[k] * span;
+        way2 += way[k] * way[k];
+        out2 += out0[k] * out0[k];
+        in2 += in1[k] * in1[k];
+        outAlong += out0[k] * way[k];
+        inAlong += in1[k] * way[k];
+      }
+      const bool curve = way2 > 1e-8f && out2 <= 4 * way2 && in2 <= 4 * way2 && out2 >= 0.25f * way2 && in2 >= 0.25f * way2 &&
+                         outAlong > 0 && inAlong > 0;
+      const float t2 = t * t, t3 = t2 * t;
+      const float h1 = curve ? -2 * t3 + 3 * t2 : t, hOut = curve ? t3 - 2 * t2 + t : 0, hIn = curve ? t3 - t2 : 0;
+      for (int k = 0; k < 3; ++k) p.position[k] += way[k] * h1 + out0[k] * hOut + in1[k] * hIn;
+      const Quat q = Nlerp({p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]},
+                           {next->orientation[0], next->orientation[1], next->orientation[2], next->orientation[3]}, t);
+      p.orientation[0] = q.x;
+      p.orientation[1] = q.y;
+      p.orientation[2] = q.z;
+      p.orientation[3] = q.w;
+    } else if (!p.stopped) {
+      // gone by the next beat (or no next beat): on along its velocity. (Not one that has hit: it stands where it hit
+      // until its script ends it next beat; moved on with the speed it came with, it was drawn through what it hit,
+      // a tank's shell up to two and a half units: Chris's "some go through the acu")
+      for (int k = 0; k < 3; ++k) p.position[k] += p.velocity[k] * ahead;
+    }
+    for (int k = 0; k < 3; ++k) p.size[k] += p.growth[k] * ahead;
     p.age += ahead;
   }
+  // (shell curve) a beam's ends go with what holds them: each toward where the next beat has it, unless that is far
+  // (another target: the beam changes at the beat, as in the game). The lists of both beats are in the game's order,
+  // so the next is looked for from where the last was found.
   out->beams = a.beams;
-  // the scripts' entities: each moved toward where it is in the next beat (there are few)
-  out->entities = a.entities;
-  if (b)
-    for (FrameEntity& f : out->entities)
-      for (const FrameEntity& next : b->entities) {
-        if (next.id != f.id) continue;
-        for (int k = 0; k < 3; ++k) f.position[k] += (next.position[k] - f.position[k]) * t;
+  if (b && shellBlend && !b->beams.empty()) {
+    size_t from = 0;
+    const size_t count = b->beams.size();
+    for (FrameBeam& beam : out->beams)
+      for (size_t tried = 0; tried < count; ++tried) {
+        const size_t at = from + tried < count ? from + tried : from + tried - count;
+        const FrameBeam& next = b->beams[at];
+        if (next.id != beam.id) continue;
+        from = at + 1 < count ? at + 1 : 0;
+        for (float* end : {beam.start, beam.end}) {
+          const float* to = end == beam.start ? next.start : next.end;
+          const float d[3] = {to[0] - end[0], to[1] - end[1], to[2] - end[2]};
+          if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 64) continue;
+          for (int k = 0; k < 3; ++k) end[k] += d[k] * t;
+        }
         break;
       }
+  }
+  // the scripts' entities: each moved toward where it is in the next beat, turned and sized with it
+  out->entities = a.entities;
+  if (b && !b->entities.empty()) {
+    size_t from = 0;
+    const size_t count = b->entities.size();
+    for (FrameEntity& f : out->entities)
+      for (size_t tried = 0; tried < count; ++tried) {
+        const size_t at = from + tried < count ? from + tried : from + tried - count;
+        const FrameEntity& next = b->entities[at];
+        if (next.id != f.id) continue;
+        from = at + 1 < count ? at + 1 : 0;
+        for (int k = 0; k < 3; ++k) f.position[k] += (next.position[k] - f.position[k]) * t;
+        if (shellBlend) {
+          const Quat q = Nlerp({f.orientation[0], f.orientation[1], f.orientation[2], f.orientation[3]},
+                               {next.orientation[0], next.orientation[1], next.orientation[2], next.orientation[3]}, t);
+          f.orientation[0] = q.x;
+          f.orientation[1] = q.y;
+          f.orientation[2] = q.z;
+          f.orientation[3] = q.w;
+          for (int k = 0; k < 3; ++k) f.scale[k] += (next.scale[k] - f.scale[k]) * t;
+        }
+        break;
+      }
+  }
   return true;
 }
 

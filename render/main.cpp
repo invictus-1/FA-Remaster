@@ -111,6 +111,9 @@
 //           simulation's wait left out), the longest frame's stages, and a line "render: --timings-stats: key=value ..."
 //           for scripts; --timings-csv <file> (turns --timings on): every counted frame a row, every stage a column
 //           (render/tools/bench_render.py, the renderer's benchmark set, reads them)
+// --shells-as-before  (shell curve) with a game: shells, beams and the scripts' entities between two beats as they were
+//           drawn before (on along the first beat's speed; SimFrames::shellBlend). --shell-log <file>: every frame a line
+//           per shell ("s <beat> <id> <x> <y> <z>") and per beam ("b <beat> <id> <start> <end>") as drawn
 // --fight-scan <beats>  [rbench] with a game: every that many beats (on the way to --tick too) where the most shots are
 //           in flight (as --find fight), printed: to find a battle's moment and place for a benchmark's camera
 // --hitch-log [ms]  [hitches] every frame that took longer than ms from the last one's end (25 unless given), or loaded or
@@ -888,6 +891,8 @@ struct Options {
   bool waterRipples = false;            // --water-ripples
   bool wakesRemade = false;             // --wakes-remade [wakes]
   bool fixedStep = false;               // --fixed-step [wakes]
+  bool shellBlend = true;               // --shells-as-before (shell curve)
+  std::string shellLog;                 // --shell-log (shell curve)
   bool hullWashOld = false;             // [livewash] --hull-wash old
   float stormFoam = 1;                  // [stormfoam] --storm-foam
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
@@ -1251,6 +1256,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
+    else if (a == "--shells-as-before") o->shellBlend = false;  // (shell curve)
     else if (a == "--surf") o->surf = true;
     else if (a == "--ocean") o->oceanWaves = true;  // [ocean]
     else if (a == "--ocean-lift") o->oceanWaves = o->oceanLift = true;  // [lift]
@@ -1390,6 +1396,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--simlog") o->simLog = v;
+    else if (a == "--shell-log") o->shellLog = v;  // (shell curve)
     else if (a == "--tick") o->tick = atof(v);
     else if (a == "--lamp-scale") o->lampScale = static_cast<float>(std::max(atof(v), 0.0));  // [unit lamps]
     else if (a == "--size") {
@@ -2134,6 +2141,7 @@ int main(int argc, char** argv) {
     setup.upgrades = opt.upgrades;  // [hitches] --upgrade-test
     setup.lua = opt.luaOrders;      // [r7] --orders
     live.SetFocusArmy(opt.focus);
+    live.SetShellBlend(opt.shellBlend);  // (shell curve)
     picture.SetVulkan(opt.vulkan);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
@@ -3660,6 +3668,17 @@ int main(int argc, char** argv) {
       CpuTimes::Part("the game's beats blended");
       frameAt(playTick, &frame);
       CpuTimes::Part(nullptr);
+      if (!opt.shellLog.empty() && !liveBusy) {  // (shell curve) --shell-log: where each shell and beam is drawn, frame by frame
+        static FILE* log = fopen(opt.shellLog.c_str(), "w");
+        if (log) {
+          for (const FrameProjectile& p : frame.projectiles)
+            fprintf(log, "s %.4f %u %.4f %.4f %.4f\n", playTick, p.id, p.position[0], p.position[1], p.position[2]);
+          for (const FrameBeam& beam : frame.beams)
+            fprintf(log, "b %.4f %u %.4f %.4f %.4f %.4f %.4f %.4f\n", playTick, beam.id, beam.start[0], beam.start[1],
+                    beam.start[2], beam.end[0], beam.end[1], beam.end[2]);
+          fflush(log);
+        }
+      }
       if (opt.fightScan > 0 && haveLive) {  // [rbench] --fight-scan: where the most shots fly, every so many beats
         static int scanned = -1;
         const int due = static_cast<int>(playTick) / opt.fightScan;
