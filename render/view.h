@@ -393,7 +393,7 @@ float3 ComputedSky(float3 d) {
     return lerp(t, skyHorizon.rgb * 0.3, saturate(-d.y * 5));  // below the horizon: the ground far away
   }
   float3 c = lerp(skyHorizon.rgb, skyZenith.rgb, pow(saturate(d.y), 0.5));
-  float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
+  float3 body = skyBody.w > 1.5 ? skyMoon.xyz : skyBody.xyz;  // (the glow's body: SkyLight::glowMoon)
   float s = saturate(dot(d, body));
   float s2 = s * s, s4 = s2 * s2, s16 = s4 * s4 * s4 * s4;
   c += skyGlow.rgb * ((s4 * s * 0.25 + s16 * s16 * s16 * 0.6) * lerp(1, 0.35, saturate(d.y)));

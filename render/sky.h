@@ -28,6 +28,12 @@ struct SkyLight {
   Vec3 body;          // toward the sun (below the horizon at night)
   Vec3 moonPlace;     // toward the moon
   bool moon = false;  // the light that falls is the moon's
+  float moonIn = 0;   // how far the moon's light has come in after the sun's has gone (0 by day .. 1 in the night)
+  // How much of a falling light there is to cast a shadow at all (1 by day and in the night, 0 at the moment the light
+  // changes from the sun's to the moon's): what darkens by the light's direction whatever its colour (the contact
+  // shadows, the clouds' shadows on the sea) is drawn by this much, or it would jump to the other side at that moment.
+  float fallIn = 1;
+  bool glowMoon = false;  // the fitted sky's glow is around the moon (later than `moon`: while the sun lights the air, around the sun)
   Vec3 direction;     // toward the body whose light falls, held a little above the horizon
   Vec3 color;         // that light on the ground, linear; about 1 is the sun at noon
   Vec3 zenith, horizon, glow;  // the fitted sky: overhead, at the horizon, around the body; linear

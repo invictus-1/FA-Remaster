@@ -725,7 +725,7 @@ bool Horizon::Begin(const MapData& map, float reach, const Weather& weather, flo
   // (the clouds' shadows carried: a pattern only where the cover is broken; under an even overcast, as in rain, the
   // far haze is already the overcast's and darkening the far water alone would only set it apart from the land)
   const float cover = std::clamp(weather.cloudCover, 0.0f, 1.0f);
-  k.ground[1] = shadows ? shadowCarry * 4 * cover * (1 - cover) : 0.0f;
+  k.ground[1] = shadows ? shadowCarry * 4 * cover * (1 - cover) * weather.fallIn : 0.0f;
   k.ground[2] = std::fmod(time * 0.0007f, 1.0f);
   onWater_ = sea && (iceAmount > 0 || k.ground[1] > 0);
 
