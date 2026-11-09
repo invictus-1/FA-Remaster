@@ -44,7 +44,28 @@ float3 Finished(float2 uv) {
   return saturate(c);
 }
 
-float4 PS(VOut i) : SV_Target { return float4(Finished(i.uv), 1); }
+// (dither) The screen holds 256 levels a channel: a smooth dark gradient (a night or dusk sky, haze, a lamp's wide
+// glow) written to it as it is shows its levels as bands. So the modern look's last pass adds a noise of one level
+// before the write (each channel its own, two even numbers added: a triangle from -1 to 1 level, which leaves no
+// level's edge and no pattern of its own), new every frame. The original's look is written as it was.
+uint ScreenMix(uint x) {
+  x = (x ^ (x >> 16)) * 0x6b43a9b5u;
+  x = (x ^ (x >> 13)) * 0x9e2d61f3u;
+  x = (x ^ (x >> 15)) * 0x4cf5ad43u;
+  return x ^ (x >> 16);
+}
+float3 ScreenNoise(float2 pixel) {
+  uint2 at = uint2(pixel);
+  uint3 n;
+  n.x = ScreenMix(at.x + ScreenMix(at.y + ScreenMix(uint(frac(time * 7.3) * 65536.0))));
+  n.y = ScreenMix(n.x);
+  n.z = ScreenMix(n.y);
+  return ((float3(n & 0xffffu) + float3(n >> 16)) / 65535.0 - 1) * (look > 0.5 ? 1.0 / 255.0 : 0.0);
+}
+
+float4 PS(VOut i) : SV_Target { return float4(saturate(Finished(i.uv) + ScreenNoise(i.position.xy)), 1); }
+// (before FSR 1, into a picture of half floats: nothing is lost there, and the noise is added where FSR writes to the screen)
+float4 TargetPS(VOut i) : SV_Target { return float4(Finished(i.uv), 1); }
 
 // [glitches] The same, sharpened (Post::sharpen; Chris's big test: "a lack of sharpness in some textures across the board ...
 // extra sharpness so its more high res in looking is important"): each pixel pushed away from the mean of its four
@@ -62,7 +83,7 @@ float4 SharpPS(VOut i) : SV_Target {
   float3 lo = min(c, min(min(n, s), min(e, wv))), hi = max(c, max(max(n, s), max(e, wv)));
   float3 room = sqrt(saturate(min(lo, 1 - hi) / max(hi, 1e-4)));
   float3 r = c + sharpen.x * room * (c - 0.25 * (n + s + e + wv)) * 2;
-  return float4(clamp(r, lo, hi), 1);
+  return float4(saturate(clamp(r, lo, hi) + ScreenNoise(i.position.xy)), 1);
 }
 )hlsl";
 
@@ -195,9 +216,10 @@ bool Post::Init(std::string* error) {
   pd.pixelEntry = "SharpPS";
   sharpened_ = device_->CreatePipeline(pd, error);
   if (!sharpened_) return false;
-  pd.pixelEntry = "PS";
+  pd.pixelEntry = "TargetPS";
   pd.name = "present, before FSR";
   pd.depthTarget = false;
+  pd.colorFormat = gfx::Format::RGBA16F;  // (dither)
   toTarget_ = device_->CreatePipeline(pd, error);
   if (!toTarget_) return false;
   pd.name = "picture copied";
@@ -509,7 +531,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     gfx::TargetDesc td;
     td.width = width_;
     td.height = height_;
-    td.format = gfx::Format::RGBA8;
+    td.format = gfx::Format::RGBA16F;  // (dither: the 256 levels only at the screen)
     ldr_ = device_->CreateTarget(td);
   }
   gfx::PassDesc pass;
@@ -535,7 +557,8 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     device_->SetTexture(1, glowing ? glowSteps_[0] : blooming ? bloom_[0] : black_);
     device_->Draw(3);
   }
-  if (scaled && ldr_) upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight);
+  if (scaled && ldr_)
+    upscaler->Run(ldr_, width_, height_, screenWidth, screenHeight, view.constants.look > 0.5f ? 1.0f / 255.0f : 0.0f, view.constants.time);
 }
 
 gfx::Texture Post::KeepFinished(gfx::Texture window, int width, int height) {
