@@ -5356,14 +5356,23 @@ int l_GiveSiloAmmo(lua_State* L) {
     if (s->weapon[0] >= 0 || s->weapon[1] >= 0) s->progress = static_cast<float>(n);
     return 0;
   }
+  // 0x6cedf6 / 0x6cf201: the silo's AdjustStorageCount(kind, n) = `stored += n`, with no clamp at the store's
+  // size; a unit without a silo: nothing. (READ, not run: order audit D1.12; before, ours clamped to the store's
+  // size and gave ammo to a unit with no counted weapon too.)
+  SiloState* s = GetSilo(*S(L), u);
+  if (s->weapon[0] < 0 && s->weapon[1] < 0) return 0;
   u->siloAmmo[Kind] += n;
-  if (u->silo && u->silo->maxStore[Kind] > 0) u->siloAmmo[Kind] = std::min(u->siloAmmo[Kind], u->silo->maxStore[Kind]);
   return 0;
 }
 template <int Kind>
 int l_RemoveSiloAmmo(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  u->siloAmmo[Kind] = std::max(0, u->siloAmmo[Kind] - static_cast<int>(luaL_checknumber(L, 2)));
+  const int n = static_cast<int>(luaL_checknumber(L, 2));
+  // 0x6cef41: AdjustStorageCount(kind, -n), with no floor at 0; a unit without a silo: nothing (order audit
+  // D1.12; before, ours stopped at 0)
+  SiloState* s = GetSilo(*S(L), u);
+  if (s->weapon[0] < 0 && s->weapon[1] < 0) return 0;
+  u->siloAmmo[Kind] -= n;
   return 0;
 }
 int l_StopSiloBuild(lua_State* L) {

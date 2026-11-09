@@ -3217,7 +3217,9 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
     Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
     d->goal = p;
     SetState(u, US("TransportUnloading"), true);
-    if (u->motion.hasGoal) MotionStop(u);
+    // ctor 0x62602c..0x626049: T mobile and a navigator -> its AbortMove, with no test of a goal (READ, not run:
+    // order audit D3.6; before, ours stopped only when a goal was set)
+    if (u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
     t->order = "UnloadUnits";
   } else {
     return nullptr;
