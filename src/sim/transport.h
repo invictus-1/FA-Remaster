@@ -90,6 +90,7 @@ bool RefuelGoalWakesNobody(const Unit* u);
 // Children of the guard task: a ctor-B ferry (T guards a factory or a beacon) and a refuel at P.
 BuildTask* MakeGuardFerryTask(Sim& sim, Unit* T, Unit* G);
 BuildTask* MakeRefuelTask(Sim& sim, Unit* u, Unit* P);
+void TransportResetReservation(Unit* P);  // the patrol's and the guard's, before MakeRefuelTask
 // The task of an AssistCommander order: CUnitPodAssist, a drone or assist station (pod_assist.md).
 BuildTask* StartPodTask(Sim& sim, Unit* u, const UnitCommand& c);
 Unit* FindPlatform(Sim& sim, Unit* plane);

@@ -798,7 +798,8 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
     const UnitCommand* hc = u->commands.empty() ? nullptr : u->commands.front().get();
     const bool ownForm = hc && hc->form && (t.type == CommandType::FormPatrol || t.type == CommandType::FormAggressiveMove);
     if (!ownForm)
-      if (Unit* P = FindPlatform(sim, u))
+      if (Unit* P = FindPlatform(sim, u)) {
+        TransportResetReservation(P);  // 0x61c1a5..0x61c1b7
         if (BuildTask* c = MakeRefuelTask(sim, u, P)) {
           u->dispatchResult = 0;  // (its CCommandTask ctor clears the parent's result, 0x5f095f)
           p.child = c;
@@ -807,6 +808,7 @@ int TickPatrol(Sim& sim, Unit* u, BuildTask& t) {
           t.waitUntil = next;
           return kTaskRunning;
         }
+      }
   }
   // (b) enemies
   if (Unit* e = PatrolFindTarget(sim, u, p.box)) {
