@@ -4194,7 +4194,9 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
   if (!w || !w->enabled) return kTaskFailed;
   const bool nuke = t.type == CommandType::Nuke;
   const int kind = nuke ? 1 : 0;
-  const bool mobile = u->motion.bp && u->motion.bp->mobile() && !u->immobile;
+  // IUnit::IsMobile 0x6a4a10: the unit has a motion (u+0x4b0), not the Immobile state (READ, not run: order audit
+  // D1.5; before, ours also asked !u->immobile, so a launcher under SetImmobile(true) out of range failed its order)
+  const bool mobile = IsMobile(u);
   const float minR = w->ovMinRadius < 0 ? w->bp->minRadius : w->ovMinRadius;
   const float maxR = w->ovMaxRadius < 0 ? w->bp->maxRadius : w->ovMaxRadius;
   const AiTarget target = CommandTarget(sim, t);
@@ -4219,7 +4221,13 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
           if (!u->motion.hasGoal) TaskMoveToward(sim, u, tp);
           return kTaskRunning;
         }
-        if (mobile) TaskStopMoving(u);  // the navigator's AbortMove
+        // 0x60b684..0x60b696: IsMobile and a navigator -> the navigator's AbortMove (vt+0x10), with no test of a
+        // goal: an idle navigator's AbortMove still brakes the motion (see AbortNavigation; its IgnoreFormation is
+        // not called here). READ, not run: order audit D1.4; before, ours stopped only when a goal was set.
+        if (mobile) {
+          MotionStop(u);
+          u->unitStates.Erase(US("Moving"));  // (ours: the walk above is a task move, which sets it)
+        }
         if (CheckSilo(w)) {
           t.state = 2;
           continue;

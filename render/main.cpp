@@ -767,6 +767,8 @@
 #include "fx_stand.h"
 #include "camera.h"
 #include "cinecam.h"
+#include "core/build_stamp.h"
+#include "core/crash.h"
 #include "core/hostfs.h"
 #include "remasters.h"
 #include "core/log.h"
@@ -1930,6 +1932,10 @@ int MostShotsNear(const Frame& frame, size_t* best) {
 int main(int argc, char** argv) {
   MOHO_THREAD_NAME("render");  // [tracy] (the viewer's main thread; docs/profiling.md 2.6)
   render::HangDumpStart();  // [hangdump] (MOHO64_HANG_DUMP=<seconds>)
+  if (argc == 2 && std::string(argv[1]) == "--version") {  // (which build this is: core/build_stamp.h)
+    printf("moho64view: build %s\n", moho::BuildStamp());
+    return 0;
+  }
   Options opt;
   if (!ParseOptions(argc, argv, &opt)) {
     fprintf(stderr, "usage: moho64view [--fa <game folder>] [--data <folder>]... [--map /maps/NAME/NAME.scmap]\n"
@@ -1939,6 +1945,28 @@ int main(int argc, char** argv) {
     return 2;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
+  // (crash report) A fault writes its place, the build and the frames to stderr and to the log (core/crash.h). A run
+  // a person watches (no --frames) also keeps a dated log of its own beside the shader cache when --simlog names none
+  // (the newest ten stay), and a fault there leaves a small memory dump beside the log and shows one window naming
+  // both. An automatic run opens no log of its own and never waits for a click.
+  {
+    std::string log = opt.simLog;
+    if (!log.empty()) {
+      if (!moho::LogOpenFile(log)) {
+        fprintf(stderr, "render: the log %s could not be made\n", log.c_str());
+        log.clear();
+      }
+    } else if (opt.frames <= 0) {
+      if (const char* local = getenv("LOCALAPPDATA"); local && *local)
+        log = moho::LogOpenDefault(std::string(local) + "\\FA Remastered\\logs", "moho64view");
+    }
+    moho::InstallCrashHandler();
+    if (!log.empty()) {
+      const size_t dot = log.rfind('.');
+      const bool ext = dot != std::string::npos && log.find_first_of("/\\", dot) == std::string::npos;
+      moho::CrashSetReport(log.c_str(), ((ext ? log.substr(0, dot) : log) + ".dmp").c_str(), opt.frames <= 0);
+    }
+  }
   // (--marks: printed when main ends, after the world and the device, which tell what they still held, are gone)
   render::Marks().wanted = opt.marks;
   struct MarksAtEnd {
@@ -2081,7 +2109,6 @@ int main(int argc, char** argv) {
       fprintf(stderr, "render: --sim and --session need --init <the game's init file>\n");
       return 1;
     }
-    if (!opt.simLog.empty()) moho::LogOpenFile(opt.simLog);
     LiveSim::Setup setup;
     setup.initFile = opt.init;
     setup.replay = opt.sim;
