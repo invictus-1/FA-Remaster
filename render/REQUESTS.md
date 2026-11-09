@@ -34,6 +34,53 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking)
+
+**Who says:** Chris, 2026-11-09: "sculpt an entire terrain outside the map so the map actually looks like it exists vs
+emptiness or a mirrored exterior outside of the map square." His rule: new looks are options.
+
+**What there is (render 55bf8e12):** `World::mapSurround` (bool, false by default). With it, and the world beyond the edge
+on (`World::worldBeyond`, the modern look), a map that brings a sculpted surround (`<map stem>_surround.json` beside its
+.scmap; today only SETONS_R) has that ground drawn past its four edges in place of the map laid out again mirrored. A map
+without one, or the world beyond the edge off, is drawn exactly as before (checked: 0 pixels differ).
+
+**The ask:** a third value for the map-edge option (today: ends at the edge / the map laid out again), for example
+"Sculpted land (where the map has it)", that sets `mapSurround = true` and `worldBeyond = true`. Which is the default is
+Chris's word; the surround is a block-out today (plain ground, no trees yet), so I would leave the default as it is until
+the visuals track's detail pass.
+
+**Costs, measured (1920 x 1080, SETONS_R, all looks):** the first frame with it on reads the heights (about 30 ms) and
+makes its ground (about 20 ms), once a map; each frame after it is cheaper than the mirrored copies (ground pass 0.62 ms
+against 1.19 with the camera at 700; 0.45 against 0.58 over the whole map).
+
+## 61. To the VISUALS track: the surround's first drawing, and what it shows of the block-out (2026-11-09; not blocking)
+
+**Drawn (render 55bf8e12, viewer `--surround`):** your `SETONS_R_surround.json` + heights, 695,552 triangles in 484 parts,
+finer near the map. The edge matches: the heights along the map's four edges are 0.00 apart from the map's own on all
+2048 samples I compare (I take the surround toward the map's edge over the first 16 world units anyway, and a curtain
+hangs from the map's own edge heights, so your item 4, the map's own border jumps, shows no gap). Pictures:
+`_scratch/render/surround/seam_far.png` (noon), `whole.png`, `edge_n.png`, `edge_w.png`, `corner_se.png`, `dusk.png`,
+`night.png`, `rain.png`.
+
+**What reads wrong, yours:**
+1. **Every shore is one step.** The heights go from 17.70 to 15.12 between two neighbouring samples wherever land meets
+   the water (5,296 such crossings; one place: world x -10, z -652; picture `_scratch/render/surround/crop_saw.png`). At
+   2 world units a sample that is drawn as a staircase along every coast. Wanted: a shore that slopes over several
+   samples (a beach above the water and a sea floor going down under it over 10 to 20 world units), as the map's own
+   shores do.
+2. **Nothing grows on it.** The map's trees and scenery stop at the edge, so the edge still reads as a line from above.
+   For your detail pass, what I can draw with the least new work, in this order: (a) a decor file in the map's own decor
+   format for the surround (`<stem>_surround_decor.bin`, same blueprint table; I draw it with the same instancing, lowest
+   level of detail past about 300 units), dense within 150 units of the edge and thinning out; (b) a forest mask
+   (8-bit, same samples as the heights) that I shade as canopy where no single tree is worth drawing.
+3. **The ground is plain beside the map's.** I colour it from the map's own ground by height and slope (low by the
+   water, level, high, steep); the steep class comes out as pale patches. A mask picture would do better than my
+   guess: 4 channels at the heights' samples (or half), each the share of one of the map's own layers (name the layer
+   per channel in the json's "masks"), and I draw the map's own layer textures by it. Tell me the layers you pick.
+
+**Not yet on my side (so you do not sculpt for it):** the surround's hills cast no shadow onto the map and are not in
+the water's reflections or the ray-traced scene; that is my follow-up.
+
 ## 60. To the ENGINE track: the weapons test, the renderer's side, and two fields it would need (2026-11-09, Chris; not blocking)
 
 **Who says:** Chris, 2026-11-09: "a full unit test for pitch, yaw etc. to make sure all new units shoot and perform
