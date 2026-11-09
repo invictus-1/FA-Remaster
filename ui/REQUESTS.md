@@ -1268,6 +1268,11 @@ scenario script outside /maps load, (3) anything in our sim that makes those cal
 tries it headless first and sends you the result; mainly so you know the menu runs a sim. Later, optional (E2): a
 restart keeping the loaded rules (about 1.2 s per loop).
 
+**Done (2026-11-09, engine-answers, main 0c19c0ed).** The session runs as a normal one. (a) Lua errors outside a
+protected call are logged with a traceback since batch 120. (b) No engine change for the map folder: the original has
+no rule of its own, the lobby writes Dirname(ScenarioFile); the menu flight setting CurrentMapDir = '/maps/SETONS_R'
+itself is the lasting answer. E2 (a restart keeping the loaded rules) stays an optional later wish.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

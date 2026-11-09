@@ -809,6 +809,7 @@ struct GameSession::WindowPicture {
   struct OpenSky {
     bool taken = false;
     float timeOfDay = -1, cloudCover = 0, rain = 0, snow = 0, fog = 0, wet = 0, snowLying = 0;
+    float cinematicHaze = 0;  // (the flight thins it: FlightHaze)
     render::Climate climate = render::Climate::Temperate;
   };
   OpenSky shownSky;
@@ -3088,6 +3089,7 @@ void GameSession::ServeWindowMap() {
     s.taken = true;
     s.timeOfDay = w->timeOfDay, s.cloudCover = w->cloudCover, s.rain = w->rain, s.snow = w->snow, s.fog = w->fog;
     s.wet = w->wet, s.snowLying = w->snowLying, s.climate = w->climate;
+    s.cinematicHaze = w->cinematicHaze;
   }
   Backdrop::Dress(wp.picture);
   wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
@@ -3174,6 +3176,19 @@ void GameSession::ServeMenuFlight(WindowPicture& wp) {
   }
 }
 
+// The flight's air: the least haze its cinematic camera sees (World::cinematicHaze), at 0.4 of the renderer's (Chris on
+// the flight's dusk, 2026-11-09: "a bit more clearer if anything"; measured at 1080p, tick 500, the far land's darkest
+// twentieth 0.210 at all of it, 0.195 at 0.65, 0.164 at none: 0.65 could hardly be seen). Always from the amount the
+// world was opened with (`opened`, kept at the menu's swap), so a flight started again does not thin it twice. The
+// player's own Haze & Mist amount takes this over once the renderer has one (ui/REQUESTS.md, renderer 50).
+// MOHO64UI_FLIGHT_HAZE: another share, for the window checks' pictures side by side.
+static void FlightHaze(render::World* w, bool taken, float opened) {
+  if (!w || !taken) return;
+  float share = 0.4f;
+  if (const char* v = std::getenv("MOHO64UI_FLIGHT_HAZE"); v && *v) share = std::max(0.0f, std::min(2.0f, static_cast<float>(std::atof(v))));
+  w->cinematicHaze = opened * share;
+}
+
 // The flight's battle on the world shown: just swapped in with its simulation handed over (`restart` false), or the
 // map shown started over for a battle made anew (its loop, the option back to Flight). Then as a game's picture is
 // dressed (DressGamePicture: GameStarted, Beat), every army shown (no player's view), nothing of the interface in the
@@ -3196,6 +3211,7 @@ void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
   p.GameStarted(*sim);
   if (render::World* w = p.world()) SkyOnWorld(*w, "beyond", -1, "");  // (the map's edge as a game's default)
   Backdrop::Dress(p);
+  FlightHaze(p.world(), wp.shownSky.taken, wp.shownSky.cinematicHaze);
   // (the hour as the picture's day (a session's world takes its light from it, not from Dress's timeOfDay: without it
   // the flight showed the map's own noon light, 2026-11-09's window check); Dusk's evening, standing still, fair)
   p.SetDayAndWeather(Backdrop::kDuskHour, 0, false);
@@ -3293,6 +3309,8 @@ void GameSession::PushWindowInfo(lua_State* L) const {
   if (const render::World* w = windowPicture_->picture.world()) {
     boolean("worldBounceLight", w->bounceLight);
     boolean("worldRayReflections", w->rayReflections);
+    num("worldCinematicHaze", w->cinematicHaze);
+    num("worldOpenedCinematicHaze", wp.shownSky.taken ? wp.shownSky.cinematicHaze : -1);
     boolean("worldVolumetricClouds", w->volumetricClouds);
     boolean("worldSoftShadows", w->softShadows);
     boolean("worldWaterDetail", w->waterDetail);
@@ -3650,6 +3668,7 @@ void GameSession::OpenPicture() {
             if (s.taken) {
               w->timeOfDay = s.timeOfDay, w->cloudCover = s.cloudCover, w->rain = s.rain, w->snow = s.snow, w->fog = s.fog;
               w->wet = s.wet, w->snowLying = s.snowLying, w->climate = s.climate;
+              w->cinematicHaze = s.cinematicHaze;  // (a replay's cinematic camera: the renderer's own again)
             }
           }
           wp.picture.CameraCut();

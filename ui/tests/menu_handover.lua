@@ -22,6 +22,7 @@ local function check(what, got, want)
     end
 end
 local function flight() return moho64ui_MenuFlight() or {} end
+local function near(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-7 + 1e-4 * math.abs(b) end
 -- (until `test` holds, at most `seconds` of the PC's clock: a live window's frames go at its own rate)
 local function waitFor(seconds, test)
     local untilAt = moho64ui_WallSeconds() + seconds
@@ -52,13 +53,15 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
             check("the flight's world taken over (no map opened again)", f.handoversKept .. " " .. f.handoversReopened, "1 0")
             check("no map begun behind for it", f.mapsBegun, data.mapsBegun)
         end
-        -- the game's looks on the world (the flight's lighter look gone: ray tracing on again where the player has it)
+        -- the game's looks on the world (the player's own: the flight keeps them too, its evening and haze go)
         local rays = looks.rayTracing and f.rayTracingSupported or false
         check("its ray tracing as the player's (bounce light, reflections)", tostring(f.worldBounceLight) .. " " .. tostring(f.worldRayReflections),
             tostring(rays) .. " " .. tostring(rays))
         check("its Atmosphere, Soft Shadows, Weather Effects, Ground Detail as the player's",
             tostring(f.worldVolumetricClouds) .. " " .. tostring(f.worldSoftShadows) .. " " .. tostring(f.worldWaterDetail) .. " " .. tostring(f.worldGroundCover),
             tostring(looks.atmosphere) .. " " .. tostring(looks.softShadows) .. " " .. tostring(looks.weatherEffects) .. " " .. tostring(looks.groundDetail))
+        -- (the flight's thinner haze goes with it: a replay's cinematic camera sees the renderer's own again)
+        check("the renderer's own cinematic haze again", near(f.worldCinematicHaze, data.openedHaze), true)
         check("not the menu's evening (17.4 h, clouds 0.45)", f.worldTimeOfDay == 17.4 or (f.worldCloudCover > 0.449 and f.worldCloudCover < 0.451), false)
         LOG(string.format("TEST note the game's world: time of day %.2f, cloud cover %.2f, rays %s", f.worldTimeOfDay or -2, f.worldCloudCover or -2,
             tostring(rays)))
@@ -93,8 +96,13 @@ ForkThread(function()
         check("its first frame kept for the next start", waitFor(10, function() return flight().keptTaken end), true)
         LOG(string.format("TEST note the first frame kept in %.2f s", flight().keptTakeSeconds or -1))
         local f = flight()
-        check("its lighter look: no bounce light or ray reflections in the menu", tostring(f.worldBounceLight) .. " " .. tostring(f.worldRayReflections),
-            "false false")
+        -- (the flight keeps the player's full looks, ray tracing included: the renderer's R4, 2026-11-09)
+        local rays = moho64ui_Looks().rayTracing and f.rayTracingSupported or false
+        check("the player's ray tracing in the menu too (bounce light, reflections)", tostring(f.worldBounceLight) .. " " .. tostring(f.worldRayReflections),
+            tostring(rays) .. " " .. tostring(rays))
+        -- (its air: 0.4 of the cinematic haze the world was opened with, Chris 2026-11-09 "a bit more clearer")
+        check("its haze thinner than the renderer's (0.4 of it)", near(f.worldCinematicHaze, 0.4 * f.worldOpenedCinematicHaze) and f.worldOpenedCinematicHaze > 0, true)
+        data.openedHaze = f.worldOpenedCinematicHaze
         WaitSeconds(3)
         data.mapsBegun = flight().mapsBegun
         data.failed = failed
@@ -107,6 +115,7 @@ ForkThread(function()
     failed = data.failed or 0
     check("the game left: the flight shows again", waitFor(60, function() return flight().flightShows end), true)
     check("on SETONS_R", flight().worldMap, SETONS_R)
+    check("its haze thinned once, not twice (0.4 of the opened)", near(flight().worldCinematicHaze, 0.4 * (flight().worldOpenedCinematicHaze or -1)), true)
     LOG("TEST done: " .. failed .. " failed")
     ExitApplication()
 end)
