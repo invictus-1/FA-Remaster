@@ -1,4 +1,5 @@
 #include "ray_scene.h"
+#include "marks.h"
 
 #include <algorithm>
 #include <cmath>
@@ -456,6 +457,7 @@ void RayScene::Build(const MeshRenderer& meshes) {
     device_->SetTexture(0, {});
     device_->SetTexture(1, {});
   }
+  Mark("ray scene: instances", instances_.size(), kMostInstances);
   if (instances_.size() > kMostInstances) {  // (what is past the picture's room is left out of the scene)
     instances_.resize(kMostInstances);
     info_.resize(static_cast<size_t>(kMostInstances) * 4);

@@ -793,8 +793,13 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach, bool tables = false)
   s.sunDisc = ReachOf(s.body, tables) * 40.0f;
   // on the clouds, some 3 km up, the sun sets about two degrees later than on the ground: lit in its
   // last colour (taken from just over the horizon) while it is still above theirs
-  if (s.moon && h < -0.07f) {
-    s.cloudSun = s.color;
+  // (the clouds' marches go toward the body this light is from, `cloudMoon`: between the ground's sunset and theirs
+  // the marches went toward the moon with the sun's last colour, the lit side of every cloud jumping across the sky
+  // at the ground's sunset. The moon's light comes in from nothing where the sun's has gone out, so the turn of
+  // the body is not seen.)
+  s.cloudMoon = s.moon && h < -0.07f;
+  if (s.cloudMoon) {
+    s.cloudSun = s.color * Smooth(-0.07f, -0.10f, h);
   } else {
     Vec3 high = s.body;
     high.y = std::max(high.y, 0.02f);
@@ -871,7 +876,7 @@ void SetSky(const SkyLight& s, ViewConstants* c) {
   set(c->skyHorizon, s.horizon, s.night);
   set(c->skyGlow, s.glow, s.daylight);
   set(c->skyBody, s.body, s.moon ? 1.0f : 0.0f);
-  set(c->skyMoon, s.moonPlace, 0);
+  set(c->skyMoon, s.moonPlace, s.cloudMoon ? 1.0f : 0.0f);  // (w: the volumetric clouds are lit by the moon)
   // the clouds drift with the wind and change slowly (by the view's clock). [cloudpace] (Chris, 2026-11-06: "Clouds move too
   // fast ... bolting across the screen") a quarter of the speed before: some 1.4 world units a second (a world unit is
   // about 20 m on Seton's: a strong wind aloft, still seen to move), their shapes changing at half the rate

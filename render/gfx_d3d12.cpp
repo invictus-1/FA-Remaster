@@ -16,6 +16,7 @@
 //    unordered-access state from a dispatch that writes it until a dispatch reads it or a pass begins.
 #include "card_memory.h"  // (photofix2)
 #include "gfx.h"
+#include "marks.h"
 #include "gfx_vulkan_dxc.h"
 
 #if defined(_WIN32)  // (the whole file: Direct3D 12 is Windows' alone)
@@ -899,6 +900,10 @@ class D3D12Device::ParallelRecorder final : public Recorder {
 };
 
 D3D12Device::~D3D12Device() {
+  // (--marks: what nobody destroyed before the device went. A number that grows from one build to the next is a leak.)
+  render::Mark("alive at the device's end: buffers", buffers_.size() - freeBuffers_.size(), 0);
+  render::Mark("alive at the device's end: textures", textures_.size() - freeTextures_.size(), 0);
+  render::Mark("alive at the device's end: pipelines", pipelines_.size() - freePipelines_.size(), 0);
   {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
     std::lock_guard<std::mutex> lock(backgroundMutex_);
     backgroundStop_ = true;
@@ -2569,6 +2574,8 @@ Texture D3D12Device::MakeTarget(const TargetDesc& desc, Com<ID3D12Resource> made
     rec.view = nextRtv_++;
     haveView = true;
   }
+  render::Mark("Direct3D 12: colour target views", nextRtv_ - kFrames + (!haveView && !depth ? 1 : 0), kMaxColorTargets);
+  render::Mark("Direct3D 12: depth target views", nextDsv_ - 1 + (!haveView && depth ? static_cast<uint32_t>(desc.layers) : 0), kMaxDepthViews);
   if (!haveView) {
     fprintf(stderr, "render: Direct3D 12: too many render targets\n");
     return {};
@@ -2578,7 +2585,12 @@ Texture D3D12Device::MakeTarget(const TargetDesc& desc, Com<ID3D12Resource> made
   HRESULT hr = S_OK;  // [warmtarget] (its resource: made here, or by PrepareTarget on another thread)
   if (made) rec.resource = std::move(made);
   else hr = TargetResource(desc, &rec.resource);
-  if (FAILED(hr)) return Complain("creating a render target", hr), Texture{};
+  // (a target that could not be made gives its view number back: there are only 64 colour and 128 depth views)
+  auto giveBack = [&] {
+    if (depth) freeDsv_.emplace_back(rec.view, static_cast<uint32_t>(desc.layers));
+    else freeRtv_.push_back(rec.view);
+  };
+  if (FAILED(hr)) return giveBack(), Complain("creating a render target", hr), Texture{};
 
   D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
   srv.Format = depth ? DXGI_FORMAT_R32_FLOAT : format;
@@ -2612,7 +2624,7 @@ Texture D3D12Device::MakeTarget(const TargetDesc& desc, Com<ID3D12Resource> made
     device_->CreateRenderTargetView(rec.resource.Get(), nullptr, RtvHandle(rec.view));
   }
   const uint32_t index = NewTextureIndex();
-  if (!index) return {};
+  if (!index) return giveBack(), Texture{};
   device_->CreateShaderResourceView(rec.resource.Get(), &srv, StagingHandle(index));
   textures_[index] = std::move(rec);
   return {index};
@@ -3135,6 +3147,7 @@ void D3D12Device::BeginFrame(const float clearColor[4]) {
   for (const auto& r : f.freedRanges) FreeRange(static_cast<int>(r[0]), r[1], r[2]);
   f.freedRanges.clear();
   f.page = f.offset = 0;
+  render::Mark("Direct3D 12: descriptors of texture sets in a frame", f.descriptorsUsed, kRingDescriptors / kFrames);
   f.descriptorsUsed = 0;
   f.tables.clear();
   ++frameNumber_;
@@ -3472,6 +3485,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::TextureTable() {
     if (f.descriptorsUsed + kTexSlots > share) {
       if (!warnedDescriptors_) fprintf(stderr, "render: Direct3D 12: more than %u texture sets in one frame\n", share / kTexSlots);
       warnedDescriptors_ = true;
+      render::Mark("Direct3D 12: descriptors of texture sets in a frame", share + kTexSlots, share);
       f.descriptorsUsed = 0;
       f.tables.clear();
     }
@@ -3552,6 +3566,7 @@ void D3D12Device::Dispatch(uint32_t x, uint32_t y, uint32_t z) {
     FrameSlot& f = frames_[cur_];
     const uint32_t share = kRingDescriptors / kFrames;
     if (f.descriptorsUsed + kStorageSlots > share) {
+      render::Mark("Direct3D 12: descriptors of texture sets in a frame", share + kStorageSlots, share);
       f.descriptorsUsed = 0;
       f.tables.clear();
     }
@@ -4123,7 +4138,10 @@ D3D12_GPU_DESCRIPTOR_HANDLE D3D12Device::RecorderTable(int index, const TableKey
   } else {
     uint32_t used = parallelDescriptors_.fetch_add(kTexSlots);
     if (used + kTexSlots > share) {  // (the share is full: as the device's own, from its start again)
-      if (!warnedParallel_.exchange(true)) fprintf(stderr, "render: Direct3D 12: more than %u texture sets in one frame\n", share / kTexSlots);
+      if (!warnedParallel_.exchange(true)) {
+        fprintf(stderr, "render: Direct3D 12: more than %u texture sets in one frame\n", share / kTexSlots);
+        render::Mark("Direct3D 12: descriptors of texture sets in a frame", share + kTexSlots, share);
+      }
       used = 0;
     }
     at = base + used;

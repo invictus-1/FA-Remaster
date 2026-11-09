@@ -44,6 +44,8 @@ struct SkyLight {
   // The sun's (or moon's) light on the volumetric clouds (clouds.h): at their height the sun is still up
   // a little after it has set for the ground, in the colour its long way through the air leaves it.
   Vec3 cloudSun;
+  // Whose light that is: the sun's until it has set for the clouds too, later than `moon` says for the ground.
+  bool cloudMoon = false;
   // The clouds' grey the fitted sky is taken toward (its brightness, and how much of the sky it takes), for
   // the sky from tables to grey its view as the fit is (view.h, ComputedSky).
   float grey = 0, greyShare = 0;

@@ -1,4 +1,5 @@
 #include "decals.h"
+#include "marks.h"
 
 #include <algorithm>
 #include <cctype>
@@ -528,6 +529,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   decals_.back().ours = ours;
   if (battleScars && seconds > 0 && IsScar(texture)) {  // a battle scar: kept; past the most, the oldest fades out
     decals_.back().scar = true;
+    Mark("battle scars kept", static_cast<uint64_t>(scars_ + 1), static_cast<uint64_t>(mostScars));
     if (++scars_ > mostScars) {
       Decal* oldest = nullptr;
       for (Decal& d : decals_)

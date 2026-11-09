@@ -75,7 +75,7 @@ struct ViewConstants {
   float skyHorizon[4];
   float skyGlow[4];
   float skyBody[4];
-  float skyMoon[4];  // toward the moon
+  float skyMoon[4];  // toward the moon; w: 1 when the volumetric clouds are lit by it (SkyLight::cloudMoon)
   // The cloud layer: x how much of the sky it covers (0 none .. 1 all of it); y, z how far it has
   // drifted (world units); w how far its shapes have changed.
   float skyClouds[4];

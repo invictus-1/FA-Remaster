@@ -40,6 +40,8 @@ class Upscaler {
   gfx::Pipeline easu_, rcas_;
   gfx::Texture upscaled_;
   int width_ = 0, height_ = 0;
+  int failedWait_ = 0;  // (frames until its picture is asked for again after it could not be made)
+  bool toldFailed_ = false;
 };
 
 }  // namespace render

@@ -367,7 +367,7 @@ float Cloud(float3 p, float h, bool frayed) {
     t1 = min(t1, t0 + 5000);  // (low toward the horizon: a long way through it)
     int steps = int(cloudLook.y);
     float dt = (t1 - t0) / steps;
-    float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
+    float3 body = skyMoon.w > 0.5 ? skyMoon.xyz : skyBody.xyz;  // (the body their light is from: SkyLight::cloudMoon)
     float c = dot(d, body);
     float phase = lerp(Phase(c, -0.15), Phase(c, 0.65), 0.5);  // (light that goes on forward: bright edges toward the sun)
     float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
@@ -615,7 +615,7 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
       zoomedNow_ = false;
     }
   }
-  k.ahead[3] = std::fmod(static_cast<float>(frame_) * 0.6180339887f, 1.0f);
+  k.ahead[3] = std::fmod(static_cast<float>(frame_ % 610) * 0.6180339887f, 1.0f);  // (as the air's: the float keeps its fraction)
   k.size[0] = static_cast<float>(width_);
   k.size[1] = static_cast<float>(height_);
   k.size[3] = haveLast_ ? std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 0.97f) : 0.0f;

@@ -3,6 +3,71 @@
 What the renderer (and Chris, through it) asks of the visuals track. The visuals track answers in its own
 file (`visuals\renderer_reply_lod.md` in the lab, numbered sections) and by message. Newest first.
 
+## 7. The land outside the map, sculpted by hand: the format (2026-11-09, Chris; a proposal, say what suits you)
+
+**Who says:** Chris, 2026-11-09: "for map sculpting sculpt an entire terrain outside the map so the map
+actually looks like it exists vs emptiness or a mirrored exterior outside of the map square." You sculpt
+it; the renderer draws it past the edges. Picture only: the simulation, the pathing and the minimap keep
+the playable square.
+
+**What is there today (it stays as a player's choice):** past the edge the map is drawn mirrored out to
+0.95 of a map's side, dimmed a little; from there a made-up ring of far land (hills and ridges guessed
+from what the map's edges hold) out to four map sides, lost in haze. The mirror is what he sees at the
+farthest zoom and what a low camera (the menu's flight, the trailer) sees behind every base.
+
+**The idea: the playable map is a window cut out of a bigger landscape.** Two parts, by how they are seen:
+
+1. **The near land** (the game's camera at its farthest zoom sees all of it from above, a low camera
+   flies over it): one square that holds the map in its middle and goes one map side out past every
+   edge (for SETONS_R 3072 x 3072 world units, the map at 1024..2048). Asked of you:
+   - **Heights:** one 16-bit grey picture of that square (PNG or raw, rows as the map's own heights), in
+     the map's height unit (1/128), one sample every 2 world units (1537 x 1537; every 1 unit if your
+     tools give it for free). The middle (the map itself) is not read: leave it as it comes.
+   - **Ground:** the map's own layers (the same textures at the same scales, so the ground joins without
+     a seam), as masks over that square in the same channels the map's masks have, one texel every 2
+     units or coarser. If the remastered ground you export for the map has its own files (albedo /
+     normal / roughness sets, macro colour), the same set for the wide square, named alike.
+   - **Decor, if you want it:** trees, rocks, grass patches and the like as picture-only entries, in the
+     map's decor list format with places outside the square (a second file, `<map>_surround_decor.bin`,
+     so the map's own list stays as it is). No game props: nothing out there can be reclaimed or hit.
+2. **The far land** (only ever seen low on the horizon, in haze): either left to the renderer (it makes
+   the ring from your near land's outer edges instead of the map's, so ridges continue), or yours: one
+   coarse 16-bit heights picture (513 x 513 over nine map sides each way) and one colour picture of the
+   same square. Your call; the first needs nothing from you.
+
+A small text file beside the map says what is there (`<map>_surround.json`: how far out the near land
+goes, the samples per side, the file names); I write its reader to whatever you send first.
+
+**What the renderer does with it:** draws it with the ground's own shader (sun, sky, shadows of clouds,
+snow lying, wet ground, the weather, the fog of war going on from the edge), finer near the camera and
+coarser far off; the sea goes on at the map's water level, with shore foam where your land meets it;
+at the map's edge the heights and the masks are blended from the map's own edge to yours over about 24
+units, so yours need to fit the edge only roughly, not sample for sample. The mirror and the made-up
+ring stay as options ("Outside the map: Hand-made / Mirrored / Original frame"); the classic look keeps
+the original's frame.
+
+**What is free out there and what is not:**
+- Free: steep ground, cliffs, mountains up to the heights' range (512 units), valleys, rivers and lakes
+  at other levels than the sea (say so in the text file: I draw one water level today), roads, ruins,
+  whatever makes it a place. Nothing has to be level or passable.
+- Not free: within about 30 units of the edge the land should carry on what the map's edge holds there
+  (land goes on as land at about that height, sea as sea or a coast a little way out), or the blend
+  shows as a ramp. Seen straight down at the farthest zoom it should read as one landscape with the map
+  (coasts and ridges that cross the edge), and not draw the eye more than the map does.
+
+**Questions:**
+1. What do you sculpt in, and does a 16-bit heights picture plus layer masks come out of it easily? If a
+   mesh suits you better for some of it (far mountains, a cliff that overhangs), say so: a mesh with a
+   texture set, as a unit's, is no trouble.
+2. One map side out by hand: right, or more / less? (More costs you area; the far land hides the rest.)
+3. Do you want the map's edge heights and masks as pictures to start from, or do you read them from the
+   map file yourself?
+4. A first rough block-out (heights only, no masks) is enough for me to build the drawing against;
+   send it whenever it exists, however unfinished.
+
+**Status:** proposed 2026-11-09. The renderer builds the reader and the drawing against the first
+heights picture; until then nothing changes in the picture.
+
 ## 6. A plan for your order of work: wreckage at the end of each faction (2026-10-14, Chris)
 
 **Who says:** Chris, with a picture of a Monkeylord's wreck from his walker fight: "We also still

@@ -40,6 +40,10 @@ enum class CommandType : int {
 
 // (enable_shared_from_this: the command database keeps an emptied command until the Sync, Sim::commandsEmptied, and a
 // coordinated order points at its partners weakly)
+uint64_t NextCommandCreateSeq();  // (commands.cpp)
+// CUnitCommandQueue::AddCommandToQueue 0x6edd80: append c to u's queue, a Patrol / FormPatrol by the patrol rule
+struct UnitCommand;
+void AppendCommandToQueue(Unit* u, const std::shared_ptr<UnitCommand>& c);
 struct UnitCommand : std::enable_shared_from_this<UnitCommand> {
   int targetPoint = -1;  // CAiTarget bone pick of an entity target (index into AI.TargetBones; -1 none)
   // the order named the army's recon BLIP of an enemy unit (a player's order: the interface only knows blips),
@@ -88,6 +92,10 @@ struct UnitCommand : std::enable_shared_from_this<UnitCommand> {
   // (0x5f2ae7) made while the command heads the unit's queue.
   std::vector<std::weak_ptr<UnitCommand>> coordinatedWith;
   bool coordinationStarted = false;
+  // cmd+0x13c: the command database's creation number (sim+0x98c, taken in the ctor 0x6e81b0 by every command made
+  // through AddIssueData). Only its order matters (AppendCommandToQueue's patrol rule), so a process-wide counter
+  // serves: every command of one sim is made on that sim's thread, in the sim's order.
+  uint64_t createSeq = NextCommandCreateSeq();
 };
 
 // CUnitCommand::IsCoordinating 0x5f24e0: the coordination list is not empty (dead partners count).

@@ -41,6 +41,7 @@ extern const char kPlantsShaderBlock[];
 
 class PlantLife {
  public:
+  static constexpr int kMostBoxes = 256;  // (the boxes one pressing pass takes: Prepare's `boxes`, eight floats each)
   explicit PlantLife(gfx::Device* device) : device_(device) {}
   ~PlantLife();
 

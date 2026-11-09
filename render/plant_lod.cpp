@@ -482,6 +482,7 @@ float4 MPS(MOut i PLANT_COVERAGE_OUT) : SV_Target {
 #endif
   }
   float2 nxy = modelNormals.Sample(samplerAniso, i.uv).ga * 2 - 1;
+  SafeFrame(i.normal, i.tangent, i.binormal, i.world, cameraPosition);  // (lighting.h: a vertex frame of no length)
   float3 vertexNormal = normalize(i.normal);
   float3 N = normalize(nxy.x * normalize(i.binormal) + nxy.y * normalize(i.tangent) + sqrt(saturate(1 - dot(nxy, nxy))) * vertexNormal);
   // (without its material: rough, no metal, some light through, as the models' leaves without one)
