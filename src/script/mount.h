@@ -14,8 +14,12 @@ class Vfs;
 // InitFileDir and SHGetFolderPath(name); `folders` holds answers that replace the system's for a name
 // (LOCAL_APPDATA, APPDATA, PERSONAL, COMMON_APPDATA, COMMON_DOCUMENTS). skip (may be null): host folders of the
 // `path` table that are left out (compared without case, / and \ alike, a trailing slash ignored), as moho64ui
-// leaves the original M28AI out when it mounts our variant. Errors are logged; returns success.
+// leaves the original M28AI out when it mounts our variant. protocols (may be null): every string value of the
+// init file's `protocols` table (the schemes OpenURL may open) is appended, read after `hook` in the same run of
+// the init file (StartupHelpers::DISK_SetupDataAndSearchPaths 0x459de0, "protocols" at 0x45a45f). Errors are
+// logged; returns success.
 bool MountFromInitFile(const std::string& initFile, const std::map<std::string, std::string>& folders, Vfs& vfs,
-                       std::vector<std::string>& hookDirs, const std::vector<std::string>* skip = nullptr);
+                       std::vector<std::string>& hookDirs, const std::vector<std::string>* skip = nullptr,
+                       std::vector<std::string>* protocols = nullptr);
 
 }  // namespace moho

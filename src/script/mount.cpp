@@ -59,7 +59,8 @@ std::string FolderKey(const std::string& folder) {
 }  // namespace
 
 bool MountFromInitFile(const std::string& initFile, const std::map<std::string, std::string>& folders, Vfs& vfs,
-                       std::vector<std::string>& hookDirs, const std::vector<std::string>* skip) {
+                       std::vector<std::string>& hookDirs, const std::vector<std::string>* skip,
+                       std::vector<std::string>* protocols) {
   auto skipped = [&](const std::string& d) {
     if (!skip) return false;
     const std::string k = FolderKey(d);
@@ -128,6 +129,17 @@ bool MountFromInitFile(const std::string& initFile, const std::map<std::string, 
     }
   }
   lua_pop(L, 1);
+  if (protocols) {  // every value of the table, as the original's table iterator takes them
+    lua_getglobal(L, "protocols");
+    if (lua_istable(L, -1)) {
+      lua_pushnil(L);
+      while (lua_next(L, -2) != 0) {
+        if (lua_type(L, -1) == LUA_TSTRING) protocols->push_back(lua_tostring(L, -1));
+        lua_pop(L, 1);
+      }
+    }
+    lua_pop(L, 1);
+  }
   return true;
 }
 

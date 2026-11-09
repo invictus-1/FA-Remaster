@@ -4,6 +4,22 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+## ui request 52: the init file's `protocols` table out of MountFromInitFile (2026-11-09) - done
+
+`MountFromInitFile` (`script/mount.h`) has one more optional parameter after `skip`:
+`std::vector<std::string>* protocols = nullptr`. When set, every string value of the init file's `protocols` table is
+appended, read after `hook` in the same run of the init file, as the original reads it
+(`StartupHelpers::DISK_SetupDataAndSearchPaths` 0x459de0, "protocols" at 0x45a45f). The values are taken with a
+table walk, as the original's table iterator takes them (a list comes in its order); a value that is not a string is
+left out; no table, nothing appended. The engine's own host passes nothing.
+
+Checked with a throwaway print in the engine's host (not committed): the lab's `init_lab.lua` and FAF's
+`init_faf.lua` both give 7: http https mailto ventrilo teamspeak daap im. Gate scenes LAND, AIR, Skirmish pass on the
+build (6 runs, 3 compares identical); no simulation code changed.
+
+For the ui: drop `InitProtocols` and pass `&cfg.protocols`.
+
+
 ## ui request 56 E1: the menu's live battle as a sandbox session (2026-11-09) - yes on all three
 
 The ui's headless run (2026-11-09, main 28dfeee3 era) answers it:
