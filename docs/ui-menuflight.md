@@ -601,6 +601,51 @@ a loop of 4 minutes with the nuke near its end, the two options on the Interface
   fallback's window (10-15 s after first showing) measured 4.6-8.4 ms. 4K was not measured; the blast is the moment
   to watch there.
 
-Left for later: the `RestartMap` hand-over to a SETONS_R game and back (the renderer's R3: valid), a menu preset over
-the per-frame setters (R2), `CinePath::loop` (R1; the cover hides the seam, and our battle restarts anyway), the kept
-first frame before the live one (4.5), the lens.
+Left for later then: the `RestartMap` hand-over (done in 12.2), a menu preset over the per-frame setters (R2; 12.2),
+`CinePath::loop` (R1; the cover hides the seam, and our battle restarts anyway), the kept first frame (12.2), the lens.
+
+## 12.2 The follow-ups (ui helper "flight2", 2026-11-09)
+
+- **The hand-over to a game on SETONS_R** (4.3; `GameSession::KeepMenuMap`, `OpenPicture`). The renderer's answer to
+  request 49: R3, `RestartMap` is valid with a different session on the same map; R2, what stays is what is fixed when the
+  map opened (ray tracing's shaders, the texture detail, the season, the anti-aliasing). So:
+  - The flight's map now opens with the player's Ray Tracing (held for it, `FlightLooks`) and Texture Detail; its lighter
+    look comes after the swap from per-frame setters only (`FlightFrameLooks`: ray tracing off, so bounce light,
+    reflections and the small lights' shadows stop; no Weather Effects; the player's Atmosphere, Soft Shadows and Ground
+    Detail). The shaders built at the opening stay (render/world_picture.cpp: `gRayShaders` = the load's `rays`), so the
+    game turns ray tracing on again on the same world. INFERRED from the renderer's code (`ApplyBundlesTo`); checked by the
+    world's switches in the game (the test below), not by the renderer.
+  - At a launch (`BeginLoad`), when the window's picture shows the flight's map, the game's map is that map, nothing of
+    the opening differs (`WindowPicture::OpenedWith`: texture detail, season, ray tracing as the game would open it) and
+    the picture is not to be made anew (Graphics API, anti-aliasing), no map is begun: at the load's end `OpenPicture`
+    starts the map shown over (`RestartMap`), lays the game's looks on it (`PictureLooks`, `WorldLooks`, the sky as the
+    map opened it, taken before the menu's evening: `WindowPicture::OpenSky`), a cut, then `DressGamePicture` as after a
+    swap. The flight's season is the summer: a player on Autumn gets the map opened again. Any other map: as before.
+    `MOHO64UI_FLIGHT_REOPEN=1`: always opened again. Log lines "the game's map is the menu's flight's: its world is taken
+    over ..." / "... it is opened again (<why>)".
+  - **Measured** (1920x1080 window, test preferences: Ultra, ray tracing on; the skirmish from the main menu, no AI):
+    the game's screen came **2.42, 3.08 and 2.46 s** after the launch call with the hand-over, **11.53 and 7.68 s** with
+    the map opened again (`MOHO64UI_FLIGHT_REOPEN=1`; the map ready 8.9 / 4.9 s after the loading thread). The game's
+    picture after the hand-over against the map opened again, both 3500 frames in: the same within 1% in three areas
+    (mean RGB 80.2/83.9/37.4 against 80.5/84.0/38.1).
+- **The kept first frame** (4.5; `GameSession::KeptFrame`, `TakeKeptFrame`). At the flight's third beat of each run the
+  world alone (`TakePhoto` at the window's size, 8 settling frames: 0.11-0.22 s, under the fade from black) is kept beside
+  the preferences, `<prefs folder>/menuflight_first_<w>x<h>.raw` (a key of the camera path and the looks it was taken
+  with). At the next start it is read on a thread and shown where the movie shows until the flight's world is swapped in
+  (some 6 s), and the flight then comes in over it (the fade's picture is the kept frame, not black). Also when the menu
+  comes back after a game while the flight's map opens again. The menu is held to 60 frames a second while it shows, as
+  for the flight. Nothing is shipped: the first start of a PC shows black as before.
+- **The launch shot** (keys 170-179, the window check): pictures at ticks 1700-2075 (`MOHO64UI_MENUFLIGHT_FAST_TO=1680`):
+  the launch at tick 1729, the impact at 2047 as before.
+- **The Remastered Preset shows Custom** once one of its looks is changed by hand to a value its level does not have
+  (`RemasterPresetLookChanged`, ui/data/hook/lua/options/options.lua), as FAF's Fidelity, Shadow Fidelity and Render Sky
+  set Fidelity Presets to Custom from their `update`. The preset's own setting does not count (`presetSetting`, its
+  sliders' `OnValueSet` too); a look set back to the level's value leaves the preset as it is (Custom stays Custom, as
+  FAF's).
+- **Tests**: `ui/tests/menu_handover.lua` (a live window: the flight shows, its first frame kept, a skirmish on SETONS_R
+  takes its world over with no map begun, the game's world switches as the player's options, not the menu's evening; back
+  at the menu the flight shows again over the kept frame; `/handcase reopen` with `MOHO64UI_FLIGHT_REOPEN=1`;
+  `/handcase kept` a second start in the same folder: the kept frame shown before the flight), the hook's new fields
+  (`moho64ui_MenuFlight()`: `handoversKept`, `handoversReopened`, `handoverWhy`, `mapsBegun`, `flightShows`,
+  `keptShown`, `keptShownFrames`, `keptTaken`, `keptTakeSeconds`, `worldShows`, `worldMap`, `world*` switches);
+  `ui/tests/options_tabs.lua` checks Custom.

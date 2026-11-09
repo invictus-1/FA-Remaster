@@ -270,7 +270,8 @@ label too wide in the game's title font at 146 px, "Remaster", or the five label
      Remastered tab".
    - Optional, same change or later: each preset key's `update` sets `remaster_preset` to Custom (5) when the value
      leaves the level, as FAF's Fidelity / Shadow Fidelity do for `fidelity_presets` (today changing Atmosphere by
-     hand leaves the preset showing "Ultra").
+     hand leaves the preset showing "Ultra"). Done 2026-11-09 (helper flight2): `RemasterPresetLookChanged` in the
+     options hook, checked by `options_tabs.lua`.
 
 2. New hook `ui/data/hook/lua/ui/dialogs/options.lua` (~40 lines, the pattern of the keybindings hook):
    - Wrap `CreateDialog(over, exitBehavior)`: call FAF's, then `RemasterFitTabs()`: n = number of tab buttons;

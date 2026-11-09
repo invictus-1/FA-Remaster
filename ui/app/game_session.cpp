@@ -731,19 +731,39 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
   StartBundles(p);
   p.SetMinimapMeshes(false);
 }
-// The menu's flight's looks (Backdrop::Mode::Flight; until the renderer's own menu look, his R2: docs/ui-menuflight.md
-// section 3): held for its map opening behind (HoldLooks; SwapMap lays them on), the player's Atmosphere (the light in
-// the air and the volumetric clouds: they make the shot), Soft Shadows and Ground Detail; no Ray Tracing and no Weather
-// Effects (its weather is fixed and fair). The world's own switches as the player has them (WorldLooks, the map's
-// `before`: battle effects, energy shields ...). The upscaler and the effects' quality as a picture starts (StartAfresh).
+// The menu's flight's looks as its map opens (Backdrop::Mode::Flight): held for its map opening behind (HoldLooks; SwapMap
+// lays them on), the player's Atmosphere (the light in the air and the volumetric clouds: they make the shot), Soft
+// Shadows and Ground Detail; no Weather Effects (its weather is fixed and fair). Ray Tracing as the player has it: what
+// is fixed when a map opens (the renderer's answer to ui request 49, R2: ray tracing's shaders, with the texture detail
+// and the season, which BeginWindowMap gives) is the game's, so that a game on SETONS_R can take the flight's world over
+// (KeepMenuMap); its menu look (the player's, without weather effects and frame generation) comes after the swap from
+// setters that act per frame only (FlightFrameLooks). The world's own switches as the player has them (WorldLooks, the
+// map's `before`: battle effects, energy shields ...). The upscaler and the effects' quality as a picture starts (StartAfresh).
 void FlightLooks(render::WorldPicture& p, std::function<void(render::World&)>* before) {
   const LookSettings looks = Looks();
   p.HoldLooks(true);
   StartBundles(p);
+  p.SetRayTracing(looks.rayTracing);  // (its shaders built as the map opens, and warmed with it)
   p.SetAtmosphere(looks.atmosphere);
   p.SetSoftShadows(looks.softShadows);
   p.SetGroundDetail(looks.groundDetail);
   *before = [looks](render::World& w) { WorldLooks(w, looks, true); };
+}
+// The flight's look once its world shows (after SwapMap or RestartMap, nothing held), by setters the renderer names as
+// acting per frame (R2): the PLAYER'S looks, ray tracing included (the renderer's R4 at 4K, 2026-11-09: full looks
+// 8.0 / 10.0 ms median / p95 over the whole battle, the lighter look 6.4 / 7.7, "keep the player's full looks: 8 ms is
+// far inside a 60 cap"; a weak card follows the player's own preset); its ray tracing off-then-on on one world gives
+// full ray tracing again (the renderer confirmed, world.cpp World::Begin). No Weather Effects (the flight's weather is
+// fixed) and no frame generation; the player's Atmosphere, Soft Shadows and Ground Detail (also as a game's world after
+// the menu's flight laid the picture's own back: a swap behind a game's world gives StartAfresh's first).
+void FlightFrameLooks(render::WorldPicture& p) {
+  const LookSettings looks = Looks();
+  p.SetRayTracing(looks.rayTracing);
+  p.SetWeatherEffects(false);
+  p.SetFrameGeneration(false);
+  p.SetAtmosphere(looks.atmosphere);
+  p.SetSoftShadows(looks.softShadows);
+  p.SetGroundDetail(looks.groundDetail);
 }
 // A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
 // picture starts with, laid on the world shown (the menus', which has them; or a game's being left).
@@ -774,6 +794,25 @@ struct GameSession::WindowPicture {
   std::string pendingMap;
   std::chrono::steady_clock::time_point begun{};
   int pendingFrames = 0;  // (the frames drawn while it opened: ServeWindowMap's line, for what the time went on)
+  // What a map was opened with that only the next map's opening changes (the renderer's answer to ui request 49, R2/R3:
+  // the texture detail, the season, ray tracing's shaders), for the map opening behind and the one shown: a game takes
+  // the menu's flight's world over only when they are the game's (KeepMenuMap).
+  struct OpenedWith {
+    int textureDetail = -1;
+    int season = -1;  // (0 summer, 1 autumn: LookSettings::season)
+    bool rays = false;  // (ray tracing on as it opened: its shaders built, where the card can)
+    bool operator==(const OpenedWith& o) const { return textureDetail == o.textureDetail && season == o.season && rays == o.rays; }
+  };
+  OpenedWith pendingWith, shownWith;
+  // The world's sky as its map opened it (taken at the menu's swap, before the evening was laid on: Backdrop::Dress),
+  // given back when a game takes the menu's world over (a game's map opened anew has it so).
+  struct OpenSky {
+    bool taken = false;
+    float timeOfDay = -1, cloudCover = 0, rain = 0, snow = 0, fog = 0, wet = 0, snowLying = 0;
+    float cinematicHaze = 0;  // (the flight thins it: FlightHaze)
+    render::Climate climate = render::Climate::Temperate;
+  };
+  OpenSky shownSky;
   // The menus' map begun behind a game's world that is over (ServeWindowMap: the score screen), its lighting bundles
   // held for it (HoldLooks) and the picture's other settings still the game's until it is swapped in.
   bool menuBehindGame = false;
@@ -788,8 +827,10 @@ struct GameSession::WindowPicture {
   // from black, as the read-back way's background does, rather than at once after the seconds of black), or the
   // picture held through a jump back of the replay timeline (Frozen: GameSession::Rewind, dimmed by its tint).
   // (Still: the main menu's still picture, Backdrop::Mode::Still; Cover: black coming over the menu's flight at its
-  // storyboard's end, held until the battle starts over: GameSession::ServeMenuFlight)
-  enum class Over { None, Card, Fade, Frozen, Still, Cover };
+  // storyboard's end, held until the battle starts over: GameSession::ServeMenuFlight; Kept: the flight's kept first
+  // frame while its map opens, which the live flight then comes in over, a Fade from it: fadeKept)
+  enum class Over { None, Card, Fade, Frozen, Still, Cover, Kept };
+  bool fadeKept = false;
   Over over = Over::None;
   float overAlpha = 1;
   std::chrono::steady_clock::time_point fadeFrom{};
@@ -800,6 +841,83 @@ struct GameSession::WindowPicture {
 #else
 struct GameSession::WindowPicture {};
 #endif
+
+// The main menu's flight's kept first frame (GameSession::kept_; docs/ui-menuflight.md 4.5): its file for a window's
+// size, read and written on a thread of its own. The file: "MFK1", the width, the height and a key (32 bits each, the
+// PC's own order), then the pixels (0xAARRGGBB, rows from the top). The key is the camera path's and the looks' the
+// frame was taken with (KeptKey): a frame of another path or other looks is not shown (the live flight would not take up
+// where it left). Ours.
+struct GameSession::KeptFrame {
+  std::string dir;           // (beside the preferences: userDir)
+  int w = 0, h = 0;          // the size read for (0: none yet)
+  uint32_t key = 0;          // (the key it was read for)
+  std::vector<uint32_t> pixels;  // the frame for w x h (empty: none there, or not read yet)
+  bool taken = false;            // this run's taken (once a run)
+  std::vector<uint32_t> fresh;   // (this run's, taken: in place of `pixels` once those are no longer over the window)
+  int freshW = 0, freshH = 0;
+  uint32_t freshKey = 0;
+  int shownFrames = 0;     // (tests: the frames it was shown in this run)
+  double takeSeconds = -1;  // (tests, the log: the photo's time)
+  std::thread io;
+  std::atomic<bool> busy{false};
+  std::vector<uint32_t> readPixels;  // (the thread's, until it is through)
+  bool reading = false;              // (the thread's job is a read: Through hands it over)
+  ~KeptFrame() {
+    if (io.joinable()) io.join();
+  }
+  std::string File(int width, int height) const {
+    return dir + "/menuflight_first_" + std::to_string(width) + "x" + std::to_string(height) + ".raw";
+  }
+  // (once a size: read on the thread; Through hands it over)
+  void Read(int width, int height, uint32_t wantKey) {
+    if (busy.load() || reading || (w == width && h == height && key == wantKey)) return;
+    if (io.joinable()) io.join();
+    w = width, h = height, key = wantKey;
+    pixels.clear();
+    reading = true;
+    busy.store(true);
+    io = std::thread([this, file = File(width, height), width, height, wantKey] {
+      std::vector<uint32_t> px;
+      if (const std::optional<std::string> data = hostfs::ReadFile(file)) {
+        uint32_t head[4] = {};
+        const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
+        if (data->size() == sizeof head + n * 4) {
+          std::memcpy(head, data->data(), sizeof head);
+          if (std::memcmp(head, "MFK1", 4) == 0 && head[1] == static_cast<uint32_t>(width) && head[2] == static_cast<uint32_t>(height) &&
+              head[3] == wantKey) {
+            px.resize(n);
+            std::memcpy(px.data(), data->data() + sizeof head, n * 4);
+          }
+        }
+      }
+      readPixels.swap(px);
+      busy.store(false);
+    });
+  }
+  bool Through() {
+    if (!reading || busy.load()) return false;
+    reading = false;
+    io.join();
+    pixels.swap(readPixels);
+    readPixels.clear();
+    if (!pixels.empty()) Logf(LogLevel::Info, "moho64ui: the menu's flight: its kept first frame read (%dx%d), shown until it is live", w, h);
+    return true;
+  }
+  void Write(std::vector<uint32_t> px, int width, int height, uint32_t wantKey) {
+    if (busy.load() || reading) return;
+    if (io.joinable()) io.join();
+    busy.store(true);
+    io = std::thread([this, file = File(width, height), px = std::move(px), width, height, wantKey] {
+      std::string data(16 + px.size() * 4, '\0');
+      const uint32_t head[4] = {0, static_cast<uint32_t>(width), static_cast<uint32_t>(height), wantKey};
+      std::memcpy(data.data(), head, sizeof head);
+      std::memcpy(data.data(), "MFK1", 4);
+      std::memcpy(data.data() + 16, px.data(), px.size() * 4);
+      if (!hostfs::WriteFile(file, data)) Logf(LogLevel::Warning, "moho64ui: the menu's flight: its first frame not kept (%s)", file.c_str());
+      busy.store(false);
+    });
+  }
+};
 
 // The beats' own thread: one job at a time (a beat, or a launch's load), asked for and waited on
 // from the main thread.
@@ -1306,6 +1424,57 @@ void GameSession::KeepMapForRewind() {
     wp.pending = Kind::None;
   }
   keepMap_ = true;
+#endif
+}
+
+// A game launched from the main menu on the map its flight shows (SETONS_R, the prime map: docs/ui-menuflight.md 4.3):
+// the flight's world is taken over at the load's end (WorldPicture::RestartMap, OpenPicture) instead of the map being
+// opened again behind the loading screen (some 6 s of the load there). The renderer's answer to ui request 49: R3,
+// RestartMap is valid with a different session on the same map (the world keeps only the map's own things: ground,
+// water, scenery; the game's armies and blueprints come with GameStarted as for any game); R2, what stays is what is
+// fixed when the map opened: ray tracing's shaders, the texture detail, the season, the anti-aliasing (the picture's
+// scene samples). So only when those are the game's: the flight's map opened with the player's ray tracing and Texture
+// Detail (FlightLooks) and the player's Season (MenuSeason: an Autumn player's menu flies over autumn), and the window's picture not to be
+// made anew for the game (the Graphics API and the anti-aliasing as it was made with: EnsureWindowPicture). Any other
+// map, or a setting changed since the flight's map opened: opened again as before. MOHO64UI_FLIGHT_REOPEN=1: always
+// opened again (the measure's other half). Ours, not the original's: its menu's background is a film.
+void GameSession::KeepMenuMap(const std::string& map) {
+  keepMenuMap_ = false;
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!windowPicture_ || map != MenuFlight::kMap) return;
+  using Kind = WindowPicture::Kind;
+  WindowPicture& wp = *windowPicture_;
+  if (wp.shows != Kind::Menu || wp.shownMap != map) return;
+  static const bool reopen = [] {
+    const char* v = std::getenv("MOHO64UI_FLIGHT_REOPEN");
+    return v && *v && std::string(v) != "0";
+  }();
+  const LookSettings looks = Looks();
+  const WindowPicture::OpenedWith game{looks.textureDetail, looks.season == 1 ? 1 : 0, looks.rayTracing && wp.picture.RayTracingSupported()};
+  std::string why;
+  if (reopen) why = "MOHO64UI_FLIGHT_REOPEN";
+  else if (!wp.picture.world()) why = "no world shown";
+  else if (wp.pending == Kind::Game) why = "a game's map opening behind already";
+  else if (wp.vulkan != looks.vulkan || wp.samples != looks.SceneSamples()) why = "the Graphics API or the anti-aliasing changed: the picture is made anew";
+  else if (!(wp.shownWith == game)) {
+    char b[160];
+    std::snprintf(b, sizeof b, "opened with texture detail %d, season %d, ray tracing %d; the game's %d, %d, %d", wp.shownWith.textureDetail,
+                  wp.shownWith.season, wp.shownWith.rays ? 1 : 0, game.textureDetail, game.season, game.rays ? 1 : 0);
+    why = b;
+  }
+  if (!why.empty()) {
+    ++handoversReopened_;
+    handoverWhy_ = why;
+    Logf(LogLevel::Info, "moho64ui: the game's map is the menu's flight's: it is opened again (%s)", why.c_str());
+    return;
+  }
+  if (wp.pending == Kind::Menu) wp.picture.CancelMap(), wp.pending = Kind::None;  // (a menus' map opening behind: not wanted now)
+  ++handoversKept_;
+  handoverWhy_.clear();
+  keepMap_ = keepMenuMap_ = true;
+  Logf(LogLevel::Info, "moho64ui: the game's map is the menu's flight's: its world is taken over at the load's end (no map opened again)");
+#else
+  (void)map;
 #endif
 }
 
@@ -1915,7 +2084,7 @@ void GameSession::End() {
     seekTo_ = 0;
     seekBack_ = false;
     back_ = BackClock{};
-    keepMap_ = false;
+    keepMap_ = keepMenuMap_ = false;
     EndRewind();
   }
   if (sounds) sounds->StopWorld();
@@ -2143,6 +2312,7 @@ void GameSession::BeginLoad() {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (windowPicture_) windowPicture_->failedGameMap.clear();
 #endif
+  if (wantPicture && window && !keepMap_) KeepMenuMap(loadSession_->header.map);  // (the menu's flight's map: taken over)
   if (wantPicture && window && !keepMap_) BeginWindowMap(true, loadSession_->header.map);  // (a jump back: KeepMapForRewind)
 }
 
@@ -2357,6 +2527,7 @@ bool GameSession::FinishLoad(std::string* why) {
   const std::unique_ptr<SessionDescription> described = std::move(loadSession_);
   if (!loadOk_) {
     *why = loadWhy_;
+    if (keepMenuMap_) keepMap_ = keepMenuMap_ = false;  // (the menu's world stays the menu's: its flight begins again)
     loadSim_.reset();
     play_.reset();
     playData_.clear();
@@ -2369,7 +2540,9 @@ bool GameSession::FinishLoad(std::string* why) {
     // (where the load's time went, seconds from its start: what the loading thread did, and what came after it)
     const double end = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();
     char map[160] = "no map opening behind";
-    if (keepMap_) std::snprintf(map, sizeof map, "no map opening behind (a jump back: the map shown is started over)");
+    if (keepMap_)
+      std::snprintf(map, sizeof map, "no map opening behind (%s: the map shown is started over)",
+                    keepMenuMap_ ? "the main menu's flight's map" : "a jump back");
     // (aheadInLoad: the loading thread's own work ended at the hand-over; its beats came after, while the map opened)
     const double stateDone = loadAhead_ ? loadAhead_->parkedAt : loadThreadDone_;
     if (loadMapReadyAt_ >= 0)
@@ -2801,7 +2974,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     p.HoldLooks(true);
     StartBundles(p);
     if (map == MenuFlight::kMap) FlightLooks(p, &before);
-    p.SetSeason(render::Season::Summer);
+    p.SetSeason(static_cast<render::Season>(MenuSeason(map)));
     p.SetTextureDetail(Looks().textureDetail);
     wp.menuBehindGame = true;
   } else {
@@ -2809,7 +2982,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     // Texture Detail as the background's own picture had it: Backdrop::Run)
     StartAfresh(p, true);
     if (map == MenuFlight::kMap) FlightLooks(p, &before);  // (the flight's: held for it)
-    p.SetSeason(render::Season::Summer);
+    p.SetSeason(static_cast<render::Season>(MenuSeason(map)));
     p.SetTextureDetail(Looks().textureDetail);
   }
   const bool begun = p.BeginMap(map, before);
@@ -2828,6 +3001,14 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
   wp.pending = kind, wp.pendingMap = map;
   wp.begun = std::chrono::steady_clock::now();
   wp.pendingFrames = 0;
+  ++mapsBegun_;
+  {
+    // (what it opens with that stays until the next opening: a game's as the player has them; the menus' the player's
+    // Texture Detail, the flight's the player's Season (MenuSeason) and its ray tracing, the dusk background's the summer)
+    const LookSettings looks = Looks();
+    const bool rays = (game || map == MenuFlight::kMap) && looks.rayTracing && p.RayTracingSupported();
+    wp.pendingWith = WindowPicture::OpenedWith{looks.textureDetail, game ? (looks.season == 1 ? 1 : 0) : MenuSeason(map), rays};
+  }
   Logf(LogLevel::Info, "moho64ui: the window's picture opens %s behind (%s)", map.c_str(), game ? "the game's map" : "the menus' background");
 #else
   (void)game, (void)map;
@@ -2901,6 +3082,15 @@ void GameSession::ServeWindowMap() {
   wp.shows = Kind::Menu, wp.shownMap = wp.pendingMap;
   wp.pending = Kind::None;
   wp.menuBehindGame = false;
+  wp.shownWith = wp.pendingWith;
+  wp.shownSky = WindowPicture::OpenSky{};
+  if (const render::World* w = wp.picture.world()) {  // (its sky as opened, before the evening: KeepMenuMap gives it back)
+    WindowPicture::OpenSky& s = wp.shownSky;
+    s.taken = true;
+    s.timeOfDay = w->timeOfDay, s.cloudCover = w->cloudCover, s.rain = w->rain, s.snow = w->snow, s.fog = w->fog;
+    s.wet = w->wet, s.snowLying = w->snowLying, s.climate = w->climate;
+    s.cinematicHaze = w->cinematicHaze;
+  }
   Backdrop::Dress(wp.picture);
   wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
   flightShows_ = false;
@@ -2986,6 +3176,19 @@ void GameSession::ServeMenuFlight(WindowPicture& wp) {
   }
 }
 
+// The flight's air: the least haze its cinematic camera sees (World::cinematicHaze), at 0.4 of the renderer's (Chris on
+// the flight's dusk, 2026-11-09: "a bit more clearer if anything"; measured at 1080p, tick 500, the far land's darkest
+// twentieth 0.210 at all of it, 0.195 at 0.65, 0.164 at none: 0.65 could hardly be seen). Always from the amount the
+// world was opened with (`opened`, kept at the menu's swap), so a flight started again does not thin it twice. The
+// player's own Haze & Mist amount takes this over once the renderer has one (ui/REQUESTS.md, renderer 50).
+// MOHO64UI_FLIGHT_HAZE: another share, for the window checks' pictures side by side.
+static void FlightHaze(render::World* w, bool taken, float opened) {
+  if (!w || !taken) return;
+  float share = 0.4f;
+  if (const char* v = std::getenv("MOHO64UI_FLIGHT_HAZE"); v && *v) share = std::max(0.0f, std::min(2.0f, static_cast<float>(std::atof(v))));
+  w->cinematicHaze = opened * share;
+}
+
 // The flight's battle on the world shown: just swapped in with its simulation handed over (`restart` false), or the
 // map shown started over for a battle made anew (its loop, the option back to Flight). Then as a game's picture is
 // dressed (DressGamePicture: GameStarted, Beat), every army shown (no player's view), nothing of the interface in the
@@ -3000,6 +3203,7 @@ void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
     return;
   }
   flightGiven_ = false;
+  FlightFrameLooks(p);  // (its menu look, per frame only: the map stays as a game would open it)
   p.SetFocusArmy(0);
   p.SetLifeBars(false);
   p.SetSelectionMarks(false);
@@ -3007,6 +3211,7 @@ void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
   p.GameStarted(*sim);
   if (render::World* w = p.world()) SkyOnWorld(*w, "beyond", -1, "");  // (the map's edge as a game's default)
   Backdrop::Dress(p);
+  FlightHaze(p.world(), wp.shownSky.taken, wp.shownSky.cinematicHaze);
   // (the hour as the picture's day (a session's world takes its light from it, not from Dress's timeOfDay: without it
   // the flight showed the map's own noon light, 2026-11-09's window check); Dusk's evening, standing still, fair)
   p.SetDayAndWeather(Backdrop::kDuskHour, 0, false);
@@ -3023,17 +3228,128 @@ void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
        f.loops());
 }
 
+// The flight's first frame of this run kept (KeptFrame): the world alone (TakePhoto: nothing of the interface; the
+// menu's veil is the interface's and lies over it as over the live world) from the camera and at the moment that frame
+// shows, at the window's size, a few settling frames first (the clouds, the light in the air), written beside the
+// preferences on the kept frame's thread. Once a run, under the black or the kept frame the flight comes in from (the
+// photo's time, some frames', is not seen there).
+void GameSession::TakeKeptFrame(WindowPicture& wp, const render::Camera& camera, double tick, int width, int height) {
+  KeptFrame& k = *kept_;
+  k.taken = true;
+  std::vector<uint32_t> pixels;
+  int mw = 0, mh = 0;
+  const auto t0 = std::chrono::steady_clock::now();
+  const bool ok = wp.picture.TakePhoto(camera, width, height, tick, &pixels, &mw, &mh, 1, 8);
+  k.takeSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  if (!ok || mw != width || mh != height || pixels.size() != static_cast<size_t>(width) * static_cast<size_t>(height)) {
+    Logf(LogLevel::Warning, "moho64ui: the menu's flight: its first frame could not be kept (%dx%d asked, %dx%d made)", width, height, mw, mh);
+    return;
+  }
+  Logf(LogLevel::Info, "moho64ui: the menu's flight: its first frame kept for the next start (%dx%d, %.2f s, %s)", width, height, k.takeSeconds,
+       k.File(width, height).c_str());
+  k.fresh = pixels, k.freshW = width, k.freshH = height, k.freshKey = KeptKey();
+  k.Write(std::move(pixels), width, height, k.freshKey);
+}
+
+// (FNV-1a over the camera path's text and the looks the flight's frames take from the player: another path, or a look
+// changed, and the frame kept would not be the flight's first)
+// The season a menu map opens in: the flight's map the player's own Season (2026-11-09, the lead: so an Autumn player's
+// menu shows autumn and a skirmish on SETONS_R still takes the flight's map over, the season being fixed at the map's
+// opening, renderer R2); the dusk background's and any other menu map the summer, as before.
+int GameSession::MenuSeason(const std::string& map) const {
+  return static_cast<int>(map == MenuFlight::kMap && Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);
+}
+
+uint32_t GameSession::KeptKey() const {
+  uint32_t h = 2166136261u;
+  auto add = [&h](const void* data, size_t n) {
+    for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const unsigned char*>(data)[i]) * 16777619u;
+  };
+  if (menuFlight) add(menuFlight->pathText().data(), menuFlight->pathText().size());
+  const LookSettings looks = Looks();
+  const int parts[] = {looks.atmosphere, looks.softShadows, looks.groundDetail, looks.originalLook, looks.textureDetail, looks.richGround,
+                       looks.fidelity, looks.shadows, looks.bloom, looks.photoLook, static_cast<int>(looks.upscale * 100), looks.SceneSamples(),
+                       looks.season};
+  add(parts, sizeof parts);
+  return h;
+}
+
+void GameSession::PushWindowInfo(lua_State* L) const {
+  auto num = [L](const char* k, double v) {
+    lua_pushstring(L, k);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  auto boolean = [L](const char* k, bool v) {
+    lua_pushstring(L, k);
+    lua_pushboolean(L, v);
+    lua_rawset(L, -3);
+  };
+  auto str = [L](const char* k, const std::string& v) {
+    lua_pushstring(L, k);
+    lua_pushstring(L, v.c_str());
+    lua_rawset(L, -3);
+  };
+  num("handoversKept", handoversKept_);
+  num("handoversReopened", handoversReopened_);
+  str("handoverWhy", handoverWhy_);
+  num("mapsBegun", mapsBegun_);
+  boolean("flightShows", flightShows_);
+  boolean("keptShown", keptShown_);
+  num("keptShownFrames", kept_ ? kept_->shownFrames : 0);
+  boolean("keptTaken", kept_ && kept_->taken);
+  num("keptTakeSeconds", kept_ ? kept_->takeSeconds : -1);
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (!windowPicture_) return;
+  const WindowPicture& wp = *windowPicture_;
+  static const char* const kKinds[] = {"none", "menu", "game", "left"};
+  str("worldShows", kKinds[static_cast<int>(wp.shows)]);
+  str("worldMap", wp.shownMap);
+  str("worldPending", kKinds[static_cast<int>(wp.pending)]);
+  if (const render::World* w = windowPicture_->picture.world()) {
+    boolean("worldBounceLight", w->bounceLight);
+    boolean("worldRayReflections", w->rayReflections);
+    num("worldCinematicHaze", w->cinematicHaze);
+    num("worldOpenedCinematicHaze", wp.shownSky.taken ? wp.shownSky.cinematicHaze : -1);
+    boolean("worldVolumetricClouds", w->volumetricClouds);
+    boolean("worldSoftShadows", w->softShadows);
+    boolean("worldWaterDetail", w->waterDetail);
+    boolean("worldGroundCover", w->groundCover);
+    num("worldTimeOfDay", w->timeOfDay);
+    num("worldCloudCover", w->cloudCover);
+  }
+  boolean("rayTracingSupported", windowPicture_->picture.RayTracingSupported());
+#endif
+}
+
 double GameSession::MenuFramePeriod() const {
-  return menuFlight && flightShows_ && !picture_ && !sim_ && load_ == Load::None ? 1.0 / 60.0 : 0.0;
+  return menuFlight && (flightShows_ || keptShown_) && !picture_ && !sim_ && load_ == Load::None ? 1.0 / 60.0 : 0.0;
 }
 
 // The picture over the window the card draws this frame (WindowPicture::Over): the interface's when its drawing gave
 // one (CardSink), else the menus' map coming in from black, else none.
-void GameSession::GiveBackdrop(WindowPicture& wp) {
+void GameSession::GiveBackdrop(WindowPicture& wp, int width, int height) {
   using Over = WindowPicture::Over;
   render::WorldPicture& p = wp.picture;
   float alpha = 1;
   Over over = Over::None;
+  // (the flight's kept first frame: read for the window's size while the flight is wanted and not live yet; shown where
+  // the movie shows until the flight's world is there, docs/ui-menuflight.md 4.5)
+  bool keptWanted = false;
+  if (menuFlight && menuBackdrop && menuBackdrop->mode() == Backdrop::Mode::Flight && menuBackdrop->Direct() && !picture_ && !sim_ &&
+      load_ == Load::None && width > 0 && height > 0) {
+    if (!kept_) kept_ = std::make_unique<KeptFrame>(), kept_->dir = userDir.empty() ? std::string(".") : userDir;
+    KeptFrame& k = *kept_;
+    // (this run's frame taken: the one shown from now, once the one read is no longer over the window)
+    if (!k.fresh.empty() && wp.over != Over::Kept && !(wp.over == Over::Fade && wp.fadeKept))
+      k.pixels.swap(k.fresh), k.fresh.clear(), k.w = k.freshW, k.h = k.freshH, k.key = k.freshKey;
+    if (!flightShows_ && menuFlight->Described()) {
+      k.Read(width, height, KeptKey());
+      k.Through();
+      keptWanted = !flightCovering_ && menuBackdrop->ShownThisFrame() && !k.busy.load() && !k.reading && !k.pixels.empty() &&
+                   k.w == width && k.h == height && k.key == KeptKey();
+    }
+  }
   if (card_ && card_->wanted && !card_->pixels.empty()) {
     over = Over::Card, alpha = card_->wantedAlpha;
   } else if (flightCovering_) {  // (the flight's loop: black over a second, held until it starts over)
@@ -3045,17 +3361,27 @@ void GameSession::GiveBackdrop(WindowPicture& wp) {
     else over = Over::Fade, alpha = static_cast<float>(1.0 - t);
   } else if (stillShown_ && !still_.empty()) {  // (Still: its one picture, where the movie shows)
     over = Over::Still;
+  } else if (keptWanted) {
+    over = Over::Kept;
   }
   if (over == Over::Card && (card_->fresh || wp.over != Over::Card)) {
     p.SetBackdrop(card_->pixels.data(), card_->width, card_->height, card_->width, render::WorldPicture::BackdropFit::Stretch, true);
     card_->fresh = false;
   } else if ((over == Over::Fade || over == Over::Cover) && wp.over != Over::Fade && wp.over != Over::Cover) {
-    p.SetBackdrop(&wp.black, 1, 1, 1, render::WorldPicture::BackdropFit::Stretch, true);
+    // (the flight swapped in while its kept frame showed: it comes in over that frame, not over black)
+    wp.fadeKept = over == Over::Fade && wp.over == Over::Kept;
+    if (wp.fadeKept) Logf(LogLevel::Info, "moho64ui: the menu's flight comes in over its kept first frame");
+    else p.SetBackdrop(&wp.black, 1, 1, 1, render::WorldPicture::BackdropFit::Stretch, true);
   } else if (over == Over::Still && wp.over != Over::Still) {
     p.SetBackdrop(still_.data(), stillW_, stillH_, stillW_, render::WorldPicture::BackdropFit::Stretch, true);
+  } else if (over == Over::Kept && wp.over != Over::Kept) {
+    p.SetBackdrop(kept_->pixels.data(), kept_->w, kept_->h, kept_->w, render::WorldPicture::BackdropFit::Stretch, true);
   } else if (over == Over::None && wp.over != Over::None) {
     p.SetBackdrop(nullptr, 0, 0, 0, render::WorldPicture::BackdropFit::Stretch, true);
   }
+  if (over == Over::Kept) ++kept_->shownFrames;
+  if (over != Over::Fade) wp.fadeKept = false;
+  keptShown_ = over == Over::Kept;
   if (over != Over::None && (alpha != wp.overAlpha || wp.over != over)) p.SetBackdropLook(alpha), wp.overAlpha = alpha;
   wp.over = over;
 }
@@ -3076,7 +3402,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (vsync != wp.vsync) wp.picture.SetVsync(vsync), wp.vsync = vsync;
   const bool lowLatency = Pacing().lowLatency;
   if (lowLatency != wp.lowLatency) wp.picture.SetLowLatency(lowLatency), wp.lowLatency = lowLatency;
-  if (!rewinding_) GiveBackdrop(wp);
+  if (!rewinding_) GiveBackdrop(wp, w, h);
   // (a frame read back: CaptureWindow's, or the picture a jump back holds, FreezePicture; into a member, as the
   // renderer fills it in the next DrawToWindow, whichever frame that is)
   const bool capturing = !captureTo_.empty() || freezeAsked_;
@@ -3167,6 +3493,11 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
           camera = cine;
           tick = f.Moment();
           if (f.TakeCut()) wp.picture.CameraCut();
+          // (its first frames of this run: kept for the next start, docs/ui-menuflight.md 4.5. At the battle's third beat,
+          // a third of a second in: the storyboard's bases and fronts are made at its first, and the live flight comes in
+          // over the kept frame from its beat 0, the units there from its first beat; the camera has moved a few metres)
+          if (kept_ && !kept_->taken && f.loops() == 0 && f.tick() >= 3 && f.tick() <= 20 && !f.fast && f.fastUntil == 0)
+            TakeKeptFrame(wp, camera, tick, w, h);
           if (f.collectSounds && sounds) {  // (Distant: heard from high over the camera, so all of it from afar)
             render::Vec3 right, up, back;
             camera.Axes(&right, &up, &back);
@@ -3243,6 +3574,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
       ++times.worldDraws;
     }
   }
+  if (menuBackdrop) menuBackdrop->EndFrame();
   if (freezeAsked_ && drawn) TakeFrozen(captureRgba_, w, h);
   else if (freezeAsked_ && ++freezeWaits_ >= 3) TakeFrozen({}, w, h);  // (no frame of the world drawn: held black)
   if (!captureTo_.empty()) SaveWindowCapture(captureRgba_, w, h, captureTo_), captureTo_.clear();
@@ -3311,19 +3643,41 @@ void GameSession::OpenPicture() {
       // beat running (FinishLoad waited for the loading thread; the old session's beats ended with it), then the new
       // session given to the picture as after a swap. If the renderer cannot (no world, a photo being made), the map is
       // opened again below, as for a game loaded before the window, and swapped in once ready (OpenPictureIfDue).
+      // A game launched from the main menu on its flight's map (KeepMenuMap) likewise: the flight's world taken over,
+      // the game's looks laid back on it first (the flight's menu look, its evening and its picture's settings go).
       keepMap_ = false;
-      if (wp.pending == Kind::None && wp.shows == Kind::Left && wp.shownMap == map_ && wp.picture.RestartMap()) {
+      const bool fromMenu = keepMenuMap_;
+      keepMenuMap_ = false;
+      const Kind kept = fromMenu ? Kind::Menu : Kind::Left;
+      if (wp.pending == Kind::None && wp.shows == kept && wp.shownMap == map_ && wp.picture.RestartMap()) {
         wp.shows = Kind::Game;
         wp.fading = false;
         auto pic = std::make_unique<Picture>(&wp.picture);
         pic->session = this;
         pic->direct = true;
         StartAfresh(wp.picture, false);  // (the per-game settings, as at a swap)
+        if (fromMenu) {
+          // (the game's looks as BeginWindowMap gives a game's map: the picture's own bundles and settings, and the
+          // world's own switches, which Picture::SetScene gives again each frame; the sky as the map opened it, for
+          // the game's own (DressGamePicture's SkyOnWorld, SetDayAndWeather); a cut from the flight's last camera)
+          const LookSettings looks = Looks();
+          PictureLooks(wp.picture, looks);
+          if (render::World* w = wp.picture.world()) {
+            WorldLooks(*w, looks, true);
+            const WindowPicture::OpenSky& s = wp.shownSky;
+            if (s.taken) {
+              w->timeOfDay = s.timeOfDay, w->cloudCover = s.cloudCover, w->rain = s.rain, w->snow = s.snow, w->fog = s.fog;
+              w->wet = s.wet, w->snowLying = s.snowLying, w->climate = s.climate;
+              w->cinematicHaze = s.cinematicHaze;  // (a replay's cinematic camera: the renderer's own again)
+            }
+          }
+          wp.picture.CameraCut();
+        }
         wp.picture.SetWorldShown(true);
         DressGamePicture(*pic);
         picture_ = std::move(pic);
-        Logf(LogLevel::Info, "moho64ui: session: the world's picture is shown, %.3f s (the map shown started over: RestartMap)",
-             secs(t3, std::chrono::steady_clock::now()));
+        Logf(LogLevel::Info, "moho64ui: session: the world's picture is shown, %.3f s (the map shown started over: RestartMap%s)",
+             secs(t3, std::chrono::steady_clock::now()), fromMenu ? ", the main menu's flight's world taken over" : "");
         return;
       }
       Logf(LogLevel::Warning, "moho64ui: session: the map shown could not be started over (RestartMap): it is opened again");
@@ -3345,6 +3699,7 @@ void GameSession::OpenPicture() {
     }
     wp.shows = Kind::Game, wp.shownMap = map_;
     wp.pending = Kind::None;
+    wp.shownWith = wp.pendingWith;
     wp.fading = false;
     auto pic = std::make_unique<Picture>(&wp.picture);
     pic->session = this;
