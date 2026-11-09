@@ -8,7 +8,14 @@ namespace moho {
 
 enum class LogLevel { Debug, Info, Warning, Error };
 
-void LogOpenFile(const std::string& path);
+// False when the file could not be made (its folder is missing, no right to write there).
+bool LogOpenFile(const std::string& path);
+// The log a program with a window writes when no --log names one: `<folder>/<program>_YYYYMMDD_HHMMSS.log` (the
+// PC's own time; the folder is made if it is missing), with the build (core/build_stamp.h) as its first line. Of
+// that program's logs there only the newest `keep` stay, this one counted: older ones go, each with its crash dump
+// (`<the same name>.dmp`, core/crash.h); a file of any other name in the folder is never touched. Returns the
+// file's name, "" when it could not be made (then nothing is open, as after a failed LogOpenFile).
+std::string LogOpenDefault(const std::string& folder, const std::string& program, int keep = 10);
 void LogSetEcho(bool echoToStdout);
 void LogWrite(LogLevel level, std::string_view message);
 void Logf(LogLevel level, const char* fmt, ...)

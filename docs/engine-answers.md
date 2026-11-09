@@ -4,6 +4,73 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+## ui request 57 + audit B2 / B3: file names in any language, safer file writes, build stamp, crash dump, default log (2026-11-09) - done in the engine's part; two lines for each build script
+
+Built from the request's wording as the ui gave it in his message (the entry was not yet in `ui/REQUESTS.md`).
+No simulation code changed.
+
+**1. File names with letters outside the PC's code page.** `src/app/utf8.manifest` sets the program's active code
+page to UTF-8 (Windows 10 1903 and later), linked through `src/app/utf8.rc`. With it the command line, `fopen`,
+`getenv` and `fs::u8path` all take the same UTF-8 names, whatever the PC's language. `tools/build_zig.py` links it
+into `moho64.exe`; CMake too. **The ui's and the renderer's programs need the same one line in their own build
+scripts** (the link command gets the `.rc` file as one more input):
+
+    if windows: link.append(os.path.join(ROOT, "src", "app", "utf8.rc"))
+
+Without it a program started from a folder such as `C:\Users\Müller\...` on a PC whose code page lacks the letter
+does not find its files (this PC's is the Japanese one, 932: `ü` and Cyrillic both fail there without the manifest).
+
+**2. `hostfs::WriteFile`** is false also when the data was not written whole or the file could not be closed (a
+full disk shows only there). **`hostfs::ReplaceFile(from, to)`** (new) renames `from` onto `to`, replacing an
+existing `to`, as one step on every system (both on one drive): write `x.tmp`, then `ReplaceFile("x.tmp", "x")`,
+and a crash or a full disk mid-write leaves the old file whole.
+
+**3. `LogOpenFile`** returns false when the file could not be made. The headless program then says so on stderr and
+plays on; a `--mods` file that cannot be read stops it with exit code 1 and the file's name.
+
+**4. The build's stamp** (`core/build_stamp.h`): `BuildStamp()` gives e.g.
+`a7b6d44f+changes, built 2026-11-09 15:02, x86-64-v2` (the commit, "+changes" with uncommitted changes, the time,
+the processor level). `tools/build_zig.py` passes it as `-DMOHO64_BUILD_STAMP="..."` to `src/core/build_stamp.cpp`
+alone and compiles that file on every build; a build script that does not pass it gets "unstamped build". For the
+other two build scripts: copy `build_stamp()` from `tools/build_zig.py`, add the flag for that one file, and put
+that file in the list to compile every time. `moho64 --version` prints it.
+
+**5. The crash report** (`core/crash.h`): every crash now also writes `crash: build <stamp>`. New
+`CrashSetReport(logFile, dumpFile, messageBox)`, called after `InstallCrashHandler`:
+- `dumpFile` (UTF-8, "" = none): a crash writes a small memory dump there (all threads' stacks and registers, a
+  few MB; `dbghelp.dll` of Windows, loaded at the call and not at the crash) and the log says
+  `crash: dump written to <file>`;
+- `messageBox` true: a crash then shows one window, "The game has stopped because of a fault in the program. To
+  report it, please send:" with the log's and the dump's names. For the programs with a window; the headless
+  program passes false (a test run must not wait for a click) and writes `<log>.dmp` when it has a `--log`.
+On Linux and Mac the call does nothing (the crash lines and the build line are written as before).
+
+**6. A default log** (`core/log.h`): `std::string LogOpenDefault(folder, program, keep = 10)` opens
+`<folder>/<program>_YYYYMMDD_HHMMSS.log` (the folder is made if missing), writes
+`info: <program>: build <stamp>` as the first line, and keeps only the newest `keep` logs of that program there
+(an older one goes with its `.dmp`; a file of any other name is never touched; two starts in one second get two
+names). It returns the file's name, "" on failure. Meant for the ui's and the viewer's programs when no `--log` is
+given: the folder is the caller's choice (the ui's preferences folder is the natural one), then
+
+    std::string log = LogOpenDefault(folder, "moho64ui");
+    InstallCrashHandler();
+    if (!log.empty()) CrashSetReport(log.c_str(), (log.substr(0, log.size() - 4) + ".dmp").c_str(), true);
+
+(the dump's name must be the log's with `.dmp` for the clean-up to take it along). The headless program opens no
+default log.
+
+**Tested:** `py tools/paths_test.py` (permanent; 9 checks, about 1.5 minutes, needs the lab's layout): the bench
+replay's first 300 ticks from a folder named `Müller` and from one named `Игрок` (log and fingerprint written
+there too) end with the reference's fingerprint; a missing `--mods` file stops with exit 1; a `--log` into a
+missing folder is said and the game plays; `--crash-test` (new: a fault on purpose after start-up) leaves the
+fault, the build and the dump's name in the log and a valid dump beside it, in the Cyrillic folder.
+`LogOpenDefault` was tried with a throwaway program (not committed): naming, first line, the newest three kept,
+other files left alone.
+**Not tested:** `moho64ui` and `moho64view` with such names (they need the link line first); an install or
+preferences folder with such letters; the message window (no program asks for it yet); Windows older than 1903
+(the manifest is ignored there, names then work only inside the PC's code page, as before).
+
+
 ## ui request 52: the init file's `protocols` table out of MountFromInitFile (2026-11-09) - done
 
 `MountFromInitFile` (`script/mount.h`) has one more optional parameter after `skip`:

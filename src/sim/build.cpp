@@ -2858,7 +2858,9 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   Unit* T = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   // 0x604422..0x60445b (read): the capturable byte (attributes +0x69, vt+0x40) is asked only when the held entity is a
   // unit (vt+0x10); a player's order holds the army's recon BLIP of the unit, and a blip is asked nothing.
-  const bool heldAsUnit = T && !(t.targetViaBlip && !t.targetFakeId);
+  // State 1 swaps the blip for its unit (0x6047be..0x6047fc), so from state 2 on the held entity is a unit for
+  // every order (READ, not run: order audit D9.3; before, a blip order never asked "capturable").
+  const bool heldAsUnit = T && (t.state >= 2 || !(t.targetViaBlip && !t.targetFakeId));
   if (!e || (heldAsUnit && !ScriptBool(sim, T, "IsCapturable"))) {  // gone, or no longer capturable: over, as a success
     PushObject(L, u);
     sim.CallMethod(L, u, "OnStopCapture", 1);
@@ -2874,7 +2876,9 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   }
   const float dx = e->position.x - u->position.x, dz = e->position.z - u->position.z;
   const float gap = std::sqrt(dx * dx + dz * dz) - static_cast<float>(std::max(uf.sizeX, uf.sizeZ)) - tfp;
-  if (T && T->unitStates.Has(US("BeingCaptured")) && gap > 10.0f) return kTaskFailed;
+  // 0x6045a0..0x6045e4: asked only of a held UNIT, so a player's order on a unit that another engineer is already
+  // capturing walks up and joins from any distance (READ, not run: order audit D9.1; before, it failed at once)
+  if (heldAsUnit && T->unitStates.Has(US("BeingCaptured")) && gap > 10.0f) return kTaskFailed;
   switch (t.state) {
     case 0:  // within 5: stay; otherwise a move to a free spot beside the target
       t.state = 1;
@@ -2909,7 +2913,7 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
       return kCaptureAgain;
     case 1: {
       if (gap > 10.0f) return kTaskFailed;
-      if (!T || T->dead) return kTaskDone;
+      if (!T || T->dead || T->destroyQueued) return kTaskDone;  // 0x60483d..0x60485e: dead or destroy queued
       GroundFreeRect(sim, u);
       float hy = T->bpData ? T->bpData->sizeY * 0.5f : 0.0f;  // the arm aims at the target's bone -1 (0x6aa637: straight up)
       SetArmAimTarget(sim, u, Vec3{T->position.x, T->position.y + hy, T->position.z});
@@ -5128,7 +5132,6 @@ bool SiloAddBuild(Sim& sim, Unit* u, int kind) {
   int pending = 0;
   for (int k : s->queue)
     if (k == kind) ++pending;
-  if (s->stage != 0 && s->kind == kind) ++pending;
   if (u->siloAmmo[kind] + pending >= s->maxStore[kind]) return false;
   s->queue.push_back(kind);
   return true;
@@ -5271,7 +5274,9 @@ void SiloTick(Sim& sim, Unit* u) {
       s->ticksTotal = std::max(1, static_cast<int>(ticks));
       s->ticksLeft = s->ticksTotal;
       s->ticks = ticks;
-      s->progress = 0;
+      // (silo+0x48, the beats done, is NOT zeroed here: 0x5cf2bd..0x5cf41c leaves it. It is zero from the
+      // construction, from state 3 and from SiloStopBuild, or it holds what FAF's GiveNukeSiloAmmo(n, true) set:
+      // a missile build that restarts with its progress kept)
       s->perTick[kEnergy] = ticks > 0 ? be * eAdj / ticks : 0;
       s->perTick[kMass] = ticks > 0 ? bm * mAdj / ticks : 0;
       if (s->request) s->request->live = false;
@@ -5321,6 +5326,7 @@ void SiloTick(Sim& sim, Unit* u) {
       CallWeaponMethod(sim, L, u, "OnNukeArmed", wi);
       ++u->siloAmmo[s->kind];
       if (!s->queue.empty()) s->queue.pop_front();
+      s->progress = 0;  // 0x5cf579
       s->stage = 0;
       return;
     }
@@ -5337,7 +5343,18 @@ int l_GetSiloAmmo(lua_State* L) {
 template <int Kind>
 int l_GiveSiloAmmo(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  u->siloAmmo[Kind] += static_cast<int>(luaL_checknumber(L, 2));
+  const int n = static_cast<int>(luaL_checknumber(L, 2));  // (truncated: 0x41b520 -> _ftol)
+  // FAF's patch of Unit:GiveNukeSiloAmmo (0x6ced74 -> 0x128eac5, 0x6cedf1 -> 0x128eaeb): called with three
+  // arguments it sets the beats done of the missile in work (silo+0x48 = n), whatever the silo's stage and
+  // kind, and stores nothing; a unit without a silo: nothing at all. FAF's Unit.lua GiveNukeSiloBlocks uses it
+  // to keep a missile's progress when an adjacent structure is finished or lost in mid-build, and when a silo
+  // changes its army. (READ, not run: order audit D1.8.)
+  if (Kind == 1 && lua_gettop(L) == 3) {
+    SiloState* s = GetSilo(*S(L), u);
+    if (s->weapon[0] >= 0 || s->weapon[1] >= 0) s->progress = static_cast<float>(n);
+    return 0;
+  }
+  u->siloAmmo[Kind] += n;
   if (u->silo && u->silo->maxStore[Kind] > 0) u->siloAmmo[Kind] = std::min(u->siloAmmo[Kind], u->silo->maxStore[Kind]);
   return 0;
 }
@@ -5349,15 +5366,27 @@ int l_RemoveSiloAmmo(lua_State* L) {
 }
 int l_StopSiloBuild(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
-  if (u->silo) {
-    u->silo->queue.clear();
-    if (u->silo->stage == 2) {
-      if (u->silo->request) {
-        u->silo->request->live = false;
-        u->silo->request.reset();
-      }
-      u->unitStates.Erase(US("SiloBuildingAmmo"));
-      u->silo->stage = 0;
+  if (SiloState* s = u->silo) {
+    // SiloStopBuild 0x5cf130..0x5cf1d7 (silo vt+0x2c), in its order (READ, not run: order audit D1.9): auto mode
+    // goes off with the script's OnAutoModeOff; in stage 1 or 2 the consumption shown is zeroed; the state, the
+    // work progress, the stage (whatever it was: a missile done in stage 3 and not yet stored is dropped), the
+    // build list and the beats done are cleared. (Before, a stop in stage 1 left stage 1 with an empty list,
+    // and the next beat read the empty list's front.)
+    if (u->autoMode) {
+      u->autoMode = false;  // Unit::SetAutoMode(false) 0x6a73a0
+      S(L)->CallMethod(L, u, "OnAutoModeOff", 0);
+    }
+    if (s->stage == 1 || s->stage == 2) u->consumptionShown[0] = u->consumptionShown[1] = 0;
+    u->unitStates.Erase(US("SiloBuildingAmmo"));
+    u->workProgress = 0;
+    s->stage = 0;
+    s->queue.clear();
+    s->progress = 0;
+    // OURS, kept: the economy request is released here. The original leaves silo+0x2c as it is (the next
+    // build's state 1 replaces it); what a request without a taker does to the economy is not read yet.
+    if (s->request) {
+      s->request->live = false;
+      s->request.reset();
     }
   }
   return 0;
