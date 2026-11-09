@@ -23,7 +23,7 @@ cbuffer Photo : register(b1) {
   float4 photoTrim;        // x the darkest share left out; y where the brightest share begins; z the first bin's stop; w bins a stop
   float4 photoBalance;     // rgb the white balance's gains on the light
   float4 photoCurve;       // x the S-curve's slope at its pivot, y the pivot, z what black is lifted to, w the colour overall
-  float4 photoExtremes;    // x how much colour the deepest shadows and the brightest lights lose
+  float4 photoExtremes;    // x how much colour the deepest shadows and the brightest lights lose; y the noise before the screen's 256 levels
   float4 photoShadows;     // rgb what the shadows lean by (no brightness of its own)
   float4 photoHighlights;  // rgb what the highlights lean by
   float4 photoLens;        // x the light lost at the corners; y the grain's amplitude; z the fringe (uv, at the corners); w the frame's number
@@ -123,6 +123,16 @@ uint Mix(uint x) {
   return x ^ (x >> 16);
 }
 
+// (dither) A noise of one of the screen's 256 levels before the write to it, as Post's last pass adds (post.cpp,
+// ScreenNoise; photoExtremes.y its size: none into the picture FSR 1 reads, which adds it itself).
+float3 ScreenNoise(uint2 at) {
+  uint3 n;
+  n.x = Mix(at.x + Mix(at.y + Mix(uint(photoLens.w) + 0x9e3779b9u)));
+  n.y = Mix(n.x);
+  n.z = Mix(n.y);
+  return ((float3(n & 0xffffu) + float3(n >> 16)) / 65535.0 - 1) * photoExtremes.y;
+}
+
 float3 ToneCurve(float3 c) { return saturate((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)); }
 
 float4 PS(VOut i) : SV_Target {
@@ -130,7 +140,7 @@ float4 PS(VOut i) : SV_Target {
   float2 uv = (i.uv - photoPanel.xy) / photoPanel.z;
   if (any(uv < 0) || any(uv >= 1)) discard;
   float3 c = photoPanel.z < 1 ? LightAt(uv) : scene.SampleLevel(samplerPointClamp, uv, 0).rgb + glowPicture.SampleLevel(samplerLinearClamp, uv, 0).rgb;
-  if (photoPanel.w > 0.5) return float4(saturate(pow(ToneCurve(c * modern.z), 1.0 / 2.2)), 1);  // (today's, as Post draws it)
+  if (photoPanel.w > 0.5) return float4(saturate(pow(ToneCurve(c * modern.z), 1.0 / 2.2) + ScreenNoise(uint2(i.position.xy))), 1);  // (today's, as Post draws it)
   float2 fromMiddle = (uv - 0.5) * float2(photoFrame.z, 1);  // (in picture heights)
   float r2 = dot(fromMiddle, fromMiddle) * photoFrame.w;     // 0 at the middle, 1 at the corners
   [branch] if (photoLens.z > 0) {  // the fringe: red a little outward, blue a little inward, as the distance cubed
@@ -159,7 +169,7 @@ float4 PS(VOut i) : SV_Target {
     float u = (float(n & 0xffffu) + float(n >> 16)) / 65535.0 - 1;
     g += u * photoLens.y * (0.25 + 3 * y * (1 - y));
   }
-  return float4(saturate(g), 1);
+  return float4(saturate(g + ScreenNoise(uint2(i.position.xy))), 1);
 }
 )hlsl";
 
@@ -313,6 +323,7 @@ bool PhotoFinish::Init(std::string* error) {
     if (!window_) return false;
     pd.name = "photographic look: the last pass, before FSR";
     pd.depthTarget = false;
+    pd.colorFormat = gfx::Format::RGBA16F;  // (dither)
     toTarget_ = device_->CreatePipeline(pd, error);
     if (!toTarget_) return false;
   }
@@ -435,8 +446,10 @@ void PhotoFinish::Finish(const View& view, bool toTarget, gfx::Texture picture, 
   device_->SetTexture(1, glow);
   device_->SetTexture(2, eye_[now_]);
   PhotoConstants k;
+  const float noise = toTarget ? 0.0f : 1.0f / 255.0f;  // (dither)
   if (look_.compare.empty()) {
     Constants(look_, width_, height_, &k);
+    k.extremes[1] = noise;
     device_->SetConstants(1, &k, sizeof k);
     device_->Draw(3);
   } else {
@@ -456,6 +469,7 @@ void PhotoFinish::Finish(const View& view, bool toTarget, gfx::Texture picture, 
       k.panel[1] = panel & 2 ? 0.5f : 0.0f;
       k.panel[2] = 0.5f;
       k.panel[3] = panel == 0 ? 1.0f : 0.0f;
+      k.extremes[1] = noise;
       device_->SetConstants(1, &k, sizeof k);
       device_->Draw(3);
     }
