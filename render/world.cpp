@@ -1729,7 +1729,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     } else {
       air.storm = 0;
     }
-    air.moonShare = starryNight && skyLight.moon ? 0.65f : 1.0f;  // [starry] (the moon's glow in the air softer)
+    air.moonShare = starryNight ? 1 - 0.35f * skyLight.moonIn : 1.0f;  // [starry] (the moon's glow in the air softer; (dusk turn) as its light comes in)
     Vec3 bolt{0, 0, 0};
     if (flash > 0) {  // lightning: for a moment the clouds light everything (less to an eye opened for the night)
       bolt = Vec3{0.75f, 0.82f, 1.0f} * (flash * 1.1f / std::pow(skyLight.exposure, 0.6f));
@@ -1922,6 +1922,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
                    map.water.present ? map.water.elevation : -1e9f);
     if (stormSunNow_ > 0 && c.cloudDrift[0] > 0.5f)  // ([stormcells] the cover's shadows take more of the sun in a storm)
       c.cloudDrift[1] = c.cloudDrift[1] + (std::max(c.cloudDrift[1], 0.9f) - c.cloudDrift[1]) * stormSunNow_;
+    if (timeOfDay >= 0) c.cloudDrift[3] *= skyLight.fallIn;  // (dusk turn: the sea darkens under them whatever light falls)
   }
   if (!sidePicture && !photo && !extraView) {  // (airfix) a weather cut (World::weatherCut): the moment or the weather jumped since the window's last frame
     const bool lit = timeOfDay >= 0 && look == Look::Modern;
@@ -1959,6 +1960,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       w.wet = wet;
       w.mist = mistNow;
       w.haze = hazeAmount;  // [hazeamt]
+      w.fallIn = skyLight.fallIn;
       w.cloudCover = c.skyClouds[0];
       w.cold = climate == Climate::Cold;
       w.seed = weatherSeed;
@@ -4664,7 +4666,8 @@ void World::Render() {
     terrain.sunMaskRows = {};
     // ambient occlusion: from the depth of everything solid, laid over it before the water
     Stage("ambient occlusion");
-    ao.contactShadows = contactShadows ? 0.8f : 0.0f;
+    // ((dusk turn) they darken toward the falling light whatever its colour: none at the moment it changes sides)
+    ao.contactShadows = contactShadows ? 0.8f * (timeOfDay >= 0 && look == Look::Modern ? skyLight.fallIn : 1.0f) : 0.0f;
     ao.pixelScale = photoPixel;  // (photofix2: a photo's frame reaches as far as the window's)
     ao.half = halfOcclusion;     // [step2b]
     if (look == Look::Modern && (ao.strength > 0 || ao.contactShadows > 0)) {

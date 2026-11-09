@@ -762,17 +762,41 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach, bool tables = false)
     if (moonInAir) c += Each(tables ? ScatterTables(d, s.moonPlace, kMoonHaze) : Scatter(d, s.moonPlace, kMoonHaze), s.moonSky);
     return c;
   };
-  s.moon = h < -0.01f;
+  // (dusk turn) The falling light was the sun's down to h = -0.01 and the moon's from there on: at dusk the sun's ramp
+  // still stood at a tenth and the moon, well up by then, came in at its full strength in the same frame, from a
+  // heading 160 degrees away: every shadow turned round at once and the warm rim light went blue. Now the sun's light
+  // goes out all the way (its ramp ends at -0.02), the body changes there, with no light falling, and the moon's
+  // comes in from nothing after it (`moonIn`); the sky's own light carries those minutes. (At dawn the moon has set
+  // before the sun's light comes.)
+  s.moon = h < -0.02f;
+  s.moonIn = Smooth(-0.02f, -0.06f, h);
+  s.fallIn = std::max(Smooth(-0.02f, 0.03f, h), s.moonIn);  // (the sun's own going, below, and the moon's coming)
   const Vec3 lit = s.moon ? s.moonPlace : s.body;
-  const float heading = std::atan2(lit.z, lit.x);
+  // The fitted sky's glow is around one body, and the horizon is what lies away from it. That body was the falling
+  // light's: at the switch the sunset's glow was gone from the fitted sky in one frame (and at dawn came in one). It
+  // stays the sun's while the sun lights the air, goes out as that light gets weak, and the moon's comes in after it;
+  // the horizon goes over from the one's to the other's meanwhile.
+  const float glowTurn = Smooth(-0.20f, -0.30f, h);
+  s.glowMoon = glowTurn > 0.5f;
   const float low = 0.10f;  // the sine of "low": about six degrees up
-  auto lowAt = [&](float turn) {
-    const float f = std::sqrt(1 - low * low);
-    return Vec3{std::cos(heading + turn) * f, low, std::sin(heading + turn) * f};
+  auto about = [&](Vec3 body, Vec3* horizon, Vec3* near) {
+    const float heading = std::atan2(body.z, body.x);
+    auto lowAt = [&](float turn) {
+      const float f = std::sqrt(1 - low * low);
+      return Vec3{std::cos(heading + turn) * f, low, std::sin(heading + turn) * f};
+    };
+    *horizon = (sky(lowAt(kPi * 0.5f)) + sky(lowAt(-kPi * 0.5f)) + sky(lowAt(kPi))) * (1 / 3.0f);
+    *near = sky(lowAt(0.25f)) - *horizon;
   };
   s.zenith = sky({0, 1, 0});
-  s.horizon = (sky(lowAt(kPi * 0.5f)) + sky(lowAt(-kPi * 0.5f)) + sky(lowAt(kPi))) * (1 / 3.0f);
-  const Vec3 near = sky(lowAt(0.25f)) - s.horizon;
+  Vec3 near{0, 0, 0}, other{0, 0, 0}, unused{0, 0, 0};
+  about(s.glowMoon ? s.moonPlace : s.body, &s.horizon, &near);
+  if (glowTurn > 0 && glowTurn < 1) {
+    about(s.glowMoon ? s.body : s.moonPlace, &other, &unused);
+    const float share = s.glowMoon ? 1 - glowTurn : glowTurn;  // (of the other body's horizon)
+    s.horizon = s.horizon * (1 - share) + other * share;
+  }
+  near = near * (s.glowMoon ? Smooth(0.5f, 1.0f, glowTurn) : Smooth(0.5f, 0.0f, glowTurn));
   // the night's own faint light (stars, the air's glow): what is left when neither body is up
   // (from sunset on: the sum here knows light scattered once only, and leaves dusk darker than a moonlit night)
   s.faint = Smooth(0.05f, -0.10f, h);
@@ -785,7 +809,7 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach, bool tables = false)
   auto against = [&](Vec3 reach) { return Vec3{reach.x / noonReach.x, reach.y / noonReach.y, reach.z / noonReach.z}; };
   if (s.moon) {
     const float up = Smooth(-0.03f, 0.05f, s.moonPlace.y);
-    s.color = Each(against(ReachOf(s.moonPlace, tables)), kMoonTint) * (kMoonLight * moonLit * up);
+    s.color = Each(against(ReachOf(s.moonPlace, tables)), kMoonTint) * (kMoonLight * moonLit * up * s.moonIn);
   } else {
     s.color = Each(against(ReachOf(s.body, tables)), {1.0f, 0.96f, 0.90f}) * Smooth(-0.02f, 0.03f, h);
   }
@@ -875,7 +899,7 @@ void SetSky(const SkyLight& s, ViewConstants* c) {
   set(c->skyZenith, s.zenith, 1);
   set(c->skyHorizon, s.horizon, s.night);
   set(c->skyGlow, s.glow, s.daylight);
-  set(c->skyBody, s.body, s.moon ? 1.0f : 0.0f);
+  set(c->skyBody, s.body, s.moon ? (s.glowMoon ? 2.0f : 1.0f) : 0.0f);  // (w: over 0.5 the falling light is the moon's, over 1.5 the fitted sky's glow is around it too)
   set(c->skyMoon, s.moonPlace, s.cloudMoon ? 1.0f : 0.0f);  // (w: the volumetric clouds are lit by the moon)
   // the clouds drift with the wind and change slowly (by the view's clock). [cloudpace] (Chris, 2026-11-06: "Clouds move too
   // fast ... bolting across the screen") a quarter of the speed before: some 1.4 world units a second (a world unit is

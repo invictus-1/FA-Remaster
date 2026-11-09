@@ -14,7 +14,7 @@ src/sim with Lua, mimalloc and zlib, built here with the flags tools/build_zig.p
 runs the simulation itself; nothing in src/ is changed). Incremental: an object is rebuilt when its
 source or a header it included last time is newer.
 """
-import argparse, concurrent.futures as cf, glob, os, subprocess, sys
+import argparse, concurrent.futures as cf, glob, os, subprocess, sys, time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ZLIB = ["adler32", "crc32", "inffast", "inflate", "inftrees", "zutil"]
@@ -26,6 +26,21 @@ TRACY_LIBS = ["-ldbghelp", "-ladvapi32", "-lsecur32", "-lws2_32"]
 
 def zig(*args):
     return [sys.executable, "-m", "ziglang", *args]
+
+
+def build_stamp():
+    """The commit ("+changes" with uncommitted changes), the build's time and the processor level, for the exe
+    (src/core/build_stamp.h; as tools/build_zig.py's)."""
+    def git(*args):
+        try:
+            r = subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True, timeout=30)
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    commit = git("rev-parse", "--short=8", "HEAD") or "no commit"
+    if commit != "no commit" and git("status", "--porcelain", "--untracked-files=no"):
+        commit += "+changes"
+    return commit + ", built " + time.strftime("%Y-%m-%d %H:%M") + ", x86-64-v2"
 
 
 def stale(src, obj):
@@ -85,15 +100,18 @@ def main():
     # The engine's files keep the engine's floating-point flags: the simulation must compute the same
     # here as in the engine's own program. Their warnings belong to the engine's build, not this one. (src/ai: the engine's
     # own AI, from its batch 25 on; none there before, and glob finds nothing)
+    # (the build's identity, src/core/build_stamp.h: that one file gets the stamp and is compiled on every build)
+    stamp_src = os.path.join(ROOT, "src", "core", "build_stamp.cpp")
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
-            add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes], True)
+            add(f, ["-std=c++20", "-w", "-ffp-contract=off", "-fno-fast-math", *includes] +
+                (['-DMOHO64_BUILD_STAMP="' + build_stamp() + '"'] if f == stamp_src else []), True)
     for f in sorted(glob.glob(os.path.join(ROOT, "render", "*.cpp"))):
         add(f, ["-std=c++20", "-Wall", "-Wextra", *includes], True)
     if a.tracy:  # Tracy's client, unchanged (third_party/tracy), once
         add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"), ["-std=c++20", "-w"], True)
 
-    todo = [j for j in jobs if stale(j[0], j[1])]
+    todo = [j for j in jobs if j[0] == stamp_src or stale(j[0], j[1])]
     print(f"render/build: {len(todo)} of {len(jobs)} objects to compile, {a.jobs} jobs")
     failed = []
     with cf.ThreadPoolExecutor(a.jobs) as ex:
@@ -110,7 +128,9 @@ def main():
         sys.exit(f"render/build: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64view.exe")
     fresh = os.path.join(a.out, "moho64view.new.exe")
-    r = subprocess.run(zig("c++", *target, *common, "-o", fresh, *[j[1] for j in jobs], *LIBS, *(TRACY_LIBS if a.tracy else []), "-static"),
+    # (src/app/utf8.rc: the program's code page is UTF-8, so file names in any language are found whatever the PC's)
+    r = subprocess.run(zig("c++", *target, *common, "-o", fresh, *[j[1] for j in jobs], os.path.join(ROOT, "src", "app", "utf8.rc"),
+                           *LIBS, *(TRACY_LIBS if a.tracy else []), "-static"),
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("render/build: link failed\n" + r.stderr)
