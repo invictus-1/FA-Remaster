@@ -1,6 +1,7 @@
 #include "app/game_session.h"
 
 #include "app/backdrop.h"
+#include "app/menu_flight.h"
 #include "app/window.h"
 
 #include <algorithm>
@@ -730,6 +731,20 @@ void StartAfresh(render::WorldPicture& p, bool looks) {
   StartBundles(p);
   p.SetMinimapMeshes(false);
 }
+// The menu's flight's looks (Backdrop::Mode::Flight; until the renderer's own menu look, his R2: docs/ui-menuflight.md
+// section 3): held for its map opening behind (HoldLooks; SwapMap lays them on), the player's Atmosphere (the light in
+// the air and the volumetric clouds: they make the shot), Soft Shadows and Ground Detail; no Ray Tracing and no Weather
+// Effects (its weather is fixed and fair). The world's own switches as the player has them (WorldLooks, the map's
+// `before`: battle effects, energy shields ...). The upscaler and the effects' quality as a picture starts (StartAfresh).
+void FlightLooks(render::WorldPicture& p, std::function<void(render::World&)>* before) {
+  const LookSettings looks = Looks();
+  p.HoldLooks(true);
+  StartBundles(p);
+  p.SetAtmosphere(looks.atmosphere);
+  p.SetSoftShadows(looks.softShadows);
+  p.SetGroundDetail(looks.groundDetail);
+  *before = [looks](render::World& w) { WorldLooks(w, looks, true); };
+}
 // A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
 // picture starts with, laid on the world shown (the menus', which has them; or a game's being left).
 void LetGoOfGameMap(render::WorldPicture& p) {
@@ -772,7 +787,9 @@ struct GameSession::WindowPicture {
   // screen's film, the "IN TRANSIT" cover), or black fading out over the menus' map just swapped in (it comes in
   // from black, as the read-back way's background does, rather than at once after the seconds of black), or the
   // picture held through a jump back of the replay timeline (Frozen: GameSession::Rewind, dimmed by its tint).
-  enum class Over { None, Card, Fade, Frozen };
+  // (Still: the main menu's still picture, Backdrop::Mode::Still; Cover: black coming over the menu's flight at its
+  // storyboard's end, held until the battle starts over: GameSession::ServeMenuFlight)
+  enum class Over { None, Card, Fade, Frozen, Still, Cover };
   Over over = Over::None;
   float overAlpha = 1;
   std::chrono::steady_clock::time_point fadeFrom{};
@@ -2019,6 +2036,13 @@ void GameSession::MountModRemasters(const std::vector<std::string>& uids) {
 }
 
 void GameSession::PrepareSession(const SessionDescription& session, const std::vector<std::string>& uids) {
+  // (the main menu's flight ends first: one simulation at a time, and the file system's mounts change below; its world
+  // stays shown, hidden under the loading screen, until the game's map is swapped in)
+  if (menuFlight) {
+    menuFlight->Stop();
+    flightGiven_ = flightShows_ = flightCovering_ = false;
+    if (sounds) sounds->StopWorld();
+  }
   MountModRemasters(uids);  // (before the picture opens behind the loading screen: its units' looks are read then)
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session %s: %zu armies, %zu command sources, focus army %d, seed %u, %zu mods",
@@ -2776,6 +2800,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     // Detail are only kept for the map's opening.)
     p.HoldLooks(true);
     StartBundles(p);
+    if (map == MenuFlight::kMap) FlightLooks(p, &before);
     p.SetSeason(render::Season::Summer);
     p.SetTextureDetail(Looks().textureDetail);
     wp.menuBehindGame = true;
@@ -2783,6 +2808,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     // (the menus' background as it always was: the picture's looks as a picture starts, the summer, the player's
     // Texture Detail as the background's own picture had it: Backdrop::Run)
     StartAfresh(p, true);
+    if (map == MenuFlight::kMap) FlightLooks(p, &before);  // (the flight's: held for it)
     p.SetSeason(render::Season::Summer);
     p.SetTextureDetail(Looks().textureDetail);
   }
@@ -2793,6 +2819,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     p.SetLoadDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
   if (!begun && game) StartAfresh(p, true), p.HoldLooks(false);  // (the held looks give way: LetGoOfGameMap)
   if (!begun && wp.menuBehindGame) GameLooksBack(wp);
+  if (!begun && !game && !wp.menuBehindGame && map == MenuFlight::kMap) StartAfresh(p, true), p.HoldLooks(false);  // (the flight's held looks give way)
   if (!begun) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture cannot open %s behind", map.c_str());
     if (!game) failedMenuMap_ = map;
@@ -2812,6 +2839,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
 void GameSession::OpenWindowPicture() {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (!EnsureWindowPicture(false)) return;
+  FollowMenuMode();
   if (!picture_ && load_ == Load::None && menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_)
     BeginWindowMap(false, menuBackdrop->map());
 #endif
@@ -2823,6 +2851,7 @@ void GameSession::OpenWindowPicture() {
 // map begun when it asks for one the picture neither shows nor opens.
 void GameSession::ServeWindowMap() {
   using Kind = WindowPicture::Kind;
+  if (!picture_ && load_ == Load::None) FollowMenuMode();
   if (!picture_ && load_ == Load::None && menuBackdrop && menuBackdrop->Direct() && menuBackdrop->map() != failedMenuMap_) {
     const std::string& want = menuBackdrop->map();
     const WindowPicture& wp = *windowPicture_;
@@ -2846,6 +2875,13 @@ void GameSession::ServeWindowMap() {
   std::string error;
   if (wp.picture.MapFailed(&error)) {
     Logf(LogLevel::Warning, "moho64ui: %s cannot be shown (%s)", wp.pendingMap.c_str(), error.c_str());
+    if (menuFlight && wp.pending == Kind::Menu && wp.pendingMap == MenuFlight::kMap) {
+      menuFlight->Fail("its map cannot be opened (" + error + ")"), flightGiven_ = false;
+      failedMenuMap_.clear();  // (the background falls back to Dusk's map: FollowMenuMode)
+      wp.picture.CancelMap();
+      wp.pending = Kind::None;
+      return;
+    }
     (wp.pending == Kind::Menu ? failedMenuMap_ : wp.failedGameMap) = wp.pendingMap;
     if (wp.pending == Kind::Game) LetGoOfGameMap(wp.picture);
     else wp.picture.CancelMap();
@@ -2856,6 +2892,9 @@ void GameSession::ServeWindowMap() {
   // (one begun behind a game's world: swapped in once that world is let go of, End; the picture's own settings put
   // back as a picture starts first, as BeginWindowMap does for the menus' map otherwise: the game's frames may have
   // given their own meanwhile, and SwapMap keeps the picture's settings and lays the bundles on as they are)
+  // (the flight's map waits for its simulation, handed to it before the swap: ServeMenuFlight)
+  const bool flightMap = menuFlight && wp.pendingMap == MenuFlight::kMap && menuBackdrop && menuBackdrop->mode() == Backdrop::Mode::Flight;
+  if (wp.pending == Kind::Menu && flightMap && !flightGiven_) return;
   if (wp.pending != Kind::Menu || !wp.picture.MapReady() || (wp.menuBehindGame && wp.shows == Kind::Game)) return;
   if (wp.menuBehindGame) StartAfresh(wp.picture, true);
   if (!wp.picture.SwapMap()) return;
@@ -2864,6 +2903,8 @@ void GameSession::ServeWindowMap() {
   wp.menuBehindGame = false;
   Backdrop::Dress(wp.picture);
   wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
+  flightShows_ = false;
+  if (flightMap) StartFlightOnPicture(wp, false);
   const render::WorldPicture::LoadNumbers n = wp.picture.LastLoadNumbers();
   Logf(LogLevel::Info,
        "moho64ui: the menu's background: %s, in the window's picture, ready after %.1f s (open %.1f s, ready %.1f s; %d frames meanwhile; "
@@ -2880,6 +2921,112 @@ void GameSession::GameLooksBack(WindowPicture& wp) {
   wp.picture.HoldLooks(false);
 }
 
+// The main menu's background's mode (Backdrop::Mode) as the player's option has it (Menu Background, live), unless the
+// flight cannot be had this run (no SETONS_R, its simulation or map failed, its frames cost too much): Dusk then, the
+// option kept as chosen. Leaving Flight stops its simulation (its world stays shown until the next map is swapped in).
+void GameSession::FollowMenuMode() {
+  if (!menuBackdrop) return;
+  using Mode = Backdrop::Mode;
+  const int option = Looks().menuBackground;
+  Mode want = option == 1 ? Mode::Dusk : option == 2 ? Mode::Still : Mode::Flight;
+  std::string why;
+  if (want == Mode::Flight && (!menuFlight || menuFlight->state() == MenuFlight::State::Failed)) {
+    want = Mode::Dusk;
+    why = menuFlight ? menuFlight->FailedWhy() : "no flight in this program";
+  }
+  const Mode was = menuBackdrop->mode();
+  if (was == want) return;
+  Logf(LogLevel::Info, "moho64ui: the menu's background: %s -> %s%s%s%s", Backdrop::ModeName(was), Backdrop::ModeName(want), why.empty() ? "" : " (",
+       why.c_str(), why.empty() ? "" : ")");
+  if (was == Mode::Flight && menuFlight) {
+    menuFlight->Stop();
+    flightGiven_ = flightShows_ = flightCovering_ = false;
+    if (sounds) sounds->StopWorld();
+  }
+  menuBackdrop->SetMode(want);
+  still_.clear(), stillW_ = stillH_ = 0, stillShown_ = false;
+}
+
+// Once a frame (PresentToWindow): the flight's simulation begun while no game's session is there (it waits for one to
+// end: one simulation at a time), handed to its map opening behind once it is made (PrepareSession: its models made
+// there; the map's warm frames from the path's first view); a battle made anew (its start, or its loop's) started on
+// the flight's map when that is the world shown (RestartMap); the loop's cover once its storyboard has ended.
+void GameSession::ServeMenuFlight(WindowPicture& wp) {
+  using Kind = WindowPicture::Kind;
+  if (!menuFlight || !menuBackdrop || menuBackdrop->mode() != Backdrop::Mode::Flight || !menuBackdrop->Direct()) return;
+  MenuFlight& f = *menuFlight;
+  const bool noGame = !picture_ && !sim_ && load_ == Load::None;
+  if (!noGame) return;
+  if (!f.onBeat) f.onBeat = [this](const Sim& sim) { windowPicture_->picture.Beat(sim); };  // (on the flight's thread)
+  if (f.state() == MenuFlight::State::Idle && f.Described()) {
+    f.collectSounds = Looks().menuBattleSound;  // (Menu Battle Sound: from each start of the battle)
+    f.sounds = sounds;
+    f.Begin();
+  }
+  f.Poll();  // (its load through: Ready, to be handed over below)
+  if (f.state() != MenuFlight::State::Ready) {
+    if (f.state() == MenuFlight::State::Ended && flightShows_ && !flightCovering_) {
+      flightCovering_ = true;
+      coverFrom_ = std::chrono::steady_clock::now();
+      Logf(LogLevel::Info, "moho64ui: the menu's flight: its end, covered (tick %u)", f.tick());
+    }
+    return;
+  }
+  // (the battle made: to the map opening behind, or started over on the flight's map shown)
+  if (wp.pending == Kind::Menu && wp.pendingMap == MenuFlight::kMap && !flightGiven_) {
+    render::Camera start;
+    if (f.StartView(&start)) wp.picture.SetLoadCamera(start);
+    wp.picture.SetLoadDayAndWeather(Backdrop::kDuskHour, 0, false);  // (its warm frames at the hour it shows: StartFlightOnPicture)
+    if (wp.picture.PrepareSession(*f.sim())) {
+      flightGiven_ = true;
+      Logf(LogLevel::Info, "moho64ui: the menu's flight: its simulation handed to its map opening behind (models made ahead)");
+    }
+  } else if (wp.pending == Kind::None && wp.shows == Kind::Menu && wp.shownMap == MenuFlight::kMap && !flightShows_) {
+    StartFlightOnPicture(wp, true);
+  }
+}
+
+// The flight's battle on the world shown: just swapped in with its simulation handed over (`restart` false), or the
+// map shown started over for a battle made anew (its loop, the option back to Flight). Then as a game's picture is
+// dressed (DressGamePicture: GameStarted, Beat), every army shown (no player's view), nothing of the interface in the
+// world (a cinematic camera's: CineCamera's header), the menu's evening as Dusk has it (Backdrop::Dress); a cut.
+void GameSession::StartFlightOnPicture(WindowPicture& wp, bool restart) {
+  MenuFlight& f = *menuFlight;
+  render::WorldPicture& p = wp.picture;
+  Sim* sim = f.sim();
+  if (!sim) return;
+  if (restart && !p.RestartMap()) {
+    f.Fail("the map shown could not be started over (RestartMap)");
+    return;
+  }
+  flightGiven_ = false;
+  p.SetFocusArmy(0);
+  p.SetLifeBars(false);
+  p.SetSelectionMarks(false);
+  p.SetWorkBars(false);
+  p.GameStarted(*sim);
+  if (render::World* w = p.world()) SkyOnWorld(*w, "beyond", -1, "");  // (the map's edge as a game's default)
+  Backdrop::Dress(p);
+  // (the hour as the picture's day (a session's world takes its light from it, not from Dress's timeOfDay: without it
+  // the flight showed the map's own noon light, 2026-11-09's window check); Dusk's evening, standing still, fair)
+  p.SetDayAndWeather(Backdrop::kDuskHour, 0, false);
+  p.Beat(*sim);
+  p.CameraCut();
+  flightGround_ = p.CineGround();
+  flightShows_ = true;
+  if (flightCovering_) {  // (the loop's cover goes: from black, as the map came in first)
+    flightCovering_ = false;
+    wp.fading = true, wp.fadeFrom = std::chrono::steady_clock::now();
+  }
+  if (flightShownAt_ == std::chrono::steady_clock::time_point{}) flightShownAt_ = std::chrono::steady_clock::now();
+  Logf(LogLevel::Info, "moho64ui: the menu's flight: the battle on the world shown (%s, loop %d)", restart ? "the map started over" : "swapped in",
+       f.loops());
+}
+
+double GameSession::MenuFramePeriod() const {
+  return menuFlight && flightShows_ && !picture_ && !sim_ && load_ == Load::None ? 1.0 / 60.0 : 0.0;
+}
+
 // The picture over the window the card draws this frame (WindowPicture::Over): the interface's when its drawing gave
 // one (CardSink), else the menus' map coming in from black, else none.
 void GameSession::GiveBackdrop(WindowPicture& wp) {
@@ -2889,16 +3036,23 @@ void GameSession::GiveBackdrop(WindowPicture& wp) {
   Over over = Over::None;
   if (card_ && card_->wanted && !card_->pixels.empty()) {
     over = Over::Card, alpha = card_->wantedAlpha;
+  } else if (flightCovering_) {  // (the flight's loop: black over a second, held until it starts over)
+    over = Over::Cover;
+    alpha = static_cast<float>(std::min(1.0, std::chrono::duration<double>(std::chrono::steady_clock::now() - coverFrom_).count()));
   } else if (wp.fading) {
     const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - wp.fadeFrom).count() / 1.5;  // (as Backdrop::Show's)
     if (t >= 1) wp.fading = false;
     else over = Over::Fade, alpha = static_cast<float>(1.0 - t);
+  } else if (stillShown_ && !still_.empty()) {  // (Still: its one picture, where the movie shows)
+    over = Over::Still;
   }
   if (over == Over::Card && (card_->fresh || wp.over != Over::Card)) {
     p.SetBackdrop(card_->pixels.data(), card_->width, card_->height, card_->width, render::WorldPicture::BackdropFit::Stretch, true);
     card_->fresh = false;
-  } else if (over == Over::Fade && wp.over != Over::Fade) {
+  } else if ((over == Over::Fade || over == Over::Cover) && wp.over != Over::Fade && wp.over != Over::Cover) {
     p.SetBackdrop(&wp.black, 1, 1, 1, render::WorldPicture::BackdropFit::Stretch, true);
+  } else if (over == Over::Still && wp.over != Over::Still) {
+    p.SetBackdrop(still_.data(), stillW_, stillH_, stillW_, render::WorldPicture::BackdropFit::Stretch, true);
   } else if (over == Over::None && wp.over != Over::None) {
     p.SetBackdrop(nullptr, 0, 0, 0, render::WorldPicture::BackdropFit::Stretch, true);
   }
@@ -2914,6 +3068,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   ServeWindowMap();
   if (!windowPicture_) return;
   WindowPicture& wp = *windowPicture_;
+  ServeMenuFlight(wp);
   const int w = target.Width(), h = target.Height();
   // (The renderer unions the changed parts until its next frame.)
   GiveLayer(wp.picture, target, changed, &wp.layerW, &wp.layerH);
@@ -2985,7 +3140,99 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     double tick = 0;
     // ([views] a game's split screen or follow camera gone with its game: one view again, also before its world goes)
     if (wp.picture.ViewCount() > 1) wp.picture.SetViews({});
-    const bool world = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
+    const bool movie = wp.shows == Kind::Menu && menuBackdrop && menuBackdrop->TakeView(wp.picture, w, h, &camera, &tick);
+    bool world = movie;
+    // The main menu's flight (ServeMenuFlight): its battle's clock and beats run while the movie shows, and the camera
+    // is its path's at the battle's moment; under the loop's cover, once black, the battle starts over (the world not
+    // drawn until it is back).
+    if (menuFlight && flightShows_ && wp.shows == Kind::Menu && wp.shownMap == MenuFlight::kMap) {
+      const auto now = std::chrono::steady_clock::now();
+      const double dt = flightFrameAt_ == std::chrono::steady_clock::time_point{}
+                            ? 0.0
+                            : std::min(0.25, std::chrono::duration<double>(now - flightFrameAt_).count());
+      flightFrameAt_ = now;
+      MenuFlight& f = *menuFlight;
+      const bool black = flightCovering_ && std::chrono::duration<double>(now - coverFrom_).count() >= 1.05;
+      if (black && f.state() == MenuFlight::State::Ended) {
+        if (sounds) sounds->StopWorld();
+        f.collectSounds = Looks().menuBattleSound;
+        f.Restart();  // (its simulation made anew on its thread: ServeMenuFlight starts it on the map shown when ready)
+        flightShows_ = false;
+      }
+      if (flightShows_) {
+        f.Advance(dt, movie && !flightCovering_);
+        render::Camera cine;
+        if (movie && flightGround_ && f.View(flightGround_, &cine)) {
+          menuBackdrop->FitToMovie(&cine, h);
+          camera = cine;
+          tick = f.Moment();
+          if (f.TakeCut()) wp.picture.CameraCut();
+          if (f.collectSounds && sounds) {  // (Distant: heard from high over the camera, so all of it from afar)
+            render::Vec3 right, up, back;
+            camera.Axes(&right, &up, &back);
+            const render::Vec3 eye = camera.Eye();
+            const float e[3] = {eye.x, eye.y + 400.0f, eye.z}, focus[3] = {camera.target.x, camera.target.y, camera.target.z};
+            const float r[3] = {right.x, 0, right.z};
+            sounds->SetListener(e, focus, r, 2000.0f);
+          }
+        }
+      }
+      if (flightCovering_ && !flightShows_) world = false;
+      if (world && flightShows_) {  // (every 10 s: what it costs)
+        if (flightLogFrom_ == std::chrono::steady_clock::time_point{}) flightLogFrom_ = now;
+        flightLogGpu_ += wp.picture.LastStats().gpuMs, ++flightLogFrames_;
+        flightLogFrameMax_ = std::max(flightLogFrameMax_, dt * 1000.0);
+        flightLogBeatMax_ = std::max(flightLogBeatMax_, f.lastBeatMs());
+        const double span = std::chrono::duration<double>(now - flightLogFrom_).count();
+        if (span >= 10) {
+          Logf(LogLevel::Info,
+               "moho64ui: the menu's flight: tick %u, %d frames in %.1f s (%.1f a second, the longest %.1f ms), the card %.2f ms a frame, "
+               "beats up to %.1f ms",
+               f.tick(), flightLogFrames_, span, flightLogFrames_ / span, flightLogFrameMax_, flightLogGpu_ / flightLogFrames_, flightLogBeatMax_);
+          flightLogFrom_ = now, flightLogGpu_ = 0, flightLogFrames_ = 0, flightLogFrameMax_ = 0, flightLogBeatMax_ = 0;
+        }
+      }
+      // (the card's time of the flight's frames, from 10 s to 15 s after it first showed: over the threshold, Dusk for
+      // the run)
+      if (world && !flightCostChecked_ && flightShownAt_ != std::chrono::steady_clock::time_point{}) {
+        const double since = std::chrono::duration<double>(now - flightShownAt_).count();
+        if (since >= 10 && since < 15) flightGpuMs_ += wp.picture.LastStats().gpuMs, ++flightGpuFrames_;
+        if (since >= 15 && flightGpuFrames_ > 0) {
+          flightCostChecked_ = true;
+          static const double limit = std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS") ? std::atof(std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS")) : 12.0;
+          const double ms = flightGpuMs_ / flightGpuFrames_;
+          Logf(LogLevel::Info, "moho64ui: the menu's flight: the card's time %.2f ms a frame over %d frames (10 to 15 s after it showed; the limit %.1f)",
+               ms, flightGpuFrames_, limit);
+          if (ms > limit) {
+            char why[96];
+            std::snprintf(why, sizeof why, "its frames cost the card %.1f ms, over %.1f", ms, limit);
+            f.Fail(why);
+            flightShows_ = false;
+          }
+        }
+      }
+    }
+    // Still (Backdrop::Mode::Still): one picture of the world from where Dusk starts, taken once (a size), then shown
+    // over the window where the movie shows, the world no longer drawn (GiveBackdrop, from the next frame).
+    if (menuBackdrop && menuBackdrop->mode() == Backdrop::Mode::Still && wp.shows == Kind::Menu && wp.shownMap == Backdrop::kDuskMap) {
+      if (movie && (stillW_ != w || stillH_ != h)) {
+        int mw = 0, mh = 0;
+        std::vector<uint32_t> pixels;
+        const auto t0 = std::chrono::steady_clock::now();
+        if (wp.picture.TakePhoto(camera, w, h, tick, &pixels, &mw, &mh, 1, 8) && mw > 0 && mh > 0) {
+          still_.swap(pixels), stillW_ = mw, stillH_ = mh;
+          wp.over = WindowPicture::Over::None;  // (given anew: GiveBackdrop)
+          Logf(LogLevel::Info, "moho64ui: the menu's background: the still picture taken, %dx%d, %.2f s", mw, mh,
+               std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        } else {
+          stillW_ = w, stillH_ = h;  // (not again at this size)
+        }
+      }
+      stillShown_ = movie && !still_.empty();
+      if (stillShown_) world = false;
+    } else {
+      stillShown_ = false;
+    }
     if (wp.shows != Kind::None) wp.picture.SetWorldShown(world);
     wp.heldWorld = false;
     wp.picture.DrawToWindow(camera, w, h, tick);

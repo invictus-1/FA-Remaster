@@ -1,0 +1,35 @@
+# The main menu's flight over Seton's Clutch Remastered (ours: docs/ui-menuflight.md section 6): the camera's keys in
+# the renderer's CinePath text (render/cinecam.h Parse), one key a line, '#' to the line's end a note (taken out
+# before it is read: app/menu_flight.cpp). The time is the battle's seconds (the simulation's tick / 10: the
+# storyboard's clock, menu_battle.lua), so the camera meets the action where the storyboard puts it.
+#   t: x, y, z, yaw, pitch, fov   (no space before the colon: Parse reads "%f:")
+# x, z the eye's place on the map; y its height OVER THE GROUND (or the water) there; yaw in degrees (0 looks north,
+# toward -z; 90 west, toward -x; 180 south; -90 east); pitch in degrees below the horizon; fov the vertical field of
+# view in degrees. The last key is held until the battle starts over (the cover: black, then the first key again).
+# A key may be tried without a rebuild: MOHO64UI_MENUFLIGHT_PATH="<keys with ; between>".
+# Fitted 2026-11-09 to the battle as the menu runs it (the census lines of a headless run, menu_battle.lua's
+# MENUFLIGHT at tick lines): each key's eye looks at the action's middle then, turned 22 degrees so that the action
+# sits in the left or right third (the main menu's buttons cover the middle); no key lower than 19 over the ground
+# along the spline, at most 37 a second.
+  0: 684, 24, 382, 154, 14, 46      # low behind the UEF line: the Fatboy and the Titans facing the bridge [right third]
+ 12: 640, 20, 492, 71, 16, 44      # beside the UEF line on its south-east flank as it rolls out [right third]
+ 24: 604, 24, 520, 68, 17, 44      # along the line, the bridge ahead [right third]
+ 34: 566, 30, 552, 64, 21, 46      # over the water south-east of the middle: the fronts meet (first loss ~ tick 266) [right third]
+ 46: 526, 36, 566, -12, 27, 48      # south of the middle, looking north into the fight [left third]
+ 60: 470, 46, 560, -63, 31, 50      # round to the south-west: the Monkeylord and the Megalith in the middle [left third]
+ 75: 452, 44, 498, -128, 31, 48      # the west side, looking east: the gunships come in [left third]
+ 88: 478, 40, 462, -122, 28, 46      # north-west of the middle: the Monkeylord's last stand [right third]
+100: 562, 36, 420, -128, 32, 44      # north of the UEF side: the Percivals coming in (tick 900-1100) [right third]
+114: 600, 34, 500, 96, 29, 46      # behind the Percivals, the Bricks across the middle [right third]
+130: 610, 130, 590, 20, 47, 55      # high and wide over the water and the bridge [left third]
+145: 622, 34, 500, 12, 26, 44      # the third wave: the Titans by the Fatboy [left third]
+160: 584, 40, 530, 23, 34, 46      # the Cybran push on the Fatboy (tick 1600) [left third]
+170: 664, 36, 366, -4, 25, 48      # over to the UEF launcher [right third]
+174: 654, 38, 350, -21, 28, 48      # on the launcher as the nuke leaves (launch ~ tick 1729) [right third]
+179: 646, 46, 350, -49, -21, 52      # following it up
+188: 520, 190, 500, 138, 35, 54      # high over the bridge, after it, toward the Cybran rear base
+198: 452, 96, 620, 148, 34, 54      # waiting over the Cybran base [right third]
+206: 468, 110, 606, 148, 31, 56      # the blast (impact ~ tick 2047) [right third]
+216: 480, 140, 596, 149, 24, 56      # its cloud rising [right third]
+228: 470, 280, 620, 122, 37, 58      # rising over its cloud
+240: 430, 600, 680, 103, 72, 60      # into the clouds: the battle starts over under the cover

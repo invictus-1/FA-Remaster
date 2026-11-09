@@ -717,7 +717,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // sync" here is the screen's rate as a pace, not a true wait for it.
     const FramePacing& pacing = Pacing();
     // (Shown by the renderer with vertical sync, its present waits for the screen: no wait here.)
-    const double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
+    double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
+    if (hooks.framePeriod) period = std::max(period, hooks.framePeriod());
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();

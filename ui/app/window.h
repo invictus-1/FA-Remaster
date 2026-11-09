@@ -150,6 +150,9 @@ struct WindowHooks {
   std::function<void()> waitForFrame;
   // True while the host runs ahead (--fast-forward): the frame times count only after it.
   std::function<bool()> catchingUp;
+  // The shortest frame the host wants now, in seconds (0: none of its own): the frame rate's pace goes no faster (the
+  // main menu's flight: 60 frames a second at most, GameSession::MenuFramePeriod). Unset: none.
+  std::function<double()> framePeriod;
   // True while the window holds its picture (the replay timeline's jump back, GameSession::Rewind): the state shown is
   // neither stepped nor drawn and gets no input (a resize waits for the next state shown, which it then reaches); the
   // interface's layer is cleared once and only what eachFrame draws goes into it (the host's note), the renderer showing
