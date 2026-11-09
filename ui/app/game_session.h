@@ -646,6 +646,7 @@ class GameSession {
   bool keptShown_ = false;  // (the kept frame is the picture over the window this frame: GiveBackdrop)
   void TakeKeptFrame(WindowPicture& wp, const render::Camera& camera, double tick, int width, int height);
   uint32_t KeptKey() const;  // (the camera path's and the looks' the frame is of)
+  int MenuSeason(const std::string& map) const;  // (render::Season's value: the flight map's the player's Season)
   void GameLooksBack(WindowPicture& wp);  // (the menus' map begun behind a game's world, not had: ServeWindowMap)
   // A game played (not a replay) is over (SessionEndGame, or the simulation's EndGame: the victory, the defeat), no
   // beat running.

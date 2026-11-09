@@ -26,7 +26,7 @@
 160: 584, 40, 530, 23, 34, 46      # the Cybran push on the Fatboy (tick 1600) [left third]
 170: 664, 36, 366, -4, 25, 48      # over to the UEF launcher [right third]
 174: 654, 38, 350, -21, 28, 48      # on the launcher as the nuke leaves (launch ~ tick 1729) [right third]
-179: 646, 46, 350, -49, -21, 52      # following it up
+179: 646, 50, 352, -49, -4, 52       # following it up (2026-11-09: pitch -21 -> -4, the silo kept in the frame as the trail rises)
 188: 520, 190, 500, 138, 35, 54      # high over the bridge, after it, toward the Cybran rear base
 198: 452, 96, 620, 148, 34, 54      # waiting over the Cybran base [right third]
 206: 468, 110, 606, 148, 31, 56      # the blast (impact ~ tick 2047) [right third]

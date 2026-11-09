@@ -1432,7 +1432,7 @@ void GameSession::KeepMapForRewind() {
 // water, scenery; the game's armies and blueprints come with GameStarted as for any game); R2, what stays is what is
 // fixed when the map opened: ray tracing's shaders, the texture detail, the season, the anti-aliasing (the picture's
 // scene samples). So only when those are the game's: the flight's map opened with the player's ray tracing and Texture
-// Detail (FlightLooks; its season the summer, so a player's Autumn opens the map anew), and the window's picture not to be
+// Detail (FlightLooks) and the player's Season (MenuSeason: an Autumn player's menu flies over autumn), and the window's picture not to be
 // made anew for the game (the Graphics API and the anti-aliasing as it was made with: EnsureWindowPicture). Any other
 // map, or a setting changed since the flight's map opened: opened again as before. MOHO64UI_FLIGHT_REOPEN=1: always
 // opened again (the measure's other half). Ours, not the original's: its menu's background is a film.
@@ -2972,7 +2972,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     p.HoldLooks(true);
     StartBundles(p);
     if (map == MenuFlight::kMap) FlightLooks(p, &before);
-    p.SetSeason(render::Season::Summer);
+    p.SetSeason(static_cast<render::Season>(MenuSeason(map)));
     p.SetTextureDetail(Looks().textureDetail);
     wp.menuBehindGame = true;
   } else {
@@ -2980,7 +2980,7 @@ void GameSession::BeginWindowMap(bool game, const std::string& map) {
     // Texture Detail as the background's own picture had it: Backdrop::Run)
     StartAfresh(p, true);
     if (map == MenuFlight::kMap) FlightLooks(p, &before);  // (the flight's: held for it)
-    p.SetSeason(render::Season::Summer);
+    p.SetSeason(static_cast<render::Season>(MenuSeason(map)));
     p.SetTextureDetail(Looks().textureDetail);
   }
   const bool begun = p.BeginMap(map, before);
@@ -3236,6 +3236,13 @@ void GameSession::TakeKeptFrame(WindowPicture& wp, const render::Camera& camera,
 
 // (FNV-1a over the camera path's text and the looks the flight's frames take from the player: another path, or a look
 // changed, and the frame kept would not be the flight's first)
+// The season a menu map opens in: the flight's map the player's own Season (2026-11-09, the lead: so an Autumn player's
+// menu shows autumn and a skirmish on SETONS_R still takes the flight's map over, the season being fixed at the map's
+// opening, renderer R2); the dusk background's and any other menu map the summer, as before.
+int GameSession::MenuSeason(const std::string& map) const {
+  return static_cast<int>(map == MenuFlight::kMap && Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);
+}
+
 uint32_t GameSession::KeptKey() const {
   uint32_t h = 2166136261u;
   auto add = [&h](const void* data, size_t n) {
@@ -3244,7 +3251,8 @@ uint32_t GameSession::KeptKey() const {
   if (menuFlight) add(menuFlight->pathText().data(), menuFlight->pathText().size());
   const LookSettings looks = Looks();
   const int parts[] = {looks.atmosphere, looks.softShadows, looks.groundDetail, looks.originalLook, looks.textureDetail, looks.richGround,
-                       looks.fidelity, looks.shadows, looks.bloom, looks.photoLook, static_cast<int>(looks.upscale * 100), looks.SceneSamples()};
+                       looks.fidelity, looks.shadows, looks.bloom, looks.photoLook, static_cast<int>(looks.upscale * 100), looks.SceneSamples(),
+                       looks.season};
   add(parts, sizeof parts);
   return h;
 }
