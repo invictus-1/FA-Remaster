@@ -118,6 +118,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.hullAir = glow >= 1.0f ? 1.0f : 0.5f;
   w.hullEvenColours = w.hullShare = glow < 1.0f;
   w.post.sharpen = std::max(0.0f, std::min(1.0f, looks.sharpen));  // (Sharpen)
+  w.hazeMist = std::max(0.0f, std::min(2.0f, looks.hazeMist));     // (Haze & Mist, render [hazeamt]: 1 as made)
   w.remasteredGate = looks.remasteredGate;                         // (Remastered Gateway)
   w.ghostLook = looks.ghostLook ? 1 : 0;                           // (Ghost Look: see-through, or solid as before)
   w.guidePull = looks.guideOverGrass ? 1.2f : 0.0f;                // (Guide over Grass)
@@ -3186,7 +3187,8 @@ void GameSession::ServeMenuFlight(WindowPicture& wp) {
 // the flight's dusk, 2026-11-09: "a bit more clearer if anything"; measured at 1080p, tick 500, the far land's darkest
 // twentieth 0.210 at all of it, 0.195 at 0.65, 0.164 at none: 0.65 could hardly be seen). Always from the amount the
 // world was opened with (`opened`, kept at the menu's swap), so a flight started again does not thin it twice. The
-// player's own Haze & Mist amount takes this over once the renderer has one (ui/REQUESTS.md, renderer 50).
+// player's own Haze & Mist amount (LookSettings::hazeMist) is on top of it: the renderer multiplies a cinematic
+// camera's least haze by World::hazeMist, so the flight is the player's amount times this share, in a game the amount.
 // MOHO64UI_FLIGHT_HAZE: another share, for the window checks' pictures side by side.
 static void FlightHaze(render::World* w, bool taken, float opened) {
   if (!w || !taken) return;

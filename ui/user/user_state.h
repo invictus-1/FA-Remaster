@@ -663,6 +663,11 @@ struct LookSettings {
   bool stormCells = true, starryNight = true;
   int shieldBend = 1;
   float unitGlow = 0.75f, sharpen = 0.5f;
+  // Haze & Mist (ours; Chris on the menu flight's dusk, 2026-11-09: "mist/haze should be an option we can adjust like
+  // unit glow"; the renderer's World::hazeMist, its answer to request 50): how much of the clear weather's haze and
+  // mist the modern look shows, 1 as made, 0 clear air, up to 2. The weather's own fog, storm and snowfall stay, and
+  // the original look has none of it. A taste setting: no preset level sets it. Console remaster_haze_mist 0..2.
+  float hazeMist = 1.0f;
   // Colour Vision (ours, the Interface tab; Chris, 2026-10-23): the armies' colours as the player SEES them replaced by
   // a palette that stays apart for a kind of colour blindness: 0 Off (the original's colours), 1 Deuteranopia,
   // 2 Protanopia, 3 Tritanopia, 4 High Contrast (session_bindings.cpp, ColorVisionColor). Only what is shown changes:

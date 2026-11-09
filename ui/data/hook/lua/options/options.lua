@@ -739,6 +739,23 @@ local looks = {
         },
     },
     {
+        -- the renderer's World::hazeMist (request 50; Chris, 2026-11-09: "an option we can adjust like unit glow").
+        -- A taste setting: no preset level sets it (remasterPresets), and the original look has no haze of ours.
+        title = "Haze & Mist",
+        key = 'remaster_haze_mist',
+        tip = "How much haze and mist the air holds in clear weather: the mist on low ground, the dust in the air, the haze the far land fades into. 100: as made. 0: clear air. 200: twice as thick. Fog, storms and snowfall are the weather's own and stay. The menu's flight follows it too.",
+        type = 'slider',
+        default = 100,
+        set = function(key, value, startup)
+            ConExecute("remaster_haze_mist " .. tostring(value / 100))
+        end,
+        custom = {
+            min = 0,
+            max = 200,
+            inc = 10,
+        },
+    },
+    {
         -- the renderer's Post::sharpen
         title = "Sharpen",
         key = 'remaster_sharpen',
@@ -854,7 +871,7 @@ local remasterSections = {
                                  'remaster_temporal_upscale', 'remaster_frame_generation' } },
     { "Preset", { 'remaster_preset', 'remaster_look' } },
     { "Sky & Light", { 'remaster_atmosphere', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky',
-                       'remaster_soft_shadows', 'remaster_ray_tracing' } },
+                       'remaster_haze_mist', 'remaster_soft_shadows', 'remaster_ray_tracing' } },
     { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak' } },

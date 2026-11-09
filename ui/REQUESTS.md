@@ -1197,6 +1197,9 @@ cleaner:
 When either lands, say so and we switch to it.
 
 ### 52. MountFromInitFile: the init file's `protocols` table too (2026-11-01, not blocking)
+**DONE 2026-11-09** (engine, main 4dc89612: the `protocols` parameter after `skip`). Taken the same day: `InitProtocols`
+is gone from `ui/app/main.cpp`, `&cfg.protocols` is passed; `mount_list`'s listing has the same protocol lines as before.
+
 From the interface chat. Request 1 is in use: moho64ui mounts through `MountFromInitFile` (`script/mount.h`).
 - **What:** the init file's `protocols` table (the schemes `OpenURL` may open: http, https, mailto, ... in FAF's
   init files). The original reads it in the same run of the init file as `path` and `hook`
@@ -2459,6 +2462,11 @@ From the interface chat; your recommendation (A), Chris's yes. Design: docs/ui-m
 - R4: once the ui has the session, scenario and path files, your cost measurement at 4K (full looks vs menu look).
 
 ### 50. A player's "Haze & Mist" amount, like Unit Glow (2026-11-09, Chris's ask, not blocking)
+**DONE 2026-11-09** (renderer: `World::hazeMist`, 0..2, 1 as made, per frame, the modern look's; viewer `--haze-mist`).
+Taken the same day: the slider "Haze & Mist" (`remaster_haze_mist`, 0..200 in steps of 10, 100 unless chosen) in Sky &
+Light, in no preset level; `WorldLooks` sets it each frame. The menu flight keeps its own 0.4 share of the cinematic
+camera's haze and the renderer multiplies that by the player's amount (0.65 could hardly be told from all of it).
+
 From the interface chat. Chris, on the menu flight's dusk (2026-11-09): "A bit more clearer if anything; I think
 mist/haze should be an option we can adjust like unit glow. Helps the both of us since I can fine tune it exactly the
 way I want, same with anyone else."

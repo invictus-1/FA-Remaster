@@ -154,13 +154,13 @@ finish of the picture:
 |---|---|---|
 | Display & Performance | Frame Rate, Low Latency, Graphics API, Upscaling (FSR 1), Temporal Upscaling (FSR 3), Frame Generation | 6 |
 | Preset | Remastered Preset, Look | 2 |
-| Sky & Light | Atmosphere, Cloud Layout, Storm Clouds, Night Sky, Soft Shadows, Ray Tracing | 6 |
+| Sky & Light | Atmosphere, Cloud Layout, Storm Clouds, Night Sky, Haze & Mist, Soft Shadows, Ray Tracing | 7 |
 | Ground & Weather | Rich Ground on Remastered Maps, Ground Detail, Tracks in Snow, Weather Effects, Season | 5 |
 | Water | Water Ripples, Ocean Glitter, Sea Sparkle, Shore Soak | 4 |
 | Effects & Battle | Remastered Effects, Effects Quality, Shell Tracers, Battle Effects, Scorch Glow, Energy Shields, Shield Bending, Remastered Gateway | 8 |
 | Units & Readability | Close-up Detail, Unit Glow at Night, Unit Glow Colour, Hidden Unit Outlines, Ghost Look, Guide over Grass, Cloak Look, Stealth Veil | 8 |
 | Picture & Camera | Photographic Look, Sharpen, Cinematic Lens Blur | 3 |
-|  |  | **42** |
+|  |  | **43** |
 
 The six of "Display & Performance" are exactly the ones no preset level touches by design (the hook's own comment:
 "choices of smoothness and screen, not looks"); they sit above the preset, so its tip "Sets the remastered looks
@@ -225,7 +225,7 @@ so presets and the palette are untouched. It is part of the recommendation as it
   PICTURE & CAMERA    Photographic Look, Sharpen [slider], Cinematic Lens Blur
 ```
 
-Remastered tab: 1 + 8 headers + 42 options = 51 rows (about 5 pages; "Go to Section", the wheel and the palette
+Remastered tab: 1 + 8 headers + 43 options = 52 rows (about 5 pages; "Go to Section", the wheel and the palette
 get anywhere in one step).
 
 Video tab: FAF's 12 rows as FAF has them, then
@@ -305,7 +305,7 @@ label too wide in the game's title font at 146 px, "Remaster", or the five label
   'remaster_ocean_glitter'` (the same steps as 222-238). The "vertical sync" check (122) stays "option Video".
 - New `ui/tests/options_tabs.lua` (front end, `--lua`): open the dialog (`CreateDialog(GetFrame(0))`);
   5 tab buttons, each inside the dialog's Left..Right, neighbours overlapping 10 px, each label's width <= its
-  button's width - 12; the lit Bitmap as wide as its button; Remastered tab clicked: 51 rows; the preset's combo set
+  button's width - 12; the lit Bitmap as wide as its button; Remastered tab clicked: 52 rows; the preset's combo set
   to Low through its `OnClick` -> `currentOptionsSet` (read as the palette reads controls) has Sharpen 0, Shore Soak 0,
   Atmosphere 0 (the preset works on its new page); "Go to Section" Water -> the grid's top row is the Water header;
   Video tab: its last row's button clicks over to the Remastered tab; Cancel. A picture with `--screenshot` for

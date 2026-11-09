@@ -104,7 +104,9 @@ do
         "Display & Performance|Preset|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
     check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
     check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
-    check("51 rows: Go to Section, 8 headers, 42 options", table.getn(items), 51)
+    check("52 rows: Go to Section, 8 headers, 43 options", table.getn(items), 52)
+    check("Haze & Mist is on the tab, set by no preset level (a taste setting)", tostring(remaster.remaster_haze_mist ~= nil) .. " " ..
+        tostring(O.RemasterPresetValues(4).remaster_haze_mist) .. " " .. tostring(O.RemasterPresetValues(0).remaster_haze_mist), "true nil nil")
     local missing = {}
     for key in O.RemasterPresetValues(4) do
         if not remaster[key] then table.insert(missing, key) end
@@ -206,6 +208,9 @@ check("Shield Bending: Subtle unless chosen, of Off, Subtle and Full", video.rem
     video.remaster_shield_bend.default .. " " .. table.getn(video.remaster_shield_bend.custom.states), "1 3")
 check("Unit Glow at Night: a slider, 75 of 100 unless chosen", video.remaster_unit_glow and
     video.remaster_unit_glow.type .. " " .. video.remaster_unit_glow.default .. " " .. video.remaster_unit_glow.custom.max, "slider 75 100")
+check("Haze & Mist: a slider, 100 of 0..200 in steps of 10 unless chosen", video.remaster_haze_mist and
+    video.remaster_haze_mist.type .. " " .. video.remaster_haze_mist.default .. " " .. video.remaster_haze_mist.custom.min .. " " ..
+    video.remaster_haze_mist.custom.max .. " " .. video.remaster_haze_mist.custom.inc, "slider 100 0 200 10")
 check("Sharpen: a slider, 50 of 100 unless chosen", video.remaster_sharpen and
     video.remaster_sharpen.type .. " " .. video.remaster_sharpen.default .. " " .. video.remaster_sharpen.custom.max, "slider 50 100")
 do
@@ -215,6 +220,7 @@ do
         " " .. tostring(l.unitDetail) .. " " .. tostring(l.cloudMix) .. " " .. tostring(l.stormCells) .. " " .. tostring(l.starryNight),
         "true true true true true true true true true true true true")
     check("Shield Bending Subtle, the units' glow 0.75, sharpening 0.5", l.shieldBend .. " " .. l.unitGlow .. " " .. l.sharpen, "1 0.75 0.5")
+    check("the haze and mist as made", l.hazeMist, 1)
 end
 video.remaster_ocean_glitter.set('remaster_ocean_glitter', 0, false)
 video.remaster_ghost_look.set('remaster_ghost_look', 0, false)
@@ -234,6 +240,17 @@ video.remaster_sharpen.set('remaster_sharpen', 0, false)
 check("the sliders at 100 and 0: the earlier glow, no sharpening", moho64ui_Looks().unitGlow .. " " .. moho64ui_Looks().sharpen, "1 0")
 video.remaster_unit_glow.set('remaster_unit_glow', 75, false)
 video.remaster_sharpen.set('remaster_sharpen', 50, false)
+video.remaster_haze_mist.set('remaster_haze_mist', 0, false)
+check("Haze & Mist at 0 in the menu: clear air", moho64ui_Looks().hazeMist, 0)
+video.remaster_haze_mist.set('remaster_haze_mist', 200, false)
+check("at 200: twice as thick", moho64ui_Looks().hazeMist, 2)
+ConExecute("remaster_haze_mist 7")
+check("the console's remaster_haze_mist stays inside 0..2", moho64ui_Looks().hazeMist, 2)
+ConExecute("remaster_haze_mist 0.6")
+ConExecute("remaster_haze_mist")
+check("and the bare name keeps the amount", string.format("%.2f", moho64ui_Looks().hazeMist), "0.60")
+video.remaster_haze_mist.set('remaster_haze_mist', 100, false)
+check("back at 100: as made", moho64ui_Looks().hazeMist, 1)
 ConExecute("remaster_shield_bend full")
 check("the console's remaster_shield_bend takes the words", moho64ui_Looks().shieldBend, 2)
 ConExecute("remaster_shield_bend subtle")

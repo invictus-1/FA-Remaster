@@ -184,15 +184,6 @@ std::string SystemFolder(const std::string& name) {
 #endif
 }
 
-int l_SHGetFolderPath(lua_State* L) {
-  std::string name = luaL_checkstring(L, 1);
-  auto it = g_opts->folders.find(name);
-  std::string v = it != g_opts->folders.end() ? it->second : SystemFolder(name);
-  if (!v.empty() && v.back() != '/' && v.back() != '\\') v += '\\';
-  lua_pushstring(L, v.c_str());
-  return 1;
-}
-
 // A path below one of the system's folders (the --folder answers first, as SHGetFolderPath's).
 std::string BelowFolder(const std::string& name, const std::string& below) {
   auto it = g_opts->folders.find(name);
@@ -228,49 +219,10 @@ void AnswerSystemFolders(Options& o) {
     o.folders.emplace(name, SystemFolder(name));  // (a --folder answer stays)
 }
 
-// The init file's `protocols` table: the schemes OpenURL may open (http, https, mailto, ... in FAF's). READ (FA exe):
-// the original takes it from the same run of the init file as `path` and `hook`
-// (StartupHelpers::DISK_SetupDataAndSearchPaths 0x459de0: the file run at 0x45a05e, "path" read at 0x45a0e7, "hook"
-// at 0x45a3a8, "protocols" at 0x45a45f, each of its values added to a set at 0x10a7bf0 by 0x45b670). The engine's
-// MountFromInitFile (script/mount.h), which mounts for us, does not hand that table out (ui/REQUESTS.md, engine 52):
-// until it does, the file runs once more here, in a state of its own over an empty file system, so nothing is
-// mounted, with its LOG / WARN / SPEW / print lines kept out of the log (the first run wrote them; the engine's own
-// debug notes on the file writes it blocks, FAF's shader cache clean-up, come twice). About 60-90 ms (2026-11-01,
-// the lab's init file; the mounting itself 5.5-7 s).
-std::vector<std::string> InitProtocols(const std::string& initFile) {
-  std::vector<std::string> protocols;
-  Vfs nothing;
-  ScriptState init(ScriptState::Kind::Init, &nothing);
-  init.onPrint = [](const std::vector<std::string>&) { return true; };
-  lua_State* L = init.L();
-  for (const char* quiet : {"LOG", "WARN", "SPEW", "_ALERT"}) {
-    lua_pushcfunction(L, [](lua_State*) -> int { return 0; });
-    lua_setglobal(L, quiet);
-  }
-  std::string dir = initFile;
-  size_t s = dir.find_last_of("/\\");
-  dir = s == std::string::npos ? "." : dir.substr(0, s);
-  lua_pushstring(L, dir.c_str());
-  lua_setglobal(L, "InitFileDir");
-  lua_pushcfunction(L, l_SHGetFolderPath);
-  lua_setglobal(L, "SHGetFolderPath");
-  auto src = hostfs::ReadFile(initFile);
-  if (!src || !init.DoString(*src, "@" + hostfs::DisplayPath(initFile))) return protocols;
-  lua_getglobal(L, "protocols");
-  if (lua_istable(L, -1)) {
-    for (int i = 1;; ++i) {
-      lua_rawgeti(L, -1, i);
-      if (!lua_isstring(L, -1)) {
-        lua_pop(L, 1);
-        break;
-      }
-      protocols.push_back(lua_tostring(L, -1));
-      lua_pop(L, 1);
-    }
-  }
-  lua_pop(L, 1);
-  return protocols;
-}
+// The init file's `protocols` table (the schemes OpenURL may open: http, https, mailto, ... in FAF's) comes from the
+// engine's MountFromInitFile, read in the same run of the init file as `path` and `hook`, as the original does
+// (StartupHelpers::DISK_SetupDataAndSearchPaths 0x459de0, "protocols" at 0x45a45f; ui/REQUESTS.md, engine 52, in
+// main 4dc89612). Until 2026-11-09 the file ran a second time here for it (60-90 ms, its notes twice).
 
 }  // namespace
 
@@ -414,9 +366,8 @@ int main(int argc, char** argv) {
     }
   }
   // The init file's `path` mounted and its `hook` taken by the engine's function, as its host does (script/mount.h;
-  // ui/REQUESTS.md, engine 1); its `protocols` read by ours (InitProtocols).
-  if (!MountFromInitFile(o.init, o.folders, vfs, cfg.hookDirs)) return 1;
-  cfg.protocols = InitProtocols(o.init);
+  // ui/REQUESTS.md, engine 1), its `protocols` in the same run (engine 52).
+  if (!MountFromInitFile(o.init, o.folders, vfs, cfg.hookDirs, nullptr, &cfg.protocols)) return 1;
   for (const auto& [folder, at] : modFixes) {
     if (vfs.Mount(folder, at)) Logf(LogLevel::Info, "moho64ui: our mod fix %s from %s", at.c_str(), hostfs::DisplayPath(folder).c_str());
     else Logf(LogLevel::Warning, "moho64ui: %s could not be mounted", folder.c_str());

@@ -317,7 +317,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
         "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
-        "remaster_menu_background", "remaster_menu_sound"};
+        "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -408,6 +408,9 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "sharpen");
   lua_pushnumber(L, looks.sharpen);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "hazeMist");
+  lua_pushnumber(L, looks.hazeMist);
   lua_rawset(L, -3);
   lua_pushstring(L, "photoLook");
   lua_pushnumber(L, looks.photoLook);
@@ -1510,6 +1513,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty())
         (key == "REMASTER_UNIT_GLOW" ? looks.unitGlow : looks.sharpen) =
             std::max(0.0f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
+      return;
+    }
+    if (key == "REMASTER_HAZE_MIST") {  // (Haze & Mist: 0 clear air, 1 as made, up to 2; the bare name keeps it)
+      if (!value.empty()) looks.hazeMist = std::max(0.0f, std::min(2.0f, static_cast<float>(std::atof(value.c_str()))));
       return;
     }
     if (key == "REMASTER_SCORCH") {  // (Scorch Glow: soft or bright; 1 / 0 too)
