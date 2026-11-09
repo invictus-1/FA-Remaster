@@ -1,4 +1,5 @@
 #include "lights.h"
+#include "marks.h"
 
 #include <algorithm>
 #include <array>
@@ -176,7 +177,8 @@ const std::vector<Vec3>* Lights::Ramp(const std::string& path) {
 }
 
 void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from) {
-  if (size <= 0 || seconds <= 0) return;
+  // (the same test as Add's: a place or size that is not a number reaches the grid's bounds and the lights' buffer)
+  if (!(size > 0) || !(seconds > 0) || !std::isfinite(size) || !std::isfinite(seconds) || !Finite(position)) return;
   if (onFlash && from.explosion) onFlash(ramp, position, size, born, seconds, from);  // (volume explosions)
   else if (VolfxLog* log = VolfxLog::Get(); log && onFlash) log->Declined(true, size, "no explosion");  // (MOHO64_DEBUG_VOLFX)
   flashes_.push_back({Ramp(ramp), position, size, born, seconds, from.explosion});
@@ -249,7 +251,9 @@ void Lights::Build(View* view) {
         for (int x = a; x <= b; ++x) ++cellCount_[static_cast<size_t>(z) * static_cast<size_t>(cols) + static_cast<size_t>(x)];
     }
     bool over = false;
-    for (uint32_t n : cellCount_) over = over || n > static_cast<uint32_t>(kMostInSquare);
+    uint32_t fullest = 0;
+    for (uint32_t n : cellCount_) over = over || n > static_cast<uint32_t>(kMostInSquare), fullest = std::max(fullest, n);
+    Mark("small lights in one square of the grid", fullest, kMostInSquare);
     return over;
   };
   merged = 0;

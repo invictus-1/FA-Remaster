@@ -180,7 +180,7 @@ bool ParseDds(std::string_view file, DdsImage* out, std::string* error) {
 
   // some files say 0 mips, some claim more than they hold: keep the levels that are really there
   const int layers = out->layers;
-  mips = std::max(1, mips);
+  mips = std::clamp(mips, 1, 15);  // (16384 has 15 levels; a damaged count must not run the loop below for ever)
   const size_t available = file.size() - header;
   auto chainBytes = [&](int levels, bool source) {
     size_t n = 0;

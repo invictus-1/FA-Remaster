@@ -756,6 +756,7 @@
 #include <vector>
 
 #include "ambient_occlusion.h"
+#include "marks.h"
 #include "bp_reader.h"
 #include "cpu_times.h"
 #include "hitch_log.h"  // [hitches]
@@ -824,6 +825,7 @@ struct Options {
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
+  bool marks = false;                   // --marks: how full each fixed room got, printed at the end (marks.h)
   int timingsFrom = 2;                  // --timings-from
   std::string timingsCsv;               // [rbench] --timings-csv
   int fightScan = 0;                    // [rbench] --fight-scan
@@ -1194,6 +1196,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
     else if (a == "--timings") o->timings = true;
+    else if (a == "--marks") o->marks = true;
     else if (a == "--hitch-log") {  // [hitches] [ms]
       o->hitchLog = 25;
       if (i + 1 < argc && (std::isdigit(static_cast<unsigned char>(argv[i + 1][0])) || argv[i + 1][0] == '.')) o->hitchLog = atof(argv[++i]);
@@ -1931,6 +1934,13 @@ int main(int argc, char** argv) {
     return 2;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
+  // (--marks: printed when main ends, after the world and the device, which tell what they still held, are gone)
+  render::Marks().wanted = opt.marks;
+  struct MarksAtEnd {
+    ~MarksAtEnd() {
+      if (render::Marks().wanted) render::PrintMarks(stdout);
+    }
+  } marksAtEnd;
   gSceneSamples = opt.fsr3 ? 1 : opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;  // (FSR 3: one sample a pixel)
   std::string error;
   // an automatic run (--frames) must give the same picture whatever the person at the machine is

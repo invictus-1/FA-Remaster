@@ -180,7 +180,7 @@ into a texture array at load, as the terrain does: wrapping and rotating each pa
 or in its mips); one wake sheet scaled by the beam to start (the Kelvin wedge's angle is the same at every speed and size),
 a second only if small fast hulls read wrong.
 
-## 52. To the INTERFACE track: frame generation is silently off with anti-aliasing on (2026-11-03, Chris's big test)
+## 52. To the INTERFACE track: frame generation is silently off with anti-aliasing on (2026-11-03, Chris's big test; DONE 2026-11-06: the ui gives one sample a pixel while Frame Generation is on, its tip says so, off in every preset)
 
 **What:** `Looks::SceneSamples()` (ui/user/user_state.h:567) gives 1 only under FSR 3 (`temporalUpscale`). The renderer makes
 frames between only with one sample a pixel (render/world.cpp:1164, `frameGeneration && gSceneSamples == 1`), as FSR 3's
@@ -482,7 +482,7 @@ copying numbers out of a markdown file (and a later map's atlas brings its own).
 dry cells (`"dry_cells": ["grass_dry_a", "grass_dry_b"], "dry_share": 0.7` on grass_dry, `"dry_only": true` on
 sand_dry). Your names and form are fine as long as they say the same; tell me what you chose.
 
-## 34. To the INTERFACE track: a sixth setting, "Frame Generation" (2026-10-17, not blocking)
+## 34. To the INTERFACE track: a sixth setting, "Frame Generation" (2026-10-17, not blocking; DONE: Remastered tab, key remaster_frame_generation, default off)
 
 **Who asks:** the renderer, for Chris (his list of 2026-10-17, item 7: FSR 3 frame generation, "yeah lets add it").
 
@@ -701,7 +701,7 @@ picture's ground, its height texture and the culling bounds follow. No change to
 
 **Blocking:** the fix of Chris's picture; nothing else.
 
-## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking)
+## 24. To the INTERFACE track: two launchers to watch big units die (2026-10-13, Chris's wish, not blocking; DONE: the ui's three launchers, walkers, ships, Izanagi)
 
 **Who asks:** Chris, through the renderer: "for the large ship sinking and walker we will have to ask
 UI chat to see if he could have a bat where two battleships are fighting so we can see the ships

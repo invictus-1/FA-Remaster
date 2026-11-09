@@ -1,4 +1,5 @@
 #include "wildlife.h"
+#include "marks.h"
 
 #include <algorithm>
 #include <cmath>
@@ -954,6 +955,7 @@ bool Wildlife::Update(const View& view, const Camera& camera, float time, float 
     }), heard_.end());
     std::stable_sort(heard_.begin(), heard_.end(), [](const Noise& a, const Noise& b) { return a.loudness > b.loudness; });
     std::vector<Noise> merged;
+    size_t places = 0;  // (--marks: the places the noises came from, also those past the 64 kept)
     for (const Noise& n : heard_) {
       bool joined = false;
       for (Noise& m : merged)
@@ -962,8 +964,10 @@ bool Wildlife::Update(const View& view, const Camera& camera, float time, float 
           joined = true;
           break;
         }
+      if (!joined) ++places;
       if (!joined && merged.size() < 64) merged.push_back(n);
     }
+    Mark("birds: places of noise in a frame", places, 64);
     heard_.clear();
     for (Flock& f : flocks_)
       for (const Noise& n : merged) Scatter(f, n, now_);

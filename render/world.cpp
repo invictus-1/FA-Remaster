@@ -1,4 +1,5 @@
 #include "world.h"
+#include "marks.h"
 
 #include "cpu_times.h"
 
@@ -4016,6 +4017,7 @@ void World::PreparePlants() {
         }
   }
   // (more in the field than the pass takes, PlantLife::kMostBoxes: the nearest to the field's middle are kept)
+  Mark("plants: pressing boxes in the field", boxes.size() / 8, PlantLife::kMostBoxes);
   if (boxes.size() > 8 * static_cast<size_t>(PlantLife::kMostBoxes)) {
     const float mx = 0.5f * (square[0] + square[2]), mz = 0.5f * (square[1] + square[3]);
     std::vector<std::pair<float, uint32_t>> order(boxes.size() / 8);

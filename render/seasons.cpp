@@ -79,6 +79,7 @@ cbuffer Leaves : register(b1) {
   float4 motion;   // x how fast a leaf sinks (world units a second); y how fast a gust of 1 carries it; z the share of the places in use
   float4 mapInfo;  // x, y the map's width and height; z world units of the heights' largest value; w the water's level
   float4 area;     // (on the ground) x, y the first square's corner (world x, z); z a square's size; w squares a side
+  float4 centre;   // (on the ground) x, y the middle the field thins out from (world x, z): the camera's, not the squares'
   float4 trees[TREES * 2];  // each: its foot (x, y, z) and height; its crown's radius, where the crown begins (a share of the height), its number
 };
 Texture2D<float> heightMap : register(t0);
@@ -246,7 +247,7 @@ LOut GroundLeaf(uint id, float now) {
   float3 p = float3(xz.x, ground + 0.004 + hop, xz.y);
   // shown: in and out at its cycle's ends, fewer toward the square's edge
   float half_ = area.z * area.w * 0.5;
-  float shown = saturate(since / 0.6) * saturate((period - since) / 0.8) * saturate((1 - length(anchor - (area.xy + half_)) / half_) * 4);
+  float shown = saturate(since / 0.6) * saturate((period - since) / 0.8) * saturate((1 - length(anchor - centre.xy) / half_) * 4);
   float spin = (LeafRand(LeafHash(c + 8)) > 0.5 ? 1 : -1) * (2 + 3 * LeafRand(LeafHash(c + 12)));
   float yaw = LeafRand(LeafHash(c + 11)) * 6.2831853 + spin * u * dur;
   float roll = moving ? 1.1 * sin(6.2831853 * hops * u) : 0.06, pitch = moving ? 0.5 * cos(6.2831853 * hops * u) : 0;
@@ -310,7 +311,7 @@ float4 PS(LOut i) : SV_Target {
 )hlsl";
 
 struct LeafConstants {
-  float info[4], motion[4], mapInfo[4], area[4];
+  float info[4], motion[4], mapInfo[4], area[4], centre[4];
   float trees[FallingLeaves::kTreesMost * 2][4];
 };
 
@@ -441,6 +442,11 @@ bool FallingLeaves::Prepare(const View& view, const Camera& camera, float rain, 
     c.area[1] = std::floor((middle.z - reach) / kSquare) * kSquare;
     c.area[2] = kSquare;
     c.area[3] = static_cast<float>(side);
+    // (the fade's middle: the true one. From the squares' own middle, which steps a square at a time, the leaves at the
+    // field's rim came and went in rows as a slow pan crossed each line.)
+    c.centre[0] = middle.x;
+    c.centre[1] = middle.z;
+    c.centre[2] = c.centre[3] = 0;
     groundPlaces = side * side * kPerSquare;
     plants_ = plants;
     groundNow_ = true;
