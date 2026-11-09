@@ -909,8 +909,9 @@ DeepTracks::Stamp DeepTracks::CraterStamp(const Crater& c) const {
   s.z = c.z;
   s.heading = c.heading;
   const float bowl = 0.32f * c.size;
-  const float steep = 0.2f + 0.1f * std::clamp((c.size - 0.2f) / 0.8f, 0.0f, 1.0f);  // (a scuff shallow, a hole deep)
-  const float depth = std::min(2 * bowl * steep, 1.0f);
+  // (a scuff shallow, a hole deep; [dents] a big shell's deeper still, Chris 2026-11-08)
+  const float steep = 0.2f + 0.1f * std::clamp((c.size - 0.2f) / 0.8f, 0.0f, 1.0f) + 0.06f * std::clamp((c.size - 1.0f) / 2.0f, 0.0f, 1.0f);
+  const float depth = std::min(2 * bowl * steep, 1.6f);
   s.halfX = s.halfZ = bowl;
   s.trough = depth * c.kept;
   s.berm = depth * 0.33f * c.kept;

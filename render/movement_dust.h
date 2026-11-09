@@ -95,7 +95,9 @@ class MovementDust {
   // `windAloft`. Along the way the trees sway and the clouds drift (mesh_renderer.cpp, sky.cpp); a map has none of its
   // own. A host may set either.
   float wind[2] = {0.915f * 0.6f, 0.403f * 0.6f};
-  float windAloft[2] = {0.915f * 2.0f, 0.403f * 2.0f};
+  // ([trailfix] Chris's 2026-11-08 test: "air trails slightly off centre", a bomber's "trail in the wrong direction" - the
+  // trail drifted 2 units a second downwind, so it lay beside the aircraft and, after a turn, pointed another way: 0.6)
+  float windAloft[2] = {0.915f * 0.6f, 0.403f * 0.6f};
   // The dust drawn under the units (over the scenery: the scene's models drawn in two parts, as for range rings), so
   // that it never hides a unit; false: over everything with the spray, as the blasts' dust is (viewer
   // --movement-dust-over: to compare).

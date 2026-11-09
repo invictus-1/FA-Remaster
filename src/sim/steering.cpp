@@ -1344,7 +1344,6 @@ void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xa
     if (wtrap::On()) trap.emplace(sim.tick(), "steering");
     sim.RunTurns("steering", all.size(), [&](size_t i) {
       Unit* u = all[i];
-      if (u->destroyQueued) return;
       wtrap::Turn trapTurn(u);
       tl_steerTurn = u;
       SteeringTick(sim, u);
@@ -1355,9 +1354,14 @@ void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xa
     sim.inSteeringStage = false;
     return;
   }
+  // (A unit whose Destroy is queued still steers in this beat: CAiSteeringImpl::OnTick 0x5d32b0 has no such test, and the
+  // steering task goes only with the unit at the destroy step (or with KillCleanup for a killed one); its own
+  // CheckCollisions does ask (vt+0x2c, 0x5d378e). Seen (probe v3840j_44_nav / _col): 4v4_4 6465, army 0's ship 0x48,
+  // handed to army 6 at the end of 6464 (ChangeUnitArmy: the new 0x600050, the old one destroy-queued), resolves its
+  // record against army 6's 0x60003c at 6465 (0x5d2e9e) and gives that one the brake record (type 5, its spline mode 4
+  // from 6466); ours passed over the old ship and 0x60003c drove on.)
   for (size_t i = 0; i < all.size(); ++i) {
     Unit* u = all[i];
-    if (u->destroyQueued) continue;
     wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
     SteeringTick(sim, u);
   }

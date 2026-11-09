@@ -543,7 +543,14 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
     // already stepped in this beat is aimed at where the beat began with it (ours: its held shape).
     const Vec3& cp = e->shapeHeld ? e->shapePos : e->position;
     const Quat& cq = e->shapeHeld ? e->shapeOri : e->orientation;
-    if (e->kind == Entity::Kind::Projectile && e->blueprint) return Add(cp, RotateM(cq, e->bpCenter));
+    // A prop the same (0x679d19: the entity's blueprint, +0x6c: CollisionOffsetX, SizeY x 0.5 + CollisionOffsetY,
+    // CollisionOffsetZ turned by the committed orientation and added to the place; no scale). Seen: setons_1 6486, army
+    // 0's ACU (uel0001, RightZephyr) shooting the prop 0x2ff0017e: the original's solver (probe v3840i_s1_aim) aims at
+    // (480.8622, 19.46288, 544.7604), ours at the prop's origin (480.865265, 19.4129715, 544.76001); our laser flew 7 mm
+    // under the terrain in its 6493 step and hit there (impact 6494, one OnImpact Random too many), the original's hit
+    // the terrain at 6497 (probe v3840i_s1_impact).
+    if ((e->kind == Entity::Kind::Projectile || e->kind == Entity::Kind::Prop) && e->blueprint)
+      return Add(cp, RotateM(cq, e->bpCenter));
     return cp;
   }
   return NaNVec();
@@ -3266,6 +3273,7 @@ void KillCleanupTick(Sim& sim) {
     UnitMotion& m = u->motion;
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
     EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
+    AirSteeringGone(sim, u);  // (the steering's dtor stops an aircraft's motion where it stands)
     m.spline.clear();
     ++m.splineVersion;
     m.splineIdx = 0;
@@ -3752,8 +3760,16 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 // UpdateAttacker 0x5f3450
 void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (u->weapons.empty()) return;
-  if (!(u->desiredTarget.type == target.type && u->desiredTarget.entityId == target.entityId &&
-        (target.type != 2 || u->desiredTarget == target))) {
+  // The test is CAiTarget 0x5e2d40 on the attacker's desired target (vt+0x24) and the task's: both must hold an entity
+  // (the weak link +4) and the two entities' ids (+0x68) must agree; a target without an entity, a GROUND target, is
+  // never the same, so each call gives it to the attacker again (SetDesiredTarget 0x5d75b0: every weapon's target
+  // cleared, 0x5d7625). Seen (probe v3840j_44_mm): 4v4_4 6267, army 1's artillery 0x100058 on a ground Attack it cannot
+  // reach (6266: no ballistic solution, canReach 0): the acquire's code 6 takes a unit (FindBestEnemy, 0x5d94e9), the
+  // attack task's chase is in reach and calls this, and SetDesiredTarget clears it again (0x5d762a), so the beat's aim
+  // has no target and canReach is 1 for the next acquire (code 1, the ground target, engaged): the original solves
+  // only on even beats and stays. Ours found the same target, kept the unit target, failed to solve every beat and
+  // walked off at 6269.
+  if (!(target.type == 1 && u->desiredTarget.type == 1 && u->desiredTarget.entityId == target.entityId)) {
     SetDesiredTarget(sim, u, target);
     t.adata->listening = true;
     u->attackStateSignal = false;

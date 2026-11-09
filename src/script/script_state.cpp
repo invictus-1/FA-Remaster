@@ -38,6 +38,15 @@ int ScriptRename(const char* from, const char*) {
   Logf(LogLevel::Debug, "script file rename blocked: %s", from);
   return -1;
 }
+// A Lua error with no pcall around it (a host call into the state outside a protected call) ends the program in
+// luaD_throw right after this; without it the exit said nothing (ui 2026-11-09: a lua_getglobal of a scenario global
+// tripping FAF's unknown-global guard gave exit code 1 and an empty log). Only writes the message; changes nothing
+// in a run that has no such error.
+int ScriptPanic(lua_State* L) {
+  const char* msg = lua_tostring(L, -1);
+  Logf(LogLevel::Error, "unprotected script error (the program ends): %s", msg ? msg : "(error object is not a string)");
+  return 0;
+}
 }  // namespace
 
 ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
@@ -50,6 +59,7 @@ ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
   }();
   (void)hooked;
   L_ = lua_open();
+  lua_atpanic(L_, ScriptPanic);
   luaopen_base(L_);
   luaopen_table(L_);
   luaopen_io(L_);

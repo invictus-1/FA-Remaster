@@ -324,13 +324,21 @@ bool FlagOn(const Entity* e, int type) {
   return e->intel && e->intel->has[type] && e->intel->on[type];
 }
 
-// ReconCanDetect 0x5c18f0 + GetReconFlags 0x5c9600 + ApplyReconCounters 0x5cb460 (mask 0xF)
-uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
+// ReconCanDetect 0x5c18f0 + GetReconFlags 0x5c9600 + ApplyReconCounters 0x5cb460. `mask` is ReconCanDetect's second
+// argument: the kinds of intel asked about. GetReconFlags hands it to each army's recon (0x5cb360 tests it bit by bit,
+// 0x5cb3a6 / 0x5cb3fd / 0x5cb41e / 0x5cb438, before it looks at a grid), and an ally's unit answers the mask itself
+// (0x5c194d). So a question about line of sight alone (mask 8: ReconTick's gone tests 0x5c0d17 / 0x5c0f73, ReconGetBlips
+// 0x5c1835) never sees the omni bit, and the counters' "omni sees through everything" return (0x5cb47c) cannot keep the
+// sight bit that a counter takes away. Seen (probe v3840j_64_blip): 6v6_4 6725, army 5's gone test of the blip
+// 0x30400043 of army 4's destroyed water structure: the original's answers "not seen" (the blip stays MaybeDead, army 6's
+// DestroyIfUnused at 6726 keeps it and army 5's torpedoes go on homing on it); ours, asked with every kind, had omni
+// there, returned before the counters and let go of the blip, which army 6's pass then destroyed.
+uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p, uint8_t mask) {
   const auto& armies = sim.armies();
   const Army* us = armies[static_cast<size_t>(a)].get();
   // 0x5c18fd: nothing outside the playable rect (margin 0; the whole map if our army may use it, vt+0xb8)
   if (sim.map() && !sim.IsWithin(p.x, p.z, 0.0f, Sim::UseWholeMap(us))) return 0;
-  if (e->army && combat::Relation(e->army, us) == 2) return 0xF;
+  if (e->army && combat::Relation(e->army, us) == 2) return mask;
   bool under = Underwater(e);
   const bool sonar = SonarCounts(e, under);
   PointCells pc(p);
@@ -340,6 +348,7 @@ uint8_t CanDetect(Sim& sim, int a, const Entity* e, Vec3 p) {
   for (size_t j = 0; j < armies.size() && j < dbs.size(); ++j)
     if (static_cast<int>(j) != a && combat::Relation(armies[j].get(), us) == 2)
       f |= NewReconFor(dbs[j], pc, under, sonar);
+  f &= mask;
   if (f == 0) return 0;
   if (f & 4) return f;
   bool unit = e->kind == Entity::Kind::Unit;
@@ -526,7 +535,7 @@ void UpdateFake(Sim& sim, lua_State* L, int a, ReconBlip* b) {
     const Vec3& c = sim.coordsPending && s->lastPosTick == sim.tick() ? s->lastPosition : s->position;
     at = Vec3{b->offset.x + c.x, b->offset.y + c.y, b->offset.z + c.z};
   }
-  uint8_t flags = CanDetect(sim, a, b, at);
+  uint8_t flags = CanDetect(sim, a, b, at, 0xF);
   flags |= old & 0x30;
   if (flags & 8) flags |= 0x30;
   const Army* us = sim.armies()[static_cast<size_t>(a)].get();
@@ -563,7 +572,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     bool mobile = b ? b->mobile : true;
     bool allied = u->army && combat::Relation(u->army, sim.armies()[static_cast<size_t>(a)].get()) == 2;
     Vec3 p = b ? b->position : u->position;
-    if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p) & 8)) {
+    if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p, 8) & 8)) {
       if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);  // a structure confirmed gone (0x5c0da6 / 0x5c0f91)
       DeleteEntry(sim, L, a, u);
       if (b) DestroyIfUnused(sim, b);
@@ -589,7 +598,7 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
         bool mobile = b ? b->mobile : true;
         bool allied = u->army && combat::Relation(u->army, us) == 2;
         Vec3 p = b ? b->position : u->position;
-        if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p) & 8)) {
+        if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p, 8) & 8)) {
           if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);
           DeleteEntry(sim, L, a, u);
           if (b) DestroyIfUnused(sim, b);
@@ -671,11 +680,11 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
     }
     if (parRecon.Pool(ahead.size())) {
       sim.workers().ParallelFor("recon detect ahead", ahead.size(), 64, [&](size_t i0, size_t i1, int) {
-        for (size_t i = i0; i < i1; ++i) ahead[i].f = CanDetect(sim, a, ahead[i].u, ahead[i].at);
+        for (size_t i = i0; i < i1; ++i) ahead[i].f = CanDetect(sim, a, ahead[i].u, ahead[i].at, 0xF);
       });
       useAhead = true;
     } else if (snapshot) {
-      for (IntelState::Ahead& x : ahead) x.f = CanDetect(sim, a, x.u, x.at);
+      for (IntelState::Ahead& x : ahead) x.f = CanDetect(sim, a, x.u, x.at, 0xF);
       useAhead = true;
     }
   }
@@ -698,15 +707,15 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       const Vec3& at = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
       uint8_t f;
       if (snapshot) {
-        f = snapAnswer ? ahead[next - 1].f : CanDetect(sim, a, u, at);
+        f = snapAnswer ? ahead[next - 1].f : CanDetect(sim, a, u, at, 0xF);
       } else if (useAhead && st.luaCalls == luaMark && next < ahead.size() && ahead[next].u == u &&
           vm::SameBits(ahead[next].at, at)) {
         f = ahead[next++].f;
-        if (parRecon.mode == ParMode::kVerify && f != CanDetect(sim, a, u, at))
+        if (parRecon.mode == ParMode::kVerify && f != CanDetect(sim, a, u, at, 0xF))
           IntelParMismatch("RECON", sim.tick(), "unit (main loop index)", next - 1);
       } else {
         useAhead = false;
-        f = CanDetect(sim, a, u, at);
+        f = CanDetect(sim, a, u, at, 0xF);
       }
       bool inUse = (u->recon[a] & kReconInUse) != 0;
       if (f && !inUse) {
@@ -1064,6 +1073,21 @@ void IntelExactUpdate(Sim& sim, Unit* u) {
   const Vec3& c = sim.coordsPending && u->lastPosTick == sim.tick() ? u->lastPosition : u->position;
   const Vec3 p{c.x, c.y + 1, c.z};
   for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), true);
+}
+
+// The Unit ctor calls Entity::AdvanceCoords 0x678f10 twice (0x6a5c59, 0x6a5c5f) after SetCurrentLayer (0x6a5b6e, whose
+// OnLayerChange from 'None' runs FAF's EnableIntel('Vision')) and after its CIntel was made (0x6a5860); AdvanceCoords
+// runs CIntel::ForceUpdate 0x76e490 (0x67907e..0x6790cb): UpdatePos 0x76f1e0 for every handle at the unit's place, 1 up,
+// with the 6-tick test. A handle already on (lastTick 0) takes its clock phase here, in the beat the unit is made (the
+// raster itself was made by EnableIntel at the same place). Seen (probe v3840j_64_iu + v3840j_64_blip): 6v6_4, army 5's
+// torpedo bombers made at 6364 by ChangeUnitArmy (a sim callback at the beat's end, after AdvanceCoords): the original's
+// vision clock of 0x500031 runs 6364 + 6k (its circle moved at 6724 and was 37.8 from army 4's dead water structure at
+// 6725, so army 5's gone test let its blip be MaybeDead and the torpedoes kept homing on it); ours took its phase at the
+// next beat's AdvanceIntelCoords (6365 + 6k: the circle stood 30.1 from it, army 5 saw it gone and dropped the blip).
+void IntelCtorForceUpdate(Sim& sim, Unit* u) {
+  if (!u || !u->intel) return;
+  const Vec3 p = SourcePos(u);
+  for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), false);
 }
 
 namespace {

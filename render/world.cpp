@@ -1878,6 +1878,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const bool day = timeOfDay >= 0 && look == Look::Modern && haveMap_;
     // ([mistpatch] in a thick fog the low band's haze and the haze under the clouds thicken by a quarter of it, World::mistPatches:
     // the fog lies in the mist's layer's patches; over all the ground they were the most of the grey close to the camera)
+    sunlight.cloudMix = volumetricClouds ? clouds.mix : 0.0f;  // [cloudmix2]
     sunlight.Begin(&view, day && driftingShadows, day && lightShafts && volumetricFog && !sidePicture, placing, mistNow, wet,
                    lowFog && mistPatches ? 0.25f * fog : fog,
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
@@ -4038,7 +4039,9 @@ float World::ShotDentSize(const std::string& weapon) {
           if (v["Label"].StringOr(std::string()) == label) w = &v;
       if (w) {
         const float radius = static_cast<float>((*w)["DamageRadius"].NumberOr(0)), damage = static_cast<float>((*w)["Damage"].NumberOr(100));
-        size = radius > 0 ? 0.85f * radius * std::clamp(0.01f * damage, 0.25f, 1.0f) : std::min(0.15f + damage / 800, 0.6f);
+        // ([dents] Chris, 2026-11-08: "too small", sized by the weapon - a big shell's hole much larger than small arms':
+        // 1.3 x its radius at full damage, up to 1.4 x for the heaviest; a direct hit's from 0.3 to 1.2 by its damage)
+        size = radius > 0 ? 1.3f * radius * std::clamp(0.01f * damage, 0.35f, 1.4f) : std::min(0.3f + damage / 500, 1.2f);
       }
     }
   }

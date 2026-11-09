@@ -87,7 +87,8 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
       *error = "the game could not be launched: " + why;
       return false;
     }
-    if (setup_.modUids.empty()) {  // the configuration's own mods
+    std::vector<std::string> locations;  // [streamplay] (where its mods lie in the game's file system)
+    {
       lua_getfield(L, -1, "GameMods");
       for (int i = 1; lua_istable(L, -1); ++i) {
         lua_rawgeti(L, -1, i);
@@ -96,9 +97,41 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
           break;
         }
         lua_getfield(L, -1, "uid");
-        if (lua_isstring(L, -1)) e.uids.push_back(lua_tostring(L, -1));
+        if (setup_.modUids.empty() && lua_isstring(L, -1)) e.uids.push_back(lua_tostring(L, -1));  // (the configuration's own mods)
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "location");
+        if (lua_isstring(L, -1)) locations.push_back(lua_tostring(L, -1));
         lua_pop(L, 2);
       }
+      lua_pop(L, 1);
+    }
+    // [streamplay] the engine's own mods the session names and no mounted folder holds (src/app/main.cpp, MountSessionMods)
+    std::vector<std::string> roots = setup_.ourMods;
+    std::string dir = moho::hostfs::ProgramFolder();
+    if (dir.empty()) dir = ".";
+    roots.push_back(dir + "/mods");
+    roots.push_back(dir + "/../mods");
+    for (const std::string& loc : locations) {
+      if (loc.empty() || e.vfs.Exists(loc + "/mod_info.lua")) continue;
+      const size_t slash = loc.find_last_of('/');
+      const std::string name = slash == std::string::npos ? loc : loc.substr(slash + 1);
+      if (name.empty() || name == "." || name == "..") continue;
+      bool mounted = false;
+      for (const std::string& r : roots)
+        if (moho::hostfs::IsFile(r + "/" + name + "/mod_info.lua")) {
+          mounted = e.vfs.Mount(r + "/" + name, loc);
+          break;
+        }
+      fprintf(stderr, "render: simulation: the session's mod %s %s\n", loc.c_str(), mounted ? "mounted from the engine's own mods" : "is in no mounted folder: it plays without it (--our-mods)");
+    }
+    // [streamplay] the played game's orders
+    if (!setup_.stream.empty()) {
+      auto orders = moho::hostfs::ReadFile(setup_.stream);
+      if (!orders) {
+        *error = "cannot read the command stream " + setup_.stream;
+        return false;
+      }
+      e.replayData = std::move(*orders);
     }
     mapPath_ = e.session.header.map;
     e.vfs.SetMemoryFile(moho::kGamePrefsPath, moho::PreGameDataPrefs(moho::SessionMapFolder(e.session.header)));
@@ -143,7 +176,8 @@ bool LiveSim::Load(std::string* error) {
     *error = "the session could not be started (see the simulation's log)";
     return false;
   }
-  if (e.session.replay) e.stream = std::make_unique<moho::CommandStream>(e.replayData, e.session.header.streamOffset);
+  if (e.session.replay || !e.replayData.empty())  // ([streamplay] or a played session's record)
+    e.stream = std::make_unique<moho::CommandStream>(e.replayData, e.session.header.streamOffset);
 
   frames_.ReadArmies(*e.sim, e.vfs);
   if (onStarted) onStarted(*e.sim);

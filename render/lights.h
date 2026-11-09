@@ -106,6 +106,11 @@ class Lights {
 
   float strength = 3.0f;      // how bright a flash of full ramp colour is
   float reach = 3.0f;         // a flash's radius, in sizes of its glow
+  // [calmflash] (Chris's 11-08 test, item 12: the picture dimming and brightening at night) the farthest a flash that is
+  // no explosion's reaches (a warp-in's, a factory's, a structure begun: the game draws these as a glow of `size`, and
+  // a warp-in's is 35 - three times that lit everything within 105 of a commander, the whole picture lifting into a grey
+  // wash for two seconds and falling back). Explosions keep their reach (a nuke lights the land round it).
+  float calmFlashReach = 24.0f;
   float night = 1;            // what flashes are multiplied by this frame (the night's dimming of the game's effects)
   // [nightlight] (World::steadyLamps) A beam that had a shadow map the frame before keeps it while no other is clearly nearer
   // to what the camera looks at (a quarter nearer), so that two lamps about as near do not take it in turns, the one
@@ -144,6 +149,7 @@ class Lights {
     float size;
     double born;
     float seconds;
+    bool explosion;  // ([calmflash] else its reach is held to calmFlashReach)
   };
   const std::vector<Vec3>* Ramp(const std::string& path);
 

@@ -179,7 +179,7 @@ void Lights::Flash(const std::string& ramp, Vec3 position, float size, double bo
   if (size <= 0 || seconds <= 0) return;
   if (onFlash && from.explosion) onFlash(ramp, position, size, born, seconds, from);  // (volume explosions)
   else if (VolfxLog* log = VolfxLog::Get(); log && onFlash) log->Declined(true, size, "no explosion");  // (MOHO64_DEBUG_VOLFX)
-  flashes_.push_back({Ramp(ramp), position, size, born, seconds});
+  flashes_.push_back({Ramp(ramp), position, size, born, seconds, from.explosion});
 }
 
 void Lights::Build(View* view) {
@@ -192,7 +192,8 @@ void Lights::Build(View* view) {
     const float t = static_cast<float>((now_ - f.born) / static_cast<double>(f.seconds)) * static_cast<float>(ramp.size() - 1);
     const size_t i = std::min(static_cast<size_t>(t), ramp.size() - 1), j = std::min(i + 1, ramp.size() - 1);
     const Vec3 color = Lerp(ramp[i], ramp[j], t - static_cast<float>(i)) * (strength * night);
-    if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, f.size * reach, color, 1, {}, -2, {}});
+    const float radius = f.explosion ? f.size * reach : std::min(f.size * reach, calmFlashReach);  // [calmflash]
+    if (color.x + color.y + color.z > 0.003f) lights_.push_back(Light{f.position, radius, color, 1, {}, -2, {}});
   }
   count = static_cast<int>(lights_.size());
   ViewConstants& c = view->constants;

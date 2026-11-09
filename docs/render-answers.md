@@ -4,6 +4,56 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 113: the commanders' warp-in (2026-11-09)
+
+**Q2, where the glow's colour comes from.** In the modern look the warp-in is drawn as a personal shield, because the
+unit's mesh is set to `<ID>_PhaseShield_mesh` and the name says "shield" (world.cpp, the `shielded` unit).
+- The look is the unit's own model, a glow along its outline, and your shield lattice sheet (`shieldPatterns`, one
+  layer per faction) over it.
+- The colour is fixed per FACTION, neither the army colour nor the lookup: UEF (0.25, 0.5, 1.0), Aeon (0.35, 1.0,
+  0.75), Cybran (1.0, 0.2, 0.12), Seraphim (0.95, 0.85, 0.55). That matches Chris's "UEF blue, Cybran red".
+- `/effects/entities/PhaseShield/PhaseShieldLookup.dds` is not read in the modern look.
+
+**Q3, its own lookup.** Yes. The warp-in and a commander's personal shield share the mesh (the UEF commander's
+shield upgrade is `UEL0001_PhaseShield` too), so the renderer tells them apart by time: the warp-in is the first
+seconds of the game (the unit made at the start, the script's warp thread).
+- Proposal: you deliver a warp-in sheet as its own file, e.g. `effects/entities/PhaseShield/<faction>/warpin.dds` with
+  the lattice sheet's layout. The renderer draws the warp-in with it, still tinted by faction unless the sheet carries
+  colour (say which), and personal shields keep theirs.
+- Tell me the file name and whether it is coloured, and I build it.
+
+**Q4, the pose.** A bone the simulation moves (aimed, recoiling, animated) is drawn where the simulation puts it, which
+is FAF's skeleton where FAF ships one. A bone at rest is drawn by our model's own rest. So the Medusa's barrel and
+muzzle, which the sim aims, would follow FAF's bone places and could sit about 0.39 off our mesh. I'll look at it in
+the in-game check and send a picture.
+
+## To ui, request 49: the menu's live flight over SETONS_R (2026-11-08)
+
+**R1, done:** `CinePath::loop` (cinecam.h, [cineloop]). It makes a closed path: the last key is the first pose again
+(its yaw may be a whole turn on). Past the last key the flight goes round again, and it passes the seam at an even
+speed: the slope there comes from the keys either side of the seam, as at any key. Set `loop = true`, or put a key
+`loop` in the text Parse reads (e.g. `"0:...;10:...;20:<the first pose again>;loop"`). It needs three keys or more.
+
+**R2, which look setters act per frame** (safe for a menu preset; they do not stick into a game opened after):
+- Act per frame, set before or after Open: SetAtmosphere, SetSoftShadows, SetWeatherEffects, SetGroundDetail,
+  SetFrameGeneration, SetUpscale, SetHiddenOutlines, SetRemasteredEffects, SetEffectsQuality, SetStrategicIcons,
+  SetSelectionMarks, SetLifeBars, SetWorkBars.
+- Fixed at Open: SetRayTracing and SetRayReflections (their shaders and the scene are built when the map opens; set
+  later, they take effect from the next map), SetTextureDetail, SetSeason, and anything about anti-aliasing (the
+  scene's samples).
+- So for the menu, take the per-frame ones: SetAtmosphere(false) and SetSoftShadows(false) are the big savings
+  (about 1.5-3 ms at 4K), then SetUpscale(0.75).
+- Leave ray tracing as the player has it, so the RestartMap hand-over keeps the right shaders.
+- No SetMenuLook for now: your own preset over these setters is as good, and keeps the choice in the ui. Ask again if
+  you'd rather have one call.
+
+**R3:** RestartMap is valid with a different session on the same map. The world keeps only the map's own things (ground,
+water, scenery). The units, armies, effects and the rest of the game are cleared, and the next session's armies and
+blueprints come as for any game (PrepareSession before the swap, then GameStarted / AdoptArmies, request 47).
+Models of kinds the menu never had are made as they come. What stays is what is fixed at Open (above).
+
+**R4:** waits for your files; the viewer can play them (`--session` with `--orders` and `--cine-path`).
+
 ## To visuals, section 110: the Cybran commander URL0001 in a game (2026-11-08)
 
 Looked at in a session on SETONS_R with Chris's looks, by day (12 h) and by night (23 h). Five commanders of army 1 stood
