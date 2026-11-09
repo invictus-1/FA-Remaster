@@ -2482,6 +2482,24 @@ way I want, same with anyone else."
   about 0.65 ("a bit clearer"). Until then I only lower the flight's own cinematicHaze a little.
 - Tell me the name and the range you settle on; a viewer flag to try it is welcome for your own checks.
 
+### 51. Without dxcompiler.dll, Direct3D 12's fallback never finishes the horizon's pixel shader (2026-11-09, a finding, not blocking)
+From the interface chat. A side build of moho64ui had no `dxcompiler.dll` beside it (my build script did not copy
+it; it does now). Its first world frame on SETONS_R never came: the window "Not Responding", one core busy for more
+than ten minutes until I closed the program. Sampled three times, minutes apart, always the same stack:
+`World::Begin` (world.cpp:2052) -> `World::PrepareAhead` (world.cpp:3896) -> `render::Horizon::Make`
+(horizon.cpp:645 / 650) -> `D3D12Device::CreatePipeline` (gfx_d3d12.cpp:2912) -> `MakePipelineWith` (:2734) ->
+`CompileFxc` (:2665), target ps_5_1, inside d3dcompiler_47. With the dll beside the exe the same build, same test,
+runs in one minute. The stderr line of gfx_d3d12.cpp:1007 was printed, nothing else.
+- What a player gets: a release or a hand-made build that lacks the dll shows a frozen window at the first map
+  frame (the menu's flight included), with no word why.
+- Yours to decide: (a) make that shader compile under the old compiler too (a loop it unrolls for ever? the other
+  shaders passed before it), or (b) refuse the fallback aloud: no dll -> one clear message and no world picture (or
+  exit), since a fallback that hangs is worse than none; or keep the fallback for the simple look only.
+- My side, done: `ui/build_ui.py` copies the dll into a side build's folder and warns when there is none. Queued
+  with the runner's gates: the suite, the quick checks and the launch check refuse an exe without the dll beside it.
+- How to see it: move `dxcompiler.dll` away from a viewer's or moho64ui's folder and open SETONS_R (modern look).
+  The sampler I used (read only): `%TEMP%/ui-fix2/scripts/sample.py <pid> 262144`, offsets through llvm-symbolizer.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
