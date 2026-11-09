@@ -1159,6 +1159,7 @@ int l_weapon_CreateProjectile(lua_State* L) {
   if (dbgProj)
     Logf(LogLevel::Info, "wproj %u unit %u   made %u %s destroy queued %d", sim.tick(), u->id, p ? p->id : 0,
          w->projBp->id.c_str(), p ? static_cast<int>(p->destroyQueued) : -1);
+  if (p) p->muzzleBone = bone;  // (for hosts that draw; the simulation does not read it)
   if (!p || p->destroyQueued) return PushProj(L, p);
   if (w->bp->muzzleVelocity != 0) {
     Vec3 tp = TargetPos(sim, w->target, false);
