@@ -1,6 +1,6 @@
 -- The Options dialog with our Remastered tab (Chris, 2026-11-08; docs/ui-options-layout.md): five tab buttons narrowed
 -- to fit the panel (ui/data/hook/lua/ui/dialogs/options.lua), the chosen one's lit picture as wide, each label inside
--- its button; the Remastered tab's 51 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
+-- its button; the Remastered tab's 52 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
 -- Soak too: a slider and a toggle) and showing Custom once one of them is changed by hand, "Go to Section" scrolling to
 -- a header, Video's "Show" button choosing the Remastered tab, a hover on one of our titles showing its tip; OK saving
 -- what the preset set. In the front end:
@@ -111,7 +111,7 @@ ForkThread(function()
     local row, grid = Row('remaster_goto_section')
     local lines = nil
     if grid then _, lines = grid:GetScrollValues('Vert') end
-    check("51 rows on the page", lines, 51)
+    check("52 rows on the page", lines, 52)
     check("Go to Section first, at the top", grid and TopRow(grid), 1)
     check("it shows the first section", Item('remaster_goto_section').control:GetItem(), 1)
 
@@ -172,14 +172,14 @@ ForkThread(function()
     Choose('remaster_goto_section', 8)
     local _, _, vmin, vmax = grid:GetScrollValues('Vert')
     local picture = Index(items, function(item) return item.type == 'header' and item.title == "Picture & Camera" end)
-    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 51 and picture > vmin and picture <= vmax, true)
+    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 52 and picture > vmin and picture <= vmax, true)
 
     -- Video: the game's own rows, then our header and the Show button, which chooses the Remastered tab
     Button(buttons, 'video'):OnClick()
     local show = Item('remaster_show_tab').control
     check("the Video tab has the Show button", show ~= nil and show._button ~= nil, true)
     local _, videoLines = Row('remaster_show_tab'):GetParent():GetScrollValues('Vert')
-    check("Video's rows: the game's 14 (its 17 less the three we leave out), our header and the button", videoLines, 16)
+    check("Video's rows: the game's 12 (its 17 less the five we leave out), our header and the button", videoLines, 14)
     show._button:OnClick()
     WaitSeconds(0.2)
     check("Show chooses the Remastered tab", Button(buttons, 'remaster'):IsHidden() and not Button(buttons, 'video'):IsHidden(), true)

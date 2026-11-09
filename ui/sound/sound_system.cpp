@@ -832,6 +832,14 @@ bool SoundSystem::Pause(const std::string& category, bool pause) {
   return true;
 }
 
+int SoundSystem::ResumeAll() {
+  int n = 0;
+  for (size_t i = 0; i < paused_.size(); ++i)
+    if (paused_[i]) paused_[i] = false, ++n;
+  if (n) UpdateCategories();
+  return n;
+}
+
 bool SoundSystem::OpenDevice() {
   if (!device_) device_ = OpenOutputDevice(&mixer_);
   return device_ != nullptr;

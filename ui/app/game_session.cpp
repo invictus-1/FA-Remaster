@@ -118,6 +118,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.hullAir = glow >= 1.0f ? 1.0f : 0.5f;
   w.hullEvenColours = w.hullShare = glow < 1.0f;
   w.post.sharpen = std::max(0.0f, std::min(1.0f, looks.sharpen));  // (Sharpen)
+  w.hazeMist = std::max(0.0f, std::min(2.0f, looks.hazeMist));     // (Haze & Mist, render [hazeamt]: 1 as made)
   w.remasteredGate = looks.remasteredGate;                         // (Remastered Gateway)
   w.ghostLook = looks.ghostLook ? 1 : 0;                           // (Ghost Look: see-through, or solid as before)
   w.guidePull = looks.guideOverGrass ? 1.2f : 0.0f;                // (Guide over Grass)
@@ -152,12 +153,14 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
 // the renderer's own kinds have (render/weather.cpp, kKinds) and with what that weather has done to the ground by now
 // (weather that changes by itself is the renderer's, by the game's seed and clock: WorldPicture::SetDayAndWeather).
 void SkyOnWorld(render::World& w, const std::string& edge, float startHour, const std::string& kind) {
-  // The map's edge, one of the two looks (the renderer's answer to ui request 20: all three
-  // switches set, as their defaults are neither look).
+  // The map's edge, one of the three looks (the renderer's answer to ui request 20: all three
+  // switches set, as their defaults are neither look; its request 62: "surround" is the land
+  // beyond with the map's own sculpted land there, where the map brings one).
   const bool frame = edge == "frame";
   w.worldBeyond = !frame;
   w.frame = frame;
   w.beyondHaze = false;
+  w.mapSurround = edge == "surround";
   if (startHour < 0) return;
   struct Kind {
     const char* name;
@@ -1920,7 +1923,7 @@ void GameSession::ReadLookOptions(lua_State* L, int options) {
   else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
   if (!weather.empty()) skyNow_.weather = weather;
   const std::string edge = option("RemasterMapEdge");
-  if (edge == "frame" || edge == "beyond") skyNow_.edge = edge;
+  if (edge == "frame" || edge == "beyond" || edge == "surround") skyNow_.edge = edge;
 }
 
 bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::string* why) {
@@ -2080,14 +2083,20 @@ void GameSession::End() {
   play_.reset();
   LetGoOfScan(std::move(postgame_));  // (a played game's moments' scan stops: GameMoments)
   if (!relaunching_) {  // (the replay closes: its moments' scan stops, a jump under way with it)
-    StopMomentScan();
+    // (Let go of, not waited for, as the played game's scan above: a scan still loading its copy of the game looks
+    // at `cancel` only from its first beat on, so a replay left in its first seconds held the window for the whole
+    // of that load; the review of 2026-11-09. The bookmarks are in their file already: written at each change.)
+    LetGoOfScan(std::move(timeline_));
     seekTo_ = 0;
     seekBack_ = false;
     back_ = BackClock{};
     keepMap_ = keepMenuMap_ = false;
     EndRewind();
   }
-  if (sounds) sounds->StopWorld();
+  if (sounds) {
+    sounds->StopWorld();
+    if (int n = sounds->ResumeAll()) Logf(LogLevel::Info, "moho64ui: sound: %d paused categor%s resumed at the session's end", n, n == 1 ? "y" : "ies");
+  }
   onSync = nullptr;
   takeOrders = nullptr;
   net_.reset();  // (its connections close: the other players hear us gone)
@@ -3180,7 +3189,8 @@ void GameSession::ServeMenuFlight(WindowPicture& wp) {
 // the flight's dusk, 2026-11-09: "a bit more clearer if anything"; measured at 1080p, tick 500, the far land's darkest
 // twentieth 0.210 at all of it, 0.195 at 0.65, 0.164 at none: 0.65 could hardly be seen). Always from the amount the
 // world was opened with (`opened`, kept at the menu's swap), so a flight started again does not thin it twice. The
-// player's own Haze & Mist amount takes this over once the renderer has one (ui/REQUESTS.md, renderer 50).
+// player's own Haze & Mist amount (LookSettings::hazeMist) is on top of it: the renderer multiplies a cinematic
+// camera's least haze by World::hazeMist, so the flight is the player's amount times this share, in a game the amount.
 // MOHO64UI_FLIGHT_HAZE: another share, for the window checks' pictures side by side.
 static void FlightHaze(render::World* w, bool taken, float opened) {
   if (!w || !taken) return;
@@ -3618,7 +3628,9 @@ void GameSession::DressGamePicture(Picture& pic) {
   pictureFocus_ = sim_->focusArmy;
   if (render::World* w = pic.picture.world()) SkyOnWorld(*w, skyNow_.edge, skyNow_.startHour, skyNow_.weather);
   Logf(LogLevel::Info, "moho64ui: session: the map's edge: %s",
-       skyNow_.edge == "frame" ? "the original's frame of machinery" : "no machinery, the land beyond");
+       skyNow_.edge == "frame" ? "the original's frame of machinery"
+       : skyNow_.edge == "surround" ? "no machinery, the map's own sculpted land beyond (where it has one)"
+                                    : "no machinery, the land beyond");
   if (skyNow_.startHour >= 0) {
     pic.picture.SetDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
     Logf(LogLevel::Info, "moho64ui: session: the day starts at %.2f h, a day takes %.0f game seconds, weather \"%s\"",

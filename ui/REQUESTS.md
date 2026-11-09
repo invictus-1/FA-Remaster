@@ -1197,6 +1197,9 @@ cleaner:
 When either lands, say so and we switch to it.
 
 ### 52. MountFromInitFile: the init file's `protocols` table too (2026-11-01, not blocking)
+**DONE 2026-11-09** (engine, main 4dc89612: the `protocols` parameter after `skip`). Taken the same day: `InitProtocols`
+is gone from `ui/app/main.cpp`, `&cfg.protocols` is passed; `mount_list`'s listing has the same protocol lines as before.
+
 From the interface chat. Request 1 is in use: moho64ui mounts through `MountFromInitFile` (`script/mount.h`).
 - **What:** the init file's `protocols` table (the schemes `OpenURL` may open: http, https, mailto, ... in FAF's
   init files). The original reads it in the same run of the init file as `path` and `hook`
@@ -1272,6 +1275,27 @@ restart keeping the loaded rules (about 1.2 s per loop).
 protected call are logged with a traceback since batch 120. (b) No engine change for the map folder: the original has
 no rule of its own, the lobby writes Dirname(ScenarioFile); the menu flight setting CurrentMapDir = '/maps/SETONS_R'
 itself is the lasting answer. E2 (a restart keeping the loaded rules) stays an optional later wish.
+
+### 57. hostfs: a write that reports its failures, a rename, UTF-8 paths on Windows (2026-11-09, not blocking)
+
+Who: ui. Found in the review pass while making the preferences file safe against a cut-off write
+(`ui/user/prefs.cpp`, `SavePreferencesOf`: temporary file, read back and compared, `.bak`, then renamed).
+
+1. `hostfs::WriteFile` (`src/core/hostfs.cpp:311`) returns true whatever `fwrite` and `fclose` say: a full disk or
+   a pulled drive gives "written" for a short or empty file. Asked: return false when `fwrite` wrote less than
+   asked or `fclose` fails. (ui reads the file back today, so nothing of ours depends on it; replays, saved
+   games and logs written through it would gain.)
+2. hostfs has no rename / replace. ui calls the platform's own (`MoveFileExW` with replace on Windows, `rename`
+   elsewhere) inside prefs.cpp. Asked: `hostfs::ReplaceFile(from, to)` (atomic where the platform can), so that
+   ui's copy can go and others can write safely the same way.
+3. On Windows `WriteFile` / `ReadFile` open with the narrow `fopen`, so a UTF-8 path with letters outside the
+   system's code page (a Windows user name with such letters: `C:\Users\<name>\...`) does not open. Asked: the
+   wide open (`_wfopen` of the UTF-8 path converted) on Windows. Today ui's safe write falls back to the old
+   in-place write when its temporary file cannot be read back, so such a player keeps today's behaviour.
+
+A measurement on the side, no ask: with 1,000 `uel0201` on one formation move in a headless run
+(`ui/tests/orderscale.lua`, session_ai_cheats.lua) a beat's frames take 140 to 900 ms by the PC's clock, pinned
+to CPUs 16-31. I did not separate the simulation's share from the interface's; told in case it is news.
 
 ## To the renderer track
 
@@ -2438,6 +2462,11 @@ From the interface chat; your recommendation (A), Chris's yes. Design: docs/ui-m
 - R4: once the ui has the session, scenario and path files, your cost measurement at 4K (full looks vs menu look).
 
 ### 50. A player's "Haze & Mist" amount, like Unit Glow (2026-11-09, Chris's ask, not blocking)
+**DONE 2026-11-09** (renderer: `World::hazeMist`, 0..2, 1 as made, per frame, the modern look's; viewer `--haze-mist`).
+Taken the same day: the slider "Haze & Mist" (`remaster_haze_mist`, 0..200 in steps of 10, 100 unless chosen) in Sky &
+Light, in no preset level; `WorldLooks` sets it each frame. The menu flight keeps its own 0.4 share of the cinematic
+camera's haze and the renderer multiplies that by the player's amount (0.65 could hardly be told from all of it).
+
 From the interface chat. Chris, on the menu flight's dusk (2026-11-09): "A bit more clearer if anything; I think
 mist/haze should be an option we can adjust like unit glow. Helps the both of us since I can fine tune it exactly the
 way I want, same with anyone else."
@@ -2452,6 +2481,24 @@ way I want, same with anyone else."
   kept out of the Preset (a taste setting, like Unit Glow); the menu flight then runs at the player's amount times
   about 0.65 ("a bit clearer"). Until then I only lower the flight's own cinematicHaze a little.
 - Tell me the name and the range you settle on; a viewer flag to try it is welcome for your own checks.
+
+### 51. Without dxcompiler.dll, Direct3D 12's fallback never finishes the horizon's pixel shader (2026-11-09, a finding, not blocking)
+From the interface chat. A side build of moho64ui had no `dxcompiler.dll` beside it (my build script did not copy
+it; it does now). Its first world frame on SETONS_R never came: the window "Not Responding", one core busy for more
+than ten minutes until I closed the program. Sampled three times, minutes apart, always the same stack:
+`World::Begin` (world.cpp:2052) -> `World::PrepareAhead` (world.cpp:3896) -> `render::Horizon::Make`
+(horizon.cpp:645 / 650) -> `D3D12Device::CreatePipeline` (gfx_d3d12.cpp:2912) -> `MakePipelineWith` (:2734) ->
+`CompileFxc` (:2665), target ps_5_1, inside d3dcompiler_47. With the dll beside the exe the same build, same test,
+runs in one minute. The stderr line of gfx_d3d12.cpp:1007 was printed, nothing else.
+- What a player gets: a release or a hand-made build that lacks the dll shows a frozen window at the first map
+  frame (the menu's flight included), with no word why.
+- Yours to decide: (a) make that shader compile under the old compiler too (a loop it unrolls for ever? the other
+  shaders passed before it), or (b) refuse the fallback aloud: no dll -> one clear message and no world picture (or
+  exit), since a fallback that hangs is worse than none; or keep the fallback for the simple look only.
+- My side, done: `ui/build_ui.py` copies the dll into a side build's folder and warns when there is none. Queued
+  with the runner's gates: the suite, the quick checks and the launch check refuse an exe without the dll beside it.
+- How to see it: move `dxcompiler.dll` away from a viewer's or moho64ui's folder and open SETONS_R (modern look).
+  The sampler I used (read only): `%TEMP%/ui-fix2/scripts/sample.py <pid> 262144`, offsets through llvm-symbolizer.
 
 ## To the visuals track
 

@@ -317,7 +317,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
         "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
-        "remaster_menu_background", "remaster_menu_sound"};
+        "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -408,6 +408,9 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "sharpen");
   lua_pushnumber(L, looks.sharpen);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "hazeMist");
+  lua_pushnumber(L, looks.hazeMist);
   lua_rawset(L, -3);
   lua_pushstring(L, "photoLook");
   lua_pushnumber(L, looks.photoLook);
@@ -1389,14 +1392,16 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
     const std::string value = at == std::string::npos ? std::string() : rest.substr(at);
     const bool on = !value.empty() && value[0] != '0' && Upper(value).rfind("FALSE", 0) != 0;
     LookSettings& looks = Looks();
-    if (key == "REMASTER_EFFECTS") return void(looks.remasteredEffects = on);
+    // (Without a value a look stays as it is, as the game's own settings below do: until the review of 2026-11-09 these
+    // four went OFF on a bare name typed in the console.)
+    if (key == "REMASTER_EFFECTS") return void(value.empty() ? false : (looks.remasteredEffects = on));
     if (key == "REMASTER_EFFECTS_QUALITY") {
       if (!value.empty()) looks.effectsQuality = std::max(0.05f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
       return;
     }
-    if (key == "REMASTER_TRACERS") return void(looks.tracers = on);
-    if (key == "REMASTER_RICH_GROUND") return void(looks.richGround = on);
-    if (key == "REMASTER_SNOW_TRACKS") return void(looks.snowTracks = on);
+    if (key == "REMASTER_TRACERS") return void(value.empty() ? false : (looks.tracers = on));
+    if (key == "REMASTER_RICH_GROUND") return void(value.empty() ? false : (looks.richGround = on));
+    if (key == "REMASTER_SNOW_TRACKS") return void(value.empty() ? false : (looks.snowTracks = on));
     // The game's own graphics settings (LookSettings); without a value they stay as they are.
     if (key == "GRAPHICS_FIDELITY") {
       if (!value.empty()) looks.fidelity = std::max(0, std::min(2, std::atoi(value.c_str())));
@@ -1508,6 +1513,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
       if (!value.empty())
         (key == "REMASTER_UNIT_GLOW" ? looks.unitGlow : looks.sharpen) =
             std::max(0.0f, std::min(1.0f, static_cast<float>(std::atof(value.c_str()))));
+      return;
+    }
+    if (key == "REMASTER_HAZE_MIST") {  // (Haze & Mist: 0 clear air, 1 as made, up to 2; the bare name keeps it)
+      if (!value.empty()) looks.hazeMist = std::max(0.0f, std::min(2.0f, static_cast<float>(std::atof(value.c_str()))));
       return;
     }
     if (key == "REMASTER_SCORCH") {  // (Scorch Glow: soft or bright; 1 / 0 too)

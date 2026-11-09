@@ -110,6 +110,29 @@ ForkThread(function()
     check("with FAF's Attack look", Radial.State.sent and Radial.State.sent.Type, 'Attack')
     LetGo()
     check("and letting go after it sends no second one", Radial.State.open, false)
+    -- opened in the screen's corner the ring is drawn whole, and the way is still the mouse's own (2026-11-09)
+    local frame = GetFrame(0)
+    local ex, ey = frame.Right() - 5, frame.Bottom() - 5
+    moho64ui_MouseMove(ex, ey)
+    WaitFrames(2)
+    Hold()
+    local at, mouseAt = Radial.State.at or {}, Radial.State.mouseAt or {}
+    local whole = true
+    for _, w in Radial.Controls.wedges or {} do
+        local g = w.group
+        if g.Left() < frame.Left() or g.Right() > frame.Right() or g.Top() < frame.Top() or g.Bottom() > frame.Bottom() then whole = false end
+    end
+    check("in the corner every wedge is on the screen", whole, true)
+    check("the ring's middle moved inwards", at[1] ~= nil and at[1] < ex - 100 and at[2] < ey - 100, true)
+    check("the mouse's own place is kept", mouseAt[1] == ex and mouseAt[2] == ey, true)
+    moho64ui_MouseMove(ex, ey - 120)
+    WaitFrames(2)
+    check("the way up from the mouse lights Attack there too", Radial.State.lit and Radial.Pings[Radial.State.lit].intent, 'attack')
+    moho64ui_MouseButton("Right", true, ex, ey - 120)
+    moho64ui_MouseButton("Right", false, ex, ey - 120)
+    WaitFrames(2)
+    check("and a right click closes it, nothing sent", Radial.State.open == false and Radial.State.why == 'cancelled', true)
+    LetGo()
     -- the labels go with their pings (FAF's lifetime: 6 s)
     WaitSeconds(14)
     local left = 0

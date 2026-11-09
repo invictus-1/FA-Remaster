@@ -10,6 +10,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -268,6 +270,8 @@ int l_SavePreferences(lua_State* L) {
 // Run a preferences file's text as a chunk of top-level assignments with a new table as its
 // environment: true with that table pushed, false with the reason. The chunk can reach nothing
 // else (no globals).
+std::filesystem::path FsPath(const std::string& utf8) { return std::filesystem::path(std::u8string(utf8.begin(), utf8.end())); }
+
 bool RunPrefsChunk(lua_State* L, const std::string& src, const std::string& chunkName, std::string* why) {
   const int top = lua_gettop(L);
   if (luaL_loadbuffer(L, src.data(), src.size(), chunkName.c_str()) != 0) {
@@ -419,7 +423,122 @@ void SavePreferencesOf(lua_State* L) {
   PushPrefs(L);
   WriteFields(L, -1, 0, true, out);
   lua_pop(L, 1);
+  // Never in place (the review of 2026-11-09: a write cut by a crash, the power or a full disk left a file the next
+  // start could not read; that start began from nothing and wrote nothing over it: options, key bindings and
+  // profiles gone). The text goes to <file>.tmp and is read back; only when every byte is there does the file
+  // before become <file>.bak and the new one take its name. A start that finds the file gone between the two
+  // renames, or unreadable, is CheckPrefsFile's.
+  const std::string tmp = file + ".tmp";
+  const auto back = hostfs::WriteFile(tmp, out) ? hostfs::ReadFile(tmp) : std::nullopt;
+  if (!back || *back != out) {
+    Logf(LogLevel::Warning, "moho64ui: preferences NOT saved: %s could not be written whole (the file before is kept)", tmp.c_str());
+    return;
+  }
+  std::error_code ec;
+  const std::filesystem::path to = FsPath(file), bak = FsPath(file + ".bak");
+  const bool was = std::filesystem::is_regular_file(to, ec);
+  ec.clear();
+  if (was) std::filesystem::rename(to, bak, ec);  // (takes the place of the backup before)
+  if (!ec) {
+    std::filesystem::rename(FsPath(tmp), to, ec);
+    if (!ec) return;
+    std::error_code undo;
+    if (was) std::filesystem::rename(bak, to, undo);  // (the file before back under its name)
+  }
+  // The names could not be changed (a file held open by another program, a path this build spells differently):
+  // the old way, so that a save is not lost; said once.
+  static bool said = false;
+  if (!said) Logf(LogLevel::Warning, "moho64ui: preferences: %s could not take the file's name (%s); written in place", tmp.c_str(), ec.message().c_str());
+  said = true;
   if (!hostfs::WriteFile(file, out)) Logf(LogLevel::Warning, "moho64ui: cannot write preferences to %s", file.c_str());
+}
+
+namespace {
+std::string g_prefsNotice;  // what CheckPrefsFile did, for the player (empty: nothing)
+
+// A path as the player reads it in the notice (the system's own separators; hostfs::DisplayPath would lower its case).
+std::string ShownPath(std::string path) {
+#ifdef _WIN32
+  for (char& c : path)
+    if (c == '/') c = '\\';
+#endif
+  return path;
+}
+
+// moho64ui_PrefsNotice() (ours) -> text | nil: what this start had to do about the preferences file (the backup
+// taken, or a start from the defaults with the unreadable file kept), for a line on the menu.
+int l_PrefsNotice(lua_State* L) {
+  if (g_prefsNotice.empty()) lua_pushnil(L);
+  else lua_pushstring(L, g_prefsNotice.c_str());
+  return 1;
+}
+
+// Whether a preferences file is one a start can use: there, not empty, and its text runs as a preferences chunk.
+bool PrefsFileIsWhole(const std::string& file, std::string* why) {
+  const auto src = hostfs::ReadFile(file);
+  if (!src) return *why = "it cannot be read", false;
+  if (src->find_first_not_of(" \t\r\n") == std::string::npos) return *why = "it is empty", false;
+  lua_State* S = lua_open();
+  const bool ok = RunPrefsChunk(S, *src, "@" + hostfs::DisplayPath(file), why);
+  lua_close(S);
+  return ok;
+}
+}  // namespace
+
+// Before anything reads the preferences (the program's start): a file that cannot be used is never written over.
+// - The file is there but empty or not a preferences chunk (a write cut in a version that wrote in place, a disk
+//   fault, a hand edit gone wrong): it is set aside as <file>.broken_<date>_<time> (kept, never deleted), and the
+//   backup <file>.bak, if whole, is copied to the file's name.
+// - The file is not there but <file>.tmp is (a save stopped between its two renames): the .tmp, written and read
+//   back whole before the first rename, takes the name; else the backup.
+// - The file is not there and no .tmp: a first start, or the player's own reset; the backup is NOT taken.
+// What it did is logged and kept for moho64ui_PrefsNotice. Returns that text (empty: nothing to do).
+std::string CheckPrefsFile(const std::string& file) {
+  g_prefsNotice.clear();
+  if (file.empty()) return {};
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path self = FsPath(file), tmp = FsPath(file + ".tmp"), bak = FsPath(file + ".bak");
+  std::string why, kept;
+  const bool there = fs::is_regular_file(self, ec);
+  if (there) {
+    if (PrefsFileIsWhole(file, &why)) return {};
+    char stamp[32] = "";
+    const std::time_t now = std::time(nullptr);
+    if (const std::tm* t = std::localtime(&now)) std::strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", t);
+    kept = file + ".broken_" + stamp;
+    ec.clear();
+    fs::rename(self, FsPath(kept), ec);
+    if (ec) {  // (it cannot be moved: left alone; this start reads nothing from it, and its saves go the safe way)
+      Logf(LogLevel::Warning, "moho64ui: the preferences file %s cannot be used (%s) and could not be set aside (%s)", file.c_str(),
+           why.c_str(), ec.message().c_str());
+      return {};
+    }
+    Logf(LogLevel::Warning, "moho64ui: the preferences file cannot be used (%s): kept as %s", why.c_str(), kept.c_str());
+  }
+  std::string unused;
+  const char* from = nullptr;
+  ec.clear();
+  if (!there && fs::is_regular_file(tmp, ec) && PrefsFileIsWhole(file + ".tmp", &unused)) {
+    ec.clear();
+    fs::rename(tmp, self, ec);
+    if (!ec) from = "the save that was under way when the program last stopped";
+  }
+  ec.clear();
+  if (!from && (there || fs::is_regular_file(tmp, ec)) && fs::is_regular_file(bak, ec) && PrefsFileIsWhole(file + ".bak", &unused)) {
+    ec.clear();
+    fs::copy_file(bak, self, fs::copy_options::overwrite_existing, ec);
+    if (!ec) from = "the backup of the save before";
+  }
+  if (from) {
+    g_prefsNotice = std::string("Your preferences were restored from ") + from + ".";
+    if (!kept.empty()) g_prefsNotice += " The file that could not be read is kept as " + ShownPath(kept) + ".";
+  } else if (!kept.empty()) {
+    g_prefsNotice = "Your preferences file could not be read and there is no backup: this start uses the defaults. The file is kept as " +
+                    ShownPath(kept) + ".";
+  }
+  if (!g_prefsNotice.empty()) Logf(LogLevel::Warning, "moho64ui: %s", g_prefsNotice.c_str());
+  return g_prefsNotice;
 }
 
 std::string PreGameDataText(lua_State* L, const std::string& mapDir) {
@@ -545,6 +664,7 @@ void RegisterPrefsBindings(lua_State* L) {
   SetGlobal(L, "SetPreference", l_SetPreference);
   SetGlobal(L, "GetOptions", l_GetOptions);
   SetGlobal(L, "SavePreferences", l_SavePreferences);
+  SetGlobal(L, "moho64ui_PrefsNotice", l_PrefsNotice);
 }
 
 }  // namespace moho::ui

@@ -275,7 +275,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   Subtle by default, Full = the look of 2026-10-28), Unit Glow at Night (`remaster_unit_glow`, a slider 0..100,
   75 by default; 100 = the glow before the big test), Sharpen (`remaster_sharpen`, a slider, 50), Remastered
   Gateway (`remaster_gateway`), Ghost Look (`remaster_ghost_look`), Guide over Grass (`remaster_guide`), Cloak
-  Look (`remaster_cloak_look`) and Stealth Veil (`remaster_stealth_veil`).
+  Look (`remaster_cloak_look`) and Stealth Veil (`remaster_stealth_veil`). Haze & Mist (`remaster_haze_mist`, a slider
+  0..200, 100 = as made, 0 = clear air; the renderer's `World::hazeMist`, 2026-11-09): the clear weather's haze and
+  mist, a taste setting no preset level sets; the menu's flight follows it.
   The Remastered Preset (`remaster_preset`; Chris, 2026-10-17) sets the new looks together, as the game's
   Fidelity Presets set its own: Off (the original game's look whole), Low, Medium, High, Ultra (Ray Tracing
   where the card can), Custom (by default: each as it is). Each look can still be changed after. The levels
@@ -345,8 +347,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (a live window moved from screen to screen, then started on the one kept).
   Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
   greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
-  "Machinery" (the original's frame of machinery round the map). `--map-edge frame|beyond` is
-  the same for a game given with `--session`.
+  "Machinery" (the original's frame of machinery round the map), or "Sculpted Land" (as No
+  Machinery, with the land sculpted for the map past its edges on maps that bring one, today
+  Seton's Clutch Remastered; `World::mapSurround`). `--map-edge frame|beyond|surround` is the
+  same for a game given with `--session`.
 - `--day-weather`, `--day <hour>`, `--day-length <seconds>` (0: the hour stands), `--weather
   <kind>` (changing, cold, dry, none, clear, cloudy, overcast, rain, storm, fog, snow),
   `--no-weather`: the same for a game whose configuration does not say (a recorded one given with

@@ -141,8 +141,8 @@ ForkThread(function()
             tostring(now.rayTracing) .. " " .. tostring(now.atmosphere) .. " " .. tostring(now.softShadows) .. " " .. tostring(now.battleEffects) .. " " .. now.effectsQuality,
             "false false false false 0.5")
         check("the note", main.RemasterFirstStart.note, rayTracing
-            and "To keep the game smooth, Ray Tracing is now off and the Remastered Preset is at Low. Your graphics card still takes 24 ms a frame: Upscaling in Options > Video can make it faster. Options > Video changes it back."
-            or "To keep the game smooth, the Remastered Preset is at Low. Your graphics card still takes 24 ms a frame: Upscaling in Options > Video can make it faster. Options > Video changes it back.")
+            and "To keep the game smooth, Ray Tracing is now off and the Remastered Preset is at Low. Your graphics card still takes 24 ms a frame: Upscaling in Options > Remastered can make it faster. Options > Remastered changes it back."
+            or "To keep the game smooth, the Remastered Preset is at Low. Your graphics card still takes 24 ms a frame: Upscaling in Options > Remastered can make it faster. Options > Remastered changes it back.")
         check("the note shows, with its one button", main.RemasterFirstStart.noteDialog and main.RemasterFirstStart.noteDialog.content._button1.label:GetText(), LOC("<LOC _Ok>"))
         check("the profile keeps them (saved as the Options dialog saves)", Prefs.GetFromCurrentProfile('options').remaster_preset, 1)
         NextGame(5, false)
@@ -156,8 +156,8 @@ ForkThread(function()
         check("one step: the card fast after it", table.getn(main.RemasterFirstStart.steps), 1)
         check("the looks", Remastered(), LevelLine(rayTracing and 3 or 2))
         check("the note", main.RemasterFirstStart.note, rayTracing
-            and "To keep the game smooth, Ray Tracing is now off. Your graphics card now takes 12 ms a frame. Options > Video changes it back."
-            or "To keep the game smooth, the Remastered Preset is at Medium. Your graphics card now takes 12 ms a frame. Options > Video changes it back.")
+            and "To keep the game smooth, Ray Tracing is now off. Your graphics card now takes 12 ms a frame. Options > Remastered changes it back."
+            or "To keep the game smooth, the Remastered Preset is at Medium. Your graphics card now takes 12 ms a frame. Options > Remastered changes it back.")
         NextGame(6, false)
         return
     end

@@ -5,6 +5,15 @@
 -- support commander's omni ring before and after its Enhanced Sensor System (UEL0301_script.lua: SetIntelRadius
 -- ('Omni', NewOmniRadius)). Run it as a launched game with cheats and the no-rush option on
 -- (session_ai_cheats_norush.lua: NoRushOption "5"), the world's picture, --frames 6000.
+-- FAF's construction panel names a unit's enhancement tables (ID, UnitID) when its enhancement tab opens
+-- (construction.lua 451-462), and its queue view reads those names (2361). A test that orders an enhancement
+-- without opening the tab names them the same way, or FAF's view raises a script error (2026-11-09).
+local function NameEnhancements(unit)
+    local bp = unit:GetBlueprint()
+    for name, enh in bp.Enhancements or {} do
+        if type(enh) == 'table' and enh.Slot then enh.ID, enh.UnitID = name, bp.BlueprintId end
+    end
+end
 local failed = 0
 local function check(what, got, want)
     if got == want then
@@ -95,6 +104,7 @@ ForkThread(function()
     frame()
     r = ringOf(rings("selected", "Omni"), sacu)
     check("selected: its omni ring, the blueprint's", r and r.radius, bp.Intel.OmniRadius)
+    NameEnhancements(sacu)
     IssueCommand("UNITCOMMAND_Script", {TaskName = "EnhanceTask", Enhancement = "SensorRangeEnhancer"}, true)
     local want = bp.Enhancements.SensorRangeEnhancer.NewOmniRadius
     local t0 = GetGameTimeSeconds()
