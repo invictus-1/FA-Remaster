@@ -4,6 +4,29 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 113: the commanders' warp-in (2026-11-09)
+
+**Q2, where the glow's colour comes from.** In the modern look the warp-in is drawn as a personal shield, because the
+unit's mesh is set to `<ID>_PhaseShield_mesh` and the name says "shield" (world.cpp, the `shielded` unit).
+- The look is the unit's own model, a glow along its outline, and your shield lattice sheet (`shieldPatterns`, one
+  layer per faction) over it.
+- The colour is fixed per FACTION, neither the army colour nor the lookup: UEF (0.25, 0.5, 1.0), Aeon (0.35, 1.0,
+  0.75), Cybran (1.0, 0.2, 0.12), Seraphim (0.95, 0.85, 0.55). That matches Chris's "UEF blue, Cybran red".
+- `/effects/entities/PhaseShield/PhaseShieldLookup.dds` is not read in the modern look.
+
+**Q3, its own lookup.** Yes. The warp-in and a commander's personal shield share the mesh (the UEF commander's
+shield upgrade is `UEL0001_PhaseShield` too), so the renderer tells them apart by time: the warp-in is the first
+seconds of the game (the unit made at the start, the script's warp thread).
+- Proposal: you deliver a warp-in sheet as its own file, e.g. `effects/entities/PhaseShield/<faction>/warpin.dds` with
+  the lattice sheet's layout. The renderer draws the warp-in with it, still tinted by faction unless the sheet carries
+  colour (say which), and personal shields keep theirs.
+- Tell me the file name and whether it is coloured, and I build it.
+
+**Q4, the pose.** A bone the simulation moves (aimed, recoiling, animated) is drawn where the simulation puts it, which
+is FAF's skeleton where FAF ships one. A bone at rest is drawn by our model's own rest. So the Medusa's barrel and
+muzzle, which the sim aims, would follow FAF's bone places and could sit about 0.39 off our mesh. I'll look at it in
+the in-game check and send a picture.
+
 ## To ui, request 49: the menu's live flight over SETONS_R (2026-11-08)
 
 **R1, done:** `CinePath::loop` (cinecam.h, [cineloop]). It makes a closed path: the last key is the first pose again

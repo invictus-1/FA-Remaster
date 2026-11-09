@@ -1044,7 +1044,8 @@ float4 Shade(VOut i, bool front) {
     if (shielded) {  // its personal shield: light of its faction's shield along its outline, breathing slowly
       float3 tint = faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0);
       float outline = pow(1 - saturate(dot(toCamera, N)), 3);  // (only where the surface turns away from the eye)
-      float3 glow = tint * ((0.03 + 1.1 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
+      // ([pshield2] its rest glow halved, Chris 2026-11-08: "only when hit" - a hit lights it as before)
+      float3 glow = tint * ((0.02 + 0.5 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
       [branch] if (kind5.w > 0.5) {
         // and its faction's lattice over it, as the bubble's (the visuals track's sheet): painted on the
         // model at rest and seen along the three axes, so it goes with the unit and its bones and shows

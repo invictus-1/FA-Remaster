@@ -127,6 +127,15 @@ float StormBlanket(float2 xz) {
   coverOut.GetDimensions(w, h);
   if (id.x >= w || id.y >= h) return;
   float2 q = coverAt.xy + ((id.xy + 0.5) / float2(w, h) - 0.5) / cloudSize.z;
+  // [cloudmix2] (Chris, 2026-11-09: Mixed "a bit more different") the clouds gathered in groups some few hundred units
+  // across with clearer sky between: the cover thicker in some wide patches and thinner in others (on average about
+  // the same), so that their shadows at the game's camera come in groups, in a fair sky too
+  float patch = 1;
+  [branch] if (coverAt.w > 0) {
+    float2 pp = (q + skyClouds.yz) * 0.0013;
+    float pn = CloudNoise(float3(pp * 1.3 + 31.7, skyClouds.w * 0.2 + 11.3));
+    patch = lerp(1.0, 1.8 * smoothstep(0.22, 0.72, pn), saturate(coverAt.w) * 0.6);
+  }
   // [sunlight] (drifting cloud shadows, sunlight.h) the heaps of many sizes, as many as the flat layer's drifting shadows
   // have (view.h, CloudShadow: about the cover's share of the land under them), full in their middles, thinning over their
   // last few units (the broken field varies less than the field: CloudFrom's thresholds would leave few clouds)
@@ -158,10 +167,10 @@ float StormBlanket(float2 xz) {
                      smoothstep(0.55, 0.78, CloudNoise(float3(tu * 0.11 + 41.7, skyClouds.w * 0.3 + 9.1)));
       cover = max(cover * (1 - cloudLight.w), cloudLight.w * max(max(max(cell, upwind), StormDeckCover(q)), StormBlanket(q)));
     }
-    coverOut[id.xy] = cover;
+    coverOut[id.xy] = saturate(cover * patch);  // [cloudmix2]
     return;
   }
-  coverOut[id.xy] = CloudFrom(CloudField(q));
+  coverOut[id.xy] = saturate(CloudFrom(CloudField(q)) * patch);  // [cloudmix2]
 }
 
 RWTexture2D<float> shadowOut : register(u2);
@@ -198,11 +207,16 @@ float4 CloudShape(float3 p, float3 wind, float mix, float bigAtLeast = 0) {
   float2 warp = (region.gb - 0.5) * 0.5;
   float2 xz = float2(q.x * 0.82 - q.z * 0.57, q.x * 0.57 + q.z * 0.82) / 1.2 + warp;  // (the heaps 1.2 times larger)
   float4 s = shapeNoise.SampleLevel(samplerLinear, float3(xz.x, q.y / 1.2, xz.y), 0);
-  float big = max(smoothstep(0.2, 0.6, region.r) * saturate(0.35 + skyClouds.x) * mix, bigAtLeast);
+  // ([cloudmix2] Chris, 2026-11-09: Mixed "a bit more different" from Even, by day in fair weather too and as shadows at
+  // the game's camera: the big heaps in wider patches and in a fair sky as well (was 0.2..0.6 of the region, at 0.35 +
+  // the sky's cover), and the shapes denser in some patches and thinner in others, so that the shadows on the ground
+  // gather in groups with clear ground between)
+  float big = max(smoothstep(0.12, 0.5, region.r) * saturate(0.7 + skyClouds.x) * mix, bigAtLeast);
   [branch] if (big > 0.01) {
     float2 bz = float2(q.x * 0.57 + q.z * 0.82, q.z * 0.57 - q.x * 0.82) / 3.0 + warp * 0.5 + 0.37;  // (three times)
     s = lerp(s, shapeNoise.SampleLevel(samplerLinear, float3(bz.x, q.y / 3.0 + 0.19, bz.y), 0), saturate(big));
   }
+  s.x = saturate(s.x * lerp(1.0, 0.7 + 0.6 * region.b, saturate(mix) * 0.8));  // [cloudmix2] (denser and thinner patches)
   return s;
 }
 

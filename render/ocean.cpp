@@ -629,7 +629,9 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const double dt = lastTime_ >= 0 ? std::clamp(time_ - lastTime_, 0.0, 0.25) : 0.0;
   lastTime_ = time_;
   const float r = rough_;
-  const float storm = StormShare(r) * std::clamp(stormFoam, 0.0f, 3.0f);  // [stormfoam]
+  // [stormfoam] ([stormfoam2] Chris, 2026-11-08: "far too strong ... we should remove it" - the whole of it at 0.4: a
+  // storm's sea in the stand went from 4 % white without it to 29 % with it, all in streaks one way; now about half that)
+  const float storm = 0.4f * StormShare(r) * std::clamp(stormFoam, 0.0f, 3.0f);
   // ([stormfoam2] Chris's 2026-11-08 test: "all of it flows the same way across the whole map" - a storm's foam rides the
   // waves more than it slides downwind: the drift a third as fast in a storm, 0.12 + 0.25 r -> 0.06 + 0.06 r)
   const float drift = (0.06f + 0.06f * r) * static_cast<float>(dt);

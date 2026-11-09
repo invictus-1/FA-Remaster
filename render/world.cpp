@@ -1878,6 +1878,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     const bool day = timeOfDay >= 0 && look == Look::Modern && haveMap_;
     // ([mistpatch] in a thick fog the low band's haze and the haze under the clouds thicken by a quarter of it, World::mistPatches:
     // the fog lies in the mist's layer's patches; over all the ground they were the most of the grey close to the camera)
+    sunlight.cloudMix = volumetricClouds ? clouds.mix : 0.0f;  // [cloudmix2]
     sunlight.Begin(&view, day && driftingShadows, day && lightShafts && volumetricFog && !sidePicture, placing, mistNow, wet,
                    lowFog && mistPatches ? 0.25f * fog : fog,
                    static_cast<float>(map.width), static_cast<float>(map.height), terrain.HeightUnit(),
