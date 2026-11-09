@@ -367,7 +367,7 @@ float Cloud(float3 p, float h, bool frayed) {
     t1 = min(t1, t0 + 5000);  // (low toward the horizon: a long way through it)
     int steps = int(cloudLook.y);
     float dt = (t1 - t0) / steps;
-    float3 body = skyBody.w > 0.5 ? skyMoon.xyz : skyBody.xyz;
+    float3 body = skyMoon.w > 0.5 ? skyMoon.xyz : skyBody.xyz;  // (the body their light is from: SkyLight::cloudMoon)
     float c = dot(d, body);
     float phase = lerp(Phase(c, -0.15), Phase(c, 0.65), 0.5);  // (light that goes on forward: bright edges toward the sun)
     float3 around = skyZenith.rgb * 0.75 + skyHorizon.rgb * 0.45;
