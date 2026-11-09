@@ -19,6 +19,7 @@
 // BeyondBack) or, above the horizon, in the sky's own haze there. It never lies on the map, nor between the game's
 // camera and the map. No props.
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -72,6 +73,10 @@ class BeyondLand {
   // which out there hides all of the land in time: the view's own is held back near the map).
   void SetView(ViewConstants* c);
   float thickAir = 0;
+  // [hazeamt] set by the world: the player's amount of haze (World::hazeMist; 1 as made, 0..2): the haze the land is lost
+  // in that much thicker or thinner, by two thirds of the way (never none: it hides where the land ends).
+  float hazeAmount = 1;
+  float HazeNow() const { return std::max(haze, 1.0f) / (1 + 0.65f * (std::clamp(hazeAmount, 0.0f, 2.0f) - 1)); }
   // Before the scene's pass, every frame (`on`: the option, with the world beyond the edge, in the modern look, not
   // for a side picture): the land made for the map the first time it is wanted, and its colours from the map's ground
   // (that dispatches, so outside a pass).

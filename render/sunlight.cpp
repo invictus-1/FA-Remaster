@@ -346,7 +346,7 @@ void Sunlight::Begin(View* view, bool drifting, bool shafts, const Camera& placi
   }
   if (!shafts) return;
   // the band's haze: some on any morning or evening in the woods, much more with mist, wet ground or fog
-  const float damp = std::max({mist, wet * 0.6f, fog});
+  const float damp = std::max({mist, wet * 0.6f * std::min(amount, 1.0f), fog});  // ([hazeamt])
   // the haze under the clouds: where they are broken (clear skies and overcast have no gaps), the more the lower the sun
   const float cover = c.skyClouds[0];
   const float broken = Smooth01(0.2f, 0.5f, cover) * (1 - Smooth01(0.85f, 1.0f, cover));
@@ -360,8 +360,8 @@ void Sunlight::Begin(View* view, bool drifting, bool shafts, const Camera& placi
   }
   c.shaftBand[0] = std::max(look.top, 0.5f);
   c.shaftBand[1] = reach > 5 ? reach : 0.0f;
-  c.shaftBand[2] = std::max(look.haze + look.misty * damp, 0.0f);
-  c.shaftBand[3] = std::max(look.under * broken * low * (1 + 0.5f * wet + fog), 0.0f);
+  c.shaftBand[2] = std::max(look.haze * amount + look.misty * damp, 0.0f);
+  c.shaftBand[3] = std::max(look.under * broken * low * (1 + 0.5f * wet + fog) * amount, 0.0f);
   c.shaftGround[0] = heightUnit;
   c.shaftGround[1] = mapWidth;
   c.shaftGround[2] = mapHeight;

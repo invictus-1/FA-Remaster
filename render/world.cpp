@@ -1419,6 +1419,9 @@ void World::TakeMomentOut() {
 
 void World::Begin(const Camera& cam, int width, int height, float time, double clock) {
   CpuTimes::Part("light, sky, weather set");
+  // [hazeamt] the player's amount of haze and mist this frame (World::hazeMist; the modern look's)
+  const float hazeAmount = look == Look::Modern ? std::clamp(hazeMist, 0.0f, 2.0f) : 1.0f;
+  air.amount = sunlight.amount = distantLand.hazeAmount = hazeAmount;
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   decals.battleScars = battleScars;
   decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]
@@ -1793,7 +1796,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     distantLand.thickAir = c.weather[2];  // (beyondland: the weather's own, before a cinematic camera's least)
     // (cinecam) a cinematic camera low over the land sees far toward the horizon: some of the air's haze then, even
     // in clear weather, so that the distance lies back as it does outdoors
-    if (camera.cinematic) c.weather[2] = std::max(c.weather[2], cinematicHaze);
+    if (camera.cinematic) c.weather[2] = std::max(c.weather[2], cinematicHaze * hazeAmount);  // ([hazeamt])
     // the mist on low ground
     mistNow = mist;
     if (mistNow < 0) {
@@ -1807,8 +1810,11 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       const float h = timeOfDay;
       const float byHour = h < 12 ? (0.3f + 0.2f * rise(4, 5.5f, h)) * (1 - rise(7, 9.5f, h)) : 0.3f * rise(19, 21, h);
       // ([seasons] more in autumn)
-      mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) + 0.5f * (lowFog ? std::min(fog, 0.25f) : fog) + 0.4f * wet * (1 - SetIn(rain));  // ([onset]; [weather] the low fog's below)
+      // ([hazeamt] the hour's and the wet ground's by the player's amount; the fog's is the weather's)
+      mistNow = byHour * (climateNow == Climate::Dry ? 0.25f : climateNow == Climate::Autumn ? 1.3f : 1.0f) * hazeAmount + 0.5f * (lowFog ? std::min(fog, 0.25f) : fog) + 0.4f * wet * (1 - SetIn(rain)) * hazeAmount;  // ([onset]; [weather] the low fog's below)
       mistNow = std::clamp(mistNow * (1 - 0.5f * rain), 0.0f, 1.0f) * (1 - SetIn(snow));
+    } else if (hazeAmount != 1) {
+      mistNow = std::min(mistNow * hazeAmount, std::max(mistNow, 1.0f));  // ([hazeamt] a set amount of mist too)
     }
     // [weather] the low fog in the mist's layer: up to 0.75 mists more, the layer half as deep again at its thickest (it
     // fills the hollows and leaves the hilltops). ([fog1103] Chris's big test, 2026-11-02: "Fog makes everything hard to see should
@@ -1921,6 +1927,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       w.fog = fog;
       w.wet = wet;
       w.mist = mistNow;
+      w.haze = hazeAmount;  // [hazeamt]
       w.cloudCover = c.skyClouds[0];
       w.cold = climate == Climate::Cold;
       w.seed = weatherSeed;
@@ -4694,7 +4701,7 @@ void World::Render() {
     if (sunlight.ShaftsNow() && air.Volume()) {  // [sunlight] the light shafts in the low band over the ground (sunlight.h)
       Stage("light shafts");
       sunlight.March(view, camera, post.Depth(), terrain.HeightTexture(), shadows.Map(), air.Volume(), cloudShadowsNow,
-                     smokeNow_ ? smokeMap.Map() : gfx::Texture{}, air.dust, groundMiddle_, air.thinsOver, air.sunInAir, air.sunForward);
+                     smokeNow_ ? smokeMap.Map() : gfx::Texture{}, air.DustNow(), groundMiddle_, air.thinsOver, air.sunInAir, air.sunForward);
       Stage("light shafts: laid");
       post.BeginColorOnly();
       sunlight.Lay(view, post.Depth());

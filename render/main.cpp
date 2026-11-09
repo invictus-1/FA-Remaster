@@ -715,6 +715,7 @@
 //           along the ground and that high over them, looking at them; pace 0 calm .. 1 active
 //           Key G switches the cinematic camera off (the game's camera goes on from where it was, eased) and on.
 // --cine-haze <n>  with a time of day, the least haze a cinematic camera sees (World::cinematicHaze, 0.0004; 0 none)
+// --haze-mist <0..2>  [hazeamt] how much of the clear weather's haze and mist shows (World::hazeMist; 1 as made, 0 clear air)
 // --dof f[,focus]  the lens's depth of field (World::lens) at aperture f/f, focused at `focus` world units from the
 //           eye, or (0 or not given) auto-focused on what is at the picture's middle, eased; --dof-scale <metres a
 //           world unit stands for> (0.125: smaller blurs more), --dof-seconds <the auto-focus's easing> (0.4), --dof-largest <the widest
@@ -1162,6 +1163,7 @@ struct Options {
   std::string cinePath;
   float cineFollow[3] = {0, 0, -1};  // --cine-follow distance,height[,pace]
   float cineHaze = -1;               // --cine-haze
+  float hazeMist = -1;               // --haze-mist [hazeamt]
   float dof = 0, dofFocus = 0, dofScale = -1, dofSeconds = -1, dofLargest = -1;
   std::string photo;
   float photoScale = 2;
@@ -1811,6 +1813,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->hasCine = true;
     } else if (a == "--cine-haze") {
       o->cineHaze = static_cast<float>(atof(v));
+    } else if (a == "--haze-mist") {  // [hazeamt]
+      o->hazeMist = static_cast<float>(atof(v));
     } else if (a == "--dof") {
       if (sscanf(v, "%f,%f", &o->dof, &o->dofFocus) < 1) return false;
     } else if (a == "--dof-scale") o->dofScale = static_cast<float>(atof(v));
@@ -2622,6 +2626,7 @@ int main(int argc, char** argv) {
   if (opt.iconFade >= 0) world.icons.fadeShare = std::min(opt.iconFade, 0.9f);  // [iconzoom] --icon-fade
   world.ao.strength = opt.ao;
   if (opt.cineHaze >= 0) world.cinematicHaze = opt.cineHaze;  // --cine-haze
+  if (opt.hazeMist >= 0) world.hazeMist = opt.hazeMist;  // --haze-mist [hazeamt]
   if (opt.dof > 0) {  // --dof: the lens's depth of field
     world.lens.on = true;
     world.lens.fNumber = opt.dof;
