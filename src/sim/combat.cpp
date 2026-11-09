@@ -3759,8 +3759,16 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
 // UpdateAttacker 0x5f3450
 void UpdateAttacker(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
   if (u->weapons.empty()) return;
-  if (!(u->desiredTarget.type == target.type && u->desiredTarget.entityId == target.entityId &&
-        (target.type != 2 || u->desiredTarget == target))) {
+  // The test is CAiTarget 0x5e2d40 on the attacker's desired target (vt+0x24) and the task's: both must hold an entity
+  // (the weak link +4) and the two entities' ids (+0x68) must agree; a target without an entity, a GROUND target, is
+  // never the same, so each call gives it to the attacker again (SetDesiredTarget 0x5d75b0: every weapon's target
+  // cleared, 0x5d7625). Seen (probe v3840j_44_mm): 4v4_4 6267, army 1's artillery 0x100058 on a ground Attack it cannot
+  // reach (6266: no ballistic solution, canReach 0): the acquire's code 6 takes a unit (FindBestEnemy, 0x5d94e9), the
+  // attack task's chase is in reach and calls this, and SetDesiredTarget clears it again (0x5d762a), so the beat's aim
+  // has no target and canReach is 1 for the next acquire (code 1, the ground target, engaged): the original solves
+  // only on even beats and stays. Ours found the same target, kept the unit target, failed to solve every beat and
+  // walked off at 6269.
+  if (!(target.type == 1 && u->desiredTarget.type == 1 && u->desiredTarget.entityId == target.entityId)) {
     SetDesiredTarget(sim, u, target);
     t.adata->listening = true;
     u->attackStateSignal = false;
