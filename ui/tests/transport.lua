@@ -242,6 +242,46 @@ ForkThread(function()
         local q = group[1]:GetCommandQueue() or {}
         local fp = q[1] and q[1].position
         check("at the press point, not where it was let go", fp ~= nil and math.abs(fp[1] - (pair[1] - 10)) < 3 and math.abs(fp[3] - (pair[3] - 10)) < 3, true)
+        -- Shift and a patrol for a group in which one tank has a move queued and the other nothing: the patrol begins
+        -- at that move's place, for both (the original's 0x81e050: the place of the last queued order of the last unit
+        -- that has one; the mean of the units' places only when none has. Ours began half way until 2026-11-09)
+        local function types(q)
+            local t = {}
+            for _, c in q do table.insert(t, c.type) end
+            return table.concat(t, " ")
+        end
+        IssueUnitCommand(group, "Stop")
+        WaitSeconds(0.5)
+        -- (the move by a right click: IssueUnitCommand carries no place)
+        local place = {pair[1] + 12, pair[2], pair[3] - 10}
+        local there = view:Project(place)
+        SelectUnits({group[1]})
+        moho64ui_MouseMove(there.x, there.y)
+        WaitSeconds(0.2)
+        moho64ui_MouseButton("Right", true, there.x, there.y)
+        moho64ui_MouseButton("Right", false, there.x, there.y)
+        WaitSeconds(0.4)
+        check("one tank has a move queued, the other nothing", types(group[1]:GetCommandQueue() or {}) .. "/" .. types(group[2]:GetCommandQueue() or {}), "Move/")
+        SelectUnits(group)
+        import("/lua/ui/game/commandmode.lua").StartCommandMode("order", {name = "RULEUCC_Patrol"})
+        WaitSeconds(0.2)
+        local far = view:Project({pair[1] + 12, pair[2], pair[3] + 12})
+        moho64ui_MouseMove(far.x, far.y)
+        moho64ui_Key(306, "Shift", "down")  -- (Shift held, as a player holds it)
+        WaitSeconds(0.2)
+        moho64ui_MouseButton("Left", true, far.x, far.y, "Shift")
+        moho64ui_MouseButton("Left", false, far.x, far.y, "Shift")
+        WaitSeconds(0.2)
+        moho64ui_Key(306, "", "up")
+        WaitSeconds(0.5)
+        import("/lua/ui/game/commandmode.lua").EndCommandMode(true)
+        local q1, q2 = group[1]:GetCommandQueue() or {}, group[2]:GetCommandQueue() or {}
+        check("Shift and a patrol: the tank with a move keeps it, then the two points", types(q1), "Move Patrol Patrol")
+        check("the idle tank: the two points", types(q2), "Patrol Patrol")
+        local function near(c)
+            return c ~= nil and c.position ~= nil and math.abs(c.position[1] - place[1]) < 3 and math.abs(c.position[3] - place[3]) < 3
+        end
+        check("the patrol begins at the queued move's place, for both", tostring(near(q1[2])) .. " " .. tostring(near(q2[1])), "true true")
     end
 
     -- the simulation's print reaches the game's console (Sim::Printf, the beat's lines: ui REQUESTS 41), here

@@ -1679,14 +1679,24 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   // ChooseFormation 0x8384c0 takes the end of each unit's queue when it has one): the mean is the formation's
   // centre, and the first point of a patrol.
   float mean[2] = {0, 0};
-  bool queuedPatrol = false;  // (with Shift: a unit whose queue ends in a patrol only gets the new point)
+  // With Shift, the selection's rule as the original has it (0x81e050, called at 0x820bd7 and 0x820ced): ONE unit whose
+  // queue ends in a Patrol (0x10) or a FormPatrol (0x12) and the whole selection gets the new point alone; and a
+  // patrol's first point is then the place of the last queued order of the last unit that has one (queueEnd), the
+  // mean of the units' places only when none has. (Until 2026-11-09 ours took the mean of queue ends and places: two
+  // units, one with a move queued to a place, and the patrol began half way between that place and the other unit.)
+  bool queuedPatrol = false;
+  bool hasQueueEnd = false;
+  float queueEnd[2] = {0, 0};
   for (const UserUnit* u : units) {
     float at[2] = {u->view.position[0], u->view.position[2]};
     if (!clear) {
       UnitStateView st;
       if (StateOf(L, u, &st)) {
         const std::vector<CommandView>& q = st.hasFactoryQueue ? st.factoryQueue : st.queue;
-        if (!q.empty() && q.back().hasPosition) at[0] = q.back().position[0], at[1] = q.back().position[2];
+        if (!q.empty() && q.back().hasPosition) {
+          at[0] = q.back().position[0], at[1] = q.back().position[2];
+          queueEnd[0] = at[0], queueEnd[1] = at[1], hasQueueEnd = true;
+        }
         if (!q.empty() && (q.back().type == static_cast<int>(CommandType::Patrol) || q.back().type == static_cast<int>(CommandType::FormPatrol))) queuedPatrol = true;
       }
     }
@@ -1765,11 +1775,12 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   if ((type == CommandType::Patrol || type == CommandType::FormPatrol) && !queuedPatrol) {
     StreamIssueData start = d, startRally = rally;
     float ground = y;
-    if (const auto& height = UserState::From(L)->config().groundHeight) ground = height(mean[0], mean[1]);
+    const float* from = hasQueueEnd ? queueEnd : mean;  // (hasQueueEnd only with Shift; without, mean = the places' mean)
+    if (const auto& height = UserState::From(L)->config().groundHeight) ground = height(from[0], from[1]);
     start.target.type = startRally.target.type = 2;
-    start.target.pos.x = startRally.target.pos.x = mean[0];
+    start.target.pos.x = startRally.target.pos.x = from[0];
     start.target.pos.y = startRally.target.pos.y = ground;
-    start.target.pos.z = startRally.target.pos.z = mean[1];
+    start.target.pos.z = startRally.target.pos.z = from[1];
     if (!others.empty()) IssueToUnits(L, others, start, clear);
     if (!factories.empty()) IssueRallyToUnits(L, factories, startRally, clear);
     clear = false;
