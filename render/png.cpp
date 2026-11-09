@@ -1,7 +1,11 @@
 #include "png.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
+
+#include <zlib.h>
 
 namespace render {
 namespace {
@@ -86,6 +90,102 @@ bool WritePng(const std::string& path, const uint8_t* rgba, int width, int heigh
   if (!f) return false;
   bool ok = fwrite(out.data(), 1, out.size(), f) == out.size();
   return fclose(f) == 0 && ok;
+}
+
+bool ReadPngGrey16(const std::string& file, int* width, int* height, std::vector<uint16_t>* out, std::string* why) {
+  static const uint8_t kSignature[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(file.data());
+  const size_t size = file.size();
+  auto word = [&](size_t at) { return static_cast<uint32_t>(p[at]) << 24 | static_cast<uint32_t>(p[at + 1]) << 16 | static_cast<uint32_t>(p[at + 2]) << 8 | p[at + 3]; };
+  if (size < 8 + 25 || std::memcmp(p, kSignature, 8) != 0) {
+    *why = "not a PNG";
+    return false;
+  }
+  uint32_t w = 0, h = 0;
+  std::vector<uint8_t> packed;
+  bool head = false, end = false;
+  for (size_t at = 8; at + 12 <= size && !end;) {
+    const uint32_t length = word(at);
+    if (length > size - at - 12) {
+      *why = "a PNG chunk longer than the file";
+      return false;
+    }
+    const uint8_t* name = p + at + 4;
+    const uint8_t* body = p + at + 8;
+    if (!std::memcmp(name, "IHDR", 4)) {
+      if (length != 13) {
+        *why = "a PNG header of the wrong length";
+        return false;
+      }
+      w = word(at + 8);
+      h = word(at + 12);
+      // bit depth 16, colour type 0 (grey), compression 0, filter 0, not interlaced
+      if (body[8] != 16 || body[9] != 0 || body[10] != 0 || body[11] != 0 || body[12] != 0) {
+        *why = "not a 16-bit grey PNG without interlace";
+        return false;
+      }
+      if (!w || !h || w > 16384 || h > 16384) {
+        *why = "a PNG of no size, or more than 16384 across or down";
+        return false;
+      }
+      head = true;
+    } else if (!std::memcmp(name, "IDAT", 4)) {
+      packed.insert(packed.end(), body, body + length);
+    } else if (!std::memcmp(name, "IEND", 4)) {
+      end = true;
+    }
+    at += 12 + static_cast<size_t>(length);
+  }
+  if (!head || packed.empty()) {
+    *why = "a PNG without a header or without a picture";
+    return false;
+  }
+  const size_t row = static_cast<size_t>(w) * 2, all = (row + 1) * h;
+  std::vector<uint8_t> raw(all);
+  z_stream z = {};  // (inflate itself: the tree's zlib is without its one-call helper)
+  z.next_in = packed.data();
+  z.avail_in = static_cast<uInt>(packed.size());
+  z.next_out = raw.data();
+  z.avail_out = static_cast<uInt>(all);
+  bool unpacked = inflateInit(&z) == Z_OK;
+  if (unpacked) {
+    unpacked = inflate(&z, Z_FINISH) == Z_STREAM_END && z.total_out == all;
+    inflateEnd(&z);
+  }
+  if (!unpacked) {
+    *why = "a PNG whose picture cannot be unpacked";
+    return false;
+  }
+  // each row: its filter, then its bytes as differences from the value to the left (2 bytes back), the row above, or both
+  std::vector<uint8_t> above(row, 0);
+  out->resize(static_cast<size_t>(w) * h);
+  for (uint32_t y = 0; y < h; ++y) {
+    uint8_t* line = raw.data() + (row + 1) * y;
+    const uint8_t filter = line[0];
+    uint8_t* d = line + 1;
+    if (filter > 4) {
+      *why = "a PNG row with an unknown filter";
+      return false;
+    }
+    for (size_t i = 0; i < row; ++i) {
+      const int a = i >= 2 ? d[i - 2] : 0, b = above[i], c = i >= 2 ? above[i - 2] : 0;
+      int add = 0;
+      if (filter == 1) add = a;
+      else if (filter == 2) add = b;
+      else if (filter == 3) add = (a + b) / 2;
+      else if (filter == 4) {
+        const int e = a + b - c, ea = std::abs(e - a), eb = std::abs(e - b), ec = std::abs(e - c);
+        add = ea <= eb && ea <= ec ? a : eb <= ec ? b : c;
+      }
+      d[i] = static_cast<uint8_t>(d[i] + add);
+    }
+    std::memcpy(above.data(), d, row);
+    uint16_t* to = out->data() + static_cast<size_t>(w) * y;
+    for (uint32_t x = 0; x < w; ++x) to[x] = static_cast<uint16_t>(d[2 * x] << 8 | d[2 * x + 1]);
+  }
+  *width = static_cast<int>(w);
+  *height = static_cast<int>(h);
+  return true;
 }
 
 }  // namespace render

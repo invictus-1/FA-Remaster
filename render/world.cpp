@@ -217,6 +217,8 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     if (options.lodPixels > 0) terrain.quadPixels = options.lodPixels;
     distantLand.Forget(map, mapPath);  // (beyondland: read from this map as opened; the land far off made when it is wanted)
+    surround.Forget();                 // (surround: looked for when it is first wanted)
+    surroundTried_ = false;
     step("ground");
     if (!water.Load(&map, &why)) {
       *error = "water: " + why;
@@ -1604,9 +1606,27 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   // the world beyond the map's edge: six tenths of the map's shorter side out, then lost in the distance
   terrain.beyondReach = 0;
+  terrain.beyondCopies = true;
   if (haveMap_ && worldBeyond && look == Look::Modern) {
-    // (sky) with the land far off on, farther: BeyondLand::reach
-    terrain.beyondReach = (beyondLand ? std::clamp(distantLand.reach, 0.6f, 1.0f) : 0.6f) * static_cast<float>(std::min(map.width, map.height));
+    // (surround) the map's own sculpted surround, with the option: looked for beside the map's file the first time
+    if (mapSurround && !surroundTried_) {
+      surroundTried_ = true;
+      const std::string& path = terrain.mapPath;
+      if (path.size() > 6 && path.compare(path.size() - 6, 6, ".scmap") == 0) {
+        const std::string name = path.substr(0, path.size() - 6) + "_surround.json";
+        if (auto json = vfs_->ReadFile(name)) {
+          const std::string folder = path.substr(0, path.find_last_of('/') + 1);
+          std::string why;
+          if (!surround.Open(map, *json, [&](const std::string& file) { return vfs_->ReadFile(folder + file); }, &why))
+            fprintf(stderr, "render: %s: %s (beyond the edge the map laid out again is drawn)\n", name.c_str(), why.c_str());
+        }
+      }
+    }
+    const bool sculpted = mapSurround && surround.Usable();
+    // (sky) with the land far off on, farther: BeyondLand::reach; (surround) as far as the map's surround goes
+    terrain.beyondReach = sculpted ? surround.Reach()
+                                   : (beyondLand ? std::clamp(distantLand.reach, 0.6f, 1.0f) : 0.6f) * static_cast<float>(std::min(map.width, map.height));
+    terrain.beyondCopies = !sculpted;
     c.beyond[0] = static_cast<float>(map.width);
     c.beyond[1] = static_cast<float>(map.height);
     c.beyond[2] = 1 / terrain.beyondReach;
@@ -2172,7 +2192,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   // ground goes. They follow the map's own: a wood felled on the map is felled out there.
   CpuTimes::Part("scenery beyond the edge listed");
   propsBeyond = 0;
-  if (terrain.beyondReach > 0 && !propCells_.empty()) {
+  if (terrain.beyondReach > 0 && terrain.beyondCopies && !propCells_.empty()) {  // (surround: none on the sculpted land yet)
     const float w = static_cast<float>(map.width), h = static_cast<float>(map.height), reach = terrain.beyondReach;
     const float margin = propReach_ + 30;
     for (int tz = -1; tz <= 1; ++tz)
@@ -4372,6 +4392,8 @@ void World::Render() {
   // (beyondland) the land far off (beyond_land.h): made for the map the first time it is wanted, its colours from the
   // map's ground (that dispatches: before the scene's pass)
   distantLand.Prepare(device_, beyondLand && view.constants.beyond[2] > 0 && !sidePicture, terrain);
+  // (surround) the map's sculpted surround: what is drawn made the first time, with the map's colours (that dispatches)
+  surround.Prepare(device_, mapSurround && !terrain.beyondCopies && view.constants.beyond[2] > 0, terrain, distantLand);
   // [seasons] leaves in the autumn wind (seasons.h), on a map with an autumn look: which of its broadleaf trees shed this
   // frame (those still standing as they were), and the squares of ground round the camera where its cover grows (the
   // cover's density made the first time, as the ground cover makes it: it dispatches)
@@ -4529,6 +4551,7 @@ void World::Render() {
   if (haveMap_) {
     Stage("ground");
     terrain.Draw(view);
+    surround.Draw(view);  // (surround) the land past the map's edges, where the map brings it (not drawn: nothing)
     Stage("marks on the ground");
     // decals on the ground, before anything stands on it: they read the ground's depth
     // ([decalsnow] the snow the ground has just laid from its shelter, for the marks to lay the same)

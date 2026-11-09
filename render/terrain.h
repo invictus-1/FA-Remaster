@@ -150,6 +150,9 @@ class Terrain {
   // laid out again mirrored on every side, which joins without a seam. 0: the map ends at its
   // edge. The host sets it with the view's `beyond` (World does).
   float beyondReach = 0;
+  // (surround) False: the ground beyond the edge is not the map laid out again but the map's own sculpted surround,
+  // drawn by the host (surround.h); the map's ground ends at its edge, and beyondReach says how far that other goes.
+  bool beyondCopies = true;
   int MaterialLayers() const;  // how many of the map's layers have a third map
 
   // Builds everything for a map. `map` must stay alive while the terrain is used.
