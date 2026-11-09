@@ -23,6 +23,9 @@ class SightShade {
   // bits of SightBits (frame.h). An empty grid: nothing is darkened.
   void Set(const std::vector<uint8_t>& grid, int cells);
   bool On() const { return static_cast<bool>(texture_); }
+  // The last grid's pixels into the picture: once a frame, within it (after the device's BeginFrame) and outside any
+  // pass, before Draw. (Set is called between frames, where a texture cannot be written.)
+  void Upload();
   // Of a place of the map (x and z as shares of its width and height, 0..1): is it seen now, and
   // has it been seen at some time. With no grid, and outside the map: yes.
   bool SeenAt(float u, float v) const { return (At(u, v) & kSightNow) != 0; }
@@ -59,6 +62,8 @@ class SightShade {
   gfx::Texture texture_;
   std::vector<uint8_t> pixels_, grid_;
   int cells_ = 0;
+  int made_ = 0;        // the picture's size a side (0: none)
+  bool fresh_ = false;  // pixels_ newer than the picture: Upload
 };
 
 }  // namespace render

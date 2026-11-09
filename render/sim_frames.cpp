@@ -546,6 +546,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     u.maxHealth = v.maxHealth;
     u.fractionComplete = v.fractionComplete;
     u.dead = v.dead;
+    u.layer = static_cast<uint32_t>(v.layer);  // (the same bits: a dying aircraft's or ship's debris, a submerged hull's wear)
     u.beingBuilt = v.beingBuilt;
     u.workProgress = v.workProgress;
     u.paused = v.paused;

@@ -824,7 +824,9 @@ void Debris::Update(double clock, Vec3 eye, MeshRenderer* meshes, Blasts* splash
       }
       const float ground = Ground(c.at.x, c.at.z);
       // ([whitecaps] the surface where the lifted waves have it)
-      const float surface = ground < waterLevel && waterRise ? waterLevel + waterRise(c.at.x, c.at.z) : waterLevel;
+      // (the waves asked only for a piece near the water: every piece in the air over the sea summed them each step;
+      // no wave stands eight units over the level)
+      const float surface = ground < waterLevel && waterRise && c.at.y < waterLevel + 8 ? waterLevel + waterRise(c.at.x, c.at.z) : waterLevel;
       if (ground < waterLevel && c.at.y < surface) {  // into the water: a splash, and it sinks
         if (splashes) splashes->Add({c.at.x, surface, c.at.z}, c.size, clock, true);
         Sink(&c, clock);

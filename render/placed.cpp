@@ -60,6 +60,11 @@ float4 PS(VOut i) : SV_Target {
 
 }  // namespace
 
+PlacedMeshes::~PlacedMeshes() {
+  for (gfx::Pipeline p : {over_, tested_, feedback3_, feedback4_})
+    if (p) device_->Destroy(p);
+}
+
 bool PlacedMeshes::Init(std::string* error) {
   const std::string source = std::string(kViewShaderBlock) + kShader;
   gfx::PipelineDesc pd;

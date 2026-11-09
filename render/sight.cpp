@@ -117,11 +117,15 @@ bool SightShade::Init(std::string* error) {
 }
 
 void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
-  if (texture_) device_->Destroy(texture_);
-  texture_ = {};
   grid_.clear();
   cells_ = 0;
-  if (cells <= 0 || grid.size() < static_cast<size_t>(cells) * static_cast<size_t>(cells)) return;
+  if (cells <= 0 || grid.size() < static_cast<size_t>(cells) * static_cast<size_t>(cells)) {
+    if (texture_) device_->Destroy(texture_);
+    texture_ = {};
+    made_ = 0;
+    fresh_ = false;
+    return;
+  }
   grid_ = grid;
   cells_ = cells;
   pixels_.resize(static_cast<size_t>(cells) * static_cast<size_t>(cells) * 4);
@@ -133,12 +137,27 @@ void SightShade::Set(const std::vector<uint8_t>& grid, int cells) {
     pixels_[i * 4 + 2] = (grid[i] & kSightRadar) ? 255 : 0;
     pixels_[i * 4 + 3] = (grid[i] & kSightSonar) ? 255 : 0;
   }
+  // (the same picture kept from grid to grid, its pixels sent in the frame, Upload: it was destroyed and made anew each
+  // beat, ten a second: an upload buffer, a copy and a retired texture every time)
+  if (texture_ && made_ == cells) {
+    fresh_ = true;
+    return;
+  }
+  if (texture_) device_->Destroy(texture_);
   gfx::TextureDesc td;
   td.width = td.height = cells;
   td.format = gfx::Format::RGBA8;
   td.data = pixels_.data();
   td.dataSize = pixels_.size();
   texture_ = device_->CreateTexture(td);
+  made_ = texture_ ? cells : 0;
+  fresh_ = false;
+}
+
+void SightShade::Upload() {
+  if (!fresh_ || !texture_) return;
+  device_->UpdateTexture(texture_, 0, 0, made_, made_, pixels_.data(), static_cast<uint32_t>(made_) * 4);
+  fresh_ = false;
 }
 
 void SightShade::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, float mapWidth, float mapHeight) {

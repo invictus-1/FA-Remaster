@@ -1049,6 +1049,12 @@ bool StreamWater::Prepare() {
   return water_ && outlet_ && white_;
 }
 
+bool StreamWater::InView(const View& view, const std::function<bool(uint32_t)>& standing) const {
+  for (const Placed& p : placed_)
+    if (!p.whiteWater && (!standing || standing(p.key)) && view.BoxVisible(p.lo, p.hi)) return true;
+  return false;
+}
+
 void StreamWater::Draw(const View& view, const Camera& camera, gfx::Texture behind, gfx::Texture sceneDepth, gfx::Texture heights,
                        float heightUnit, float mapWidth, float mapHeight, const std::function<bool(uint32_t)>& standing, bool whiteWater) {
   if (!whiteWater) drawn = triangles = 0;

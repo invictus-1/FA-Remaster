@@ -62,7 +62,7 @@ namespace {
 
 constexpr int kPressSize = 512;        // texels a side of the field
 constexpr float kPressTexel = 0.25f;   // world units a texel
-constexpr int kMostBoxes = 256;
+constexpr int kMostBoxes = PlantLife::kMostBoxes;
 constexpr int kBurnsADraw = 256;
 
 // The field (a thread a texel): what was here (the last field, at this place: it lies a whole number of texels away),

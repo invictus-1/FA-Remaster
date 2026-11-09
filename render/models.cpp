@@ -1007,6 +1007,9 @@ const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool origin
         if (of->ok) {
           *m = *of;  // (the same buffers and textures)
           m->scale = scale;
+          // (a level's number stands for the level AND the model's scale wherever a drawn thing is kept by it: its own here,
+          // as FromDisplay gives a model made from another's levels)
+          for (ModelLod& lod : m->lods) lod.serial = NextLodSerial();
         }
       }
     }

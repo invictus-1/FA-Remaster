@@ -667,6 +667,11 @@ void Wildlife::Hear(Vec3 at, float loudness) {
 }
 
 void Wildlife::Listen(const Frame& frame, const FrameCombat& combat) {
+  if (flocks_.empty()) {  // (no birds on this map: nothing to hear for, no shot kept)
+    shots_.clear();
+    beams_.clear();
+    return;
+  }
   ++stamp_;
   // (only what the army the picture is for sees: birds scattering must not give away a fight in the fog of war)
   // shots: one first seen is a weapon firing; one gone since the last frame has met something (where the engine's
@@ -936,6 +941,18 @@ bool Wildlife::Update(const View& view, const Camera& camera, float time, float 
   now_ += dt;
   // the noises heard, those close together as one (the loudest), then the flocks they reach scattered
   if (!heard_.empty()) {
+    // (only those that reach a flock, the loudest first: the first sixty-four places were once kept in the order heard,
+    // and in a large fight they were all far from the birds; the blast beside a wood, heard later, scattered nothing)
+    heard_.erase(std::remove_if(heard_.begin(), heard_.end(), [&](const Noise& n) {
+      const float reach = 40 * std::sqrt(n.loudness);  // (Scatter's)
+      for (const Flock& f : flocks_) {
+        const Vec3 centre = f.state == Resting || f.state == Landing ? f.home : f.aim;
+        const float dx = centre.x - n.at.x, dz = centre.z - n.at.z;
+        if (dx * dx + dz * dz <= reach * reach) return false;
+      }
+      return true;
+    }), heard_.end());
+    std::stable_sort(heard_.begin(), heard_.end(), [](const Noise& a, const Noise& b) { return a.loudness > b.loudness; });
     std::vector<Noise> merged;
     for (const Noise& n : heard_) {
       bool joined = false;

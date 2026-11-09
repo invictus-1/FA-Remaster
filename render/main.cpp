@@ -3450,7 +3450,7 @@ int main(int argc, char** argv) {
           if (e.key == kKeyPlus) playSpeed = std::min(playSpeed * 2, 64.0);
           if (e.key == kKeyMinus) playSpeed = std::max(playSpeed / 2, 0.125);
           if (e.key == kKeyPageDown) playTick += 100;
-          if (e.key == kKeyPageUp) playTick -= 100;
+          if (e.key == kKeyPageUp) playTick = std::max(playTick - 100, 0.0);  // (never before the start: a live game is run to it as an unsigned beat)
           if (e.key == kKeyHome && haveRecording) playTick = recording.FirstTick();
           if (e.key == 'F' && havePlay) lookAtUnits();
           if (e.key == 'L') look = look == Look::Modern ? Look::Original : Look::Modern;

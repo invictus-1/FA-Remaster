@@ -49,6 +49,7 @@ struct PlacedMesh {
 class PlacedMeshes {
  public:
   PlacedMeshes(gfx::Device* device, ModelCache* models) : device_(device), models_(models) {}
+  ~PlacedMeshes();
   bool Init(std::string* error);
   // Is it one of the shaders drawn here (not a lit model)?
   static bool Flat(const std::string& shader);

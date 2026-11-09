@@ -1062,8 +1062,9 @@ GroundCover::~GroundCover() {
   if (farField_) device_->Destroy(farField_);  // [plantlod]
   for (gfx::Pipeline p : modelPipelines_)  // [plantlod]
     if (p) device_->Destroy(p);
-  for (gfx::Buffer b : {tileBuffer_, modelTileBuffer_})  // [plantlod]
+  for (gfx::Buffer b : {tileBuffer_, modelTileBuffer_, modelArgsBuffer_})  // [plantlod]
     if (b) device_->Destroy(b);
+  if (modelArgs_) device_->Destroy(modelArgs_);
   if (trampled_) device_->Destroy(trampled_);
 }
 
