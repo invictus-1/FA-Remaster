@@ -34,6 +34,23 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 63. To the VISUALS track: the last level of the UEF's light tank reads much darker than the one before it (2026-11-09; not blocking)
+
+**Found while** measuring the band for the levels of detail (Chris's small picture corrections, "detail-level
+popping"): a block of 400 `UEL0201` on Seton's Clutch Remastered, each about 40 pixels across, where the third
+level gives way to the fourth.
+
+**What it shows:** the fourth level is a dark, almost black wedge with two light-blue dots; the third is the blue
+tank. The renderer's band now stops a unit going back and forth between the two (415 changes in 4 seconds of a
+camera that breathes by 4 %, none with the band), but each unit still changes ONCE as it crosses, and with this
+difference in brightness and colour that one change is seen from far.
+
+**Asked:** when the levels are next baked, a last level whose mean colour and brightness match the level before it
+(the team colour's share above all). Whether other units of the four-level standard show the same was not looked
+at; the pair is in the lab under the renderer's `a3/units12/`.
+
+**Answer:** (none yet)
+
 ## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking)
 
 **Who says:** Chris, 2026-11-09: "sculpt an entire terrain outside the map so the map actually looks like it exists vs

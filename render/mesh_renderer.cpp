@@ -1697,6 +1697,21 @@ void MeshRenderer::Begin() {
   markedItems_.clear();  // (hidden outlines)
   marks_ = 0;
   markedSorted_ = false;
+  {  // (level band) the levels the frame drew its keyed models at, for the next frame's choice
+    size_t keyed = 0;
+    for (const Entry& e : entries_) keyed += e.key && (e.levelNow[0] != 255 || e.levelNow[1] != 255);
+    size_t room = 16;
+    while (room < keyed * 2) room *= 2;
+    levelsBefore_.assign(keyed ? room : 0, 0);  // (also with no band: the count of changes)
+    if (!levelsBefore_.empty())
+      for (const Entry& e : entries_) {
+        if (!e.key || (e.levelNow[0] == 255 && e.levelNow[1] == 255)) continue;
+        if (e.levelWas[0] != 255 && e.levelNow[0] != 255 && e.levelWas[0] != e.levelNow[0]) ++levelChanges;
+        size_t slot = LevelSlot(e.key, room);
+        while (levelsBefore_[slot]) slot = (slot + 1) & (room - 1);
+        levelsBefore_[slot] = static_cast<uint64_t>(e.key) << 16 | static_cast<uint64_t>(e.levelNow[0]) << 8 | e.levelNow[1];
+      }
+  }
   entries_.clear();
   culls_.clear();
   groupsListed_.clear();
@@ -1992,6 +2007,15 @@ void MeshRenderer::Add(const Model* model, const Mat4& world, Vec3 teamColor, fl
   if (!model || !model->ok) return;
   Entry e = MakeEntry(model, world, teamColor, built, tint, treads);
   e.key = key;
+  if (key && model->lods.size() > 1 && !levelsBefore_.empty()) {  // (level band) its levels of the frame before
+    const size_t room = levelsBefore_.size();
+    for (size_t slot = LevelSlot(key, room); levelsBefore_[slot]; slot = (slot + 1) & (room - 1))
+      if (static_cast<uint32_t>(levelsBefore_[slot] >> 16) == key) {
+        e.levelWas[0] = static_cast<uint8_t>(levelsBefore_[slot] >> 8);
+        e.levelWas[1] = static_cast<uint8_t>(levelsBefore_[slot]);
+        break;
+      }
+  }
   e.scenery = addingScenery;
   if (addingScenery) e.flags |= kScenery;
   if (pose && (pose->nowCount || pose->nextCount) && !model->bones.empty()) {
@@ -2196,16 +2220,23 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     const std::vector<ModelLod>& lods = e.model->lods;
     size_t level = 0;
     const std::vector<float>& sizes = e.model->levelPixels;
+    // (level band) what it was drawn at in the frame before holds it: at the border between levels n and n + 1 its size
+    // counts as larger by the band while it was at n or finer, as smaller while it was coarser
+    const uint8_t was = e.levelWas[shadowPass ? 1 : 0];
+    const float held[2] = {was == 255 ? 1.0f : 1 / (1 - levelBand), was == 255 ? 1.0f : 1 / (1 + levelBand)};
     if (!sizes.empty()) {
       // built to the standard: each level down to the size it was made for (the quality setting and
       // the shadows' coarser wish count as a smaller size)
       const float size = sized * 0.75f * std::sqrt(detail * (shadowPass ? shadowDetail : 1.0f));
-      while (level < sizes.size() && level + 1 < lods.size() && size < sizes[level]) ++level;
+      while (level < sizes.size() && level + 1 < lods.size() && size * held[was > level] < sizes[level]) ++level;
     } else {
-      while (level + 1 < lods.size() &&
-             wanted * wanted < static_cast<float>(lods[level].indexCount / 3) * static_cast<float>(lods[level + 1].indexCount / 3))
+      while (level + 1 < lods.size()) {
+        const float h = held[was > level], w = wanted * h * h;  // (the wish goes by the size's square)
+        if (w * w >= static_cast<float>(lods[level].indexCount / 3) * static_cast<float>(lods[level + 1].indexCount / 3)) break;
         ++level;
+      }
     }
+    e.levelNow[shadowPass ? 1 : 0] = static_cast<uint8_t>(level);
     const ModelLod* lod = &lods[level];
     // ([glitches] a see-through ghost: its solid levels, in the see-through pass)
     if (lod->hidden || ((c.flags & kGhost) ? lod->glass : lod->glass != glass)) return;
