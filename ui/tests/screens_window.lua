@@ -4,9 +4,12 @@
 -- and back; with more it moves between them (the window covers each screen for two seconds). Then the player's
 -- choice is kept as the last screen's mode, and a second run starts there (case "start"), on the same preferences:
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --window --size 1280x720
---            --lua ui/tests/screens_window.lua --frames 6000 --log move.log
+--            --lua ui/tests/screens_window.lua --frames 200000 --log move.log
 --   moho64ui --init <init.lua> --prefs <the same> --stage frontend --window
---            --lua ui/tests/screens_window.lua --frames 6000 --log start.log -- /screenscase start
+--            --lua ui/tests/screens_window.lua --frames 200000 --log start.log -- /screenscase start
+-- (The frame budget is only a guard: the test ends itself. The test preferences are "uncapped", about 790 frames a
+-- second in the front end, and the test waits about ten seconds: 6000 frames cut it off. From Git Bash the second
+-- run needs MSYS_NO_PATHCONV=1, or "/screenscase" arrives as a path and the default case runs.)
 -- (In the first, --size chose the mode, so the menu offers "Command Line Override" alone; the console's
 -- SC_PrimaryAdapter still asks, as the menu's Apply would: a key "w,h,rate,N" names screen N, its size being the
 -- screen's own anyway. The second has no --size: the profile's Primary Adapter chooses.)
