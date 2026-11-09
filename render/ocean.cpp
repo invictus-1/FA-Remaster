@@ -48,7 +48,7 @@ float StormShare(float rough) {
 }
 // [stormfoam] How fast a storm's foam is drawn out downwind into streaks (world units a second, at its full share: the
 // residue's patches lengthen by this as they drift, as a storm's wind rows do).
-constexpr float kStormStreak = 0.4f;
+constexpr float kStormStreak = 0.15f;  // ([stormfoam2] 0.4 -> 0.15: Chris, 2026-11-08, all of it streaming one way)
 // [whitecaps] How long foam stays fresh after its crest has broken (seconds to fall to 1/e): bright and solid while the crest
 // breaks and just after, then the residue, greyer and broken.
 constexpr float kFreshLife = 0.45f;
@@ -629,8 +629,12 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const double dt = lastTime_ >= 0 ? std::clamp(time_ - lastTime_, 0.0, 0.25) : 0.0;
   lastTime_ = time_;
   const float r = rough_;
-  const float storm = StormShare(r) * std::clamp(stormFoam, 0.0f, 3.0f);  // [stormfoam]
-  const float drift = (0.12f + 0.25f * r) * static_cast<float>(dt);
+  // [stormfoam] ([stormfoam2] Chris, 2026-11-08: "far too strong ... we should remove it" - the whole of it at 0.4: a
+  // storm's sea in the stand went from 4 % white without it to 29 % with it, all in streaks one way; now about half that)
+  const float storm = 0.4f * StormShare(r) * std::clamp(stormFoam, 0.0f, 3.0f);
+  // ([stormfoam2] Chris's 2026-11-08 test: "all of it flows the same way across the whole map" - a storm's foam rides the
+  // waves more than it slides downwind: the drift a third as fast in a storm, 0.12 + 0.25 r -> 0.06 + 0.06 r)
+  const float drift = (0.06f + 0.06f * r) * static_cast<float>(dt);
   // [whitecaps] the field drifts with the water: its cells lie from the drift so far on, in whole cells round what the
   // camera looks at (so that it is copied cell for cell from frame to frame, kFoam)
   if (foamFresh_) driftX_ = driftZ_ = 0;
@@ -640,7 +644,10 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
             oz = static_cast<int>(std::floor((camera.target.z - driftZ_) / cell)) - kFoamCells / 2;
   const float x0 = static_cast<float>(ox * static_cast<double>(cell) + driftX_), z0 = static_cast<float>(oz * static_cast<double>(cell) + driftZ_),
               side = static_cast<float>(kFoamCells) * cell;
-  const float life = 2.0f + 3.5f * r + 4.0f * storm;  // (seconds to fall to 1/e; [whitecaps] longer, as its residue thins to lace: was 1.5 + 2 r; [stormfoam] a storm's 4 s longer)
+  // ([stormfoam2] Chris, 2026-11-08: "far too strong" at times - but right just after the look was switched on, before the
+  // residue had built up: a storm's residue no longer lasts 4 s longer, only 1 s, so that it builds up to about what the
+  // fresh sea showed)
+  const float life = 2.0f + 3.5f * r + 1.0f * storm;  // (seconds to fall to 1/e; [whitecaps] longer, as its residue thins to lace: was 1.5 + 2 r; [stormfoam] a storm's 4 s longer)
   const bool sameCells = !foamFresh_ && cell == foamCell_;
   const float foamNew[4] = {x0, z0, cell, static_cast<float>(kFoamCells)};
   const float foamOld[4] = {foamArea_[0], foamArea_[1], foamArea_[2], foamFresh_ ? 2.0f : sameCells ? 0.0f : 1.0f};

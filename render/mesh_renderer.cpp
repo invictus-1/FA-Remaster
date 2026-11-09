@@ -1044,13 +1044,16 @@ float4 Shade(VOut i, bool front) {
     if (shielded) {  // its personal shield: light of its faction's shield along its outline, breathing slowly
       float3 tint = faction == 1 ? float3(0.35, 1.0, 0.75) : faction == 2 ? float3(1.0, 0.2, 0.12) : faction == 3 ? float3(0.95, 0.85, 0.55) : float3(0.25, 0.5, 1.0);
       float outline = pow(1 - saturate(dot(toCamera, N)), 3);  // (only where the surface turns away from the eye)
-      float3 glow = tint * ((0.03 + 1.1 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
+      // ([pshield2] its rest glow halved, Chris 2026-11-08: "only when hit" - a hit lights it as before)
+      float3 glow = tint * ((0.02 + 0.5 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
       [branch] if (kind5.w > 0.5) {
         // and its faction's lattice over it, as the bubble's (the visuals track's sheet): painted on the
         // model at rest and seen along the three axes, so it goes with the unit and its bones and shows
         // on every side; faint where the surface faces the eye (the paint must show), stronger toward
         // the outline, a little more where the sheet's patches drift, each cell on its own slow beat
-        float3 q = i.rest * (1.0 / 3.0);  // (the sheet some 3 world units across: about 0.4 a cell)
+        // ([pshield2] Chris, 2026-11-08, the Dragonite's: "only when hit, and a finer mesh" - the sheet 2 units across, its
+        // cells finer, and the lattice at rest faint: a hit lights it as before)
+        float3 q = i.rest * (1.0 / 2.0);  // (the sheet some 2 world units across: about 0.27 a cell)
         float3 w = pow(abs(normalize(i.restNormal)), 4);
         w /= w.x + w.y + w.z;
         const float layer = faction;
@@ -1059,7 +1062,7 @@ float4 Shade(VOut i, bool front) {
                      shieldPatterns.Sample(samplerAniso, float3(q.xy, layer)).rgb * w.z;
         float beat = 0.75 + 0.25 * sin(time * 1.7 + pat.b * 6.283);
         float drift = pat.g * (0.6 + 0.4 * sin(time * 0.9 + pat.b * 6.283));
-        glow += tint * (pat.r * (beat * (0.18 + 1.5 * outline) + drift * 0.36));
+        glow += tint * (pat.r * (beat * (0.05 + 0.6 * outline) + drift * 0.12));  // ([pshield2] was 0.18 + 1.5, 0.36)
         [branch] if (hitAge >= 0) {  // a hit: the cells round it light up and fade, in about a second
           float near = saturate(1 - length(i.rest - i.tint) / 0.9);  // (some two cells round it)
           float fade = 1 - hitAge;

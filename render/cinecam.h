@@ -58,10 +58,16 @@ class CinePath {
     CinePose pose;
   };
   std::vector<Key> keys;  // in order of time
+  // [cineloop] (the interface's request 49 R1: the menu's flight) a closed path: the last key is the first pose again (its
+  // yaw may be a whole turn on), and the flight goes round and round - at a moment past the last key it is where it was
+  // that long after the first, and it passes the seam at an even speed (the keys either side of it shape the slope there).
+  // Set by the host, or by a key "loop" in Parse's text. Needs three keys or more (the first, one between, the first again).
+  bool loop = false;
   // The pose at a moment.
   CinePose At(float time) const;
   float Length() const { return keys.empty() ? 0 : keys.back().time - keys.front().time; }
-  // From text: keys with ';' between, each "t:x,y,z,yaw,pitch,fov" (the viewer's --cine-path): the time in
+  // From text: keys with ';' between, each "t:x,y,z,yaw,pitch,fov" (the viewer's --cine-path; a key "loop": a closed path,
+  // `loop`): the time in
   // seconds, the place (y the height over the ground there, by `ground`), the angles and the field of view in
   // degrees. False (and `error` says why) when it cannot be read.
   bool Parse(const std::string& text, const GroundFn& ground, std::string* error);

@@ -81,6 +81,8 @@ class Sunlight {
                               // less, so that a misty morning's woods are not washed out)
   };
   Look look;
+  // [cloudmix2] the clouds' Mixed layout (Clouds::mix, 0..1): the drifting shadows gathered in groups as the clouds are
+  float cloudMix = 0;
   // Sets those named in a list "top=6,haze=0.0015,..." (shadow, edge, sea, drift, top, open, forward, haze, misty, under,
   // low, lowforward, lowreach, reach, farthest, fadefrom, fadeto, steps, spacing, strength); false and why.
   bool Set(const std::string& list, std::string* why);
