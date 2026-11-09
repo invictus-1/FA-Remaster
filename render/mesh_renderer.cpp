@@ -1213,6 +1213,8 @@ float4 Shade(VOut i, bool front) {
 
 // a ghost: its shape in one colour, the light and dark of the model kept
 float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
+  SafeFrame(i.normal, i.tangent, i.binormal, i.world, cameraPosition);  // (lighting.h: a vertex frame of no length)
+  i.restNormal = dot(i.restNormal, i.restNormal) > 1e-12 ? i.restNormal : float3(0, 1, 0);
   [branch] if (kind13.y > 0.5 && i.color.a < 1.5 && dot(i.tint, float3(1, 1, 1)) > 0) {
     // [glitches] a building's see-through ghost (SeeThroughGhost), as the original's UnitPlace: its tint lit by the sun
     // on its shape, mostly see-through (the original's 0.2), so the ground and what stands there show through it and it

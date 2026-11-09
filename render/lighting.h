@@ -182,6 +182,20 @@ float3 OriginalLight(float sunDotN, float shadow) {
 
 float3 ToLinear(float3 c) { return pow(max(c, 0), 2.2); }
 
+// A model's frame as it comes to a pixel, made safe to normalize (a pixel shader's first step). A vertex can carry a
+// normal, tangent or binormal of no length (stock and mod models do); between vertices that have one it does no harm,
+// but where a whole triangle's are without, normalize makes not-a-number of it: black or flickering specks on the
+// model and in whatever is blurred from them. Such a normal becomes the triangle's own, toward the eye; such a tangent
+// or binormal a direction across the normal. A frame that has its lengths is not touched.
+void SafeFrame(inout float3 normal, inout float3 tangent, inout float3 binormal, float3 world, float3 eye) {
+  float3 flat = cross(ddx(world), ddy(world));
+  flat = dot(flat, flat) > 0 ? flat : float3(0, 1, 0);
+  flat = dot(flat, eye - world) < 0 ? -flat : flat;
+  normal = dot(normal, normal) > 1e-12 ? normal : flat;
+  tangent = dot(tangent, tangent) > 1e-12 ? tangent : cross(normal, abs(normal.y) < 0.9 * length(normal) ? float3(0, 1, 0) : float3(1, 0, 0));
+  binormal = dot(binormal, binormal) > 1e-12 ? binormal : cross(normal, tangent);
+}
+
 // How much sky a rough surface reflects, without a lookup table (after Karis, "Physically Based
 // Shading on Mobile").
 float3 EnvironmentBrdf(float3 f0, float roughness, float nDotV) {
