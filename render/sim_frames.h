@@ -97,6 +97,14 @@ class SimFrames {
   // about; not the blueprints' looks (TakeLooks gives none: the world was given them as the session was prepared).
   void AdoptArmies(SimFrames& from);
 
+  // (shell curve) Between two beats a shell was drawn on along the speed it had at the first, and set to its true place
+  // at the next: one that turns (a homing missile) or is pushed jumped sideways ten times a second, its trail with it;
+  // a beam stood where the beat had it while its unit moved on. So FrameAt draws a shell that both beats know on the
+  // curve through both places with both speeds (a straight line where the speeds do not fit the way, as a script's
+  // move), turns it from the one beat's direction to the other's, moves a beam's ends with it, and turns and sizes the
+  // scripts' entities as it moved them. false: as it was (a test's "before").
+  bool shellBlend = true;
+
  private:
   struct Beat_ {
     uint32_t tick = 0;
@@ -111,6 +119,11 @@ class SimFrames {
 
   mutable std::mutex mutex_;
   std::deque<Beat_> beats_;            // the newest few
+  // (shell curve) for the pair of beats FrameAt was last asked about: each of the first's projectiles' place in the
+  // next's list (-1: not there). Made once per pair, not per frame; FrameAt checks the id at each use.
+  std::vector<int32_t> shellNext_;
+  uint32_t shellPair_[2] = {~0u, ~0u};
+  size_t shellPairCount_ = 0;
   std::vector<std::string> names_;     // blueprint ids, by FrameUnit::blueprint and FrameProjectile::blueprint
                                        // (0: unknown); only grows
   std::vector<Vec3> armyColors_;

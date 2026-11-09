@@ -102,6 +102,8 @@ class LiveSim {
   // The frame at a moment given in ticks, blended between the two beats around it (clamped to the
   // beats kept). False while there is no beat yet.
   bool FrameAt(double tick, Frame* out);
+  // (shell curve) false: shells, beams and entities between beats as they were drawn before (SimFrames::shellBlend).
+  void SetShellBlend(bool on) { frames_.shellBlend = on; }
   // The effect events of the beats computed since the last call, in order (each says its beat).
   void TakeEffectEvents(std::vector<FrameEffectEvent>* out);
   void TakePropEvents(std::vector<FramePropEvent>* out) { frames_.TakePropEvents(out); }
