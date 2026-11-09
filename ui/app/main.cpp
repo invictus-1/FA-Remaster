@@ -584,8 +584,9 @@ int main(int argc, char** argv) {
   if ((backdropWanted && windowed && directWindow) || (menuFlightHeadless && !windowed)) {
     menuFlight = std::make_unique<ui::MenuFlight>(&vfs, gameHookDirs);
     session.menuFlight = menuFlight.get();
-    cfg.menuFlightInfo = [&menuFlight, &backdrop](lua_State* L) {
+    cfg.menuFlightInfo = [&menuFlight, &backdrop, &session](lua_State* L) {
       menuFlight->PushInfo(L);
+      session.PushWindowInfo(L);  // (the window's picture: the hand-over to a game, the kept first frame, the world's switches)
       lua_pushstring(L, "mode");
       lua_pushstring(L, backdrop ? ui::Backdrop::ModeName(backdrop->mode()) : "none");
       lua_rawset(L, -3);

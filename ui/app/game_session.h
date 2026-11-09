@@ -38,6 +38,9 @@ struct ReplayHeader;
 namespace moho::net {
 class LobbyCore;
 }
+namespace render {
+struct Camera;
+}
 
 namespace moho::ui {
 class NetGameLink;
@@ -280,9 +283,14 @@ class GameSession {
   // background falls back to Dusk for the run when the map or the simulation cannot be had, or when the flight's
   // frames cost the card more than 12 ms (MOHO64UI_MENUFLIGHT_GPU_MS) on average over 5 s after its first 10 s.
   MenuFlight* menuFlight = nullptr;
-  // The window's shortest frame while the menu's flight shows (the menu at most 60 frames a second, whatever the
-  // player's Frame Rate: the renderer's advice; 0 otherwise): for the host's pacing (WindowHooks::framePeriod).
+  // The window's shortest frame while the menu's flight, or its kept first frame, shows (the menu at most 60 frames a
+  // second, whatever the player's Frame Rate: the renderer's advice; 0 otherwise): for the host's pacing
+  // (WindowHooks::framePeriod).
   double MenuFramePeriod() const;
+  // (tests: moho64ui_MenuFlight's fields of the window's picture: handoversKept / handoversReopened / handoverWhy, the
+  // games launched on the flight's map that took its world over or opened it again; mapsBegun, the maps begun behind;
+  // keptFrame, the kept first frame shown / taken; world*, the world shown's switches now)
+  void PushWindowInfo(lua_State* L) const;
   void OpenWindowPicture();
   bool DrawsToWindow() const;
   // Where the interface's controls hand a picture over the whole window to the graphics card (the
@@ -540,6 +548,14 @@ class GameSession {
   // end, OpenPicture, instead of opening it again behind; MOHO64UI_REWIND_REOPEN=1: opened again, as before)
   bool keepMap_ = false;
   void KeepMapForRewind();
+  // (the same for a game launched from the main menu on the map its flight shows, SETONS_R: the game takes the flight's
+  // world over, RestartMap at the load's end, when the map was opened as the game would open it: KeepMenuMap;
+  // MOHO64UI_FLIGHT_REOPEN=1: opened again, as before. Counted for the tests: moho64ui_MenuFlight's handover fields.)
+  bool keepMenuMap_ = false;
+  void KeepMenuMap(const std::string& map);
+  int handoversKept_ = 0, handoversReopened_ = 0;
+  int mapsBegun_ = 0;  // (maps begun behind the window's picture: BeginWindowMap)
+  std::string handoverWhy_;
   bool freezeAsked_ = false, frozenTaken_ = false;
   int freezeWaits_ = 0;  // (frames shown without a world drawn since the freeze was asked: after 3 it is held black)
   std::vector<uint32_t> frozen_;
@@ -599,7 +615,7 @@ class GameSession {
   bool EnsureWindowPicture(bool remake);
   void BeginWindowMap(bool game, const std::string& map);  // (the game's map or the menus' background's, behind)
   void ServeWindowMap();
-  void GiveBackdrop(WindowPicture& wp);
+  void GiveBackdrop(WindowPicture& wp, int width, int height);
   // (the main menu's background's mode by the option and the fallback; the flight's simulation begun, given to its map,
   // started on the world shown; the still picture)
   void FollowMenuMode();
@@ -620,6 +636,16 @@ class GameSession {
   std::vector<uint32_t> still_;  // (Still: the one picture, its size; taken once a size)
   int stillW_ = 0, stillH_ = 0;
   bool stillShown_ = false;
+  // The flight's kept first frame (docs/ui-menuflight.md 4.5): the world alone as the flight's first frames show it (its
+  // third beat), taken once a run (TakePhoto at the window's size) and kept beside the preferences
+  // (<userDir>/menuflight_first_<w>x<h>.raw); at the next start it is shown where the movie shows while the flight's map
+  // opens (some 6 s), and the live flight comes in over it (the first pose is always the same). Read and written on a
+  // thread of its own (8 MB at 1080p, 33 MB at 4K).
+  struct KeptFrame;
+  std::unique_ptr<KeptFrame> kept_;
+  bool keptShown_ = false;  // (the kept frame is the picture over the window this frame: GiveBackdrop)
+  void TakeKeptFrame(WindowPicture& wp, const render::Camera& camera, double tick, int width, int height);
+  uint32_t KeptKey() const;  // (the camera path's and the looks' the frame is of)
   void GameLooksBack(WindowPicture& wp);  // (the menus' map begun behind a game's world, not had: ServeWindowMap)
   // A game played (not a replay) is over (SessionEndGame, or the simulation's EndGame: the victory, the defeat), no
   // beat running.

@@ -79,10 +79,12 @@ function RemasterPresetValues(level)  -- (also for the tests)
     if moho64ui_RayTracingSupported() == false then out.remaster_ray_tracing = 0 end
     return out
 end
+local presetSetting = false  -- (the preset is setting its looks: their own updates leave it as it is)
 local function SetRemasterPreset(control, level)
     local values = RemasterPresetValues(level)
     if not values then return end  -- (Custom)
     local logic = import("/lua/options/optionslogic.lua")
+    presetSetting = true
     for key, value in values do
         local item = logic.FindOptionItem(key)
         if item and item.type == 'slider' then
@@ -98,6 +100,7 @@ local function SetRemasterPreset(control, level)
             logic.SetValue(key, value, true)
         end
     end
+    presetSetting = false
 end
 
 -- The first-start graphics check's next step down (ui/data/hook/lua/ui/game/gamemain.lua; Chris, 2026-10-18: "turn
@@ -1162,6 +1165,41 @@ table.insert(options.gameplay.items, {
         },
     },
 })
+
+-- A look of the Remastered Preset changed by hand: the preset shows Custom once that look is no longer its level's (the
+-- design's optional step, docs/ui-options-layout.md 4.2; as the game's own Fidelity, Shadow Fidelity and Render Sky set
+-- Fidelity Presets to Custom from their `update`: FAF's /lua/options/options.lua, with optionslogic.SetValue(key, 4, true)).
+-- The dialog calls an item's `update` when the player chooses in its drop-down (combo.OnClick without skipUpdate) or lets
+-- go of / drags its slider (OnValueSet, OnScrub: FAF's /lua/ui/dialogs/options.lua); the preset's own setting goes through
+-- SetValue with skipUpdate, or for a slider through OnValueSet (SetRemasterPreset), which `presetSetting` lets pass. A look
+-- set back to the level's value leaves the preset as it is then (Custom stays Custom, as the game's).
+function RemasterPresetLookChanged(key, value)  -- (also for the tests)
+    if presetSetting then return end
+    local logic = import("/lua/options/optionslogic.lua")
+    local preset = logic.FindOptionItem('remaster_preset')
+    local combo = preset and preset.control
+    if not combo or IsDestroyed(combo) or not combo.keyMap then return end
+    local level = combo.keyMap[combo:GetItem()]
+    local values = RemasterPresetValues(level)
+    if values and values[key] ~= nil and values[key] ~= value then
+        logic.SetValue('remaster_preset', 5, true)
+    end
+end
+do
+    local levelKeys = remasterPresets[4]
+    for _, tabKey in optionsOrder do
+        for _, item in (options[tabKey] and options[tabKey].items) or {} do
+            if type(item.key) == 'string' and levelKeys[item.key] ~= nil and not item.remasterPresetWatched then
+                local own, key = item.update, item.key
+                item.remasterPresetWatched = true
+                item.update = function(control, value)
+                    if own then own(control, value) end
+                    RemasterPresetLookChanged(key, value)
+                end
+            end
+        end
+    end
+end
 
 -- Our options' tips in the game's tooltip table: FAF's dialog shows only Tooltips["options_" .. key]
 -- (/lua/ui/help/tooltips.lua; its CreateOption, Tooltip.CreateMouseoverDisplay) and never an item's `tip`, so until

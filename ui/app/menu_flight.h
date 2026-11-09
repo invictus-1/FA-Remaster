@@ -107,6 +107,7 @@ class MenuFlight {
   uint32_t tick() const;
   bool Paused() const { return !shownLast_; }
   double pathLength() const;
+  const std::string& pathText() const { return pathText_; }  // (the camera's keys as read: the kept first frame's key)
   double lastBeatMs() const { return beatSeconds_ * 1000.0; }  // (the last beat's time on its thread: the log)
 
   // Tests and measurements (MOHO64UI_MENUFLIGHT_FAST=1: up to 50 beats a frame, not ten a second; a run without a window
