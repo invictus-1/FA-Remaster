@@ -336,7 +336,7 @@ void Sunlight::Begin(View* view, bool drifting, bool shafts, const Camera& placi
   driftDrawn_ = false;
   placing_ = placing;
   if (drifting) {
-    c.cloudDrift[0] = 1;
+    c.cloudDrift[0] = 1 + std::clamp(cloudMix, 0.0f, 1.0f);  // ([cloudmix2] above 1: the Mixed layout's share)
     c.cloudDrift[1] = std::clamp(look.shadow, 0.0f, 1.0f);
     c.cloudDrift[2] = std::max(look.edge, 0.002f);
     c.cloudDrift[3] = std::clamp(look.sea, 0.0f, 1.0f);

@@ -833,12 +833,21 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
   // projectiles fly on along their velocity for the part of the beat that has passed (a beat is a tenth of a second)
   out->projectiles = a.projectiles;
   const float ahead = b ? t * 0.1f * static_cast<float>(b->tick - a.tick) : 0;
+  // [shellstop] the next beat's shells that have hit (stopped where they hit), by id: one that hits within this beat is
+  // moved toward its hit, not on along its velocity past it (Chris's 2026-11-08 test: an ACU's bolt drawn up to two units
+  // past the unit it hit, then snapping back)
+  std::unordered_map<uint32_t, const FrameProjectile*> hitNext;
+  if (b)
+    for (const FrameProjectile& n : b->projectiles)
+      if (n.stopped) hitNext[n.id] = &n;
   for (FrameProjectile& p : out->projectiles) {
+    const auto hit = p.stopped ? hitNext.end() : hitNext.find(p.id);
     for (int k = 0; k < 3; ++k) {
       // (not one that has hit: it stands where it hit until its script ends it next beat; moved on
       // with the speed it came with, it was drawn through what it hit, a tank's shell up to two and
       // a half units: Chris's "some go through the acu")
-      if (!p.stopped) p.position[k] += p.velocity[k] * ahead;
+      if (hit != hitNext.end()) p.position[k] += (hit->second->position[k] - p.position[k]) * t;
+      else if (!p.stopped) p.position[k] += p.velocity[k] * ahead;
       p.size[k] += p.growth[k] * ahead;
     }
     p.age += ahead;

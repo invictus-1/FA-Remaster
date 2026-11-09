@@ -218,9 +218,11 @@ float4 PS(VOut i) : SV_Target {
   [branch] if (nightLook.x > 0 && night > 0.01) {
     float lum = dot(c, float3(0.3, 0.6, 0.1));
     float3 deep = lerp(c, lum * float3(0.55, 0.68, 1.2), 0.55);
-    c = lerp(c, deep * lerp(0.5, 0.25, saturate(d.y * 2.2)), night * nightLook.x);  // (Chris, 2026-11-07: "a tad darker")
+    // (Chris, 2026-11-07: "a tad darker"; 2026-11-08: "the sky is not dark enough" - 0.5..0.25 -> 0.3..0.14)
+    c = lerp(c, deep * lerp(0.3, 0.14, saturate(d.y * 2.2)), night * nightLook.x);
   }
-  c += float3(0.012, 0.016, 0.028) * sunDisc.w;  // the night's own faint light
+  // the night's own faint light ([starry] half of it: Chris, 2026-11-08, darker still)
+  c += float3(0.012, 0.016, 0.028) * sunDisc.w * (1 - 0.5 * nightLook.x);
   [branch] if (night > 0.01 && d.y > -0.02) {
     // among the stars: the sky turned back by the hours
     float sn = sin(rayUp.w), cs = cos(rayUp.w);

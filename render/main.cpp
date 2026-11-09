@@ -13,7 +13,7 @@
 // --createlog  only for recordings that do not name their units (older ones): the engine's log of the
 //           same run made with MOHO64_DEBUG_CREATE=1
 // --init <init file> --sim <replay> [--mod-uids <file>] [--simlog <file>]
-// --init <init file> --session <game configuration> [--seed N]
+// --init <init file> --session <game configuration> [--seed N] [--stream <file>] [--our-mods <folders>]
 //           the same with a new game: the configuration a lobby hands over at Launch (a Lua file with
 //           GameConfig = { ... }); its AI armies play, nobody gives orders yet
 //           the simulation itself plays the replay inside the viewer (no recording needed): the game's
@@ -1125,6 +1125,8 @@ struct Options {
   double tick = -1;
   std::string screenshot, fa, map, recording, createLog, display;
   std::string init, sim, session, modUids, simLog;  // the simulation run in the viewer (--init, --sim or --session, ...)
+  std::string stream;                  // [streamplay] --stream: a played session's orders (the interface host's --replay-out)
+  std::vector<std::string> ourMods;    // [streamplay] --our-mods: the engine's own mods' folders (';' between)
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, remasters, place, crowd;
   bool placeAlone = false;  // --place-alone
@@ -1357,6 +1359,16 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--session") o->session = v;
     else if (a == "--seed") o->seed = static_cast<unsigned>(strtoul(v, nullptr, 0));
     else if (a == "--mod-uids") o->modUids = v;
+    else if (a == "--stream") o->stream = v;  // [streamplay]
+    else if (a == "--our-mods") {             // [streamplay]
+      const std::string list = v;
+      for (size_t at = 0; at <= list.size();) {
+        size_t semi = list.find(';', at);
+        if (semi == std::string::npos) semi = list.size();
+        if (semi > at) o->ourMods.push_back(list.substr(at, semi - at));
+        at = semi + 1;
+      }
+    }
     else if (a == "--simlog") o->simLog = v;
     else if (a == "--tick") o->tick = atof(v);
     else if (a == "--lamp-scale") o->lampScale = static_cast<float>(std::max(atof(v), 0.0));  // [unit lamps]
@@ -2052,6 +2064,8 @@ int main(int argc, char** argv) {
     setup.replay = opt.sim;
     setup.session = opt.session;
     setup.seed = opt.seed;
+    setup.stream = opt.stream;    // [streamplay]
+    setup.ourMods = opt.ourMods;
     setup.maps = opt.maps;
     setup.selfDestructAt = static_cast<uint32_t>(std::max(opt.selfDestructAt, 0));
     setup.selfDestructArmy = opt.selfDestructArmy;

@@ -435,7 +435,18 @@ float CloudFieldBroken(float2 q) {
 float CloudFrom(float field) { return saturate((field - lerp(0.75, 0.2, skyClouds.x)) * 5); }
 // [sunlight] How much of a place on the clouds' underside lies under a heap (0..1, soft over cloudDrift.z of the broken
 // field either side of the value that leaves the cover's share of the ground in shadow).
-float DriftHeaps(float2 q) { return smoothstep(-cloudDrift.z, cloudDrift.z, CloudFieldBroken(q) - lerp(0.63, 0.37, skyClouds.x)); }
+// ([cloudmix2] Chris, 2026-11-09: with the clouds' Mixed layout - cloudDrift.x above 1 - the field raised in some wide patches
+// and lowered in others, as the volumetric clouds' cover is (clouds.cpp, Coverage): the shadows come in groups with clear
+// ground between, in a fair sky too)
+float DriftHeaps(float2 q) {
+  float field = CloudFieldBroken(q);
+  float mixed = saturate(cloudDrift.x - 1);
+  [branch] if (mixed > 0) {
+    float2 pp = (q + skyClouds.yz) * 0.0013;
+    field += (CloudNoise(float3(pp * 1.3 + 31.7, skyClouds.w * 0.2 + 11.3)) - 0.5) * 0.3 * mixed;
+  }
+  return smoothstep(-cloudDrift.z, cloudDrift.z, field - lerp(0.63, 0.37, skyClouds.x));
+}
 Texture2D<float> cloudShadowPicture : register(t31);  // (clouds.h: what comes through the clouds toward the sun, at their underside)
 float CloudShadow(float3 world) {
   if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
