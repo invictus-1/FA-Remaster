@@ -115,15 +115,19 @@ struct OrderGraph {
     int units = 0;
     int lastQueue = -1;
   };
-  // A queue walked (a unit's own, or a factory's second one), and the units that carry any of its
-  // commands (for the leg's byte +0x18 above: the unit under the mouse among them).
+  // A queue walked (a unit's own, or a factory's second one), and its commands (for the leg's byte +0x18 above:
+  // the unit under the mouse carries one of them). The commands, not the units that carry them: a list of those
+  // units per queue cost the cube of a group that shares an order (1,000 units: a tenth of a second and more per
+  // sync with Shift held; the review of 2026-11-09), and it was asked one thing only, which WorkOutOrderGraph now
+  // answers from the commands the unit under the mouse carries.
   struct Queue {
     uint32_t unit = 0xffffffffu;
-    std::vector<uint32_t> partners;
+    std::vector<uint32_t> commands;
   };
   std::vector<Record> records;  // 0x28 kinds
   bool made = false;            // it exists (Shift held); made again on the next press
   uint64_t builtSync = ~0ull;   // the sync it was worked out after
+  double buildMs = 0;           // what the last working out cost, in the PC's milliseconds (ours: for the scale test)
   std::vector<Node> nodes;
   std::vector<Leg> legs;
   std::vector<Queue> queues;
@@ -4352,9 +4356,8 @@ void BuildOrderGraph(lua_State* L, Sim& sim, UnitStore& store, OrderGraph& g) {
     const int queue = static_cast<int>(g.queues.size());
     OrderGraph::Queue q;
     q.unit = w.unit->view.id;
-    for (const CommandView& c : w.queue)
-      for (uint32_t unit : g.carriers[c.id])
-        if (std::find(q.partners.begin(), q.partners.end(), unit) == q.partners.end()) q.partners.push_back(unit);
+    q.commands.reserve(w.queue.size());
+    for (const CommandView& c : w.queue) q.commands.push_back(c.id);
     g.queues.push_back(std::move(q));
     auto [start, fresh] = startOf.try_emplace(w.queue[0].id, static_cast<int>(g.nodes.size()));
     if (fresh) g.nodes.emplace_back();
@@ -4649,8 +4652,10 @@ OrderGraph& HoldOrderGraph(lua_State* L, bool held) {
   // INFERRED: worked out again after every beat (the original marks its graph to be worked out
   // again, the byte graph+0; what marks it is not read; its nodes follow their targets each frame).
   if (g.builtSync != user->syncCount) {
+    const auto start = std::chrono::steady_clock::now();
     BuildOrderGraph(L, *sim, Store(L), g);
     WorkOutEtas(L, Store(L), g, sim->tick());
+    g.buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     g.builtSync = user->syncCount;
   }
   return g;
@@ -4862,14 +4867,26 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
   UnitStore& store = Store(L);
   std::vector<uint32_t> selected;
   for (const UserUnit* u : store.selection) selected.push_back(u->view.id);
+  std::sort(selected.begin(), selected.end());  // (asked per carrier of every node below: a search, not a walk)
   auto has = [](const std::vector<uint32_t>& list, uint32_t id) { return std::find(list.begin(), list.end(), id) != list.end(); };
+  auto among = [](const std::vector<uint32_t>& sorted, uint32_t id) { return std::binary_search(sorted.begin(), sorted.end(), id); };
+  // The commands the unit under the mouse carries, in rising order (the map's own), once per call.
+  std::vector<uint32_t> rolloverCommands;
+  if (rollover != 0xffffffffu)
+    for (const auto& [command, units] : g.carriers)
+      if (has(units, rollover)) rolloverCommands.push_back(command);
+  auto sharesWithRollover = [&](const OrderGraph::Queue& q) {
+    for (uint32_t command : q.commands)
+      if (among(rolloverCommands, command)) return true;
+    return false;
+  };
   auto stateOf = [&](const OrderGraph::Node& n) {
     if (n.command == 0xffffffffu) return 0;
     const std::vector<uint32_t>& units = g.carriers[n.command];
     if (rollover != 0xffffffffu && has(units, rollover)) return 1;
     if (n.command == g.hovered) return 1;  // (the waypoint under the mouse, session+0x4c8: 0x828246)
     for (uint32_t u : units)
-      if (has(selected, u)) return 2;
+      if (among(selected, u)) return 2;
     return 0;
   };
   auto slot = [](int state) { return state == 1 ? 2 : state == 2 ? 1 : 0; };  // (the record's normal, selected, highlight)
@@ -4889,7 +4906,7 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
     const OrderGraph::Record& r = record(b.type);
     if (r.lineTexture.empty()) continue;  // (0x826a35: in no texture's list, so never drawn)
     const bool hovered = rollover != 0xffffffffu && leg.lastQueue >= 0 &&
-                         has(g.queues[static_cast<size_t>(leg.lastQueue)].partners, rollover);
+                         sharesWithRollover(g.queues[static_cast<size_t>(leg.lastQueue)]);
     OrderGraphOut::LegOut o;
     o.units = leg.units, o.from = leg.from, o.to = leg.to;
     o.state = hovered ? 1 : stateOf(b);
@@ -4967,6 +4984,7 @@ void WorkOutOrderGraph(lua_State* L, bool shown, uint32_t rollover, OrderGraphOu
 // hovered: the id of the waypoint under the mouse's order (nil: none); dragged: the id of the order
 // whose waypoint is being dragged; coordinated: {order, with}, the last attack the interface sent
 // coordinated with another order (a double click on its waypoint) and that order's id (nil: none yet).
+// buildMs: the PC's milliseconds the last working out of the graph after a beat took (HoldOrderGraph).
 // preview (nil: none drawn): the path preview in the main world view (ui_DrawPathPreview): order (the command's name
 // whose record draws it), unit (the entity id it starts from), points ({x, y, z} each, as listed), width (its one
 // width W), arrow (its last leg the arrowhead), pathfinding (ui_PathPreview), and legs as the order lines' (width:
@@ -5011,6 +5029,8 @@ int l_OrderGraphForTests(lua_State* L) {
   lua_newtable(L);
   lua_pushboolean(L, g.made && shown);
   field("shown");
+  lua_pushnumber(L, g.buildMs);  // (ours: what the last working out after a beat cost; orderscale.lua's budget)
+  field("buildMs");
   if (g.hovered != 0xffffffffu) PushCommandId(L, g.hovered), field("hovered");
   if (g.drag.command != 0xffffffffu) PushCommandId(L, g.drag.command), field("dragged");
   if (Store(L).coordinatedOrder != 0xffffffffu) {  // (the last attack sent coordinated with another: AttackClick)

@@ -388,7 +388,13 @@ int ImportPreferences(lua_State* L, const std::string& source, std::string* why)
 // (func_DoPreload 0x88bee0, USER_SavePreferences 0x8c91a0) and when the program closes
 // (CScApp::Destroy 0x8d0f20); our states each keep a copy, so the host writes at those moments
 // and when a game's state goes (what it changed would be lost with it).
+// The write is never in place: <file>.tmp, read back, then the file before becomes <file>.bak (prefs.cpp).
 void SavePreferencesOf(lua_State* L);
+// Once at the program's start, before anything reads the preferences: a file that is empty or cannot be read as
+// preferences is set aside as <file>.broken_<date>_<time> (never written over, never deleted) and the backup or the
+// save that was under way takes its place. Returns what it did, for the player (empty: nothing); the same text is
+// moho64ui_PrefsNotice()'s.
+std::string CheckPrefsFile(const std::string& file);
 // The text of the game's own /preferences/Game.prefs (moho::kGamePrefsPath, held in memory: sim/session.h),
 // which FAF's /lua/system/Blueprints.lua reads for PreGameData (LoadPreGameData: CurrentMapDir, whose *.bp files
 // load with the rules; IconReplacements): `PreGameData = { ... }` with CurrentMapDir = `mapDir` (the session's

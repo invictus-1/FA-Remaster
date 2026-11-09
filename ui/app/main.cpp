@@ -509,6 +509,9 @@ int main(int argc, char** argv) {
     Logf(LogLevel::Warning, "moho64ui: --prefs names the original game's own file: not used (it is never written); preferences in memory only");
     cfg.prefsFile.clear();
   }
+  // (ours) A preferences file cut off by a crash or a full disk is set aside and its backup taken, before the
+  // first-start test below and before any state reads it.
+  if (!cfg.prefsFile.empty()) ui::CheckPrefsFile(cfg.prefsFile);
   const bool firstStart = cfg.prefsFile.empty() || !hostfs::IsFile(cfg.prefsFile);
   // A recorded game needs its launch table kept too: a game launched from the lobby writes it
   // beside the record unless a place of its own was named.
