@@ -27,6 +27,17 @@ Two things the ui found, both on the engine's list:
 
 E2 (a restart that keeps the loaded rules, ~1.2 s a loop) stays open and optional; ask when the menu needs it.
 
+**Both closed (2026-11-09 12:25).**
+- (a) Done in batch 120 (039c6bf1): `ScriptState` installs a panic handler
+  (`src/script/script_state.cpp`, `lua_atpanic`), so an unprotected Lua error writes its message and the Lua
+  traceback to the log before the program ends. A host call that can fail should still be a protected call.
+- (b) No engine change: ours is the original's rule. The original has no rule of its own for the map folder; the
+  lobby writes `PreGameData.CurrentMapDir = Dirname(GameOptions.ScenarioFile)` (lobby.lua 2449) and the rules load
+  that folder's *.bp. `SessionMapFolder` (src/sim/session.cpp) does the same: the folder of Options.ScenarioFile,
+  else the folder of the map file. A session whose scenario file lies outside the map's folder would lose the
+  map's own blueprints in the original too. So the menu flight naming `/maps/SETONS_R` itself is the right and
+  lasting answer, not a workaround to remove.
+
 ## 2026-11-05 16:13, visuals: the duplicate unit id wes0401 (Antares Gemini vs Wyvern Ultimina)
 
 Done in the local Antares mod fix (outside the repository, it carries other people's mod data): Antares Unit Pack's
