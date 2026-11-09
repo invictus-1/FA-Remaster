@@ -161,6 +161,8 @@ def main():
                 link += ["-lSDL3"]
     if windows and not sdl:
         link.append("-static")
+    if windows:  # (the UTF-8 code page for the program: file names in any language; engine answer to request 57)
+        link.append(os.path.join(ROOT, "src", "app", "utf8.rc"))
     r = subprocess.run(link, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("build_ui: link failed\n" + r.stderr)
@@ -169,6 +171,17 @@ def main():
         if os.path.exists(dll):
             import shutil
             shutil.copy(dll, a.out)
+    # Microsoft's shader compiler beside the program (it is not in the repository). Without it Direct3D 12 falls back
+    # to the old compiler, which did not finish the horizon's pixel shader in ten minutes (2026-11-09: a side build's
+    # first world frame hung there), and Vulkan does not start. A side build takes the default build's copy.
+    if windows and not a.headless:
+        import shutil
+        dxc = os.path.join(a.out, "dxcompiler.dll")
+        have = os.path.join(ROOT, "build-ui", "dxcompiler.dll")
+        if not os.path.exists(dxc) and os.path.exists(have):
+            shutil.copy(have, dxc)
+        if not os.path.exists(dxc):
+            print("build_ui: WARNING: no dxcompiler.dll beside " + exe + ": put one there before a map is opened")
     print("build_ui: built " + exe)
 
 
