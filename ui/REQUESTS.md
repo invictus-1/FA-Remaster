@@ -1273,6 +1273,27 @@ protected call are logged with a traceback since batch 120. (b) No engine change
 no rule of its own, the lobby writes Dirname(ScenarioFile); the menu flight setting CurrentMapDir = '/maps/SETONS_R'
 itself is the lasting answer. E2 (a restart keeping the loaded rules) stays an optional later wish.
 
+### 57. hostfs: a write that reports its failures, a rename, UTF-8 paths on Windows (2026-11-09, not blocking)
+
+Who: ui. Found in the review pass while making the preferences file safe against a cut-off write
+(`ui/user/prefs.cpp`, `SavePreferencesOf`: temporary file, read back and compared, `.bak`, then renamed).
+
+1. `hostfs::WriteFile` (`src/core/hostfs.cpp:311`) returns true whatever `fwrite` and `fclose` say: a full disk or
+   a pulled drive gives "written" for a short or empty file. Asked: return false when `fwrite` wrote less than
+   asked or `fclose` fails. (ui reads the file back today, so nothing of ours depends on it; replays, saved
+   games and logs written through it would gain.)
+2. hostfs has no rename / replace. ui calls the platform's own (`MoveFileExW` with replace on Windows, `rename`
+   elsewhere) inside prefs.cpp. Asked: `hostfs::ReplaceFile(from, to)` (atomic where the platform can), so that
+   ui's copy can go and others can write safely the same way.
+3. On Windows `WriteFile` / `ReadFile` open with the narrow `fopen`, so a UTF-8 path with letters outside the
+   system's code page (a Windows user name with such letters: `C:\Users\<name>\...`) does not open. Asked: the
+   wide open (`_wfopen` of the UTF-8 path converted) on Windows. Today ui's safe write falls back to the old
+   in-place write when its temporary file cannot be read back, so such a player keeps today's behaviour.
+
+A measurement on the side, no ask: with 1,000 `uel0201` on one formation move in a headless run
+(`ui/tests/orderscale.lua`, session_ai_cheats.lua) a beat's frames take 140 to 900 ms by the PC's clock, pinned
+to CPUs 16-31. I did not separate the simulation's share from the interface's; told in case it is news.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
