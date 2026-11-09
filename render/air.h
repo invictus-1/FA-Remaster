@@ -15,6 +15,7 @@
 // in place of the haze and mist formulas; so do particles, trails and the water. The lamps' beams
 // show in it with their shadows: the billboards of shafts.h are left out while it is on.
 #pragma once
+#include <algorithm>
 #include <utility>  // [views] (std::swap)
 #include <cstdint>
 #include <string>
@@ -61,6 +62,12 @@ class Air {
   // air's dust alone (mist and fog scatter it as they are): in clear air a lamp's beam would hardly show,
   // and the game's lamps are meant to be seen.
   float sunInAir = 1, skyInAir = 1, lampsInAir = 150;
+  // [hazeamt] set by the world: the player's amount of haze (World::hazeMist; 1 as made). The dust is that much (a
+  // twentieth at least), and below 1 the lamps' and the small lights' strengthening on it that much more: their beams
+  // stay as they are in air made clearer.
+  float amount = 1;
+  float DustShare() const { return std::clamp(amount, 0.05f, 2.0f); }
+  float DustNow() const { return std::max(dust, 0.0f) * DustShare(); }
   float storm = 0;  // [stormcells] set by the world: in a storm the sun's light in the air is 0.75 (shafts through the deck's gaps)
   float moonShare = 1;  // [starry] set by the world: the moon's light in the air with the starry night (its glow, Chris: "not as strong")
   float pointsInAir = 15;       // the same for the other small lights (flashes of explosions, glows): a battle is not to be a white cloud

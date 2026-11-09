@@ -452,6 +452,15 @@ class World {
   // more on wet ground after rain and in fog, little in a dry climate, none while it snows.
   // `mistNow` is what it came to in the last frame.
   float mist = -1, mistNow = 0;
+  // [hazeamt] (the interface's request 50: a player's "Haze & Mist" amount) How much of the clear weather's haze and mist
+  // the modern look shows, with a time of day: 1 as made, 0 clear air, up to 2. It scales the mist on low ground (the
+  // hour's and the wet ground's), a cinematic camera's least haze, the air's own dust (below 1 the lamps' and small
+  // lights' strengthening on it goes up as it goes down, so their beams stay), the light shafts' band's own haze and the
+  // low haze under broken clouds, the haze the land far off is lost in (at 0 it reaches 2.9 times as far, at 2 0.6
+  // times; never none: the land's end is hidden in it) and the horizon's standing fog banks. It leaves what the weather
+  // itself brings (fog, a storm's and a snowfall's murk, the low fog's layer): the weather is the game's own choice.
+  // The sky's own horizon haze and the clouds are the sky's. At 1 every number is what it was.
+  float hazeMist = 1;
   // [weather] Fog as a low layer (World::Begin; Chris's snapshot test, 2026-10-25): fog past a quarter lies on the ground and
   // the water in the mist's layer, deeper than the mist, and only a little of it thickens the air all over. Off (the
   // viewer's --fog-old): all of it in the air all over, as before.

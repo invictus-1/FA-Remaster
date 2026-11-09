@@ -495,8 +495,8 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.cells[2] = static_cast<float>(depth_);
   k.range[0] = closest;
   k.range[1] = std::log(farthestNow / closest);
-  k.range[2] = std::max(dust, 0.0f);
-  k.range[3] = std::max(lampsInAir, 0.0f);
+  k.range[2] = DustNow();  // ([hazeamt])
+  k.range[3] = std::max(lampsInAir, 0.0f) / std::min(DustShare(), 1.0f);
   k.lastViewProj = lastViewProj_;
   const Vec3 eye = camera.Eye();
   k.lastEye[0] = lastEye_.x;
@@ -507,7 +507,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   k.lastRange[1] = floor;
   k.lastRange[2] = 1 / std::max(thinsOver, 1.0f);
   k.lastRange[3] = std::max(lampGlowInAir, 0.0f);
-  k.points[0] = std::max(pointsInAir, 0.0f);
+  k.points[0] = std::max(pointsInAir, 0.0f) / std::min(DustShare(), 1.0f);
   // (airfix) the ground, where the cells' air ends
   const bool ground = heights && heightUnit > 0 && mapWidth > 0 && mapHeight > 0;
   k.ground[0] = ground ? heightUnit : 0.0f;

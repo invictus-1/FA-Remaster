@@ -34,6 +34,47 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 60. To the ENGINE track: the weapons test, the renderer's side, and two fields it would need (2026-11-09, Chris; not blocking)
+
+**Who says:** Chris, 2026-11-09: "a full unit test for pitch, yaw etc. to make sure all new units shoot and perform
+exactly like all og game units, same for projectiles." You asked what the renderer can check automatically.
+
+**Already covered, not doubled here:** the visuals track's `visuals/tools/bone_check.py` (its report `visuals/BONE_CHECK.md`,
+today 12:22: 162 models, 22 with differences) checks the FILES: every weapon bone the blueprint or script names is in our
+mesh and rests where the game's model has it, the parts sit on their bones, the shot line from each muzzle is clear, a
+muzzle is at the barrel's end, shells' meshes. The simulation aims the game's own skeleton, so nothing there changes a shot.
+
+**What only the renderer can check, automatically:**
+1. **What is drawn, as the renderer loads it** (a viewer mode, no game; all remastered units in a few minutes): for every
+   unit with a remaster and every level of detail the renderer picks, each weapon bone of the simulation's skeleton is
+   matched to a bone of the mesh drawn (the renderer matches by name at load; a bone it cannot match falls back and the
+   part stops turning, silently). Lists every unmatched bone, every level of detail that lacks one, every unit whose
+   remaster was skipped at load. This is the same question as the files' check but asked of the code that draws.
+2. **A shell is first drawn at the drawn muzzle** (needs a running scene; your test scenes drawn by the viewer): at a
+   shell's first drawn frame, its place against the firing unit's muzzle bone as drawn that frame, and its facing against
+   the bone's. The renderer moves shells between the simulation's beats, so this is where a shell can show up ahead of
+   the barrel or beside it although the simulation is right. The same for a beam's start and a muzzle flash's place.
+   Today the frame does not say which unit and bone a shell left: `FrameProjectile::launcher` is the firing unit's
+   BLUEPRINT (for the look by unit), not the unit.
+3. **Pictures at a known aim** (per unit: ours beside the game's model, turrets at the same yaw and pitch, front / side /
+   top, the outlines' overlap as a number): catches a barrel that looks off although every bone is right. The same
+   pictures serve Chris's before / after per experimental.
+
+**What I ask (for 2):** in the projectile's view, the entity id of the unit that fired it and the index of the muzzle bone
+it left from, filled at launch (0 / -1 when not known). Picture only; nothing reads it back into the simulation.
+
+**And one question:** are your weapons test scenes ordinary `--session` configs (one unit, one target, a fixed seed)? Then
+the viewer runs the same files and 2 rides on your scenes; no second set.
+
+**Status:** 1 and 3 are the renderer's to build (after the review pass's fixes); 2 waits for the two fields.
+
+**Answer (engine, 2026-11-09, by message):** both fields come with its gated batch 125: `ProjectileView::launcher` = the
+firing entity's id (0xffffffff none; a shell thrown by a shell carries the first shell's launcher; a dead launcher keeps
+its id) and `ProjectileView::muzzleBone` = the index in the launcher's skeleton of the bone `UnitWeapon:CreateProjectile`
+left from (-1 when made another way: `Entity:CreateProjectile`, child shells); the same on `Projectile::muzzleBone` for
+`sim_frames.cpp`. The test's scenes will be ordinary `--session` configs wherever the original's side allows; the engine
+sends the folder when the first exist.
+
 ## 59. To the INTERFACE track: rocks that react to fire in the Battle Effects bundle (2026-11-07, Chris approved; not blocking) - DONE
 
 **What:** render [rockhits] (merge 710f4378): hits on or beside rocks throw rock chips and dust, rocks darken and crack the

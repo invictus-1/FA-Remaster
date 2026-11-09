@@ -400,7 +400,7 @@ void BeyondLand::SetView(ViewConstants* c) {
   if (read_ && hasWater_) {
     c->beyondSea[0] = 1;
     c->beyondSea[1] = sea_;
-    c->beyondSea[2] = std::max(haze, 1.0f);
+    c->beyondSea[2] = HazeNow();  // ([hazeamt])
     c->beyondSea[3] = std::max(hazeHeight, 1.0f);
   }
 }
@@ -625,7 +625,7 @@ void BeyondLand::Draw(const View& view) {
   c.grid[1] = static_cast<float>(rings_);
   c.grid[2] = sea_;
   c.grid[3] = top_;
-  c.look[0] = std::max(haze, 1.0f);
+  c.look[0] = HazeNow();  // ([hazeamt])
   c.look[1] = std::max(mountains, 1.0f) * snowline;
   c.look[2] = start_;
   c.look[3] = 0.15f * std::max(mapSize_[0], mapSize_[1]);
