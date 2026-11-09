@@ -125,6 +125,12 @@ Unit* UnitRef(Sim& sim, uint32_t ref) {
   Entity* e = sim.FindEntity(ref);
   return e && e->kind == Entity::Kind::Unit && !e->destroyQueued ? static_cast<Unit*>(e) : nullptr;
 }
+// The unit's ferry link (u+0x4c8, written at 0x625752..0x62579c) is a weak link in the original: it empties by
+// itself when the ferry's object is destroyed, and the load's filter (0x625202 on) and the ferry's (0x60e4a1) ask
+// it for non-null. Ours keeps a plain reference, so ask whether it still resolves: before, a unit whose assigned
+// ferry was destroyed kept the stale reference, no ferry took it again and its wait polled for ever. (READ, not
+// run: order audit D5.2.)
+bool FerryLinked(Sim& sim, const Unit* u) { return u->ferryUnit && sim.FindEntity(u->ferryUnit); }
 const NamedFootprint& Fp(const Unit* u) {
   static const NamedFootprint one{"", 1, 1, 1, 0, 0, 0, 0};
   return u->blueprint && u->blueprint->hasFootprint ? u->blueprint->footprint : one;
@@ -1316,7 +1322,7 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
   std::vector<Unit*> L;
   for (uint32_t r : d.cargo) {
     Unit* u = UnitRef(sim, r);
-    if (!u || u->dead || u->parentId || State(u, US("WaitingForTransport")) || u->ferryUnit) continue;
+    if (!u || u->dead || u->parentId || State(u, US("WaitingForTransport")) || FerryLinked(sim, u)) continue;
     Vec3 dv = Sub(T->position, u->position);
     d.picks.push_back({r, Dot(dv, dv)});
   }
@@ -1811,7 +1817,7 @@ std::vector<Unit*> FilterTransportable(Sim& sim, Unit* T, const TransportTaskDat
   for (Unit* u : sim.units()) {
     if (u->army != T->army || !u->blueprint || !InCat(sim, u, "LAND")) continue;
     if (u->dead || u->destroyQueued || u->beingBuilt) continue;
-    if (!State(u, US("WaitForFerry")) || u->ferryUnit) continue;
+    if (!State(u, US("WaitForFerry")) || FerryLinked(sim, u)) continue;
     if (State(u, US("WaitingForTransport")) || State(u, US("Attached")) || u->parentId) continue;
     if (!canCommander && InCat(sim, u, "COMMAND")) continue;
     if (!CanCarryUnit(sim, O, u) || !HasSpaceFor(sim, O, *u->blueprint)) continue;

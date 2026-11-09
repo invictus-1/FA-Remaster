@@ -2914,7 +2914,8 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 1: {
       if (gap > 10.0f) return kTaskFailed;
       if (!T || T->dead || T->destroyQueued) return kTaskDone;  // 0x60483d..0x60485e: dead or destroy queued
-      GroundFreeRect(sim, u);
+      // (no FreeOgridRect in TaskTick: the cells reserved in state 0 (0x60473e) stay until the dtor 0x60523c =
+      // EndCapture. READ, not run: order audit D9.6; before, ours freed them here.)
       float hy = T->bpData ? T->bpData->sizeY * 0.5f : 0.0f;  // the arm aims at the target's bone -1 (0x6aa637: straight up)
       SetArmAimTarget(sim, u, Vec3{T->position.x, T->position.y + hy, T->position.z});
       u->unitStates.Insert(US("Capturing"));
