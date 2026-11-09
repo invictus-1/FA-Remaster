@@ -365,7 +365,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       (f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity" || f.compare(0, 19, "CreateLightParticle") == 0 ||
        f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone"))
     return;
-  if (verbose && (f == "CreateLightParticle" || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
+  if (verbose && (f.compare(0, 19, "CreateLightParticle") == 0 || f == "CreateDecal" || f == "CreateSplat" || f == "CreateSplatOnBone")) {
     std::string what = f + " " + event.blueprint + " | " + event.text + " | " + event.text2;
     if (!said_[what]++) {
       printf("render: effects: %s; numbers", what.c_str());
