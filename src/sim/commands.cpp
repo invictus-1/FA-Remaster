@@ -1302,6 +1302,13 @@ bool NavEventWakesCommandThread(const Unit* u) {
   const BuildTask* t = u->task;
   if (IsPatrolType(HeadTaskType(u))) {  // only the patrol's child's walk listens
     const BuildTask* c = t && t->pdata ? t->pdata->child : nullptr;
+    // a refuel child (FindPlatform's IssueRefuelTask) sleeps in its landing / take-off move task (NewMoveTask 0x6190a0
+    // at 0x621c38 / 0x621e5b), whose listener re-links the thread. Seen (oracle probe v3840k_61_order): FAF 3840 pro
+    // replay 6v6_1, army 7's patrolling 0x70002d lands on staging platform 0x70005a at 7783: the original's
+    // CUnitRefuel::Execute runs first at 7783 (the thread asleep before), and from then on AFTER 0x700040's patrol
+    // (7784, 7802); at 7802 0x700040 asks FindPlatform before 0x70002d takes off, finds no room and patrols on. Ours
+    // had not re-linked 0x70002d: its take-off freed the slot first and sent 0x700040 to refuel.
+    if (c && c->tdata) return TransportTaskAsleepOnMove(c);
     return c && (c->moving || (c->sub && c->sub->moving));
   }
   if (t && t->adata) return false;

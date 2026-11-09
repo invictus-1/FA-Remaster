@@ -2030,7 +2030,13 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
 
 void EndFerry(Sim& sim, Unit* T, TransportTaskData& d) {
   EndChild(sim, T, d);
-  if (T->motion.hasGoal) MotionStop(T);  // navigator AbortMove (Ferrying still set: the land layer stays)
+  // 0x60e2c0: if the transport has a navigator, AbortMove (+0x10), with or without a goal, while Ferrying is still set:
+  // CUnitMotion::Stop keeps the land layer. Seen: FAF 3840 pro replay 4v4_setons_1 7179, army 0's transport 0x7b,
+  // landed (Land layer) on its Ferry, is killed by army 1's commander's self-destruct (a sim callback): the kill's queue
+  // teardown aborts it here, the land layer stays, and it lifts off only after the kill clean-up's stop (steering dtor)
+  // of 7180, from 7181 in the original. Ours skipped this abort for a landed transport (no goal); the clear's own stop
+  // then came after Ferrying was off, set the Air layer, and it lifted off at 7180.
+  if (T->motion.air || T->motion.nav) MotionStop(T);
   SetState(T, US("ForceSpeedThrough"), false);
   SetState(T, US("Ferrying"), false);
 }
