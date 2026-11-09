@@ -2432,6 +2432,22 @@ From the interface chat; your recommendation (A), Chris's yes. Design: docs/ui-m
   faction remasters), so a game on SETONS_R takes over the menu's open map? If not, the ui reopens the map as today.
 - R4: once the ui has the session, scenario and path files, your cost measurement at 4K (full looks vs menu look).
 
+### 50. A player's "Haze & Mist" amount, like Unit Glow (2026-11-09, Chris's ask, not blocking)
+From the interface chat. Chris, on the menu flight's dusk (2026-11-09): "A bit more clearer if anything; I think
+mist/haze should be an option we can adjust like unit glow. Helps the both of us since I can fine tune it exactly the
+way I want, same with anyone else."
+- Wanted: ONE scalar the interface sets per frame (a World field or a WorldPicture setter, your choice), 1 = today's
+  picture exactly, 0 = clear air, up to 2 = twice as thick. What it scales is yours to decide; my guess of what a
+  player means by "haze / mist": the air's haze with a time of day (the clear-weather haze, cinematicHaze, the haze
+  the land beyond is lost in), the mist on low ground and water (World::mist's result, mistNow) and the shafts' low
+  haze. NOT the lobby's weather choice itself (a player who picks Fog still gets fog, perhaps scaled less: your call),
+  and nothing in the original look (time of day off).
+- Per frame please (a slider dragged in Options over a running game shows at once), and safe on the menu flight's map.
+- My side when it exists: a slider "Haze & Mist" (0..200 %, default 100) in the Remastered tab's Sky & Light section,
+  kept out of the Preset (a taste setting, like Unit Glow); the menu flight then runs at the player's amount times
+  about 0.65 ("a bit clearer"). Until then I only lower the flight's own cinematicHaze a little.
+- Tell me the name and the range you settle on; a viewer flag to try it is welcome for your own checks.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
