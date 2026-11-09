@@ -63,6 +63,11 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
     return false;
   }
   for (const std::string& folder : setup_.maps) e.vfs.Mount(folder, "/maps");
+  for (const std::string& m : setup_.mounts) {  // [menumount]
+    const size_t eq = m.find('=');
+    if (eq == std::string::npos || !e.vfs.Mount(m.substr(0, eq), m.substr(eq + 1)))
+      fprintf(stderr, "render: simulation: --mount %s: give <folder>=<place> of a folder that exists\n", m.c_str());
+  }
   if (!setup_.modUids.empty()) {
     std::ifstream f(setup_.modUids);
     std::string line;
@@ -134,7 +139,8 @@ bool LiveSim::Open(const Setup& setup, std::string* error) {
       e.replayData = std::move(*orders);
     }
     mapPath_ = e.session.header.map;
-    e.vfs.SetMemoryFile(moho::kGamePrefsPath, moho::PreGameDataPrefs(moho::SessionMapFolder(e.session.header)));
+    e.vfs.SetMemoryFile(moho::kGamePrefsPath,
+                        moho::PreGameDataPrefs(setup_.mapDir.empty() ? moho::SessionMapFolder(e.session.header) : setup_.mapDir));  // [menumount]
     return true;
   }
   auto data = moho::hostfs::ReadFile(setup.replay);
