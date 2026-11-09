@@ -23,6 +23,7 @@
 
 #include "card_memory.h"  // (photofix2)
 #include "gfx.h"
+#include "marks.h"
 
 #if defined(_WIN32)
 #define VK_USE_PLATFORM_WIN32_KHR 1
@@ -1228,6 +1229,10 @@ class VulkanDevice::ParallelRecorder final : public Recorder {
 };
 
 VulkanDevice::~VulkanDevice() {
+  // (--marks: what nobody destroyed before the device went. A number that grows from one build to the next is a leak.)
+  render::Mark("alive at the device's end: buffers", buffers_.size() - freeBuffers_.size(), 0);
+  render::Mark("alive at the device's end: textures", textures_.size() - freeTextures_.size(), 0);
+  render::Mark("alive at the device's end: pipelines", pipelines_.size() - freePipelines_.size(), 0);
   {  // [snowhitch] the thread making pipelines ahead: what it is making finished, the rest left
     std::lock_guard<std::mutex> lock(backgroundMutex_);
     backgroundStop_ = true;
@@ -4158,6 +4163,7 @@ void VulkanDevice::BeginFrame(const float clearColor[4]) {
   // the frame's memory: its pages and constants from the start, its descriptor sets anew
   f.page = 0;
   f.offset = 0;
+  render::Mark("Vulkan: texture sets in a frame", f.sets.size(), 8192);
   vkResetDescriptorPool(device_, f.descriptors, 0);
   f.sets.clear();
   f.constantSets.clear();
@@ -5075,6 +5081,7 @@ bool VulkanDevice::PrepareDraw() {
       static bool told = false;
       if (!told) fprintf(stderr, "render: Vulkan: out of descriptor sets this frame\n");
       told = true;
+      render::Mark("Vulkan: texture sets in a frame", 8192 + 1, 8192);
       return false;
     }
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_->pipeline, 0, 1, &set, 0, nullptr);

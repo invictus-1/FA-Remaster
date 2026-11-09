@@ -196,7 +196,7 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
   r.Skip(8);
 
   int decals = r.I();
-  if (decals < 0) return fail("bad decal count");
+  if (decals < 0 || static_cast<size_t>(decals) > (r.d.size() - std::min(r.p, r.d.size())) / 4) return fail("bad decal count");
   m.decals.reserve(static_cast<size_t>(decals));
   for (int i = 0; i < decals && r.ok; ++i) {
     MapDecal d;
@@ -260,7 +260,7 @@ bool LoadMap(std::string_view file, MapData* out, std::string* error) {
   }
   if (!r.ok) return fail("truncated before the props");
   int props = r.I();
-  if (props < 0) return fail("bad prop count");
+  if (props < 0 || static_cast<size_t>(props) > (r.d.size() - std::min(r.p, r.d.size())) / 4) return fail("bad prop count");
   m.props.reserve(static_cast<size_t>(props));
   for (int i = 0; i < props && r.ok; ++i) {
     MapProp p;
@@ -295,6 +295,7 @@ bool LoadDecor(std::string_view file, std::vector<MapProp>* out, std::string* er
   take(&entries, 4);
   if (!ok || std::memcmp(magic, "MDECOR1", 8) != 0) return *error = "not a decor file", false;
   if (version != 1) return *error = "decor version " + std::to_string(version) + " (1 is read)", false;
+  if (kinds > (file.size() - at) / 2) return *error = "truncated blueprint names", false;  // (each name has 2 bytes of length at least)
   std::vector<std::string> names(kinds);
   for (std::string& n : names) {
     uint16_t length = 0;

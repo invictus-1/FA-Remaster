@@ -627,6 +627,13 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
   device_->SetPipeline(cover_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   std::vector<float> k;
+  auto flush = [&](const Material& mat) {
+    const size_t n = (k.size() - 4) / 8;
+    if (!n) return;
+    device_->SetTexture(0, mat.albedo);
+    device_->SetConstants(1, k.data(), static_cast<uint32_t>(k.size() * sizeof(float)));
+    device_->Draw(static_cast<uint32_t>(n * 6));
+  };
   for (size_t m = 0; m < materials_.size(); ++m) {
     const Material& mat = materials_[m];
     if (mat.tier.empty()) continue;
@@ -639,13 +646,12 @@ gfx::Texture Tarmacs::ClearCover(const View& view, const float* area, const std:
       const float texels = mat.tier == "8k" ? 8192.0f : 4096.0f;
       const float level = std::max(0.0f, std::log2(texels * (wide / static_cast<float>(size)) / std::max(2 * std::fabs(p.halfX), 0.1f)));
       k.insert(k.end(), {p.centre.x, p.centre.z, p.halfX, p.halfZ, p.cosHeading, p.sinHeading, p.alpha, level});
-      if ((k.size() - 4) / 8 >= kMaxCoverPads) break;
+      if ((k.size() - 4) / 8 >= kMaxCoverPads) {  // (a full batch is drawn and the walk goes on: no pad is left out)
+        flush(mat);
+        k.resize(4);
+      }
     }
-    const size_t n = (k.size() - 4) / 8;
-    if (!n) continue;
-    device_->SetTexture(0, mat.albedo);
-    device_->SetConstants(1, k.data(), static_cast<uint32_t>(k.size() * sizeof(float)));
-    device_->Draw(static_cast<uint32_t>(n * 6));
+    flush(mat);
   }
   device_->SetTexture(0, {});
   return into ? into : coverField_;

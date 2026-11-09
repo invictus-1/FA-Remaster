@@ -128,6 +128,7 @@ void Debris::Clear() {
   dying_.clear();
   shells_.clear();
   shellKinds_.clear();
+  kills_.clear();  // (a new game hands the same unit numbers out again: none of its units was struck in the one before)
   baked.Clear();  // [bakeddebris]
   clock_ = -1;
 }
@@ -666,7 +667,8 @@ std::string Debris::DebrisStyleFor(uint32_t unit, const Dying& d) const {
   // [debriscommander] (a commander dies in its own nuke's blast, whatever struck it last: nothing much is left)
   if (baked.models && !d.unit.empty() && baked.models->HasCategory(d.unit, "COMMAND")) return "vaporise";
   auto it = kills_.find(unit);
-  if (it == kills_.end()) return "break";
+  // (a blow told long before this death is not what killed it: a unit that ends itself, or is ended by a script, is told none)
+  if (it == kills_.end() || std::abs(killsClock_ - it->second.told) > 60) return "break";
   const KillBlow& k = it->second;
   auto lower = [](std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

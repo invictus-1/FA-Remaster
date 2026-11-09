@@ -255,6 +255,7 @@ struct Fsr3::Impl {
   bool firstExecution = true;
   uint32_t resourceFrameIndex = 0;
   bool toldSize = false;
+  int failedWidth = 0, failedHeight = 0, failedWait = 0;  // (the size its pictures could not be made for, and the frames until the next try)
 
   void Defaults() {  // fsr3upscalerCreate
     constants = Constants{};
@@ -364,6 +365,12 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
   }
   gfx::Device* d = device_;
 
+  // (their pictures could not be made for this size a moment ago, the card out of memory: not asked for again every
+  // frame, dozens of large targets made and let go each time, but once in 300 frames)
+  if (m->failedWait > 0 && displayWidth == m->failedWidth && displayHeight == m->failedHeight) {
+    --m->failedWait;
+    return;
+  }
   // the pictures, made again for another display size (a new context of AMD's: everything starts over)
   if (displayWidth != m->width || displayHeight != m->height || !m->upscaled[0]) {
     for (gfx::Texture* t : m->All())
@@ -410,7 +417,10 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
     bool all = true;
     for (gfx::Texture* t : m->All()) all = all && *t;
     if (!all) {
-      fprintf(stderr, "render: FSR 3: its pictures could not be made for %dx%d\n", w, h);
+      if (m->failedWidth != w || m->failedHeight != h) fprintf(stderr, "render: FSR 3: its pictures could not be made for %dx%d\n", w, h);  // (said once a size)
+      m->failedWidth = w;
+      m->failedHeight = h;
+      m->failedWait = 300;
       for (gfx::Texture* t : m->All())
         if (*t) {
           d->Destroy(*t);

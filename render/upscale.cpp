@@ -82,6 +82,10 @@ bool Upscaler::Init(std::string* error) {
 }
 
 void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth, int outHeight) {
+  if (!upscaled_ && failedWait_ > 0 && outWidth == width_ && outHeight == height_) {  // (could not be made a moment ago)
+    --failedWait_;
+    return;
+  }
   if (outWidth != width_ || outHeight != height_ || !upscaled_) {
     if (upscaled_) device_->Destroy(upscaled_);
     gfx::TargetDesc td;
@@ -91,6 +95,12 @@ void Upscaler::Run(gfx::Texture picture, int inWidth, int inHeight, int outWidth
     upscaled_ = device_->CreateTarget(td);
     width_ = outWidth;
     height_ = outHeight;
+    if (!upscaled_) {  // (the card out of memory: no pass into a picture that is not there, and not asked for every frame)
+      if (!toldFailed_) fprintf(stderr, "render: FSR 1: its picture could not be made for %dx%d\n", outWidth, outHeight);
+      toldFailed_ = true;
+      failedWait_ = 300;
+      return;
+    }
   }
   uint32_t con[16] = {};
   FsrEasuCon(con, con + 4, con + 8, con + 12, static_cast<AF1>(inWidth), static_cast<AF1>(inHeight), static_cast<AF1>(inWidth),
