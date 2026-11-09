@@ -117,7 +117,7 @@ session file and a path.
   That script's `OnPopulate` calls `ScenarioUtils.InitializeArmies()` and its `OnStart` is empty. There are
   8 armies plus `ARMY_9 NEUTRAL_CIVILIAN`.
 - Earlier staged fights:
-  - `_scratch\ui\fight_walkers.lua` and `fight_izanagi.lua` / `fight_ships.lua` with `session_fight.lua`. These
+  - `_scratch\ui\fight_walkers.lua`, a private mod's air experimental's fight file / `fight_ships.lua` with `session_fight.lua`. These
     are **interface-side** scripts (`--game-lua`). They need `CheatsEnabled`, a game interface, and an
     "AI: Normal" opponent. They spawn units through `SimCallback CheatSpawnUnit`. The battle is recorded
     (`replay_fight_*.stream/.seed`).

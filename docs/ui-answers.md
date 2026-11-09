@@ -157,11 +157,11 @@ Built as the original does them (read from the FA exe), tested, landing with ui 
 
 Built as the original does them (read from the FA exe), tested, landing with ui ba69c02 / 7b25a3f / 9128bcb.
 
-1. **Item 5, "health regen on Izanagi shows +0 while shields show +600"**: our host's fault, not the blueprint's (the
+1. **Item 5, "health regen on [a private mod's air experimental] shows +0 while shields show +600"**: our host's fault, not the blueprint's (the
    staged MIA0401 has Defense.RegenRate 300). FAF's unit view shows `GetStat("HitpointsRegeneration")`, and our
    UserUnit:GetStat always answered the default, so every unit showed "+0/s". It now reads the unit's statistics from
    the engine's view (UnitStateView::stats, engine 13a6e16): the regen numbers, veterancy (VetLevel, VetExperience)
-   and the reclaim totals are real. The Izanagi should now show "+300/s".
+   and the reclaim totals are real. That unit should now show "+300/s".
 2. **Item 16, the mass extractor snapping from farther**: it was missing. While an extractor (or a hydrocarbon plant)
    is placed, the place under the mouse jumps onto the nearest fitting deposit within the original's reach (the
    cursor update 0x86f520, FAF's patch; ui_ExtractSnapTolerance 4 map units, capped between 20 and 90 pixels); the
@@ -178,7 +178,7 @@ Built as the original does them (read from the FA exe), tested, landing with ui 
    held with a selection. As the original (MAUI_KeyIsDown 0x79cb70), a key counts as held only while the window is in
    front, and leaving the front lets every key go.
 6. **Item 22, "load the game without any mods at all"**: the plain launchers (Open-Game-NewMap, Open-Game-Quixel)
-   load none. The Izanagi tours load the Wyvern Battle Pack because his Mitsurugi mod requires it; Chris chose
+   load none. The tours of the private mod's air experimental load the Wyvern Battle Pack because his private mod requires it; Chris chose
    (2026-10-20) a mod-free tour beside them: `_scratch\ui\Open-Game-Tour.bat` (an Aeon CZAR on the rebuilt map, no
    mods at all). The mod units' remastered art moved out of `visuals\work` (visuals, 2026-10-20) into
    `visuals\work_mods\<mod>`, mounted only by the launchers of games with that mod (`--remasters` may be given more
