@@ -3273,6 +3273,7 @@ void KillCleanupTick(Sim& sim) {
     UnitMotion& m = u->motion;
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
     EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
+    AirSteeringGone(sim, u);  // (the steering's dtor stops an aircraft's motion where it stands)
     m.spline.clear();
     ++m.splineVersion;
     m.splineIdx = 0;

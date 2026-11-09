@@ -1906,6 +1906,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
   // any typed cell hears OnTerrainTypeChange(type, nil) before its weapons and OnCreate)
   UpdateTerrainType(*this, u, pos.x, pos.z);
   MotionCreated(*this, u);  // (the CUnitMotion ctor follows SetCurrentLayer: 0x6a5b65, 0x6a5df2)
+  IntelCtorForceUpdate(*this, u);  // (the ctor's AdvanceCoords 0x6a5c59: the intel handles' first ForceUpdate)
 
   // Weapons: one per bp.Weapon entry; class from unit:GetWeaponClass(label) (FA exe
   // UnitWeapon::CreateInstance), falling back to /lua/sim/Weapon.lua's Weapon.

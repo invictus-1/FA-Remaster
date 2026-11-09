@@ -1075,6 +1075,21 @@ void IntelExactUpdate(Sim& sim, Unit* u) {
   for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), true);
 }
 
+// The Unit ctor calls Entity::AdvanceCoords 0x678f10 twice (0x6a5c59, 0x6a5c5f) after SetCurrentLayer (0x6a5b6e, whose
+// OnLayerChange from 'None' runs FAF's EnableIntel('Vision')) and after its CIntel was made (0x6a5860); AdvanceCoords
+// runs CIntel::ForceUpdate 0x76e490 (0x67907e..0x6790cb): UpdatePos 0x76f1e0 for every handle at the unit's place, 1 up,
+// with the 6-tick test. A handle already on (lastTick 0) takes its clock phase here, in the beat the unit is made (the
+// raster itself was made by EnableIntel at the same place). Seen (probe v3840j_64_iu + v3840j_64_blip): 6v6_4, army 5's
+// torpedo bombers made at 6364 by ChangeUnitArmy (a sim callback at the beat's end, after AdvanceCoords): the original's
+// vision clock of 0x500031 runs 6364 + 6k (its circle moved at 6724 and was 37.8 from army 4's dead water structure at
+// 6725, so army 5's gone test let its blip be MaybeDead and the torpedoes kept homing on it); ours took its phase at the
+// next beat's AdvanceIntelCoords (6365 + 6k: the circle stood 30.1 from it, army 5 saw it gone and dropped the blip).
+void IntelCtorForceUpdate(Sim& sim, Unit* u) {
+  if (!u || !u->intel) return;
+  const Vec3 p = SourcePos(u);
+  for (int s = 1; s <= 8; ++s) UpdatePos(IS(sim), u->intel->h[s], s, p, sim.tick(), false);
+}
+
 namespace {
 // One source's step of AdvanceIntelCoords; viz as UpdatePos's. Reads the entity's transform and kind, writes only its
 // own handles (and what viz does).
