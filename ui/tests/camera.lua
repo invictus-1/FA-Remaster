@@ -13,6 +13,29 @@ local function check(what, got, want)
     end
 end
 local function near(a, b, d) return math.abs(a - b) <= d end
+-- A move given as a player gives it: the unit selected, a right click at the place. (IssueUnitCommand's third
+-- argument is the command's Lua table, not a place: a "Move" given by it goes nowhere, and until 2026-11-09 this
+-- test gave its move so and the unit stood.) Answers whether the unit then has an order queued.
+local function walkTo(unit, place)
+    local before = GetSelectedUnits()
+    local at = import("/lua/ui/game/worldview.lua").viewLeft:Project(place)
+    SelectUnits({unit})
+    local waited = 0  -- (a commander still arriving cannot be selected yet)
+    while table.getn(GetSelectedUnits() or {}) == 0 and waited < 10 do
+        WaitSeconds(0.5)
+        waited = waited + 0.5
+        SelectUnits({unit})
+    end
+    moho64ui_MouseMove(at.x, at.y)
+    WaitSeconds(0.2)
+    moho64ui_MouseButton("Right", true, at.x, at.y)
+    moho64ui_MouseButton("Right", false, at.x, at.y)
+    WaitSeconds(0.4)
+    local queued = (unit:GetCommandQueue() or {})[1] ~= nil
+    if not queued then LOG(string.format("TEST note: walkTo: no order after the click at %.0f, %.0f with %d selected", at.x, at.y, table.getn(GetSelectedUnits() or {}))) end
+    SelectUnits(before)
+    return queued
+end
 ForkThread(function()
     WaitSeconds(4)
     local cam = GetCamera('WorldCamera')
@@ -90,9 +113,11 @@ ForkThread(function()
     local cp = cdr:GetPosition()
     local f = cam:GetFocusPosition()
     check("TrackEntities: the focus on the unit", near(f[1], cp[1], 1.5) and near(f[3], cp[3], 1.5), true)
-    IssueUnitCommand({cdr}, "Move", {cp[1] + 30, cp[2], cp[3]})
+    local stood = {cp[1], cp[2], cp[3]}
+    walkTo(cdr, {cp[1] + 8, cp[2], cp[3]})
     WaitSeconds(2.5)
     cp = cdr:GetPosition()
+    check("the unit walks", math.abs(cp[1] - stood[1]) + math.abs(cp[3] - stood[3]) > 1, true)
     f = cam:GetFocusPosition()
     LOG("TEST note: following, the unit at " .. string.format("%.1f, %.1f", cp[1], cp[3]) .. ", the focus at " .. string.format("%.1f, %.1f", f[1], f[3]))
     check("and follows it as it walks", near(f[1], cp[1], 3) and near(f[3], cp[3], 3), true)
