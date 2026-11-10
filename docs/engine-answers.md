@@ -4,6 +4,41 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+## ui request 58: after a defeat, does the original's exe free the view by itself? (2026-11-09) - no; read, not run
+
+Read in the stock exe's disassembly (3839). FAF's added code (0x128xxxx) is not part of this read, apart from the
+sim-side SetFocusArmy (0x128ce81) of the answer to ui 29.
+
+**1. Nothing in the exe changes the focus army by itself.** The player keeps the defeated army's view until a
+SetFocusArmy comes.
+- The only path to a focus change is `CWldSession::RequestFocusArmy` (0x8965e0): range check, then
+  `ValidateFocusArmyRequest` (0x896670), then the driver's vt+0x30 (SetArmyIndex). Its only callers are the user
+  Lua's SetFocusArmy (0x842fc1), the console's (0x865a06) and CON_UI_CreateHead1Map (0x834f04).
+- `CWldSession::DoBeat` (0x894530..0x895700) touches neither the driver global (0x10c4f50) nor the local command
+  source (session+0x480), and none of the 70 functions that use the driver is a beat or army-out-of-game path that
+  sets the focus.
+- Session+0x480 (the local command source) is written once, in the constructor, from the launch info (+0x2c):
+  losing the army does not change it.
+
+`ValidateFocusArmyRequest` in full (eax = the army asked, -1 = none). True when:
+- the local source is 0xff; or
+- session+0x4d4 is set; or
+- the army is not -1 and the local source is in that army's command-source set (army+0x128); or
+- session+0x48c is set (written to 1 once in DoBeat at 0x89548a; taken to be "game over", not confirmed); or
+- session+0x487 (observing allowed) is set AND the local source is in NO army's set (the loop 0x8966bf..0x89671f
+  over all armies; found in any army gives false; the compare of army+0x1b8 at 0x896713 is dead, its flags are not
+  used).
+
+Else false. So once FAF's ToObserver has taken the source off every army, and the user side's army sets have
+followed by the sync, every army and -1 are valid requests; but someone has to ask.
+
+**2. SessionIsObservingAllowed** (0x8980c0) returns the byte session+0x487. It is set once, in CWldSession's
+constructor (0x8935ee..0x8936b4), and nothing writes it later:
+- 1 when session+0x484 is set (launch info +0x25; taken to be "a replay", not confirmed);
+- else the boolean of the launch scenario's `Options.AllowObservers` (strings 0xe3e2a0, 0xe4aa6c), when the
+  scenario has an Options table and the key;
+- else false.
+
 ## ui request 57 + audit B2 / B3: file names in any language, safer file writes, build stamp, crash dump, default log (2026-11-09) - done in the engine's part; two lines for each build script
 
 Built from the request's wording as the ui gave it in his message (the entry was not yet in `ui/REQUESTS.md`).

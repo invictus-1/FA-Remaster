@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +16,41 @@ namespace {
 std::mutex g_mutex;
 FILE* g_file = nullptr;
 bool g_echo = true;
+// LogTallyToFile: the counted messages (never freed: the writer runs at the program's end)
+std::map<std::string, int>* g_tally = nullptr;
+std::string* g_tallyPath = nullptr;
+int g_tallyTotal = 0;
+
+void TallyMessage(std::string_view message) {  // (the caller holds g_mutex)
+  const std::string_view first = message.substr(0, message.find('\n'));
+  auto hex = [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+  std::string key;
+  for (size_t i = 0; i < first.size() && key.size() < 200;) {
+    size_t j = i;
+    while (j < first.size() && hex(first[j])) ++j;
+    if (j - i >= 6) {
+      key.push_back('#');
+      i = j;
+    } else if (j > i) {
+      key.append(first.substr(i, j - i));
+      i = j;
+    } else {
+      key.push_back(first[i] == '\t' || first[i] == '\r' ? ' ' : first[i]);
+      ++i;
+    }
+  }
+  ++(*g_tally)[key];
+  ++g_tallyTotal;
+}
+
+void TallyWrite() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  FILE* f = std::fopen(g_tallyPath->c_str(), "wb");
+  if (!f) return;
+  std::fprintf(f, "total %d\n", g_tallyTotal);
+  for (const auto& [message, count] : *g_tally) std::fprintf(f, "%d\t%s\n", count, message.c_str());
+  std::fclose(f);
+}
 
 const char* Prefix(LogLevel level) {
   switch (level) {
@@ -81,8 +117,17 @@ std::string LogOpenDefault(const std::string& folder, const std::string& program
 
 void LogSetEcho(bool echo) { g_echo = echo; }
 
+void LogTallyToFile(const std::string& path) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_tally) return;
+  g_tally = new std::map<std::string, int>();
+  g_tallyPath = new std::string(path);
+  std::atexit(TallyWrite);
+}
+
 void LogWrite(LogLevel level, std::string_view message) {
   std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_tally && (level == LogLevel::Warning || level == LogLevel::Error)) TallyMessage(message);
   const char* prefix = Prefix(level);
   // Every line of a multi-line message carries the level prefix, as in the original log.
   size_t start = 0;

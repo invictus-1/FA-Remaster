@@ -1955,6 +1955,9 @@ int main(int argc, char** argv) {
   if (!o.logFile.empty() && !LogOpenFile(o.logFile))
     std::fprintf(stderr, "moho64: cannot write the log file %s (is its folder there?); going on without it\n", o.logFile.c_str());
   if (o.quiet) LogSetEcho(false);
+  // MOHO64_WARNINGS=<file>: the run's warning and error messages counted into a file at the end (core/log.h). The
+  // gate compares it with the entry's list, so a new script error fails it even when the game's state is the same.
+  if (const char* w = std::getenv("MOHO64_WARNINGS"); w && *w) LogTallyToFile(w);
   InstallCrashHandler();  // a crash writes its place and stack to the log (core/crash.h)
   // ... and, with a log file, a memory dump beside it (<log>.dmp); never a window: a test run must not wait
   if (!o.logFile.empty()) CrashSetReport(o.logFile.c_str(), (o.logFile + ".dmp").c_str(), false);
