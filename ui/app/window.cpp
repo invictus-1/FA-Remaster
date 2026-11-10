@@ -55,13 +55,41 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // owner comes to the front, so the keys reach the game again (ours, INFERRED: the original's exclusive heads had no
     // other window to click).
     if (pressed && w->noActivate && w->owner && !w->InFront()) SetForegroundWindow(static_cast<HWND>(w->owner));
-    if (pressed) SetCapture(hwnd);
-    else ReleaseCapture();
+    // The mouse stays captured while ANY button is down (ours, the review of 2026-11-09, row B: the release of a
+    // second button gave the capture away, and a drag still held by the first lost the mouse outside the window).
+    const int bit = left ? 1 : middle ? 2 : 4;
+    if (pressed) w->buttonsHeld |= bit, SetCapture(hwnd);
+    else if ((w->buttonsHeld &= ~bit) == 0) ReleaseCapture();
     if (w->callbacks.mouseButton) w->callbacks.mouseButton(e, pressed, dbl);
   };
   switch (msg) {
     case WM_CLOSE:
       w->closed = true;
+      return 0;
+    // Alt alone, F10, or Alt and a letter no menu has: Windows' DefWindowProc turns them into SC_KEYMENU, which in a
+    // framed window opens its (empty) menu mode: the game stood still until the next key or click, with a beep for a
+    // letter (the review of 2026-11-09, row A; Alt is a modifier of the game's keys). Not taken here: Alt+Space, the
+    // window's own menu (its lp is the space). Ours.
+    case WM_SYSCOMMAND:
+      if ((wp & 0xFFF0) == SC_KEYMENU && lp != ' ') return 0;
+      break;
+    // Windows took the mouse capture away while buttons were down (another window came to the front in a drag): each
+    // button still held is let go for the interface, where the pointer is, so no drag stays open (row B).
+    case WM_CAPTURECHANGED:
+      if (reinterpret_cast<HWND>(lp) != hwnd && w->buttonsHeld) {
+        POINT p{};
+        GetCursorPos(&p);
+        ScreenToClient(hwnd, &p);
+        const int held = w->buttonsHeld;
+        w->buttonsHeld = 0;
+        for (int bit : {1, 2, 4}) {
+          if (!(held & bit) || !w->callbacks.mouseButton) continue;
+          UiEvent e = MouseEvent(0, MAKELPARAM(p.x, p.y));
+          if (w->holding()) w->HeldPlace(&e.x, &e.y);
+          e.left = bit == 1, e.middle = bit == 2, e.right = bit == 4;
+          w->callbacks.mouseButton(e, false, false);
+        }
+      }
       return 0;
     case WM_MOUSEMOVE: {
       UiEvent e = MouseEvent(wp, lp);

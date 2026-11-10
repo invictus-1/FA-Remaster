@@ -92,6 +92,7 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
   Callbacks callbacks;
   bool closed = false;
   bool keyDownHandled = false;  // the last key down was handled: its character is not passed on
+  int buttonsHeld = 0;          // the mouse buttons down as this window was told (1 left, 2 middle, 4 right): the capture's
 
  private:
   void* hwnd_ = nullptr;
