@@ -27,6 +27,7 @@
 #include "core/log.h"
 #include "core/vfs.h"
 #include "core/workers.h"
+#include "draw/draw.h"
 #include "maui/font.h"
 #include "net/beat_exchange_net.h"
 #include "net/lobby_core.h"
@@ -179,7 +180,13 @@ void SkyOnWorld(render::World& w, const std::string& edge, float startHour, cons
 }
 bool WeatherByItself(const std::string& kind) { return kind == "changing" || kind == "cold" || kind == "dry"; }
 }  // namespace
+
 #endif
+
+bool& GameSession::FramesByCount() {
+  static bool byCount = false;
+  return byCount;
+}
 
 // The renderer's world picture behind the interface's WorldSource.
 struct GameSession::Picture : WorldSource {
@@ -621,6 +628,7 @@ struct GameSession::Picture : WorldSource {
     // The icons on the resource deposits from far up (the renderer's World::depositIcons, its "resource icons"): the
     // main view's EnableResourceRendering (off, for one, while an operation's cinematic plays: FAF's gamemain.NISMode).
     if (render::World* w = picture.world()) w->depositIcons = scene.resourceIcons;
+    if (render::World* w = picture.world()) w->steadyFrames = GameSession::FramesByCount();  // (a stepped run: game_session.h)
     // The player's own looks (the Options menu's Remastered tab), when they change.
     const LookSettings& looks = Looks();
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
@@ -850,11 +858,23 @@ struct GameSession::WindowPicture {};
 // PC's own order), then the pixels (0xAARRGGBB, rows from the top). The key is the camera path's and the looks' the
 // frame was taken with (KeptKey): a frame of another path or other looks is not shown (the live flight would not take up
 // where it left). Ours.
+// The first start has no such file yet, nor has the first one after a look changed or the window got another size, and
+// the flight's map takes its ten to twenty seconds to open: the menu stood on black all that time (Chris's playtest of
+// 2026-11-09: "initial startup I got no background"). Then the program's own picture of the flight's first view is
+// shown instead (ui/data/menuflight/first_frame.jpg: taken once at 1920x1080 with the looks a new player starts with;
+// `stock`), fitted over the window with its shape kept; the live flight comes in over it as over a kept frame, and this
+// run's own frame is kept for the next start as always.
+constexpr const char* kStockFirstFrame = "/moho64ui/menuflight/first_frame.jpg";
 struct GameSession::KeptFrame {
   std::string dir;           // (beside the preferences: userDir)
+  std::string stock;         // the program's own first frame's file bytes (empty: none), decoded on the thread when needed
   int w = 0, h = 0;          // the size read for (0: none yet)
   uint32_t key = 0;          // (the key it was read for)
   std::vector<uint32_t> pixels;  // the frame for w x h (empty: none there, or not read yet)
+  int pw = 0, ph = 0;            // the pixels' own size: w x h, or the stock picture's
+  bool isStock = false;          // the pixels are the stock picture's
+  int readW = 0, readH = 0;      // (the thread's, as readPixels)
+  bool readStock = false;
   bool taken = false;            // this run's taken (once a run)
   std::vector<uint32_t> fresh;   // (this run's, taken: in place of `pixels` once those are no longer over the window)
   int freshW = 0, freshH = 0;
@@ -881,6 +901,8 @@ struct GameSession::KeptFrame {
     busy.store(true);
     io = std::thread([this, file = File(width, height), width, height, wantKey] {
       std::vector<uint32_t> px;
+      int rw = width, rh = height;
+      bool fromStock = false;
       if (const std::optional<std::string> data = hostfs::ReadFile(file)) {
         uint32_t head[4] = {};
         const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
@@ -893,7 +915,15 @@ struct GameSession::KeptFrame {
           }
         }
       }
+      if (px.empty() && !stock.empty()) {  // (no frame of the player's own for this size and these looks: the program's)
+        Image image;
+        if (DecodeImage(stock, image) && image.valid()) {
+          for (uint32_t& c : image.pixels) c |= 0xff000000u;  // (opaque: SetBackdrop's colours are multiplied by their alpha)
+          px.swap(image.pixels), rw = image.width, rh = image.height, fromStock = true;
+        }
+      }
       readPixels.swap(px);
+      readW = rw, readH = rh, readStock = fromStock;
       busy.store(false);
     });
   }
@@ -903,7 +933,11 @@ struct GameSession::KeptFrame {
     io.join();
     pixels.swap(readPixels);
     readPixels.clear();
-    if (!pixels.empty()) Logf(LogLevel::Info, "moho64ui: the menu's flight: its kept first frame read (%dx%d), shown until it is live", w, h);
+    pw = readW, ph = readH, isStock = readStock;
+    if (!pixels.empty() && isStock)
+      Logf(LogLevel::Info, "moho64ui: the menu's flight: no kept first frame for %dx%d and these looks yet: the program's own (%dx%d) is shown until it is live",
+           w, h, pw, ph);
+    else if (!pixels.empty()) Logf(LogLevel::Info, "moho64ui: the menu's flight: its kept first frame read (%dx%d), shown until it is live", w, h);
     return true;
   }
   void Write(std::vector<uint32_t> px, int width, int height, uint32_t wantKey) {
@@ -3348,11 +3382,14 @@ void GameSession::GiveBackdrop(WindowPicture& wp, int width, int height) {
   bool keptWanted = false;
   if (menuFlight && menuBackdrop && menuBackdrop->mode() == Backdrop::Mode::Flight && menuBackdrop->Direct() && !picture_ && !sim_ &&
       load_ == Load::None && width > 0 && height > 0) {
-    if (!kept_) kept_ = std::make_unique<KeptFrame>(), kept_->dir = userDir.empty() ? std::string(".") : userDir;
+    if (!kept_) {
+      kept_ = std::make_unique<KeptFrame>(), kept_->dir = userDir.empty() ? std::string(".") : userDir;
+      if (auto stock = vfs_->ReadFile(kStockFirstFrame)) kept_->stock = std::move(*stock);  // (the program's own: KeptFrame)
+    }
     KeptFrame& k = *kept_;
     // (this run's frame taken: the one shown from now, once the one read is no longer over the window)
     if (!k.fresh.empty() && wp.over != Over::Kept && !(wp.over == Over::Fade && wp.fadeKept))
-      k.pixels.swap(k.fresh), k.fresh.clear(), k.w = k.freshW, k.h = k.freshH, k.key = k.freshKey;
+      k.pixels.swap(k.fresh), k.fresh.clear(), k.w = k.pw = k.freshW, k.h = k.ph = k.freshH, k.key = k.freshKey, k.isStock = false;
     if (!flightShows_ && menuFlight->Described()) {
       k.Read(width, height, KeptKey());
       k.Through();
@@ -3385,7 +3422,8 @@ void GameSession::GiveBackdrop(WindowPicture& wp, int width, int height) {
   } else if (over == Over::Still && wp.over != Over::Still) {
     p.SetBackdrop(still_.data(), stillW_, stillH_, stillW_, render::WorldPicture::BackdropFit::Stretch, true);
   } else if (over == Over::Kept && wp.over != Over::Kept) {
-    p.SetBackdrop(kept_->pixels.data(), kept_->w, kept_->h, kept_->w, render::WorldPicture::BackdropFit::Stretch, true);
+    p.SetBackdrop(kept_->pixels.data(), kept_->pw, kept_->ph, kept_->pw,
+                  kept_->isStock ? render::WorldPicture::BackdropFit::Cover : render::WorldPicture::BackdropFit::Stretch, true);
   } else if (over == Over::None && wp.over != Over::None) {
     p.SetBackdrop(nullptr, 0, 0, 0, render::WorldPicture::BackdropFit::Stretch, true);
   }

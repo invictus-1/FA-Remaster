@@ -434,21 +434,21 @@ void SavePreferencesOf(lua_State* L) {
     Logf(LogLevel::Warning, "moho64ui: preferences NOT saved: %s could not be written whole (the file before is kept)", tmp.c_str());
     return;
   }
+  // (the renames are hostfs's own since the engine's answer to ui request 57: one spelling of the path for the
+  // write, the read back and the renames, on every system)
   std::error_code ec;
-  const std::filesystem::path to = FsPath(file), bak = FsPath(file + ".bak");
-  const bool was = std::filesystem::is_regular_file(to, ec);
-  ec.clear();
-  if (was) std::filesystem::rename(to, bak, ec);  // (takes the place of the backup before)
-  if (!ec) {
-    std::filesystem::rename(FsPath(tmp), to, ec);
-    if (!ec) return;
-    std::error_code undo;
-    if (was) std::filesystem::rename(bak, to, undo);  // (the file before back under its name)
+  const bool was = std::filesystem::is_regular_file(FsPath(file), ec);
+  const std::string bak = file + ".bak";
+  const char* stuck = "the file before could not become the backup";
+  if (!was || hostfs::RenameOver(file, bak)) {  // (takes the place of the backup before)
+    if (hostfs::RenameOver(tmp, file)) return;
+    stuck = "the new file could not take the name";
+    if (was) hostfs::RenameOver(bak, file);  // (the file before back under its name)
   }
-  // The names could not be changed (a file held open by another program, a path this build spells differently):
-  // the old way, so that a save is not lost; said once.
+  // The names could not be changed (a file held open by another program): the old way, so that a save is not
+  // lost; said once.
   static bool said = false;
-  if (!said) Logf(LogLevel::Warning, "moho64ui: preferences: %s could not take the file's name (%s); written in place", tmp.c_str(), ec.message().c_str());
+  if (!said) Logf(LogLevel::Warning, "moho64ui: preferences: %s (%s); written in place", stuck, tmp.c_str());
   said = true;
   if (!hostfs::WriteFile(file, out)) Logf(LogLevel::Warning, "moho64ui: cannot write preferences to %s", file.c_str());
 }

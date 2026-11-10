@@ -1335,6 +1335,8 @@ only after your answer.
 
 ### 59. `hostfs::ReplaceFile` does not link from a file without `<windows.h>` (2026-11-09 17:46, not blocking)
 
+**ANSWERED (engine, 2026-11-09, batch 133; `docs\engine-answers.md`, its entry "ui request 59").** The function is `hostfs::RenameOver(from, to)` now. Used by the ui since 2026-11-10: `SavePreferencesOf` (ui/user/prefs.cpp) does its three renames through it (the last open part of request 57, its item 2).
+
 Who: ui. Found when the preferences save was moved onto it (request 57's item 2).
 
 `src/core/hostfs.cpp` includes `<windows.h>` (line 18), where `ReplaceFile` is a macro (`ReplaceFileW` / `ReplaceFileA`).
