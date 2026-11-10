@@ -446,6 +446,16 @@ int l_EdgeScroll(lua_State* L) {
   return 0;
 }
 
+// moho64ui_DragState(): for tests: whether the pointer is held and hidden (a camera drag: UiManager::holdPointer) and
+// whether a control drags by itself now (UiManager::engineDragger), as "held dragging", "held", "dragging" or "".
+int l_DragState(lua_State* L) {
+  const UiManager& ui = UserState::From(L)->ui();
+  std::string state = ui.holdPointer ? "held" : "";
+  if (ui.engineDragger) state += state.empty() ? "dragging" : " dragging";
+  lua_pushstring(L, state.c_str());
+  return 1;
+}
+
 // moho64ui_Type(text): the characters of an ASCII text typed one after the other.
 int l_Type(lua_State* L) {
   std::string text = luaL_checkstring(L, 1);
@@ -468,6 +478,7 @@ void RegisterInputBindings(lua_State* L) {
   lua_register(L, "moho64ui_Type", l_Type);
   lua_register(L, "moho64ui_WindowFocus", l_WindowFocus);
   lua_register(L, "moho64ui_EdgeScroll", l_EdgeScroll);
+  lua_register(L, "moho64ui_DragState", l_DragState);
 }
 
 }  // namespace moho::ui

@@ -2108,6 +2108,7 @@ class WorldView : public Control {
       return true;
     }
     if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return true;
+    if (user->ui().engineDragger == this && user->ui().draggerKey != e.keyCode) return true;  // (a drag is open: as below)
     if (e.right) {
       photoTurn_ = true;
       lastX_ = e.x, lastY_ = e.y;
@@ -2536,6 +2537,14 @@ class WorldView : public Control {
     }
     // (A second press soon after the first comes as a double click: it is a press too.)
     if (e.type != EventType::ButtonPress && e.type != EventType::ButtonDClick) return false;
+    // Another button pressed while a drag of this view is open (the camera's by the middle button, a selection box, a
+    // row of buildings, a right press held for a formation's facing, a waypoint): not taken. Before, the press began a
+    // drag of its own, which cancelled the open one without ending it (UiManager::PostEngineDragger: the same control
+    // posting again), and the first button's release then came as a plain release: after a camera drag and a right
+    // click the pointer stayed hidden and held and the screen's edges no longer scrolled; a selection box stood until
+    // the next left click; a row of buildings was ordered at the other button's release (the review of 2026-11-09,
+    // toolkit H3). Ours: INFERRED that the original's separate dragger objects do not end each other this way.
+    if (UiManager& uim = UserState::From(L)->ui(); uim.engineDragger == this && uim.draggerKey != e.keyCode) return true;
     if (e.middle) {
       if (miniMap) return false;
       TakeCameraBack(L, GetCameraObject(L, cameraName));  // (the drag's start already hands the camera back)
