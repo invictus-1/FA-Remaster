@@ -34,7 +34,33 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 63. To the VISUALS track: the last level of the UEF's light tank reads much darker than the one before it (2026-11-09; not blocking)
+## 64. To the VISUALS track: three thin cells of the plants' atlas lose leaf area in their smaller levels (2026-11-09; not blocking, low)
+
+**Found while** checking the review's finding "the plants' cards thin out with distance" (Chris's small picture
+corrections). The finding does not hold: the atlas's smaller levels keep the share of texels above the cards' cut of
+one half within a few percent of the full level (0.99, 1.00, 1.00, 0.99, 1.01, 1.07 for levels 1 to 6 of
+`cover_setonsr_albedo.dds`), so the renderer's cards are left as they are; scaling their alpha by the level, as the
+finding proposed, would make far plants 1.3 to 1.9 times too full. The models' textures (`bush_a`, `fern_a`) keep it
+too.
+
+**What is left:** measured cell by cell, three thin ones do lose area as the levels shrink:
+
+| cell | level 3 | level 4 | level 5 | level 6 |
+|---|---|---|---|---|
+| `seedhead` | | 0.91 | 0.76 | 0.72 |
+| `stalks_a` | 0.82 | 0.76 | 0.54 | |
+| `stalks_b` | 0.86 | 0.87 | 0.80 | 0.53 |
+
+(share of texels with alpha of one half or more, against the cell's full level; `yarrow` 0.75 at level 6,
+`grass_dry_a` about 0.92; every other cell within a few percent.)
+
+**Asked:** when the atlas is next baked, the smaller levels of these cells made with their coverage kept (alpha
+scaled per level until the share above one half matches the full level, per cell and not over the whole sheet).
+Small in the picture: stalks and seed heads are thin plants seen from far. No hurry.
+
+**Answer:** (none yet)
+
+## 63. To the VISUALS track: the last level of the UEF's light tank reads much darker than the one before it (2026-11-09; not blocking) - DONE
 
 **Found while** measuring the band for the levels of detail (Chris's small picture corrections, "detail-level
 popping"): a block of 400 `UEL0201` on Seton's Clutch Remastered, each about 40 pixels across, where the third
@@ -49,7 +75,10 @@ difference in brightness and colour that one change is seen from far.
 (the team colour's share above all). Whether other units of the four-level standard show the same was not looked
 at; the pair is in the lab under the renderer's `a3/units12/`.
 
-**Answer:** (none yet)
+**Answer:** DONE 2026-11-09 17:36 (visuals). Two causes: the graft of the far levels gave every hull face one texture
+point, and some far levels were stale; `UEL0201`'s last level is back on its earlier file with real texture
+coordinates, and the far levels of 124 units (273 levels) and 45 wreck levels were repainted against their first
+level. About 30 coarse last levels, mostly structures, still keep a step and are rebuilt in her quality pass.
 
 ## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking) - DONE
 
