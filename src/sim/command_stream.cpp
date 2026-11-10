@@ -594,7 +594,12 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       if (!e || !sim.OkayToMessWith(e->army)) break;
       auto c = StreamCommand(sim, id);
       if (!c || !OkayCommand(sim, *c) || e->kind != Entity::Kind::Unit || e->dead) break;
-      if (!RemoveCommandFromUnit(sim, static_cast<Unit*>(e), *c)) unhandled("RemoveCommandFromQueue (factory queue)");
+      // (0x749970: in the unit's own queue -> removed there; else, when its builder's rally queue holds it
+      // (vt+0x2c), removed there (vt+0x34); else nothing)
+      Unit* u = static_cast<Unit*>(e);
+      // (a command neither queue holds: nothing, as the original. Seen: MP1's 17, orders already done when the
+      // player's removal arrives; ours counted them as a gap until batch 134)
+      if (!RemoveCommandFromUnit(sim, u, *c)) RemoveFactoryCommand(u, *c);
       break;
     }
     case 20: {  // DebugCommand 0x6e4d80 -> Sim::ExecuteDebugCommand 0x749da0
