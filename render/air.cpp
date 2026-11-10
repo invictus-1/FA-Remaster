@@ -26,7 +26,7 @@ struct AirConstants {
   float lastEye[4];    // xyz: last frame's eye; w: last frame's log(farthest / nearest)
   float light[4];      // x the sun's forward scattering, y the lamps', z the sun's light in the air, w the sky's
   float lastRange[4];  // x last frame's nearest distance; y the height the haze and dust thin above; z 1 / their scale height; w the share of a lamp's glow to all sides the air takes
-  float points[4];     // x the other small lights' (flashes, glows) light in the air
+  float points[4];     // x the other small lights' (flashes, glows) light in the air; z [airsteady] 1: each cell from its own start, the sky's light by the cell's thickness (Air::steady)
   float ground[4];     // (airfix) x the ground's height unit (0: no heights, nothing left out); y, z the map's width and height; w the water's level (-1e9: none)
 };
 
@@ -228,7 +228,11 @@ float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
   float3 sun = falls * (AirPhase(cs, airLight.x) * airLight.z * near * (1 - ShaftShare(over, away)) + AirPhase(cs, shaftLow.y) * airLight.z * share.w * (1 - LowShare(away)));
   float3 points;
   float3 beams = LampsInAir(q, ray, points);
-  float3 scattered = sun + SkyInAir() * (modern.y * airLight.w) * thin + beams * (thin + dust * max(airRange.w - 1, 0)) +
+  // [airsteady] the sky's light is alike all along the stretch, so it takes the stretch's thickness as it is (`thick`),
+  // not the drawn place's share of it: by the place it was whole or half (the low haze under the clouds scatters half)
+  // as the frame's place fell into one haze or another, in every cell at once, and the high view pulsed under clouds
+  float skyThin = airPoints.z > 0.5 ? thick / whole : thin;
+  float3 scattered = sun + SkyInAir() * (modern.y * airLight.w) * skyThin + beams * (thin + dust * max(airRange.w - 1, 0)) +
                      points * (thin + dust * max(airPoints.x - 1, 0));
   return float4(scattered * whole, thick);
 }
@@ -246,8 +250,12 @@ float4 GatherSpread(float3 ray, float t0, float t1, bool meets, float u) {
   // same share of every cell's depth, is off the cells' mean all alike, and the frames after would keep that
   float4 now = 0;
   uint samples = max(uint(airCells.w), 1u);
+  // [airsteady] each cell starts the frame's places at a share of its own (a noise over the picture's cells, stepped on
+  // down each column so that a column's cells lie evenly over all shares): with one start for all, every cell was off
+  // its mean the same way in a frame, and whole areas brightened and darkened together from frame to frame
+  float own = airPoints.z > 0.5 ? frac(52.9829189 * frac(0.06711056 * id.x + 0.00583715 * id.y) + 0.7548776662 * id.z) : 0;
   for (uint i = 0; i < samples; ++i) {
-    float jitter = frac(airUp.w + float(i) / samples);
+    float jitter = frac(airUp.w + own + float(i) / samples);
 #ifdef SUNLIGHT
     [branch] if (clearTo > t0) {  // (sky) a stretch above the ground: the hazes on it taken whole (GatherSpread)
       now += GatherSpread(ray, t0, clearTo, clearTo < t1, jitter);
@@ -488,8 +496,11 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   // (airfix) from a fresh start (a weather cut, Restart; the first frame): four places a cell, evenly spread, and the frames
   // after keep the mean of all since then until that is as much as `keep` keeps (else the first frame's one place, at the
   // same share of every cell's depth, lingered off the mean for a quarter of a second)
-  if (haveLast_) k.ahead[3] = std::min(k.ahead[3], counted_ / (counted_ + 1));
-  k.cells[3] = haveLast_ ? (moving ? 2.0f : 1.0f) : 4.0f;
+  // [airsteady] (`places` a frame at least, each cell from its own start: air.h)
+  const float most = steady ? static_cast<float>(std::clamp(places, 1, 16)) : 1.0f;
+  k.cells[3] = std::max(haveLast_ ? (moving ? 2.0f : 1.0f) : 4.0f, most);
+  if (haveLast_) k.ahead[3] = std::min(k.ahead[3], counted_ / (counted_ + (steady ? k.cells[3] : 1.0f)));
+  k.points[2] = steady ? 1.0f : 0.0f;
   k.cells[0] = static_cast<float>(width_);
   k.cells[1] = static_cast<float>(height_);
   k.cells[2] = static_cast<float>(depth_);
@@ -563,7 +574,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   lastEye_ = eye;
   lastNearest_ = closest;
   lastFarthest_ = farthestNow;
-  counted_ = haveLast_ ? std::min(counted_ + 1, 1000.0f) : k.cells[3];
+  counted_ = haveLast_ ? std::min(counted_ + (steady ? k.cells[3] : 1.0f), 1000.0f) : k.cells[3];  // ([airsteady] the places taken)
   haveLast_ = true;
   now_ = 1 - now_;
   ++frame_;
