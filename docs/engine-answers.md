@@ -4,6 +4,20 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+## ui request 59: hostfs::ReplaceFile did not link from a file without windows.h (2026-11-09) - renamed, with a caller
+
+`ReplaceFile` is a macro under `<windows.h>` (ReplaceFileA / ReplaceFileW). `core/hostfs.cpp` has the header, so the
+function was compiled as `hostfs::ReplaceFileA`, and a caller without the header asked for `hostfs::ReplaceFile`.
+
+- **New name: `hostfs::RenameOver(from, to)`** (core/hostfs.h; the same function: `to` is replaced in one step, both
+  on one drive, false when it failed and `from` then stays). None of hostfs.h's other 15 names is a macro under
+  windows.h (ReadFile and WriteFile are functions there, with no A / W pair).
+- **A caller in the engine's own build**, so the link proves it from a file without the header:
+  `moho64 --files-selftest <folder>` writes selftest.txt ("old") and selftest.tmp ("new") in the folder, renames the
+  second over the first, reads it back and checks the .tmp is gone. Exit 0 and "files self-test in <folder>: ok", or
+  exit 1 and "FAILED". Run in a folder with a non-ASCII name: ok; in a missing folder: FAILED.
+- Through the full gate (133). The ui's prefs.cpp can take `hostfs::RenameOver` in place of std::filesystem::rename.
+
 ## ui request 58: after a defeat, does the original's exe free the view by itself? (2026-11-09) - no; read, not run
 
 Read in the stock exe's disassembly (3839). FAF's added code (0x128xxxx) is not part of this read, apart from the

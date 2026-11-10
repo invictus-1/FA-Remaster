@@ -324,7 +324,7 @@ bool WriteFile(std::string_view path, std::string_view data) {
   return wrote && closed;
 }
 
-bool ReplaceFile(std::string_view from, std::string_view to) {
+bool RenameOver(std::string_view from, std::string_view to) {
   std::string a = CleanPath(from), b = CleanPath(to);
 #ifndef _WIN32
   {

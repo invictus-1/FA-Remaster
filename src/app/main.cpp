@@ -1901,6 +1901,14 @@ int main(int argc, char** argv) {
       std::printf("workers self-test: %d thread(s): %s\n", pool.Threads(), ok ? "ok" : "FAILED");
       return ok ? 0 : 1;
     }
+    else if (a == "--files-selftest") {  // core/hostfs.h's write + rename-over, in the folder given (it leaves selftest.txt)
+      const std::string dir = next(), tmp = dir + "/selftest.tmp", file = dir + "/selftest.txt";
+      bool ok = hostfs::WriteFile(file, "old") && hostfs::WriteFile(tmp, "new") && hostfs::RenameOver(tmp, file);
+      const auto back = hostfs::ReadFile(file);
+      ok = ok && back && *back == "new" && !hostfs::IsFile(tmp);
+      std::printf("files self-test in %s: %s\n", dir.c_str(), ok ? "ok" : "FAILED");
+      return ok ? 0 : 1;
+    }
     else if (a == "--together") o.together = true;
     else if (a == "--together-lag") o.togetherLag = std::atoi(next().c_str());
     else if (a == "--together-threads") {

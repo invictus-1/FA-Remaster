@@ -56,7 +56,9 @@ std::optional<std::string> ReadFile(std::string_view path);
 bool WriteFile(std::string_view path, std::string_view data);
 // Renames `from` to `to` in one step, replacing `to` when it exists (the whole old file or the whole new one is
 // there, never half of each). Both on one drive. False when it failed; `from` then stays.
-bool ReplaceFile(std::string_view from, std::string_view to);
+// (Not "ReplaceFile": that is a macro under <windows.h>, which names the function ReplaceFileA in a file that has
+// the header and ReplaceFile in one that has not, so the two did not link: ui request 59.)
+bool RenameOver(std::string_view from, std::string_view to);
 
 // The folder of the running program (forward slashes, UTF-8), "" when the system does not say.
 std::string ProgramFolder();
