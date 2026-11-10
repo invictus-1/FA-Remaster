@@ -468,6 +468,8 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
   v.repeatQueue = u->repeatQueue;
   v.autoMode = u->autoMode;
   v.autoSurfaceMode = u->autoSurfaceMode;
+  v.overchargePaused = u->overchargePaused;  // (ui request 60)
+  v.stunned = u->stunned > 0;
   lua_State* L = sim.L();
   v.commandCaps = ViewCommandCaps(u);
   v.toggleCaps = ViewToggleCaps(u);
