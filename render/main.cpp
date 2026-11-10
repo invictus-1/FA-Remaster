@@ -549,7 +549,9 @@
 // --air     light in the air (air.h, World::volumetricFog; modern look): the air's own light in a volume over
 //           the view, the sun's shafts and the lamps' beams in it. Tuning: --air-dust <thickness per world unit>,
 //           --air-sun <strength>, --air-lamps <strength>, --air-cells <across>,<deep>; [glitches] --air-keep <share>: Air::keep
-//           (0.9); --air-let-go <n>: Air::letGo (25; 0: as much kept in motion as standing, as before)
+//           (0.9); --air-let-go <n>: Air::letGo (25; 0: as much kept in motion as standing, as before); [airsteady]
+//           --air-places <n>: the places each cell takes a frame, each cell from its own start (Air::places, 4; 0: one
+//           place, one start for all cells and the sky's light by the place, as before: Air::steady off)
 // --slab-fade <s>  [glitches] the UEF's build glow slab over a finished structure gone within s seconds (World::finishedSlabFade,
 //           0.4); 0: it lasts its six-second lifetime, as the original's
 // --sharpen <0..1>  [glitches] the last pass sharpens the picture (Post::sharpen; 0 none, as before; 0.5 suggested)
@@ -1067,6 +1069,7 @@ struct Options {
   int airAcross = 0, airDeep = 0;       // --air-cells
   float airKeep = -1;                   // [glitches] --air-keep
   float airLetGo = -1;                  // [glitches] --air-let-go
+  int airPlaces = -1;                   // [airsteady] --air-places
   float slabFade = -1;                  // [glitches] --slab-fade
   float sharpen = -1;                   // [glitches] --sharpen
   int gateLook = -1;                    // [glitches] --gate-look
@@ -1639,6 +1642,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (sscanf(v, "%d,%d", &o->airAcross, &o->airDeep) != 2) return false;
     }
     else if (a == "--air-let-go") o->airLetGo = static_cast<float>(atof(v));  // [glitches]
+    else if (a == "--air-places") o->airPlaces = atoi(v);  // [airsteady]
     else if (a == "--air-keep") o->airKeep = static_cast<float>(atof(v));  // [glitches]
     else if (a == "--slab-fade") o->slabFade = static_cast<float>(atof(v));  // [glitches]
     else if (a == "--sharpen") o->sharpen = static_cast<float>(atof(v));  // [glitches]
@@ -2532,6 +2536,7 @@ int main(int argc, char** argv) {
   if (opt.airLamps >= 0) world.air.lampsInAir = opt.airLamps;
   if (opt.airAcross > 0) world.air.across = opt.airAcross;
   if (opt.airLetGo >= 0) world.air.letGo = opt.airLetGo;  // [glitches]
+  if (opt.airPlaces >= 0) world.air.steady = opt.airPlaces > 0, world.air.places = std::max(opt.airPlaces, 1);  // [airsteady]
   if (opt.airKeep >= 0) world.air.keep = opt.airKeep;  // [glitches]
   if (opt.slabFade >= 0) world.finishedSlabFade = opt.slabFade;  // [glitches]
   if (opt.sharpen >= 0) world.post.sharpen = opt.sharpen;  // [glitches]

@@ -88,6 +88,17 @@ class Air {
   // what it looks at, and the turn of its axis in radians), at least `keepMoving` of it; a frame that keeps less takes two
   // places a cell (less flicker). 0: as much kept in motion as standing, as before. Standing still: as before.
   float letGo = 25, keepMoving = 0.4f;
+  // [airsteady] (Chris's test of 2026-11-09: "flickering headlights", "the map flicker in the high-up view is still there")
+  // A cell took one place a frame, at the same share of its depth in every cell, and while FSR 3 brings the frame up it
+  // keeps only half of the frame before (keepUpscaled). A lamp's beam is far narrower than a cell is deep, so the one
+  // place fell into it in one frame and beside it in the next: the shaft over a headlight jumped from frame to frame.
+  // And from high up, under clouds, the sky's light in a cell was whole or half by which haze the place was drawn from
+  // (GatherSpread), in all cells at once: the whole view pulsed. Now each cell takes `places` places a frame, evenly
+  // spread over its depth from a start of its own (neighbours and the cells along a column differ, so what a pixel sees
+  // through them is near the mean in every frame), and the sky's light takes the cell's thickness as it is. The mean
+  // is what it was. `steady` false: one place, one start for all, the sky's light by the place, as before.
+  bool steady = true;
+  int places = 4;
   // [sunlight] The light shafts (sunlight.h, World::lightShafts), set by the world before Build: the low band's haze and
   // the haze under the clouds thicken the air, and the band's sunlight near the eye is left to the shafts' pass; `heights`
   // the ground's (Terrain::HeightTexture), `woods` where the woods are (Sunlight::Woods). Off (or none): the gather as
