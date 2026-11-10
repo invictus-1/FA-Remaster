@@ -23,21 +23,30 @@ int g_tallyTotal = 0;
 
 void TallyMessage(std::string_view message) {  // (the caller holds g_mutex)
   const std::string_view first = message.substr(0, message.find('\n'));
-  auto hex = [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+  auto digit = [](char c) { return c >= '0' && c <= '9'; };
+  auto alnum = [&](char c) { return digit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+  auto hex = [&](char c) { return digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
   std::string key;
   for (size_t i = 0; i < first.size() && key.size() < 200;) {
-    size_t j = i;
-    while (j < first.size() && hex(first[j])) ++j;
-    if (j - i >= 6) {
-      key.push_back('#');
-      i = j;
-    } else if (j > i) {
-      key.append(first.substr(i, j - i));
-      i = j;
-    } else {
+    if (!alnum(first[i])) {
       key.push_back(first[i] == '\t' || first[i] == '\r' ? ' ' : first[i]);
       ++i;
+      continue;
     }
+    // a whole word: '#' when it is 6 or more hex digits with a digit among them (an address, a large number), with
+    // or without "0x" before it; any other word as it is ("traceback" holds six hex letters in a row)
+    size_t j = i;
+    while (j < first.size() && alnum(first[j])) ++j;
+    std::string_view word = first.substr(i, j - i);
+    std::string_view body = word.size() > 2 && word[0] == '0' && (word[1] == 'x' || word[1] == 'X') ? word.substr(2) : word;
+    bool allHex = body.size() >= 6, anyDigit = false;
+    for (char c : body) {
+      allHex = allHex && hex(c);
+      anyDigit = anyDigit || digit(c);
+    }
+    if (allHex && anyDigit) key.push_back('#');
+    else key.append(word);
+    i = j;
   }
   ++(*g_tally)[key];
   ++g_tallyTotal;
