@@ -338,7 +338,11 @@
 //           the map opens), as remap.json's "ground" would say it; the map's mud material (remap.json) is drawn in the
 //           ruts of ground that is mud by its kind, --no-mud-ruts without it [mud ruts]; [dents] shell holes where shots
 //           strike the ground (a bowl, a raised lip, the earth thrown round it; deep in snow and mud, shallow in dirt, sand
-//           and grass, none in rock; filled by falling snow, softened by rain), the picture only
+//           and grass, none in rock; filled by falling snow, softened by rain), the picture only;
+//           --holes-added  [churn] every hole added to what is there, as before (World::churnedHoles off: where many shots
+//           strike one spot each new hole is otherwise dug into what is there, whole within its lip, none deeper than two
+//           world units, so that the spot is one churned field of bowls and not a flat dark sheet with holes at its edge;
+//           and the game's flat marks, a shot's scorch, otherwise give way where the ground shows a hole)
 // --ground-parallax  [parallax] the ground's relief close by (World::groundParallax, Terrain::parallax; modern look, a
 //           remastered map): its stones stand up and its hollows sink as the eye passes, a low sun shades the hollows;
 //           --ground-parallax-tune depth[,reach[,shadows]]: the relief that many times the scans' real one (1), full
@@ -710,7 +714,13 @@
 //           HideBone does; a name or a number, as for --turn); with --animate also a comma list of names, or of their
 //           beginnings ending in * (shell*), hidden in the animation's pose (a satellite's shells after its first opening)
 // --soften <n>  over how many world units particles fade where they meet something solid (0.6; next to 0: a hard cut)
-// --shielded  placed units are drawn with a personal shield up
+// --shielded  placed units are drawn with a personal shield up (in the modern look it shows at rest only with
+//           --shields-at-rest)
+// --shields-at-rest  [shieldhit] personal shields light their unit's outline and lattice for as long as they are up, as
+//           before (World::personalShieldsAtRest; without it, in the modern look, a personal shield shows only its hits:
+//           the whole shield lit for the second after one, fading, a ring running out from where it struck). By default
+//           the game's own units keep their rest light and mods' units show only hits; --shields-hit-only: no unit
+//           shows a personal shield at rest
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
@@ -962,6 +972,7 @@ struct Options {
   float exhaustTune[3] = {1, 1, 1};     // --exhaust-tune (unitsfx)
   std::vector<std::string> groundKind;  // --ground-kind
   bool noMudRuts = false;               // --no-mud-ruts [mud ruts]
+  bool holesAdded = false;              // --holes-added [churn]
   bool groundParallax = false;          // [parallax] --ground-parallax
   bool mudMask = false;                 // [ground mud] --mud-mask
   bool rainGround = false;              // [rain ground] --rain-ground
@@ -1108,6 +1119,7 @@ struct Options {
   bool unexplored = false;              // --unexplored
   bool ranges = false;                  // --ranges
   bool shielded = false;                // --shielded
+  int shieldsAtRest = 1;                // --shields-at-rest (2) / --shields-hit-only (0) [shieldhit]
   bool hideTurned = false;              // --hide-bone
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
@@ -1291,6 +1303,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rock-hits") o->rockHits = true;  // [rockhits]
     else if (a == "--deep-tracks") o->deepTracks = true;
     else if (a == "--no-mud-ruts") o->noMudRuts = true;  // [mud ruts]
+    else if (a == "--holes-added") o->holesAdded = true;  // [churn]
     else if (a == "--ground-parallax") o->groundParallax = true;  // [parallax]
     else if (a == "--remastered-tarmacs") o->remasteredTarmacs = true;  // [tarmac]
     else if (a == "--no-read-ahead") o->readAhead = false;  // [hitches]
@@ -1372,6 +1385,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-minimap-resources") o->minimapResources = false;  // [minimap deposits]
     else if (a == "--range-fill") o->rangeFill = true;  // [range fill]
     else if (a == "--shielded") o->shielded = true;
+    else if (a == "--shields-at-rest") o->shieldsAtRest = 2;  // [shieldhit]
+    else if (a == "--shields-hit-only") o->shieldsAtRest = 0;
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--hot-scorch") o->hotScorchOriginal = std::string(v) == "bright";  // [softscorch] soft | bright
@@ -2391,6 +2406,7 @@ int main(int argc, char** argv) {
   if (opt.debrisSag >= 0) world.debris.baked.meltSag = std::min(opt.debrisSag, 1.0f);  // [debrispile]
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
+  world.churnedHoles = !opt.holesAdded;    // [churn]
   world.groundParallax = opt.groundParallax;  // [parallax]
   world.mudMask = opt.mudMask;  // [ground mud]
   world.rainGround = opt.rainGround;  // [rain ground]
@@ -2413,6 +2429,7 @@ int main(int argc, char** argv) {
   world.plantsReact = opt.plantsReact;                                       // [plants]
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
+  world.personalShieldsAtRest = opt.shieldsAtRest;  // [shieldhit]
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
   if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
     world.hullGlow = world.hullReach = world.hullAir = 1;
@@ -2797,6 +2814,7 @@ int main(int argc, char** argv) {
     int turned = -1;               // --turn: the bone it turns
     std::vector<FrameBone> bones;  // this frame's pose
     bool building = false;         // a structure (its id's third letter b, as the game names them)
+    std::string id;                // its blueprint's id ([shieldhit]: whose unit it is, World::ShieldOnlyHits)
   };
   std::vector<PlacedUnit> placedUnits;
   // --animate: one of the game's animations (.sca: per frame every bone's place and turn against
@@ -2844,6 +2862,7 @@ int main(int argc, char** argv) {
       if (haveMap && map.water.present) p.y = std::max(p.y, map.water.elevation);
       PlacedUnit placed{model, p, icons.ForBlueprint(models.UnitBlueprintPath(id)), -1, {}};
       placed.building = id.size() > 2 && (id[2] == 'b' || id[2] == 'B');
+      placed.id = id;
       if (opt.listBones && (placedUnits.empty() || placedUnits.back().model != model)) {
         printf("render: %s: %zu bones:", id.c_str(), model->bones.size());
         for (size_t i = 0; i < model->bones.size(); ++i) printf(" %zu %s", i, model->bones[i].name.c_str());
@@ -4451,7 +4470,9 @@ int main(int argc, char** argv) {
       }
       const bool posed = pose.nowCount > 0 || pose.nextCount > 0;
       // ((level band) with --level-band keyed, as the game's units are: the band holds them and their changes are counted)
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0], opt.shielded ? 3.0f : opt.built, posed ? &pose : nullptr,
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0],
+                 opt.shielded && !world.ShieldOnlyHits(u.id) ? 3.0f : opt.built,  // ([shieldhit] nothing at rest)
+                 posed ? &pose : nullptr,
                  nullptr, nullptr, opt.levelBand >= 0 ? placedId : 0);
       meshes.Belt(belt);
       if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)

@@ -223,6 +223,21 @@ class Decals {
     heightsWidth_ = mapWidth + 1;
     heightsHeight_ = mapHeight + 1;
   }
+  // [churn] Shell holes under the marks (deep_tracks.h's holes; World::churnedHoles, set by the world each frame before
+  // Draw; Chris's test of 2026-11-09: "some parts will look like a hole while others look like a layer of mud over
+  // it"). A picture the game lays (a shot's scorch, kept as a battle scar) is a flat picture thrown straight down on the
+  // ground's own surface: it knows nothing of the holes the ground's shader draws there, so a scorch lay over a hole
+  // like a black sheet - at the height of the ground before the hole, lit flat, hiding the bowl's walls and its shade -
+  // while the hole beside it, whose scorch had faded or lay elsewhere, read as a hole. Where the ground shows a hole
+  // (as deep as it holds it there: by its kind, all of it under lying snow) a picture the game laid now gives way, from
+  // 0.03 world units of depth to nothing at 0.2: the hole's own torn, dark earth shows in the bowl, and the burnt ground
+  // stays round it, on its lip and on the flat between the holes. A scuff (a small gun's) keeps its scorch. The map's
+  // own pictures and the pads are left as they are. `field` none: as before.
+  struct Holes {
+    gfx::Texture field;             // DeepTracks::Atlas (none: no holes are read)
+    gfx::Texture kinds;             // Terrain::GroundKinds (none: all as dirt)
+    TrackFieldConstants constants;  // DeepTracks::Constants
+  } holes;
   // Draws the decals into the current pass, which must be the scene's colour alone (no depth
   // target); `sceneDepth` is the scene's depth with the ground in it. `overWater`: the second
   // drawing, after the water: only the "Water Albedo" decals' parts that lie over water.

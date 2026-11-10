@@ -53,6 +53,45 @@ Texture2D reliefTexture : register(t5);  // a remastered picture's relief: x in 
 #ifdef DECAL_SNOW_GROUND
 Texture2D snowShelter : register(t6);  // [decalsnow] the snow ground's shelter (Terrain::SnowShelter): g sky, b crowns, a how it lies
 #endif
+#ifndef RIDE
+// [churn] The shell holes under the marks (Decals::holes): deep tracks' field as the ground's shader reads it (terrain.cpp:
+// its three levels, the third number a texel the holes' height in world units) and the kinds of ground. (Not for the
+// pictures that ride the water: there are no holes under it, and their pipeline has the waves' constants here.)
+cbuffer DecalHoles : register(b3) {
+  float4 holeLevel[3];  // per level: x, z of its window's first texel; 1 / its texel's size; its texels across
+  float4 holeAtlas[3];  // per level: the atlas texel its data begins at; 1 = it wraps round; its texel's size
+  float4 holeInfo;      // x, y: 1 / the atlas's size; z: above 0.5 = there is a field to read
+};
+Texture2D holeField : register(t8);
+Texture2D holeKinds : register(t9);  // Terrain::GroundKinds: sand, grass, snow (a layer of it), hard ground
+float HoleTap(int level, float2 xz) {
+  float4 L = holeLevel[level], A = holeAtlas[level];
+  float2 s = xz * L.z;
+  float2 c = A.z > 0.5 ? s - L.w * floor(s / L.w) : clamp(s, 0.5, L.w - 0.5);
+  return holeField.SampleLevel(samplerLinearClamp, (A.xy + c) * holeInfo.xy, 0).b;
+}
+float HoleInside(int level, float2 xz) {
+  float4 L = holeLevel[level];
+  float2 s = xz * L.z - L.xy;
+  return L.w > 0 ? min(min(s.x, s.y), min(L.w - s.x, L.w - s.y)) : -1;
+}
+// How much of a flat mark the game laid is left at a place: all of it on untouched ground, on a hole's lip and in a
+// scuff; none where the ground shows a hole a fifth of a world unit deep or more (by the finest level that holds the
+// place; as deep as the ground there holds it: a snow layer all of it, sand 0.7, dirt 0.6 and more as it gets wet,
+// grass 0.55, rock none, and all of it under lying snow, as the ground's shader takes it).
+float MarkOverHoles(float2 xz, float2 perMap) {
+  [branch] if (holeInfo.z < 0.5) return 1;
+  float w0 = saturate((HoleInside(0, xz) - 8) / 96), w1 = saturate((HoleInside(1, xz) - 8) / 96);
+  float hole = HoleTap(2, xz);
+  [branch] if (w1 > 0) hole = lerp(hole, HoleTap(1, xz), w1);
+  [branch] if (w0 > 0) hole = lerp(hole, HoleTap(0, xz), w0);
+  [branch] if (hole > -0.03) return 1;
+  float4 k = holeKinds.SampleLevel(samplerLinearClamp, xz * perMap, 0);
+  float rest = saturate(1 - k.x - k.y - k.z - k.w);
+  float soft = max(k.z + k.x * 0.7 + k.y * 0.55 + rest * lerp(0.6, 0.88, saturate(weather.x)), saturate(weather.y * 2));
+  return 1 - smoothstep(0.03, 0.2, -hole * soft);
+}
+#endif
 #ifdef MSAA
 Texture2DMS<float> sceneDepth : register(t1);
 float DepthAt(int2 p) { return sceneDepth.Load(p, 0); }
@@ -190,6 +229,12 @@ float4 PS(VOut i) : SV_Target {
                          - groundHeights.SampleLevel(samplerLinearClamp, at - float2(0, groundInfo.y), 0)) * (groundInfo.z * 0.5);
     steepFade = smoothstep(0.45, 0.7, rsqrt(1 + dot(rise, rise))) * smoothstep(1, 0.7, abs(world.y - i.centre.y) / -i.centre.w);
   }
+  // [churn] a picture the game laid gives way where the ground shows a shell hole (MarkOverHoles; its glow, the light of
+  // hot earth, does not)
+  float holeFade = 1;
+#ifndef RIDE
+  [branch] if (i.centre.w < 0 && look > 0.5 && holeInfo.z > 0.5) holeFade = MarkOverHoles(world.xz, mapInfo.xy);
+#endif
   i.centre.w = abs(i.centre.w);
   [branch] if (i.options.z > 5.5) {
     // hot metal (hot_metal.h): a fresh scorch's or crater's middle glowing on the ground, its light added, through the
@@ -226,7 +271,7 @@ float4 PS(VOut i) : SV_Target {
   float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
-  i.options.x *= steepFade;  // [steep] (1 for the water's, a mark's and the map's own)
+  i.options.x *= steepFade * holeFade;  // [steep] (1 for the water's, a mark's and the map's own; [churn] the holes')
   if (i.options.z > 3.5) {  // a "Water Albedo" decal: unlit, in its own colours (the original's times the light multiplier)
     c.a *= i.options.x;
     if (c.a <= 0.003) discard;
@@ -917,6 +962,14 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
       device_->SetTexture(3, water ? waterMap_ : textures_->Black());
       device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
       device_->SetTexture(7, groundHeights_ ? groundHeights_ : textures_->Black());  // [steep]
+      if (!riding || kind == 5 || kind == 2 || kind == 1) {  // [churn] (the shell holes under the marks; none: nothing read.
+        // Every pipeline but the one that rides the waves, which has the waves' constants in this place)
+        TrackFieldConstants field = holes.constants;
+        if (!holes.field || riding) field.info[2] = 0;
+        device_->SetConstants(3, &field, sizeof field);
+        device_->SetTexture(8, holes.field ? holes.field : textures_->Black());
+        device_->SetTexture(9, holes.kinds ? holes.kinds : textures_->Black());
+      }
       device_->SetVertexBuffer(cube_);
     }
     device_->SetTexture(0, gfx::Texture{texture});
@@ -929,6 +982,10 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   }
   if (!padsDone) drawPads();
   if (snowNow) device_->SetTexture(6, {});  // [decalsnow]
+  if (holes.field && !riding) {  // [churn] (the field is drawn into again before the next frame's scene)
+    device_->SetTexture(8, {});
+    device_->SetTexture(9, {});
+  }
   if (riding) ride->UnbindRide();  // [whitecaps]
 }
 
