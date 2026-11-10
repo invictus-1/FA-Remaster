@@ -630,7 +630,20 @@ struct GameSession::Picture : WorldSource {
     if (render::World* w = picture.world()) w->depositIcons = scene.resourceIcons;
     if (render::World* w = picture.world()) w->steadyFrames = GameSession::FramesByCount();  // (a stepped run: game_session.h)
     // The player's own looks (the Options menu's Remastered tab), when they change.
-    const LookSettings& looks = Looks();
+    LookSettings looks = Looks();
+    // FSR 3 or Frame Generation switched off while this picture has one sample a pixel and the player's Anti-Aliasing
+    // asks for more: kept on until the next picture is made (the next map), as Anti-Aliasing itself changes only
+    // then. The picture's samples are taken when it is made (1 under FSR 3 or Frame Generation, SceneSamples); with
+    // the temporal pass switched off at once the game showed a bare one-sample picture, no anti-aliasing at all
+    // (Chris's playtest of 2026-11-09: "without fsr 3 on units seem to lack a lot of details like no anti aliasing";
+    // the renderer's request 65). The options' tips say so.
+    if (render::gSceneSamples == 1 && looks.SceneSamples() > 1) {
+      if (lookApplied) looks.temporalUpscale = lookNow.temporalUpscale, looks.frameGeneration = lookNow.frameGeneration;
+      if (!looks.temporalUpscale && !looks.frameGeneration) looks.temporalUpscale = true;
+      static bool said = false;
+      if (!said) Logf(LogLevel::Info, "moho64ui: FSR 3 / Frame Generation switched off in this picture: kept on until the next map (its anti-aliasing is chosen when a map opens)");
+      said = true;
+    }
     if (!lookApplied || looks.remasteredEffects != lookNow.remasteredEffects) picture.SetRemasteredEffects(looks.remasteredEffects);
     if (!lookApplied || looks.effectsQuality != lookNow.effectsQuality) picture.SetEffectsQuality(looks.effectsQuality);
     if (!lookApplied || looks.upscale != lookNow.upscale) picture.SetUpscale(looks.upscale);

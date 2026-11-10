@@ -249,9 +249,9 @@ local looks = {
         },
     },
     {
-        title = "Upscaling (FSR 1)",
+        title = "Render Scale",
         key = 'remaster_upscale',
-        tip = "Draws the world smaller and scales it up to the screen with AMD FSR 1: a higher frame rate for a softer picture. Off: drawn at the screen's own size.",
+        tip = "How large the world is drawn before it is scaled up to the screen: smaller is a higher frame rate for a softer picture. Scaled up by AMD FSR 1, or by FSR 3 when Temporal Upscaling (FSR 3) is on. Off: drawn at the screen's own size.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_upscale"),
@@ -271,7 +271,7 @@ local looks = {
         -- the next map loaded as that setting.)
         title = "Temporal Upscaling (FSR 3)",
         key = 'remaster_temporal_upscale',
-        tip = "Draws the world smaller and sharpens it up to the screen with AMD FSR 3, in place of anti-aliasing. Raises the frame rate only where the graphics card is what holds it back; in a big late game the processor usually is. Its anti-aliasing part changes from the next map.",
+        tip = "Draws the world smaller and sharpens it up to the screen with AMD FSR 3, in place of anti-aliasing. Raises the frame rate only where the graphics card is what holds it back; in a big late game the processor usually is. Switched off in a running game it stays on until the next map, where the game's Anti-Aliasing takes over again.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_temporal_upscale"),
@@ -434,7 +434,7 @@ local looks = {
         -- before, with the Anti-Aliasing on it silently did nothing)
         title = "Frame Generation",
         key = 'remaster_frame_generation',
-        tip = "Shows a frame made between each two drawn ones: twice the frames shown, but it ADDS INPUT DELAY (about 12 ms more) and costs time on every real frame (about 3 ms). The upscaler (FSR) is the smoother choice. Off unless chosen; no preset turns it on. Turns anti-aliasing off while on (from the next map).",
+        tip = "Shows a frame made between each two drawn ones: twice the frames shown, but it ADDS INPUT DELAY (about 12 ms more) and costs time on every real frame (about 3 ms). The upscaler (FSR) is the smoother choice. Off unless chosen; no preset turns it on. Turns anti-aliasing off while on (from the next map); switched off in a running game without FSR 3 it stays on until the next map.",
         type = 'toggle',
         default = 0,
         set = Look("remaster_frame_generation"),

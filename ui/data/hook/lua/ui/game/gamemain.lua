@@ -82,7 +82,7 @@ local function RemasterLower(ms)
     end
     local text = "To keep the game smooth, " .. table.concat(changed, " and ") .. ". "
     if ms > remasterBudgetMs then
-        text = text .. string.format("Your graphics card still takes %.0f ms a frame: Upscaling in Options > Remastered can make it faster. ", ms)
+        text = text .. string.format("Your graphics card still takes %.0f ms a frame: Render Scale in Options > Remastered can make it faster. ", ms)
     else
         text = text .. string.format("Your graphics card now takes %.0f ms a frame. ", ms)
     end

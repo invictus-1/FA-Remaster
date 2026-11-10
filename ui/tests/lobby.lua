@@ -174,7 +174,7 @@ video.remaster_tracers.set('remaster_tracers', 1, false)
 video.remaster_effects_quality.set('remaster_effects_quality', 0.5, false)
 check("and the effects quality follows", moho64ui_Looks().effectsQuality, 0.5)
 video.remaster_effects_quality.set('remaster_effects_quality', 1, false)
-check("the Remastered tab has Upscaling (FSR 1), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
+check("the Remastered tab has Render Scale (FSR 1 or FSR 3 scale it up), off unless chosen", video.remaster_upscale and video.remaster_upscale.default, 1)
 -- FSR 3 (the renderer's request 30): off unless chosen; on, the scene is drawn with one sample a pixel
 -- (FAF 3840, 2026-11-04: new games are made by 3840's rules, and the menus name that version too: Chris)
 check("the front end's GetVersion: the version new games are made with", GetVersion(), "1.5.3840")
