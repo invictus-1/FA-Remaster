@@ -1357,6 +1357,15 @@ ready beside the suite (`Temp\ui-land-out\prefs57_hostfs_renames.patch`, 13 line
 on Windows meanwhile: the suite's `prefs_safe` job has a sixth run, the save in a folder named `zapis_żółć_ü`
 (file, `.bak`, no `.tmp`, nothing written in place): green on a build with `src/app/utf8.rc` in the link.
 
+### 60. UnitStateView: overchargePaused and stunned (2026-11-10, not blocking)
+
+Who: ui. Why: the review of 2026-11-09, row M. The interface's `unit:IsOverchargePaused()` and `unit:IsStunned()`
+answer false always (ui/user/user_units.cpp, the l_UnitFalse list), so FAF's order panel shows the overcharge button
+ready while the simulation holds overcharge paused (orders.lua asks IsOverchargePaused for the button's state).
+The simulation keeps both as script attributes (src/sim/entities.cpp kAttrs: SetOverchargePaused / IsOverchargePaused,
+SetStunned / IsStunned). Asked: two booleans in `UnitStateView` (as autoMode, autoSurfaceMode, repeatQueue are), filled
+where the others are. The ui then binds them with l_UnitSwitch and adds a check to its toggles test.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
