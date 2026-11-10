@@ -137,6 +137,7 @@ bool RectFreeOfUnits(Sim& sim, const int r[4]);
 bool IsImmobileFactory(Sim& sim, const Unit* u);
 void AddFactoryCommand(Unit* f, const std::shared_ptr<UnitCommand>& c);
 void ClearFactoryCommandQueue(Unit* f);
+bool RemoveFactoryCommand(Unit* f, UnitCommand& c);  // vf+0x34, for the stream's RemoveCommandFromQueue
 std::shared_ptr<UnitCommand> IssueFactoryCommand(Sim& sim, const std::vector<Unit*>& units, CommandType type,
                                                  const Vec3& pos, uint32_t targetId, bool clear);
 void SetUpInitialRally(Sim& sim, Unit* f);

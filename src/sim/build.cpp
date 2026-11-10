@@ -4231,6 +4231,21 @@ void ClearFactoryCommandQueue(Unit* f) {  // vf+0x38: RemoveUnit from the back u
     ReleaseCommand(f, *c);
   }
 }
+// CAiBuilderImpl::RemoveFactoryCommand 0x59f580 (vf+0x34: CUnitCommand::RemoveUnit 0x6e8c20), after ContainsCommand
+// 0x59f500 (vf+0x2c): what Sim::RemoveCommandFromQueue 0x749970 asks of the unit's builder when the unit's own queue
+// does not hold the command (a player takes one order out of a factory's rally queue). False if it is not there.
+// (An emptied queue gets the initial rally back at the end of the factory's MotionTick, ValidateFactoryCommandQueue.)
+bool RemoveFactoryCommand(Unit* f, UnitCommand& c) {
+  auto& q = f->factoryCommands;
+  for (size_t i = 0; i < q.size(); ++i) {
+    if (q[i].get() != &c) continue;
+    std::shared_ptr<UnitCommand> keep = q[i];
+    q.erase(q.begin() + static_cast<long>(i));
+    ReleaseCommand(f, c);
+    return true;
+  }
+  return false;
+}
 // UNIT_IssueFactoryCommand 0x6f14d0: one command (flag +0x142) appended to every factory's rally queue.
 std::shared_ptr<UnitCommand> IssueFactoryCommand(Sim& sim, const std::vector<Unit*>& units, CommandType type,
                                                  const Vec3& pos, uint32_t targetId, bool clear) {
