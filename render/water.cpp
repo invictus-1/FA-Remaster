@@ -757,12 +757,23 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #endif
   float2 uv = i.position.xy * viewport.zw;
   float2 bent = uv + N.xz * (0.035 * saturate(deep * 1.5) / (1 + distance * 0.02));
-  float depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
-  if (depthBent > i.position.z || any(bent < 0) || any(bent > 1)) {
+  // (above water) The bent place is given up where it is off the picture, where something stands in front of the water
+  // there, and where what the picture shows there is above the water: the far shore's sand, a hull's side over its
+  // waterline, a pier. That was taken for the bed and laid under the water, a fringe of the shore's or the hull's colour
+  // in the water beside it, moving with the waves. (The picture's edge is tested before the depth is read.)
+  float depthBent = depthBehind;
+  float3 bedBent = bed;
+  bool bends = all(bent >= 0) && all(bent < 1);
+  if (bends) {
+    depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
+    bedBent = WorldAt(bent * viewport.xy, depthBent);
+    bends = depthBent <= i.position.z && bedBent.y <= i.world.y + level;
+  }
+  if (!bends) {
     bent = uv;
     depthBent = depthBehind;
+    bedBent = bed;
   }
-  float3 bedBent = WorldAt(bent * viewport.xy, depthBent);
   float through = min(length(bedBent - i.world), 80);
   float deepBent = max(i.world.y + level - bedBent.y, 0);
   float3 under = behind.SampleLevel(samplerLinearClamp, bent, 0).rgb;

@@ -51,7 +51,13 @@ at; the pair is in the lab under the renderer's `a3/units12/`.
 
 **Answer:** (none yet)
 
-## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking)
+## 62. To the INTERFACE track: a player option for the land round the map (2026-11-09, Chris's ask; not blocking) - DONE
+
+DONE 2026-11-09 (the interface's ff9dc653; its answer is the top entry of docs/ui-answers.md): Map Edge has a third value,
+"Sculpted Land" (key 'surround': worldBeyond and mapSurround), the default stays 'beyond', `--map-edge surround` for a
+game given with --session. Looked at by the renderer in the interface's own build on Seton's Clutch Remastered, both
+values: the sculpted land is read (1537 x 1537 heights, no gap along the edge) and drawn past the west edge in place of
+the mirrored map, the interface and the map itself unchanged.
 
 **Who says:** Chris, 2026-11-09: "sculpt an entire terrain outside the map so the map actually looks like it exists vs
 emptiness or a mirrored exterior outside of the map square." His rule: new looks are options.

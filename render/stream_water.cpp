@@ -320,8 +320,14 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 
   // what lies under it, bent a little by the ripples (not where that would bring in something standing in front)
   float2 bent = uv + N.xz * (0.03 * saturate(bedDepth * 6) / (1 + distance * 0.03));
-  float depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
-  if (depthBent > i.position.z || any(bent < 0) || any(bent > 1)) bent = uv;
+  // ((above water), as the sea's: not off the picture, and not where the picture shows the bank or something standing
+  // above the stream's surface)
+  bool bends = all(bent >= 0) && all(bent < 1);
+  if (bends) {
+    float depthBent = SCENE_DEPTH(int2(bent * viewport.xy), 0);
+    bends = depthBent <= i.position.z && WorldAt(bent * viewport.xy, depthBent).y <= i.world.y;
+  }
+  if (!bends) bent = uv;
   float3 under = behind.SampleLevel(samplerLinearClamp, bent, 0).rgb * 0.7;  // (a wet bed is darker)
   // the bright net of light on a shallow bed in sunlight
   float n1 = CloudNoise(float3(i.world.xz * 2.6 + time * 0.30, time * 0.25));
