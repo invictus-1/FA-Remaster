@@ -45,6 +45,9 @@ class Post {
   // of its own) changed the picture, and how much (R8, the scene's size; none without KeepOpaque).
   void KeepOpaque();
   gfx::Texture Reactive(const std::function<void()>& more = {});  // ([rainreactive] `more`: drawn into the mask after it)
+  // [falltrail] The temporal upscaler's transparency and composition mask (Fsr3::Inputs::composition; R8, the scene's
+  // size): cleared to nought, then what `draw` draws into its pass (Precipitation::DrawComposition). Before Reactive.
+  gfx::Texture Composition(const std::function<void()>& draw);
   // Begins a pass into what KeepOpaque kept, keeping what is there (false: nothing kept): for what darkens
   // the picture where it stands still (the fog of war), drawn there too, so that the reactive mask does not
   // take it for something that moves. ContinueScene afterwards.
@@ -100,13 +103,15 @@ class Post {
     std::swap(bloomHeight_, o.bloomHeight_), std::swap(width_, o.width_), std::swap(height_, o.height_);
     std::swap(finishWidth_, o.finishWidth_), std::swap(finishHeight_, o.finishHeight_), std::swap(opaque_, o.opaque_);
     std::swap(reactive_, o.reactive_), std::swap(upscaled_, o.upscaled_), std::swap(upscaledWidth_, o.upscaledWidth_);
+    std::swap(composition_, o.composition_);  // [falltrail]
     std::swap(upscaledHeight_, o.upscaledHeight_), std::swap(upscaledNow_, o.upscaledNow_), std::swap(keptOpaque_, o.keptOpaque_);
     std::swap(photoFinish, o.photoFinish);
   }
   // [views] A view's own (views.h, ViewSide) let go of: the pictures SwapView swaps, destroyed (a class without a
   // destructor of its own: the world's are let go of with the device).
   void ReleaseView() {
-    for (gfx::Texture* t : {&finished_, &ldr_, &color_, &depth_, &drawn_, &behind_, &bloom_[0], &bloom_[1], &opaque_, &reactive_, &upscaled_})
+    for (gfx::Texture* t : {&finished_, &ldr_, &color_, &depth_, &drawn_, &behind_, &bloom_[0], &bloom_[1], &opaque_, &reactive_, &upscaled_,
+                            &composition_})
       if (*t) {
         device_->Destroy(*t);
         *t = {};
@@ -141,6 +146,7 @@ class Post {
   int finishWidth_ = 0, finishHeight_ = 0;
   void SizeFinishing(int width, int height);
   gfx::Texture opaque_, reactive_;  // (KeepOpaque, Reactive)
+  gfx::Texture composition_;        // [falltrail] (Composition)
   gfx::Texture upscaled_;  // (UpscaleTemporal: FSR 3's picture at the screen's size, until the next Present)
   int upscaledWidth_ = 0, upscaledHeight_ = 0;
   bool upscaledNow_ = false;

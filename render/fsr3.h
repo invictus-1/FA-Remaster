@@ -30,6 +30,11 @@ class Fsr3 {
     gfx::Texture motion;    // RG16F at the size drawn: where each pixel was last frame, as last frame's place minus this
                             // frame's, in the picture's 0..1 (u right, v down), the jitter left out of both
     gfx::Texture reactive;  // optional R8 at the size drawn: how much a pixel follows this frame alone (particles, sparks); none: 0
+    // [falltrail] optional R8 at the size drawn: AMD's transparency and composition mask (0..1): where it is set no lock
+    // is made on a thin bright feature and what is locked is let go (FSR 3.1 reads `reactive` as a change of shading
+    // only, which shortens a lock's life but still makes new ones); for what is thin, bright and moves without motion
+    // vectors (snow, rain: Precipitation::DrawComposition). None: 0, as before.
+    gfx::Texture composition;
     int renderWidth = 0, renderHeight = 0;  // the size drawn
     float jitterX = 0, jitterY = 0;  // this frame's jitter in pixels of the size drawn (Jitter below)
     float exposure = 1;              // what the colour is multiplied by before the tone curve

@@ -1473,6 +1473,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   const int sceneWidth = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(width) * share))) : width;
   const int sceneHeight = share < 0.999f ? std::max(16, static_cast<int>(std::lround(static_cast<float>(height) * share))) : height;
   view = View::Make(camera, sceneWidth, sceneHeight, time);
+  if (upscaleLod && sceneHeight < height) view.lodPixels = static_cast<float>(height) / static_cast<float>(sceneHeight);  // [uplod]
   // the temporal upscaler (FSR 3): its shaders made the first time it is asked for
   temporalNow_ = false;
   if (temporalUpscale && !sidePicture && !photo && gSceneSamples == 1 && motionView <= 0) {
@@ -1602,6 +1603,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   if (temporalNow_)  // (the temporal upscaler: textures read for the screen's size and finer)
     c.temporal[0] = std::log2(static_cast<float>(sceneWidth) / static_cast<float>(width)) + temporalMipBias;
+  else if (upscaleMipBias && sceneWidth < width)  // [upmip] (FSR 1: the textures read for the window's size too)
+    c.temporal[0] = std::log2(static_cast<float>(sceneWidth) / static_cast<float>(width));
   if (softShadows && look == Look::Modern) {  // (soft shadows: on, how the edges grow, how far casters are looked for, the widest edge)
     c.softShadows[0] = 1;
     c.softShadows[1] = sunSize;
@@ -4927,6 +4930,9 @@ void World::Render() {
   falling.pixelScale = photoPixel;  // (photofix: in a photo's frame as the window shows it; else 1, 1)
   falling.underClouds = stormSunNow_;  // [rainunder] a storm's rain from under its cover (its pockets of sun dry)
   falling.pictureShare = photoShare;
+  // [fallsize] (under an upscaler the widths in the window's pixels) [fallpace]
+  falling.windowShare = fallWindowSize && screenHeight_ > view.height ? static_cast<float>(view.height) / static_cast<float>(screenHeight_) : 1.0f;
+  falling.steadyPace = fallSteadyPace;
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
   if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
     post.BeginColorOnly();
@@ -4969,6 +4975,8 @@ void World::Render() {
     Stage("temporal upscale (FSR 3)");
     Fsr3::Inputs in;
     in.motion = motion.Texture();
+    if (fallNoLocks && falling.WantsComposition())  // [falltrail] (while it snows; before Reactive, which ends the fall's masks)
+      in.composition = post.Composition([&] { falling.DrawComposition(view); });
     in.reactive = post.Reactive([&] { falling.DrawReactive(view); });  // ([rainreactive])
     in.jitterX = motion.jitterX;
     in.jitterY = motion.jitterY;

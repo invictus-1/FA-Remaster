@@ -519,7 +519,7 @@ bool CardScenery::Pick(const std::vector<uint32_t>& listed, const Pass* passes, 
       k.planes[i * 5 + j][2] = v.planes[j].z;
       k.planes[i * 5 + j][3] = v.planes[j].w;
     }
-    const float focal = static_cast<float>(v.height) / (2 * std::tan(v.fovY * 0.5f));
+    const float focal = static_cast<float>(v.height) * v.lodPixels / (2 * std::tan(v.fovY * 0.5f));  // ([uplod])
     const float eye[4] = {v.eye.x, v.eye.y, v.eye.z, focal};
     const float level[4] = {p.smallest, p.wish, v.lodScale, p.standard};
     const float mode[4] = {p.shadow ? 1.0f : 0.0f, divertStream ? 1.0f : 0.0f, p.sway ? 1.0f : 0.0f, p.swayPixels};
@@ -559,7 +559,7 @@ bool CardScenery::Pick(const std::vector<uint32_t>& listed, const Pass* passes, 
 void CardScenery::Guess(const std::vector<uint32_t>& listed, const Pass& pass, int index, bool divertStream) {
   std::vector<Draw>& out = draws_[index];
   const View& v = *pass.view;
-  const float focal = static_cast<float>(v.height) / (2 * std::tan(v.fovY * 0.5f));
+  const float focal = static_cast<float>(v.height) * v.lodPixels / (2 * std::tan(v.fovY * 0.5f));  // ([uplod])
   std::vector<Seen>& seen = seen_[index];
   std::vector<uint32_t>& touched = touched_[index];
   if (seen.size() < models_.size()) seen.resize(models_.size());
