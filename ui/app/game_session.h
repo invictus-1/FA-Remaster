@@ -215,6 +215,11 @@ class GameSession {
   // compare two programs beat by beat. Off in a live window unless MOHO64UI_RECORD_FINGERPRINT=1 (main.cpp): a
   // headless playback of the record rebuilds it line for line.
   bool recordFingerprint = true;
+  // The frames are drawn by their count, not for someone watching (no live window: the tests' stepped runs, their
+  // pictures): the renderer's World::steadyFrames, so that what its clouds, air and bounce light keep of the frames
+  // before goes by the frame, not by the clock, and a run's picture does not depend on how fast it was drawn (the
+  // renderer's note of 2026-11-10 with its cb980d6b, "the app draws by the clock"). main.cpp sets it.
+  static bool& FramesByCount();
   std::string TableFile() const;
   int RecordIndex() const;  // the next game's number (1: `<prefix>` itself)
 

@@ -499,6 +499,7 @@ int main(int argc, char** argv) {
   session.sky = sky;
   session.replayOut = replayOut;
   session.recordFingerprint = !windowed || std::getenv("MOHO64UI_RECORD_FINGERPRINT") != nullptr;
+  ui::GameSession::FramesByCount() = !windowed;  // (no live window: the pictures go by the frame's count, not the clock)
   session.replayTable = !sessionIn.empty() ? sessionIn : sessionFile;  // (a lobby game's table is written there)
   session.numberTables = tableBesideRecord && sessionIn.empty();  // (the second game's beside its own record)
   if (session.numberTables) cfg.sessionFileNow = [&session] { return session.TableFile(); };
