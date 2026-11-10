@@ -20,6 +20,29 @@ local function check(what, got, want)
         LOG("TEST FAIL " .. what .. ": got " .. tostring(got) .. ", want " .. tostring(want))
     end
 end
+-- A move given as a player gives it: the unit selected, a right click at the place. (IssueUnitCommand's third
+-- argument is the command's Lua table, not a place: a "Move" given by it goes nowhere, and until 2026-11-09 this
+-- test gave its move so and the unit stood.) Answers whether the unit then has an order queued.
+local function walkTo(unit, place)
+    local before = GetSelectedUnits()
+    local at = import("/lua/ui/game/worldview.lua").viewLeft:Project(place)
+    SelectUnits({unit})
+    local waited = 0  -- (a commander still arriving cannot be selected yet)
+    while table.getn(GetSelectedUnits() or {}) == 0 and waited < 10 do
+        WaitSeconds(0.5)
+        waited = waited + 0.5
+        SelectUnits({unit})
+    end
+    moho64ui_MouseMove(at.x, at.y)
+    WaitSeconds(0.2)
+    moho64ui_MouseButton("Right", true, at.x, at.y)
+    moho64ui_MouseButton("Right", false, at.x, at.y)
+    WaitSeconds(0.4)
+    local queued = (unit:GetCommandQueue() or {})[1] ~= nil
+    if not queued then LOG(string.format("TEST note: walkTo: no order after the click at %.0f, %.0f with %d selected", at.x, at.y, table.getn(GetSelectedUnits() or {}))) end
+    SelectUnits(before)
+    return queued
+end
 local function bools(...)
     local out = {}
     for i = 1, arg.n do table.insert(out, tostring(arg[i])) end
@@ -309,7 +332,7 @@ if not SessionIsReplay() then
         -- the commander walks for the replay
         local cdr = GetArmyAvatars()[1]
         local p = cdr:GetPosition()
-        IssueUnitCommand({ cdr }, "Move", { p[1] + 40, p[2], p[3] - 30 })
+        check("the commander is sent walking", walkTo(cdr, { p[1] + 12, p[2], p[3] - 8 }), true)
         WaitSeconds(14)
         local profile = import("/lua/user/prefs.lua").GetCurrentProfile().Name
         CopyCurrentReplay(profile, REPLAY)

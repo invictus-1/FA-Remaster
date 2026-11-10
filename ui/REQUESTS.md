@@ -1299,8 +1299,8 @@ to CPUs 16-31. I did not separate the simulation's share from the interface's; t
 
 ### 58. After a defeat: does the original's exe free the view by itself? (2026-11-09, a question, not blocking)
 
-**ANSWERED (engine, 2026-11-09, read in the stock 3839 exe, not run; in `docs\engine-answers.md` with his next
-commit).** (1) No: the exe never changes the focus army by itself. The only path is CWldSession::RequestFocusArmy
+**ANSWERED (engine, 2026-11-09, read in the stock 3839 exe, not run; `docs\engine-answers.md`,
+its entry "ui request 58").** (1) No: the exe never changes the focus army by itself. The only path is CWldSession::RequestFocusArmy
 0x8965e0 (callers: user Lua SetFocusArmy 0x842fc1, the console's 0x865a06, CON_UI_CreateHead1Map 0x834f04); DoBeat
 never touches it; the player keeps the defeated army's view until a SetFocusArmy comes. ValidateFocusArmyRequest in
 full: the local source is 0xff; or cheats (session+0x4d4); or army != -1 and the local source is in THAT army's

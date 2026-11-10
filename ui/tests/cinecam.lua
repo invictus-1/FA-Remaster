@@ -20,6 +20,29 @@ local function check(what, got, want)
     end
 end
 local function flat(a, b) return math.sqrt((a[1] - b[1]) * (a[1] - b[1]) + (a[3] - b[3]) * (a[3] - b[3])) end
+-- A move given as a player gives it: the unit selected, a right click at the place. (IssueUnitCommand's third
+-- argument is the command's Lua table, not a place: a "Move" given by it goes nowhere, and until 2026-11-09 this
+-- test gave its move so and the unit stood.) Answers whether the unit then has an order queued.
+local function walkTo(unit, place)
+    local before = GetSelectedUnits()
+    local at = import("/lua/ui/game/worldview.lua").viewLeft:Project(place)
+    SelectUnits({unit})
+    local waited = 0  -- (a commander still arriving cannot be selected yet)
+    while table.getn(GetSelectedUnits() or {}) == 0 and waited < 10 do
+        WaitSeconds(0.5)
+        waited = waited + 0.5
+        SelectUnits({unit})
+    end
+    moho64ui_MouseMove(at.x, at.y)
+    WaitSeconds(0.2)
+    moho64ui_MouseButton("Right", true, at.x, at.y)
+    moho64ui_MouseButton("Right", false, at.x, at.y)
+    WaitSeconds(0.4)
+    local queued = (unit:GetCommandQueue() or {})[1] ~= nil
+    if not queued then LOG(string.format("TEST note: walkTo: no order after the click at %.0f, %.0f with %d selected", at.x, at.y, table.getn(GetSelectedUnits() or {}))) end
+    SelectUnits(before)
+    return queued
+end
 local function bools(...)
     local out = {}
     for i = 1, arg.n do table.insert(out, tostring(arg[i])) end
@@ -75,7 +98,7 @@ if not SessionIsReplay() then
             tostring(moho64ui_KeyMapAction("Ctrl-Alt-C")) .. " " .. tostring(moho64ui_KeyMapAction("Ctrl-Alt-F12")), "remaster_cinecam remaster_photo")
         local cdr = GetArmyAvatars()[1]
         local c = cdr:GetPosition()
-        IssueUnitCommand({cdr}, "Move", {c[1] + 40, c[2], c[3] - 30})  -- (so the replay has a unit walking)
+        check("the commander is sent walking, so the replay has a unit that moves", walkTo(cdr, {c[1] + 12, c[2], c[3] - 8}), true)
         take()
         ConExecute("remaster_cinecam")
         check("in a game one plays the cinematic camera says it is for replays, one line", take(),
