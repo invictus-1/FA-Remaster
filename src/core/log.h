@@ -19,8 +19,9 @@ std::string LogOpenDefault(const std::string& folder, const std::string& program
 void LogSetEcho(bool echoToStdout);
 // MOHO64_WARNINGS=<file> (the gate's script-error check, engine-ref\gate.ps1): from this call on every warning and
 // error message is counted, and at the program's end the file gets "total N" and one "count<TAB>message" line per
-// distinct message, sorted: the message's first line, cut at 200 characters, with every run of 6 or more hex digits
-// as '#' (addresses and large numbers differ run to run). Counting only: the log is the same with it as without.
+// distinct message, sorted: the message's first line, cut at 200 characters, with every word of 6 or more hex
+// digits (a digit among them) as '#' (addresses and large numbers differ run to run). Counting only: the log is
+// the same with it as without.
 void LogTallyToFile(const std::string& path);
 void LogWrite(LogLevel level, std::string_view message);
 void Logf(LogLevel level, const char* fmt, ...)

@@ -751,7 +751,9 @@ SkyLight Parts(float hours, float strength, Vec3 noonReach, bool tables = false)
   // (the sun's light in the air is let go as the sun sinks far below the horizon: the sum here knows
   // no shadow of the planet and would leave a brown glow all night; the tables know it)
   s.sunSky = Vec3{1, 1, 1} * (strength * (tables ? 1.0f : Smooth(-0.30f, -0.08f, h)));
-  s.moonSky = kMoonTint * (strength * kMoonLight * moonLit);
+  // (and the moon's as it goes under: at -0.1 its branch drops it, here and in the shader, and without a fade of its own
+  // the night sky's haze, the ground's ambient light and the exposure stepped in that one frame, about five in the morning)
+  s.moonSky = kMoonTint * (strength * kMoonLight * moonLit * (tables ? 1.0f : Smooth(-0.1f, 0.0f, s.moonPlace.y)));
   s.night = Smooth(-0.05f, -0.27f, h);
 
   // the fitted sky: overhead, low all around away from the body, and what there is more near the body
