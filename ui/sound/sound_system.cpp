@@ -564,7 +564,17 @@ void SoundSystem::SetListener(const float eye[3], const float focus[3], const fl
 }
 
 int SoundSystem::PlayAt(const std::string& bank, const std::string& cue, const float position[3]) {
+  if (!worldOn_) return 0;  // (the world's sounds are switched off: SetWorldEnabled)
   return PlayCue(bank, cue, false, position);
+}
+
+void SoundSystem::SetWorldEnabled(bool on) {
+  if (on == worldOn_) return;
+  worldOn_ = on;
+  if (on) return;  // (the running sounds start again from UpdateWorld, where they can be heard)
+  for (auto& entry : placed_) Stop(entry.first, true);
+  placed_.clear();
+  for (auto& entry : loops_) entry.second.handle = 0;
 }
 
 void SoundSystem::SetLoop(uint32_t entity, const std::string& bank, const std::string& cue, const float position[3]) {
@@ -593,6 +603,7 @@ void SoundSystem::StopWorld() {
   placed_.clear();
   loops_.clear();
   listening_ = false;
+  worldOn_ = true;  // (a world ended: the next one's sounds are on, whatever a score screen switched off)
 }
 
 // What the game's curves by "CameraDistance" and "Duck" give now (decibels). The camera's
@@ -646,6 +657,7 @@ void SoundSystem::ApplyGains() {
 // hearing starts, one that has gone out of it ends.
 void SoundSystem::UpdateWorld() {
   ApplyGains();
+  if (!worldOn_) return;  // (switched off: no running sound starts)
   for (auto& entry : loops_) {
     Loop& loop = entry.second;
     auto placed = placed_.find(loop.handle);

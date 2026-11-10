@@ -97,6 +97,11 @@ class SoundSystem {
     return ids;
   }
   void StopWorld();
+  // The world's sounds off or on (the scripts' DisableWorldSounds / EnableWorldSounds: FAF's score screen switches
+  // them off, a game's start on). Off: the ones playing stop, no new one starts, the entities' running sounds are
+  // kept in mind and come back when it is on again and they can be heard. A session's end sets it on again.
+  void SetWorldEnabled(bool on);
+  bool worldEnabled() const { return worldOn_; }
   int worldPlayed() const { return worldPlayed_; }  // the world's sounds that were heard, loops counted when they start
 
   // The language of the voices (AudioSetLanguage): their banks are in /sounds/voice/<language>.
@@ -199,6 +204,7 @@ class SoundSystem {
   int duckState_ = 0, duckCount_ = 0;
   std::vector<int> ducking_;
   int worldPlayed_ = 0;
+  bool worldOn_ = true;  // (SetWorldEnabled)
   std::map<std::string, bool> complained_;
   Mixer mixer_;
   std::unique_ptr<OutputDevice> device_;

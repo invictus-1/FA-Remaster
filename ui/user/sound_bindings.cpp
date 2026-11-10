@@ -148,9 +148,18 @@ int l_HasLocalizedVO(lua_State* L) {
   lua_pushboolean(L, s && s->HasLanguage(luaL_checkstring(L, 1)));
   return 1;
 }
-// DisableWorldSounds(), EnableWorldSounds(): the world's own sounds (units, weapons) are not
-// played yet, so there is nothing to switch.
-int l_Nothing(lua_State*) { return 0; }
+// DisableWorldSounds(), EnableWorldSounds(): the world's own sounds (units, weapons) off and on (FAF's score screen
+// switches them off before its own, score.lua CreateDialog; gamemain.lua switches them on). INFERRED what the
+// original's do beyond the names: SoundSystem::SetWorldEnabled says what ours does. (Until 2026-11-10 they did
+// nothing: the battle went on sounding under the score screen; the review of 2026-11-09, toolkit T5.)
+int l_DisableWorldSounds(lua_State* L) {
+  if (sound::SoundSystem* s = System(L)) s->SetWorldEnabled(false);
+  return 0;
+}
+int l_EnableWorldSounds(lua_State* L) {
+  if (sound::SoundSystem* s = System(L)) s->SetWorldEnabled(true);
+  return 0;
+}
 
 // moho64ui_SoundInfo() -> {played = cues played so far, wave = the last one's wave ("Interface#11"),
 // world = how many of them were sounds of the world, duck = the duck now (0..1)}
@@ -159,6 +168,9 @@ int l_SoundInfo(lua_State* L) {
   lua_newtable(L);
   lua_pushstring(L, "played");
   lua_pushnumber(L, s ? s->played() : 0);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "worldOn");  // (the world's sounds switched on: DisableWorldSounds / EnableWorldSounds)
+  lua_pushboolean(L, !s || s->worldEnabled());
   lua_rawset(L, -3);
   lua_pushstring(L, "wave");
   lua_pushstring(L, s ? s->lastWave().c_str() : "");
@@ -301,8 +313,8 @@ void RegisterSoundBindings(lua_State* L) {
   SetGlobal(L, "PauseVoice", l_PauseSound);
   SetGlobal(L, "AudioSetLanguage", l_AudioSetLanguage);
   SetGlobal(L, "HasLocalizedVO", l_HasLocalizedVO);
-  SetGlobal(L, "DisableWorldSounds", l_Nothing);
-  SetGlobal(L, "EnableWorldSounds", l_Nothing);
+  SetGlobal(L, "DisableWorldSounds", l_DisableWorldSounds);
+  SetGlobal(L, "EnableWorldSounds", l_EnableWorldSounds);
   lua_register(L, "moho64ui_SoundInfo", l_SoundInfo);
   lua_register(L, "moho64ui_SoundBanks", l_SoundBanks);
   lua_register(L, "moho64ui_SoundBanksRead", l_SoundBanksRead);
