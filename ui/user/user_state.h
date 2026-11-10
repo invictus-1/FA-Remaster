@@ -339,6 +339,10 @@ class UserState {
   bool endGameCopy = false;
   int pauseOwnerCopy = -1;
   std::vector<std::string> commandSourcesCopy;
+  // Each army's command sources (the simulation's Army::sources, the original's user-side army+0x128 set), in the
+  // armies' order: which sources may command it. FAF's scripts take a defeated player's source off every army
+  // (ToObserver's SetCommandSource) where observing is allowed; the focus army's check reads it.
+  std::vector<std::vector<int>> armySourcesCopy;
   bool economyCopied = false;  // (these copies are there: one beat's sync came)
   void CopyFromSimulation();
   // Tests only (moho64ui_PretendBeat, a run with a test script): beatRunning() answers true as if a beat ran on its

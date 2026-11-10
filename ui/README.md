@@ -1194,7 +1194,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   one gives white and a line in the log, where the original raises "Unknown color".
 - `SetFocusArmy(n)` (0x842ee0; the replay's army list, NoteGameOver's -1): checked as the original's
   (ValidateFocusArmyRequest 0x896670, with FAF's stricter rule): free in a replay, with cheats, for
-  one's own army or once the game is over; else refused. The engine applies it at its next Sync
+  one's own army or once the game is over; and where observing is allowed (`SessionIsObservingAllowed`
+  0x8980c0: a replay, else the BOOLEAN of the scenario's `Options.AllowObservers`, which FAF's lobby
+  sets in every single-player game) once the player's command source commands no army; else refused.
+  That last case is watching on after a defeat (Chris, 2026-11-09: "do what the original does"): FAF's
+  sim takes a defeated player's source off every army (`ToObserver`, unless an allied human still
+  plays), nothing changes the view by itself (the engine's answer to ui 58, read in the exe), and a
+  click on a name in the score list, or `SetFocusArmy(-1)`, then shows that army, or all of them;
+  ui/tests/watch_defeat.lua (three armies, each for itself). The engine applies it at its next Sync
   (Sim::RequestFocusArmy, engine request 29: the sim's focus first, then the scripts'
   NoteFocusArmyChanged); the interface takes it from that beat's copy: the selection emptied,
   GetFocusArmy / IsObserver, the picture's focus (its fog; none for an observer) and allies.

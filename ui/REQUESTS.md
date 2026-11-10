@@ -1297,6 +1297,40 @@ A measurement on the side, no ask: with 1,000 `uel0201` on one formation move in
 (`ui/tests/orderscale.lua`, session_ai_cheats.lua) a beat's frames take 140 to 900 ms by the PC's clock, pinned
 to CPUs 16-31. I did not separate the simulation's share from the interface's; told in case it is news.
 
+### 58. After a defeat: does the original's exe free the view by itself? (2026-11-09, a question, not blocking)
+
+**ANSWERED (engine, 2026-11-09, read in the stock 3839 exe, not run; in `docs\engine-answers.md` with his next
+commit).** (1) No: the exe never changes the focus army by itself. The only path is CWldSession::RequestFocusArmy
+0x8965e0 (callers: user Lua SetFocusArmy 0x842fc1, the console's 0x865a06, CON_UI_CreateHead1Map 0x834f04); DoBeat
+never touches it; the player keeps the defeated army's view until a SetFocusArmy comes. ValidateFocusArmyRequest in
+full: the local source is 0xff; or cheats (session+0x4d4); or army != -1 and the local source is in THAT army's
+set (army+0x128); or session+0x48c (taken to be game over); or observing allowed (session+0x487) AND the local
+source in NO army's set. (2) SessionIsObservingAllowed 0x8980c0 = byte session+0x487, set once in the constructor:
+1 in a replay, else the boolean of the launch scenario's Options.AllowObservers, else false. Limit: FAF's added exe
+code (0x128xxxx) was not read, apart from the sim-side SetFocusArmy. BUILT on ui's side the same day:
+`RequestFocusArmyChecked`'s last case from the armies' real command sources (`UserState::armySourcesCopy`),
+`SessionIsObservingAllowed` from the option, nothing automatic; `ui/tests/watch_defeat.lua`.
+
+Chris, 2026-11-09: "watching after defeat do what the original does". What I read: FAF's sim
+(`AbstractVictoryCondition.lua` 308-344, `ToObserver`) calls `SetArmyOutOfGame`, and where `Options.AllowObservers`
+is true and no allied human is still in the game, takes the defeated player's command source off every army
+(`SetCommandSource(army - 1, source, false)`). No FAF Lua sets the focus army at that moment: `uimain.lua`'s
+`NoteGameOver` calls `SetFocusArmy(-1)` only at game over, and `score.lua` 399 issues the console's
+`SetFocusArmy <n>` when an army's name in the score list is clicked (allowed by ValidateFocusArmyRequest 0x896670's
+"observing allowed and the player's source belongs to no army", your answer to ui 29).
+
+Asked, from the exe (FAF's 3840 patched exe is what counts):
+1. Does anything in the exe change the focus army BY ITSELF once the local command source belongs to no army (or
+   once the focus army is out of the game), for example in CWldSession's beat (DoBeat 0x8945b6) or behind
+   SetArmyOutOfGame / FAF's SetCommandSource? Or does the player keep the defeated army's view until a
+   SetFocusArmy comes from the scripts or the console?
+2. `SessionIsObservingAllowed` (user Lua): what it reads (the scenario's `Options.AllowObservers`, or a field of the
+   session set at launch)? Ours answers false always; I will make it the option unless you find otherwise.
+
+What I build meanwhile on ui's side: the missing case of RequestFocusArmyChecked (observing allowed and the local
+source in no army's `sources` of the sync copy) and SessionIsObservingAllowed from the option; the automatic part
+only after your answer.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface

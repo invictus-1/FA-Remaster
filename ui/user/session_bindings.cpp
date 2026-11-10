@@ -666,13 +666,52 @@ int l_SessionSendChatMessage(lua_State* L) {
 // CWldSession::RequestFocusArmy (FA exe 0x8965e0) for a 0-based army or -1, from SetFocusArmy (the Lua function's n - 1)
 // and the console's SetFocusArmy (keymap.cpp, 0x834e50): an index outside -1 .. armies - 1 is only logged (0x896633);
 // else ValidateFocusArmyRequest (0x896670) checks it: allowed with no command source of one's own (a replay's viewer),
-// with cheats on, for one's own army, or once the game is over; else only where observing is allowed and the player's
-// source belongs to no army at all (FAF's exe makes the original's "no army still in the game" that): never in our
-// games, where it always belongs to the player's army. A request the checks refuse is dropped quietly. The engine
+// with cheats on, for an army the player's source may command (one's own), or once the game is over; else only where
+// observing is allowed (SessionIsObservingAllowed below) and the player's source is in NO army's set of sources (the
+// loop 0x8966bf..0x89671f; the engine's answer to ui 58). That last case is the watching after a defeat: FAF's
+// ToObserver (AbstractVictoryCondition.lua) takes a defeated player's source off every army when no allied human
+// plays on, and from then every army and -1 may be asked. Nothing in the exe asks by itself (the same answer): the
+// view stays the defeated army's until the player clicks a name in the score list (score.lua: the console's
+// SetFocusArmy) or the game ends (NoteGameOver's SetFocusArmy(-1)). A request the checks refuse is dropped quietly. The engine
 // applies it at its next Sync (Sim::RequestFocusArmy, engine request 29; the original's sim driver slot 0x30); this
 // state takes the change from that beat's copy (CopyFromSimulation). The request is the simulation's queued atomic
 // slot, taken at its next Sync (the engine, 2026-11-03), so it is written without waiting for a running beat (no
 // LiveSim); the checks read the sync's copies (before the first sync, when no beat has run yet, the simulation).
+// The scenario's Options[key] pushed (nil where there is none); the caller restores the stack's top.
+static void PushScenarioOption(lua_State* L, const char* key) {
+  lua_getglobal(L, "SessionGetScenarioInfo");
+  if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
+    lua_pushstring(L, "Options");
+    lua_gettable(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, key);
+      lua_gettable(L, -2);
+      return;
+    }
+  }
+  lua_pushnil(L);
+}
+
+// SessionIsObservingAllowed() (FA exe 0x8980c0: the byte session+0x487, set once in CWldSession's constructor
+// 0x8935ee..0x8936b4): true for a replay (session+0x484; the engine's reading: "taken to be a replay"), else the
+// BOOLEAN of the launch scenario's Options.AllowObservers (FAF's lobby keeps that option a boolean for this reason,
+// lobby.lua 2701, and sets it true in every single-player game, 4499), else false. Until 2026-11-09 ours said false
+// always.
+static bool ObservingAllowed(lua_State* L) {
+  UserState* user = UserState::From(L);
+  const Sim* sim = user->config().liveSim;
+  if (user->economyCopied ? user->isReplayCopy : (sim && sim->isReplay)) return true;
+  const int top = lua_gettop(L);
+  PushScenarioOption(L, "AllowObservers");
+  const bool allowed = lua_isboolean(L, -1) && lua_toboolean(L, -1) != 0;
+  lua_settop(L, top);
+  return allowed;
+}
+static int l_SessionIsObservingAllowed(lua_State* L) {
+  lua_pushboolean(L, ObservingAllowed(L));
+  return 1;
+}
+
 void RequestFocusArmyChecked(lua_State* L, int wanted) {
   UserState* user = UserState::From(L);
   Sim* sim = user->config().liveSim;
@@ -686,23 +725,29 @@ void RequestFocusArmyChecked(lua_State* L, int wanted) {
   const bool replay = user->economyCopied ? user->isReplayCopy : sim->isReplay;
   bool cheats = false;
   {
-    int top = lua_gettop(L);
-    lua_getglobal(L, "SessionGetScenarioInfo");
-    if (lua_isfunction(L, -1) && lua_pcall(L, 0, 1, 0) == 0 && lua_istable(L, -1)) {
-      lua_pushstring(L, "Options");
-      lua_gettable(L, -2);
-      if (lua_istable(L, -1)) {
-        lua_pushstring(L, "CheatsEnabled");
-        lua_gettable(L, -2);
-        cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
-      }
-    }
+    const int top = lua_gettop(L);
+    PushScenarioOption(L, "CheatsEnabled");
+    cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
     lua_settop(L, top);
   }
   const GamePace* pace = user->config().pace;
   const bool over = (pace && pace->ended) || user->endGameCopy;
   const int own = user->config().ownArmy;
-  const bool allowed = replay || own < 0 || cheats || (wanted != -1 && wanted == own) || over;
+  // (the armies' sources: the beat's copy; before the first beat, the simulation's own, as the armies above)
+  std::vector<std::vector<int>> asked;
+  if (!user->economyCopied)
+    for (const auto& a : sim->armies()) asked.push_back(a->sources);
+  const std::vector<std::vector<int>>& sources = user->economyCopied ? user->armySourcesCopy : asked;
+  const int source = user->config().commandSource;
+  auto commands = [&](size_t army) {
+    return army < sources.size() && std::find(sources[army].begin(), sources[army].end(), source) != sources[army].end();
+  };
+  bool allowed = replay || own < 0 || cheats || (wanted != -1 && (wanted == own || commands(static_cast<size_t>(wanted)))) || over;
+  if (!allowed && ObservingAllowed(L)) {
+    allowed = true;  // (watching after a defeat: the player's source commands no army any more)
+    for (size_t i = 0; i < sources.size(); ++i)
+      if (commands(i)) allowed = false;
+  }
   if (!allowed) return;
   sim->RequestFocusArmy(wanted);
 }
@@ -873,6 +918,8 @@ void UserState::CopyFromSimulation() {
   commandSourcesCopy.clear();
   for (const auto& source : sim->cmdSources) commandSourcesCopy.push_back(source.name);
   armiesCopy = ArmyViews(*sim);
+  armySourcesCopy.clear();
+  for (const auto& a : sim->armies()) armySourcesCopy.push_back(a->sources);
   // (the deposits: the map's script makes them at the start, CreateResourceDeposit; a script may add more)
   if (depositsCopy.size() != sim->deposits.size()) {
     depositsCopy.clear();
@@ -1068,8 +1115,8 @@ void RegisterSessionBindings(lua_State* L) {
   SetGlobal(L, "ValidateUnitsList", l_ValidateUnitsList);
   for (const char* name : {"SessionIsActive", "WorldIsPlaying"}) SetGlobal(L, name, l_True);
   SetGlobal(L, "SessionIsReplay", l_SessionIsReplay);
-  for (const char* name : {"WorldIsLoading", "SessionIsBeingRecorded", "SessionIsObservingAllowed"})
-    SetGlobal(L, name, l_False);
+  for (const char* name : {"WorldIsLoading", "SessionIsBeingRecorded"}) SetGlobal(L, name, l_False);
+  SetGlobal(L, "SessionIsObservingAllowed", l_SessionIsObservingAllowed);
   SetGlobal(L, "SessionIsMultiplayer", l_SessionIsMultiplayer);
   SetGlobal(L, "IsObserver", l_IsObserver);
   SetGlobal(L, "TeamColorMode", l_TeamColorMode);
