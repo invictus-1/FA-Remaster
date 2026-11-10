@@ -1359,6 +1359,8 @@ on Windows meanwhile: the suite's `prefs_safe` job has a sixth run, the save in 
 
 ### 60. UnitStateView: overchargePaused and stunned (2026-11-10, not blocking)
 
+**ANSWERED (engine, 2026-11-10, batch 135, main ddfe8536; `docs/engine-answers.md` top entry).** Both are in UnitStateView; the ui binds `IsOverchargePaused` and `IsStunned` to them (ui/user/user_units.cpp) and checks them in ui/tests/toggles.lua.
+
 Who: ui. Why: the review of 2026-11-09, row M. The interface's `unit:IsOverchargePaused()` and `unit:IsStunned()`
 answer false always (ui/user/user_units.cpp, the l_UnitFalse list), so FAF's order panel shows the overcharge button
 ready while the simulation holds overcharge paused (orders.lua asks IsOverchargePaused for the button's state).

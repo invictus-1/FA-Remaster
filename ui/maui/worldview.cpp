@@ -2491,6 +2491,10 @@ class WorldView : public Control {
     if (!dead() && !miniMap &&
         (e.type == EventType::MouseMotion || e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick || e.type == EventType::ButtonRelease))
       UpdateWaypointHover(L, e.x, e.y);
+    // (another button pressed while a drag of this view is open: not taken, nor shown to the script's handler, which
+    // may post a dragger of its own and so cancel the open one; the reasons are at the press's handling below)
+    if (!dead() && (e.type == EventType::ButtonPress || e.type == EventType::ButtonDClick))
+      if (UiManager& uim = UserState::From(L)->ui(); uim.engineDragger == this && uim.draggerKey != e.keyCode) return true;
     if (Control::HandleEvent(L, e)) return true;
     if (dead() || inputLocked) return false;
     // Each event the script leaves to the view works out again whether the selection's moves could become a patrol
@@ -2544,7 +2548,7 @@ class WorldView : public Control {
     // click the pointer stayed hidden and held and the screen's edges no longer scrolled; a selection box stood until
     // the next left click; a row of buildings was ordered at the other button's release (the review of 2026-11-09,
     // toolkit H3). Ours: INFERRED that the original's separate dragger objects do not end each other this way.
-    if (UiManager& uim = UserState::From(L)->ui(); uim.engineDragger == this && uim.draggerKey != e.keyCode) return true;
+    // (The test itself is at the handler's top, before the script's own handler: OtherButtonInDrag.)
     if (e.middle) {
       if (miniMap) return false;
       TakeCameraBack(L, GetCameraObject(L, cameraName));  // (the drag's start already hands the camera back)

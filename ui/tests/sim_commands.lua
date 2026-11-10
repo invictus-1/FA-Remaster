@@ -198,5 +198,44 @@ ForkThread(function()
         WaitSeconds(1)
         check("and the tank dies", t2:IsDead() or GetUnitById(t2:GetEntityId()) == nil, true)
     end
+    -- Overcharge paused, as the simulation has it, reaches the interface's unit (the engine's answer to ui request 60,
+    -- 2026-11-10: UnitStateView.overchargePaused; before, IsOverchargePaused answered false always and the order
+    -- panel's overcharge button looked ready while it was paused). The game's own way: the commander overcharges an
+    -- enemy tank (two energy storages and the cheat's resources first: an overcharge wants 5,000 energy), and FAF's
+    -- weapon script holds overcharge paused while it reloads. (IsStunned is bound the same way; nothing here stuns.)
+    local cdr = GetArmyAvatars()[1]
+    local c = cdr:GetPosition()
+    local view = import("/lua/ui/game/worldview.lua").viewLeft
+    check("the commander: overcharge not paused, not stunned", tostring(cdr:IsOverchargePaused()) .. " " .. tostring(cdr:IsStunned()), "false false")
+    for _, d in {{-8.5, 6.5}, {-8.5, 10.5}} do
+        SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {c[1] + d[1], c[2], c[3] + d[2]}, bpId = "ueb1105", count = 1, yaw = 0}})
+    end
+    local enemy = GetFocusArmy() == 1 and 2 or 1
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = enemy, pos = {c[1] + 10, c[2], c[3] + 2}, bpId = "url0107", count = 1, yaw = 0}})
+    WaitSeconds(1.5)
+    SelectUnits({cdr})
+    WaitSeconds(0.2)
+    ConExecute("DoSimCommand BlingBling")
+    WaitSeconds(0.5)
+    import("/lua/ui/game/commandmode.lua").StartCommandMode("order", {name = "RULEUCC_Overcharge"})
+    local p = view:Project(Vector(c[1] + 10, c[2], c[3] + 2))
+    moho64ui_MouseMove(p.x, p.y)
+    WaitSeconds(0.2)
+    moho64ui_MouseButton("Left", true, p.x, p.y)
+    moho64ui_MouseButton("Left", false, p.x, p.y)
+    local waited, paused = 0, false
+    while not paused and waited < 12 do
+        WaitSeconds(0.1)
+        waited = waited + 0.1
+        paused = cdr:IsOverchargePaused()
+    end
+    check("after an overcharge shot the simulation holds overcharge paused, and the interface's unit says so", paused, true)
+    waited = 0
+    while cdr:IsOverchargePaused() and waited < 15 do
+        WaitSeconds(0.2)
+        waited = waited + 0.2
+    end
+    check("and it is free again once the weapon has reloaded", cdr:IsOverchargePaused(), false)
+    SelectUnits(nil)
     LOG("TEST done: " .. failed .. " failed")
 end)

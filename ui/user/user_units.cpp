@@ -6070,6 +6070,10 @@ void RegisterUserUnitBindings(lua_State* L) {
   SetMethod(L, cls, "IsAutoMode", l_UnitSwitch<&UnitStateView::autoMode>);
   SetMethod(L, cls, "IsAutoSurfaceMode", l_UnitSwitch<&UnitStateView::autoSurfaceMode>);
   SetMethod(L, cls, "IsRepeatQueue", l_UnitSwitch<&UnitStateView::repeatQueue>);
+  // (the engine's answer to ui request 60, 2026-11-10: before, both answered false always, and FAF's order panel
+  // showed the overcharge button ready while the simulation held overcharge paused; the review's row M)
+  SetMethod(L, cls, "IsOverchargePaused", l_UnitSwitch<&UnitStateView::overchargePaused>);
+  SetMethod(L, cls, "IsStunned", l_UnitSwitch<&UnitStateView::stunned>);
   SetMethod(L, cls, "GetShieldRatio", l_GetShieldRatioNow);
   SetMethod(L, cls, "GetFuelRatio", l_GetFuelRatioNow);
   SetMethod(L, cls, "GetBuildRate", l_GetBuildRateNow);
