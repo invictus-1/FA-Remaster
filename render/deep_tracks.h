@@ -37,6 +37,18 @@
 // is picked stays as the game has it. Holes fade as the tracks do, slower (a hole is deeper than a rut): falling snow
 // fills them, rain softens them, mud keeps them longest. The holes of the last while are listed, so that one comes back
 // into the levels round the camera when it comes back to them (at what is left of it).
+// [churn] Holes one over another (churnedHoles; Chris's test of 2026-11-09: where many shells struck one spot "some parts
+// will look like a hole while others look like a layer of mud over it"). Added up, as above, thirty holes on one patch
+// came to twenty and more world units of depth in its middle, far past what the ground's shader takes for a hole (it
+// looks one unit down for where the eye's ray meets them, and shades a hole's bottom by its walls): the middle read as one
+// flat black sheet, with whole bowls only at its margin. Now a hole is dug into what is there instead: within its lip
+// it takes the place of what was there (the older holes' walls, lips and the ruts under it are gone, as under a real
+// shell), its bowl dug from the level the ground had round its middle (`base`: a small shot's scuff in a large hole's
+// floor is a dimple in that floor, a shell of the same size in an older hole a whole new bowl a little lower), never
+// deeper in all than kDeepestHole; beyond its lip the thrown earth lies over what is there by as much as there is of it
+// (an older hole beside it is filled toward the new lip, nearest it most). So a patch struck many times is one field of
+// whole bowls, the newest whole, the older cut by them, none deeper than a hole can be. A hole alone on untouched
+// ground is to the last number what it was.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -119,6 +131,13 @@ class DeepTracks {
   int stamped = 0;  // (the last Draw: quads drawn into the field, the wrap's copies counted)
   int faded = -1;   // (the last Draw: the level it faded, -1 none)
   int craters = 0;  // [dents] (holes listed now)
+  // [churn] A new hole takes the place of what is within its lip, dug from the ground's level there (above). False: every
+  // hole added to what is there, as before (World::churnedHoles, the viewer's --holes-added).
+  bool churnedHoles = true;
+  // [churn] The holes' height at a place as the listed holes leave it one over another (world units; for a new hole's
+  // level, and for checking the field by numbers).
+  float HolesAt(float x, float z) const;
+  static constexpr float kDeepestHole = 2.0f;  // [churn] (world units below the ground: the field's holes never deeper)
 
  private:
   static constexpr int kLevels = 3;
@@ -140,6 +159,7 @@ class DeepTracks {
     // these whole texels of the world (what was cleared: the rest of the level holds it still)
     int level = -1;
     float clip[4] = {-1e9f, -1e9f, 1e9f, 1e9f};
+    float base = 0;        // shape 5: [churn] the level its bowl is dug from (world units; at or below the ground)
   };
   struct Vertex {
     float x, y;              // in the atlas, -1..1
@@ -155,6 +175,7 @@ class DeepTracks {
   struct Crater {            // [dents] a hole of the last while: where, how large, turned how, how much of it is left
     float x, z, size, heading;
     float kept = 1;
+    float base = 0;          // [churn] the level the ground had round its middle when it struck (as it was then: x kept now)
   };
   struct Level {
     int size = 0;            // texels across (its data, without the copied edges)
@@ -232,6 +253,7 @@ class DeepTracks {
   gfx::Device* device_;
   TextureCache* textures_;
   gfx::Pipeline stamp_, clear_, fade_;
+  gfx::Pipeline crater_;  // [churn] (a hole dug into what is there: churnedHoles)
   gfx::Buffer buffer_;
   gfx::Texture atlas_;
   int atlasWidth_ = 0, atlasHeight_ = 0;

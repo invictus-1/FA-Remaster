@@ -48,7 +48,7 @@ cbuffer TerrainConstants : register(b1) {
   // deep tracks (deep_tracks.h, TrackFieldConstants): the field's levels, and per layer what kind of ground it is
   float4 tracksLevel[3];
   float4 tracksAtlas[3];
-  float4 tracksInfo;     // x, y: 1 / the atlas's size; z: 1 = deep tracks are read
+  float4 tracksInfo;     // x, y: 1 / the atlas's size; z: 1 = deep tracks are read (2: [churn] their holes dug one into another)
   float4 kindA[10];      // per layer, shares: snow, mud, sand, grass
   float4 kindB[10];      // dirt, hard ground (rock, concrete)
   float4 mudInfo;        // deep tracks' mud (MudInRuts): x 1 = the map's mud is drawn in the ruts; y its repeats per world unit
@@ -283,10 +283,15 @@ float2 DentParallax(float3 world, float2 stepX, float2 stepY, float soft) {
   float3 V = normalize(world - cameraPosition);
   float2 along = V.xz / max(-V.y, 0.3);  // (its way over the ground per unit it goes down)
   float top = 0.3 * k, bottom = -1.0 * k;
+  int steps = 12;
+  // [churn] (DeepTracks::churnedHoles: the holes dug one into another go down to two world units, DeepTracks::kDeepestHole,
+  // and a large shell's lip stands half a unit high: from over the highest lip to under the deepest hole, in steps as
+  // fine as before. Added up, as before, a large hole's bottom below one unit was cut off flat here.)
+  if (tracksInfo.z > 1.5) top = 0.55 * k, bottom = -2.1 * k, steps = 24;
   float lastY = top, lastGap = top - TrackTap(lv, xz - along * top).z * k, y = top, gap = lastGap;
-  [loop] for (int s = 1; s <= 12 && gap > 0; ++s) {
+  [loop] for (int s = 1; s <= steps && gap > 0; ++s) {
     lastY = y, lastGap = gap;
-    y = lerp(top, bottom, s / 12.0);
+    y = lerp(top, bottom, s / float(steps));
     gap = y - TrackTap(lv, xz - along * y).z * k;
   }
   if (gap > 0) return xz - along * y;

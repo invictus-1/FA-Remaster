@@ -2033,6 +2033,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   }
   if (!sidePicture && !extraView) {  // [views] (the field stays round the first view's camera)
     trackField.on = deepNow_;
+    trackField.churnedHoles = churnedHoles;  // [churn]
     trackField.Begin(placing.target, clock);
   }
   if (!deepNow_ && haveMap_ && tracks.on && snowLying > 0 && look == Look::Modern && timeOfDay >= 0) {
@@ -3391,12 +3392,16 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       auto hits = shieldHits_.find(u.id);
       const ShieldHit* latest = hits == shieldHits_.end() || hits->second.empty() ? nullptr : &hits->second.back();
       const double latestAge = latest ? clock_ - latest->clock : 2;
+      // ([shieldhit] personalShieldsAtRest off, the modern look: every shield along its outline only while hit, and what
+      // it shows fading with the hit - `built` 5 and a little more, MeshRenderer::Add)
+      const bool onlyHits = ShieldOnlyHits(blueprint);
       if (own && own->capsule) shielded = false;                                   // (the hull shows nothing of it)
       else if (own && own->hitOnly) shielded = latestAge >= 0 && latestAge < 1;  // (along its outline while hit)
+      else if (shielded && onlyHits) shielded = latestAge >= 0 && latestAge < 1;
       float built = shielded ? 3.0f : fractionComplete;
       const Vec3* hitAt = nullptr;
       if (shielded && latestAge >= 0 && latestAge < 1) {
-        built = 3.001f + 0.9f * static_cast<float>(latestAge);
+        built = (onlyHits ? 5.001f : 3.001f) + 0.9f * static_cast<float>(latestAge);
         hitAt = &latest->at;
       }
       if (own && own->capsule && own->lattice && hits != shieldHits_.end()) {  // its shell, lit round its hits
@@ -4567,6 +4572,11 @@ void World::Render() {
     std::copy(terrain.snowTune, terrain.snowTune + 4, decals.snowGround.tune);
     decals.snowGround.mapWidth = static_cast<float>(map.width);
     decals.snowGround.mapHeight = static_cast<float>(map.height);
+    // [churn] (the shell holes the ground has just drawn: the game's flat marks give way where one is; with the holes
+    // added up, as before, the marks lie over them as before)
+    decals.holes.field = deepNow_ && churnedHoles ? trackField.Atlas() : gfx::Texture{};
+    decals.holes.kinds = decals.holes.field ? terrain.GroundKinds() : gfx::Texture{};
+    decals.holes.constants = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
     if (decals.Count() && hide.find("decals") == std::string::npos) {
       post.BeginColorOnly();
       lights.Bind();

@@ -135,6 +135,25 @@ float4 PSStamp(VOut i) : SV_Target {
   return float4(trough * i.amounts.x, ring * i.amounts.y, 0, 1);  // ([dents] the holes' number left as it is)
 }
 
+// [churn] A shell's hole dug into what is there (DeepTracks::churnedHoles; its shape as PSStamp's): blended as what is
+// drawn + what is there x (1 - its alpha). Within its lip the alpha is 1: the hole takes the place of the older holes
+// there, and of the ruts (the first two numbers go to nothing), its bowl dug from its level (amounts.z, at or below the
+// ground: what the ground had come to round its middle). Beyond the lip the alpha is the thrown earth's share of the
+// lip's height: what is there goes toward the lip's level by as much as lies on it, so an older hole beside it is
+// filled nearest the new lip and left farther out, and earth thrown on earth never heaps higher than a lip. On
+// untouched ground (level 0) this is the same hole as PSStamp's. amounts.w: how much of a texel it is, where it is
+// smaller than one.
+float4 PSCrater(VOut i) : SV_Target {
+  if (Outside(i) || any(i.world < i.clip.xy) || any(i.world >= i.clip.zw)) discard;
+  float2 p = i.across * i.shape.w;
+  float r = length(p), a = atan2(p.y, p.x);
+  float x = r / (1 + 0.07 * sin(3 * a + 0.4) + 0.05 * sin(5 * a + 1.9) + 0.03 * sin(9 * a + 4.2));  // (1 at the lip)
+  float bowl = saturate(1 - x * x);
+  float lip = x < 1 ? smoothstep(0.55, 1.0, x) : exp(-2.6 * (x - 1)) * (1 - smoothstep(1.6, 2.15, x)) * (1 + 0.35 * sin(11 * a + 2.7) * saturate(x - 1));
+  float cover = (x < 1 ? 1 : saturate(lip)) * i.amounts.w;
+  return float4(0, 0, cover * i.amounts.z + lip * i.amounts.y - bowl * i.amounts.x, cover);
+}
+
 float4 PSClear(VOut i) : SV_Target {
   if (Outside(i)) discard;
   return 0;
@@ -330,7 +349,7 @@ AlphaSpan AlphaLength(const std::string& file) {
 }  // namespace
 
 DeepTracks::~DeepTracks() {
-  for (gfx::Pipeline p : {stamp_, clear_, fade_})
+  for (gfx::Pipeline p : {stamp_, clear_, fade_, crater_})
     if (p) device_->Destroy(p);
   if (atlas_) device_->Destroy(atlas_);
   if (buffer_) device_->Destroy(buffer_);
@@ -361,6 +380,12 @@ bool DeepTracks::Init(std::string* error) {
   pd.alphaWrite = false;
   stamp_ = device_->CreatePipeline(pd, error);
   if (!stamp_) return false;
+  // [churn] (a hole dug into what is there: what is drawn + what is there x (1 - its alpha), PSCrater)
+  pd.name = "deep tracks: a hole dug";
+  pd.pixelEntry = "PSCrater";
+  pd.blend = gfx::Blend::Premultiplied;
+  crater_ = device_->CreatePipeline(pd, error);
+  if (!crater_) return false;
   pd.alphaWrite = true;
   pd.name = "deep tracks: cleared";
   pd.pixelEntry = "PSClear";
@@ -895,11 +920,23 @@ void DeepTracks::PressCrater(Vec3 at, float size) {
   c.z = at.z;
   c.size = std::min(size, 40.0f);
   c.heading = static_cast<float>(h & 0xffffu) / 65536.0f * 6.2831853f;
+  {
+    // [churn] the level it is dug from: what the listed holes have made of the ground round its middle (there and at six
+    // places half its bowl out), never above the ground (a hole struck into a lip levels it) and no lower than leaves
+    // its own depth above the deepest a hole may be
+    const float out = 0.5f * 0.32f * c.size;
+    float level = HolesAt(c.x, c.z);
+    for (int k = 0; k < 6; ++k) {
+      const float turn = c.heading + 1.0471976f * static_cast<float>(k);
+      level += HolesAt(c.x + out * std::cos(turn), c.z + out * std::sin(turn));
+    }
+    c.base = std::clamp(level / 7, std::min(CraterStamp(c).trough - kDeepestHole, 0.0f), 0.0f);
+  }
   if (craters_.size() >= 4096) craters_.erase(craters_.begin(), craters_.begin() + 512);
   craters_.push_back(c);
   stamps_.push_back(CraterStamp(c));
   lastPressed_ = clock_;
-  if (debug_) printf("render: deep tracks: a hole %.2f across at %.2f,%.2f\n", size, at.x, at.z);
+  if (debug_) printf("render: deep tracks: a hole %.2f across at %.2f,%.2f (turned %.4f, dug from %.3f)\n", size, at.x, at.z, c.heading, c.base);
 }
 
 DeepTracks::Stamp DeepTracks::CraterStamp(const Crater& c) const {
@@ -915,7 +952,35 @@ DeepTracks::Stamp DeepTracks::CraterStamp(const Crater& c) const {
   s.halfX = s.halfZ = bowl;
   s.trough = depth * c.kept;
   s.berm = depth * 0.33f * c.kept;
+  s.base = c.base * c.kept;  // [churn]
   return s;
+}
+
+// [churn] The listed holes one over another at a place, the oldest first, each as PSCrater lays it (its shape as the
+// shader's): what the field's finer levels hold there, but for what the ground's kind and the weather have taken of it
+// since (the list fades as dirt does).
+float DeepTracks::HolesAt(float x, float z) const {
+  auto smooth = [](float from, float to, float v) {
+    const float t = std::clamp((v - from) / (to - from), 0.0f, 1.0f);
+    return t * t * (3 - 2 * t);
+  };
+  float height = 0;
+  for (const Crater& c : craters_) {
+    const float bowl = 0.32f * c.size;
+    const float dx = x - c.x, dz = z - c.z;
+    if (dx * dx + dz * dz > 6.4f * bowl * bowl) continue;  // (beyond the earth thrown round it: 2.15 of its bowl, and its uneven edge)
+    const Stamp s = CraterStamp(c);
+    const float cs = std::cos(c.heading), sn = std::sin(c.heading);
+    const float px = (dx * cs - dz * sn) / bowl, pz = (dx * sn + dz * cs) / bowl;  // (in the stamp's own frame, Quad)
+    const float r = std::sqrt(px * px + pz * pz), a = std::atan2(pz, px);
+    const float u = r / (1 + 0.07f * std::sin(3 * a + 0.4f) + 0.05f * std::sin(5 * a + 1.9f) + 0.03f * std::sin(9 * a + 4.2f));
+    const float dug = std::clamp(1 - u * u, 0.0f, 1.0f);
+    const float lip = u < 1 ? smooth(0.55f, 1.0f, u)
+                            : std::exp(-2.6f * (u - 1)) * (1 - smooth(1.6f, 2.15f, u)) * (1 + 0.35f * std::sin(11 * a + 2.7f) * std::clamp(u - 1, 0.0f, 1.0f));
+    const float cover = u < 1 ? 1.0f : std::clamp(lip, 0.0f, 1.0f);
+    height = height * (1 - cover) + cover * s.base + lip * s.berm - dug * s.trough;
+  }
+  return height;
 }
 
 void DeepTracks::PressCratersAgain(int level, int x0, int z0, int x1, int z1) {
@@ -943,6 +1008,7 @@ void DeepTracks::Emit(const Vertex c[4]) {
 void DeepTracks::Quad(const Stamp& s, int level) {
   const Level& l = levels_[level];
   float halfX = s.halfX, halfZ = s.halfZ, trough = s.trough, berm = s.berm;
+  float share = 1;  // [churn] (a hole smaller than the level's texel: how much of the texel it is)
   int shape = s.shape;
   // the room the berm needs round the shape
   float margin = shape == 0 ? 1.35f : shape == 1 ? 1.45f : (s.bandX + 2.3f * s.bandHalf);
@@ -955,6 +1021,7 @@ void DeepTracks::Quad(const Stamp& s, int level) {
       const float r = l.texel, area = (halfX * halfX) / (r * r);
       trough *= area;
       berm *= area;
+      share = area;
       halfX = halfZ = r;
     }
     if (level == 2) berm = 0;
@@ -1003,7 +1070,10 @@ void DeepTracks::Quad(const Stamp& s, int level) {
       Vertex v[4];
       for (int k = 0; k < 4; ++k) {
         const float atlasX = x0 + px + ox[k], atlasY = pz + oz[k];
-        v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, across, (s.tread ? 1.0f : 0.0f) + (s.hd && shape == 0 ? 2.0f : 0.0f),
+        // ([churn] a hole: its level and its share of a texel, in the two numbers a picture's stamp has its texels across
+        // and its kind in: PSCrater)
+        v[k] = Vertex{atlasX * sx - 1, 1 - atlasY * sy, cornerX[k], cornerZ[k], trough, berm, shape == 5 ? s.base : across,
+                      shape == 5 ? share : (s.tread ? 1.0f : 0.0f) + (s.hd && shape == 0 ? 2.0f : 0.0f),
                       static_cast<float>(shape), s.bandX, s.bandHalf, margin, x0, 0, x1, y1, s.stripX0, s.stripX1,
                       s.x * inv + ox[k], s.z * inv + oz[k], s.clip[0], s.clip[1], s.clip[2], s.clip[3]};  // ([dents] where, and what it may write)
       }
@@ -1113,10 +1183,17 @@ void DeepTracks::Draw(float snowing, float raining, gfx::Texture kinds) {
   clears_.clear();
   const size_t clearEnd = vertices_.size();
   // what pressed: by picture (the shapes made in the shader first, with no picture)
-  std::stable_sort(stamps_.begin(), stamps_.end(), [](const Stamp& a, const Stamp& b) { return (a.shape ? 0u : a.texture.id) < (b.shape ? 0u : b.texture.id); });
+  // ([churn] the holes dug into what is there first, in the order they struck: each is blended over the one before)
+  const bool dug = churnedHoles && static_cast<bool>(crater_);
+  std::stable_sort(stamps_.begin(), stamps_.end(), [dug](const Stamp& a, const Stamp& b) {
+    const bool holeA = dug && a.shape == 5, holeB = dug && b.shape == 5;
+    if (holeA != holeB) return holeA;
+    return (a.shape ? 0u : a.texture.id) < (b.shape ? 0u : b.texture.id);
+  });
   struct Run {
     size_t first, count;
     gfx::Texture texture;
+    bool hole = false;  // [churn]
   };
   std::vector<Run> runs;
   size_t used = 0;
@@ -1127,7 +1204,8 @@ void DeepTracks::Draw(float snowing, float raining, gfx::Texture kinds) {
     ++used;
     if (vertices_.size() == before) continue;
     const gfx::Texture t = s.shape ? gfx::Texture{} : s.texture;
-    if (runs.empty() || runs.back().texture.id != t.id) runs.push_back({before, 0, t});
+    const bool hole = dug && s.shape == 5;  // [churn]
+    if (runs.empty() || runs.back().texture.id != t.id || runs.back().hole != hole) runs.push_back({before, 0, t, hole});
     runs.back().count = vertices_.size() - runs.back().first;
   }
   debugStamps_ += static_cast<int>(used), debugQuads_ += stamped, debugFades_ += faded >= 0 ? 1 : 0;
@@ -1159,8 +1237,11 @@ void DeepTracks::Draw(float snowing, float raining, gfx::Texture kinds) {
     device_->Draw(static_cast<uint32_t>(clearEnd - fadeEnd), static_cast<uint32_t>(fadeEnd));
   }
   if (!runs.empty()) {
+    bool hole = false;
     device_->SetPipeline(stamp_);
     for (const Run& r : runs) {
+      if (r.hole != hole) device_->SetPipeline(r.hole ? crater_ : stamp_);  // [churn]
+      hole = r.hole;
       device_->SetTexture(0, r.texture ? r.texture : textures_->White());
       device_->Draw(static_cast<uint32_t>(r.count), static_cast<uint32_t>(r.first));
     }
@@ -1184,7 +1265,7 @@ TrackFieldConstants DeepTracks::Constants() const {
   }
   c.info[0] = 1.0f / static_cast<float>(atlasWidth_);
   c.info[1] = 1.0f / static_cast<float>(atlasHeight_);
-  c.info[2] = 1;
+  c.info[2] = churnedHoles ? 2.0f : 1.0f;  // ([churn] 2: the holes dug one into another, none deeper than kDeepestHole)
   c.info[3] = static_cast<float>(debugView_);
   return c;
 }

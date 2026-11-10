@@ -51,6 +51,9 @@ class MeshRenderer {
   // `pose`: where its bones are, for a model that does not stand at rest (null: at rest).
   // `tint`: the model is shown as a ghost of that colour (a building's preview while its site is chosen).
   // `built` above 1.5: a finished unit with its personal shield up (a glow along its outline).
+  // ([shieldhit] 3.001 + 0.9 x the seconds since its shield's last hit, below one: that hit lit round `tint`, where it
+  // struck on the model at rest; 5.001 + the same: a shield that shows only its hits - what it shows at rest is there
+  // for the hit alone and fades with it, World::personalShieldsAtRest)
   // `treads`: its two treads' scroll (the amounts the original adds to the u of the texture's strips at
   // v above 0.95 and between 0.90 and 0.95); null: none. Not with `tint`.
   // `key`: what it is from frame to frame, for its motion (`motion`): an entity's own number, the same

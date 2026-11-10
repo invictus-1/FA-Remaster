@@ -605,7 +605,10 @@ float4 Shade(VOut i, bool front) {
   // (a finished unit whose personal shield is up says so with an alpha above 1)
   bool shielded = i.color.a > 1.5;
   // (a hit on its shield this many seconds ago, below 1; i.tint: where it struck on the model at rest)
-  float hitAge = shielded && i.color.a > 3.0005 ? (i.color.a - 3.001) / 0.9 : -1;
+  // ([shieldhit] 5 and a little more in place of 3 and a little more: a shield that shows only its hits, World::
+  // personalShieldsAtRest off - the unit is drawn so only for the second after a hit)
+  bool hitOnly = i.color.a > 4.5;
+  float hitAge = shielded && i.color.a > 3.0005 ? (i.color.a - (hitOnly ? 5.001 : 3.001)) / 0.9 : -1;
   i.color.a = min(i.color.a, 1);
   if (inspect.x > 8.5 && inspect.x < 9.5 && look > 0.5) {
     // a view for checking art: which level of detail each model is drawn at: white the finest,
@@ -1046,6 +1049,13 @@ float4 Shade(VOut i, bool front) {
       float outline = pow(1 - saturate(dot(toCamera, N)), 3);  // (only where the surface turns away from the eye)
       // ([pshield2] its rest glow halved, Chris 2026-11-08: "only when hit" - a hit lights it as before)
       float3 glow = tint * ((0.02 + 0.5 * outline) * (0.8 + 0.2 * sin(time * 2.2)));
+      // [shieldhit] (Chris, 2026-11-09, the Dragonite's: "just needs to be off unless hit") a shield that shows only its
+      // hits: what it shows at rest - the light along its outline, its lattice - is there for the hit alone, twice as
+      // strong at the hit (as strong as it was at rest before 2026-11-08) and gone with the square of the second's
+      // rest, so that the whole shield is seen taking the hit and goes out again; from the hit a ring runs out over the
+      // lattice (below)
+      float atRest = hitOnly ? 2 * (1 - hitAge) * (1 - hitAge) : 1;
+      glow *= atRest;
       [branch] if (kind5.w > 0.5) {
         // and its faction's lattice over it, as the bubble's (the visuals track's sheet): painted on the
         // model at rest and seen along the three axes, so it goes with the unit and its bones and shows
@@ -1062,11 +1072,17 @@ float4 Shade(VOut i, bool front) {
                      shieldPatterns.Sample(samplerAniso, float3(q.xy, layer)).rgb * w.z;
         float beat = 0.75 + 0.25 * sin(time * 1.7 + pat.b * 6.283);
         float drift = pat.g * (0.6 + 0.4 * sin(time * 0.9 + pat.b * 6.283));
-        glow += tint * (pat.r * (beat * (0.05 + 0.6 * outline) + drift * 0.12));  // ([pshield2] was 0.18 + 1.5, 0.36)
+        glow += tint * (pat.r * (beat * (0.05 + 0.6 * outline) + drift * 0.12)) * atRest;  // ([pshield2] was 0.18 + 1.5, 0.36)
         [branch] if (hitAge >= 0) {  // a hit: the cells round it light up and fade, in about a second
           float near = saturate(1 - length(i.rest - i.tint) / 0.9);  // (some two cells round it)
           float fade = 1 - hitAge;
           glow += tint * (near * near * fade * fade * (0.35 + 2.5 * pat.r) * (0.7 + 0.3 * pat.b) * 2.0);
+          // ([shieldhit] the ring: from half a world unit to four and a half round where it struck, within the second,
+          // lighting the lattice's lines as it passes and a little of what is between them)
+          [branch] if (hitOnly) {
+            float ring = saturate(1 - abs(length(i.rest - i.tint) - (0.5 + 4 * hitAge)) / 0.4);
+            glow += tint * (ring * ring * fade * (0.2 + 1.6 * pat.r));
+          }
         }
       }
       emission += glow * (falling.w > 0 ? falling.w : 1);
