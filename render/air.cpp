@@ -472,7 +472,7 @@ void Air::Build(View* view, const Camera& camera, gfx::Texture sunShadows, gfx::
   std::memcpy(k.ahead, a4, sizeof k.ahead);
   // this frame's place inside each cell's depth: the golden ratio's steps, which spread evenly over frames
   k.up[3] = std::fmod(static_cast<float>(frame_ % 610) * 0.6180339887f, 1.0f);  // (610: a Fibonacci number, so the wrap is near seamless and the float keeps its fraction)
-  k.ahead[3] = haveLast_ ? std::clamp(unjittered ? std::min(keep, keepUpscaled) : keep, 0.0f, 0.98f) : 0.0f;  // ([airjitter])
+  k.ahead[3] = haveLast_ ? std::clamp(std::pow(std::clamp(unjittered ? std::min(keep, keepUpscaled) : keep, 0.0f, 1.0f), frameShare), 0.0f, 0.98f) : 0.0f;  // ([airjitter], [cloudkeep])
   // [glitches] (letGo) less of last frame kept while the camera moves, and two places a cell then
   bool moving = false;
   if (haveLast_ && letGo > 0) {

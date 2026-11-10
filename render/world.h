@@ -965,6 +965,10 @@ class World {
   // game's next (the temporal upscaler, motion, frame generation's picture), and with nothing of the interface laid
   // over it (icons, bars, order lines). What else of the interface is in the world the host takes out itself.
   bool photo = false;
+  // [cloudkeep] The frames are drawn for a run by their count (the viewer's --frames: a test, a picture, a film), not for
+  // someone watching: what the clouds, the light in the air and the bounce light keep of the frames before then goes by
+  // the frame as it always did, not by the clock, so that such a run gives the same picture however fast it was drawn.
+  bool steadyFrames = false;
   // [session] A warm frame of a map opened behind with the game's first beat (WorldPicture::PrepareSession): drawn as the game's
   // frames are, its icons, life bars and hidden outlines too, though a photo's frame (so that what they make the first time is
   // made unseen). Off at first.
