@@ -36,6 +36,8 @@ addressed to the interface track (a fifth lighting setting, Ground Detail; open)
 
 ## 64. To the VISUALS track: three thin cells of the plants' atlas lose leaf area in their smaller levels (2026-11-09; not blocking, low)
 
+**TAKEN (visuals, 2026-11-09): done at the atlas's next bake.**
+
 **Found while** checking the review's finding "the plants' cards thin out with distance" (Chris's small picture
 corrections). The finding does not hold: the atlas's smaller levels keep the share of texels above the cards' cut of
 one half within a few percent of the full level (0.99, 1.00, 1.00, 0.99, 1.01, 1.07 for levels 1 to 6 of
