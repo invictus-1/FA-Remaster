@@ -104,7 +104,10 @@ int l_DiskGetFileInfo(lua_State* L) {
     const std::string what = name + 14;
     const bool watch = mode && std::strcmp(mode, "watch") == 0;
     const bool on = mode && (watch || std::strcmp(mode, "on") == 0);
-    if ((what == "on" && on) || (what == "watch" && watch)) {
+    // "range": the weapons test range (the overlay's wtr_range.lua, started by the score.lua hook), on its own:
+    // the probe itself stays off, so the game is the replay plus the range and nothing else.
+    const bool range = mode && std::strcmp(mode, "range") == 0;
+    if ((what == "on" && on) || (what == "watch" && watch) || (what == "range" && range)) {
       lua_newtable(L);
       lua_pushstring(L, "IsFolder");
       lua_pushboolean(L, 0);

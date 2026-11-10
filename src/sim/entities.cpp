@@ -1087,6 +1087,8 @@ int l_AttrSet(lua_State* L) {
   const char* key = lua_tostring(L, lua_upvalueindex(1));
   SetObjectValue(L, o, key, 2);
   // (the shield's ratio is also kept where the plain unit view can read it without asking the script state)
+  if (key && !strcmp(key, "OverchargePaused"))  // (for UnitStateView::overchargePaused, ui request 60)
+    if (Unit* u = ToObject<Unit>(L, 1)) u->overchargePaused = lua_toboolean(L, 2) != 0;
   if (key && !strcmp(key, "ShieldRatio"))  // (the keys are the setters' names without "Set")
     if (Unit* u = ToObject<Unit>(L, 1)) {
       u->shieldRatio = static_cast<float>(lua_tonumber(L, 2));

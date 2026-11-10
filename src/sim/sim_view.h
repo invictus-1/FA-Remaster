@@ -323,6 +323,9 @@ struct UnitStateView {
   int fireState = 0;              // 0 return fire, 1 hold fire, 2 hold ground
   uint32_t scriptBits = 0;        // bit n set = toggle n is on
   bool paused = false, repeatQueue = false, autoMode = false, autoSurfaceMode = false;
+  // overchargePaused: what the unit's script last gave Unit:SetOverchargePaused (IsOverchargePaused for the interface);
+  // stunned: the unit's stun count is running (Unit:SetStunned's beats, IsStunned). (ui request 60)
+  bool overchargePaused = false, stunned = false;
   // what it can do right now: RULEUCC_ and RULEUTC_ bits (the blueprint's, as scripts changed them since)
   uint32_t commandCaps = 0, toggleCaps = 0;
   float shieldRatio = 0;          // as the shield's script last set it (0: none or down)

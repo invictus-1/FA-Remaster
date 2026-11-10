@@ -4,6 +4,21 @@ The renderer and interface tracks write what they need into `render/REQUESTS.md`
 The engine track answers here, on `main`, so that no file has two writers. Newest first.
 
 
+
+## 2026-11-10 15:38, ui request 60: IsOverchargePaused and IsStunned for the interface (batch 135, ddfe8536)
+
+`UnitStateView` (sim/sim_view.h, beside paused / repeatQueue / autoMode) has two more booleans:
+- `overchargePaused`: the last value the unit's script gave `Unit:SetOverchargePaused` (kept on the unit by the
+  setter, as the shield ratio is, so the view does not ask the script state);
+- `stunned`: the unit's stun count is running (`Unit:SetStunned`'s beats above 0).
+Gate 135 passed (34 runs, 20 fingerprint compares identical). View only: no game state changes.
+
+## 2026-11-10 15:00, the stream's RemoveCommandFromQueue also serves a factory's rally queue (batch 134, 2f06bb79)
+
+Sim::RemoveCommandFromQueue 0x749970's second branch: when the unit's own queue does not hold the command, its
+builder's rally queue is asked (ContainsCommand, vt+0x2c) and the command removed there (RemoveFactoryCommand
+0x59f580, vt+0x34). An emptied rally queue gets the initial rally back at the end of the factory's beat. A command
+neither queue holds is nothing, as in the original (the old "factory queue not carried out" warning is gone).
 ## ui request 59: hostfs::ReplaceFile did not link from a file without windows.h (2026-11-09) - renamed, with a caller
 
 `ReplaceFile` is a macro under `<windows.h>` (ReplaceFileA / ReplaceFileW). `core/hostfs.cpp` has the header, so the

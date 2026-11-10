@@ -358,6 +358,7 @@ class Unit : public Entity {
   int ogridRect[4] = {0, 0, 0, 0}; // a ground unit's reserved o-grid rect (ReserveOgridRect)
   int parentBone = -1, ownBone = -1;
   float shieldRatio = 0;
+  bool overchargePaused = false;  // Unit:SetOverchargePaused's last value, kept for the unit view (ui request 60)
   // AimMuzzlesAhead's walk of this beat (MOHO64_PAR_AIM): its beat and what it walked from
   uint32_t aimAheadTick = 0xffffffffu, aimAheadPoseVersion = 0;
   Vec3 aimAheadP0;
