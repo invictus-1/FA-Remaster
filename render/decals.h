@@ -157,6 +157,9 @@ class Decals {
   bool remasteredTarmacs = false;
   Tarmacs tarmacs;
   bool addingOriginal = false;
+  // [steep] the effects stand's --fx-decal: laid as the game lays one, not as one of the map's own, though it is there
+  // before the first frame (the map's own keep their whole footprint on steep ground, the game's fade out there)
+  bool addingGames = false;
   // [tarmac] The pads drawn in their materials now (with remasteredTarmacs), each with its fade by its time alone: for
   // the ground cover cleared under them (Tarmacs::ClearCover).
   void TarmacPads(double now, std::vector<Tarmacs::Pad>* out);
@@ -211,6 +214,14 @@ class Decals {
     waterRamp_ = waterRamp;
     mapWidth_ = mapWidth;
     mapHeight_ = mapHeight;
+  }
+  // [steep] The ground's heights (Terrain::HeightTexture, one sample a map corner: the map's size + 1 each way) and what
+  // one of its values is in world units (Terrain::HeightUnit): the slope under a picture the game laid is read from it.
+  void SetGround(gfx::Texture heights, float unit, float mapWidth, float mapHeight) {
+    groundHeights_ = heights;
+    groundUnit_ = unit;
+    heightsWidth_ = mapWidth + 1;
+    heightsHeight_ = mapHeight + 1;
   }
   // Draws the decals into the current pass, which must be the scene's colour alone (no depth
   // target); `sceneDepth` is the scene's depth with the ground in it. `overWater`: the second
@@ -283,6 +294,8 @@ class Decals {
   gfx::Pipeline hot_;  // (hot metal: a fresh mark's glow, added, its alpha left alone)
   gfx::Buffer cube_;
   gfx::Texture waterMap_, waterRamp_;
+  gfx::Texture groundHeights_;  // [steep]
+  float heightsWidth_ = 1, heightsHeight_ = 1, groundUnit_ = 0;
   float mapWidth_ = 0, mapHeight_ = 0;
   std::vector<Decal> decals_;
   std::vector<Deposit> deposits_;

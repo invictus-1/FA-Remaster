@@ -264,6 +264,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
       });
     if (map.water.present) decals.SetWater(terrain.WaterMap(), terrain.WaterRamp(), static_cast<float>(map.width), static_cast<float>(map.height));
     decals.waterLevel = map.water.present ? map.water.elevation : -1e9f;
+    decals.SetGround(terrain.HeightTexture(), terrain.HeightUnit(), static_cast<float>(map.width), static_cast<float>(map.height));  // [steep]
     decals.groundHeight = [this](float x, float z) { return map.Height(Clamp(x, 0, static_cast<float>(map.width)), Clamp(z, 0, static_cast<float>(map.height))); };
     // [iconzoom] (the symbols come in by the zoom of the ground or the water under a unit, as the original's)
     icons.groundHeight = [this](float x, float z) {
