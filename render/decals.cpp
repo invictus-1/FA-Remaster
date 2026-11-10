@@ -22,7 +22,7 @@ constexpr size_t kMaxInstances = 1024;  // per draw call (the size of the shader
 // the decal's own frame, and gives up where that is outside the footprint.
 const char kShaderHead[] = R"hlsl(
 struct Instance {
-  float4 centre;   // xyz; w: half the box's height
+  float4 centre;   // xyz; w: half the box's height (below 0: one the game laid, which fades out on steep ground, [steep])
   float4 shape;    // x, y: half the footprint along its own x and z; z, w: cos and sin of its heading
   float4 options;  // x: how much of it is there (fading), y: a light's age (0..1 of its time; a plain mark: how much of the lying snow covers it),
                    // z: 1 = a light (texture x ramp, added), 2 a normal decal, 3 a mark, 4 a "Water Albedo" decal
@@ -34,6 +34,7 @@ cbuffer DecalCamera : register(b1) {
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: 1 = the map has water; w: the water's level
+  float4 groundInfo;   // [steep] x, y: 1 / the ground's heights' size (t7); z: their unit (0: none given)
 #ifdef DECAL_SNOW_GROUND
   float4 snowWind;     // [decalsnow] xy the way the wind blows (unit length); zw 1 / the map's size
   float4 snowTune;     // [decalsnow] Terrain::snowTune
@@ -47,6 +48,7 @@ Texture2D decalTexture : register(t0);
 Texture2D rampTexture : register(t2);
 Texture2D waterMap : register(t3);
 Texture2D waterRamp : register(t4);
+Texture2D<float> groundHeights : register(t7);  // [steep] the ground's heights (Terrain::HeightTexture)
 Texture2D reliefTexture : register(t5);  // a remastered picture's relief: x in alpha, y in green (BC5 read as the game's DXT5), y up the picture
 #ifdef DECAL_SNOW_GROUND
 Texture2D snowShelter : register(t6);  // [decalsnow] the snow ground's shelter (Terrain::SnowShelter): g sky, b crowns, a how it lies
@@ -69,7 +71,7 @@ struct VOut {
 VOut VS(float3 corner : POSITION, uint instance : SV_InstanceID) {
   Instance n = instances[instance];
   float2 flat = corner.xz * n.shape.xy;
-  float3 world = n.centre.xyz + float3(flat.x * n.shape.z + flat.y * n.shape.w, corner.y * n.centre.w, -flat.x * n.shape.w + flat.y * n.shape.z);
+  float3 world = n.centre.xyz + float3(flat.x * n.shape.z + flat.y * n.shape.w, corner.y * abs(n.centre.w), -flat.x * n.shape.w + flat.y * n.shape.z);
   VOut o;
   o.position = mul(viewProj, float4(world, 1));
   o.centre = n.centre;
@@ -173,6 +175,22 @@ float4 PS(VOut i) : SV_Target {
   float depth = DepthAt(int2(i.position.xy));
   if (depth <= 0) discard;  // nothing drawn here
   float3 world = WorldAt(i.position.xy, depth);
+  // [steep] a picture the game laid (a scorch, a scar, a print: centre.w below 0) is thrown straight down, so on a steep face it
+  // was drawn out down the face and cut off with a hard line where its box ends. In the modern look it now fades out as
+  // the ground steepens (from 45 degrees, gone at 63; nothing walks there) and toward its box's top and bottom. The
+  // map's own pictures stay as they are: its cliffs' faces are pictures thrown down on purpose. (The slope is read from
+  // the ground's heights, which run smoothly; the drawn ground's own, from the depth, is one value a triangle, and the
+  // fade then ended on a triangle's edge, a straight line.)
+  float steepFade = 1;
+  [branch] if (i.centre.w < 0 && look > 0.5 && groundInfo.z > 0) {
+    float2 at = (world.xz + 0.5) * groundInfo.xy;
+    float2 rise = float2(groundHeights.SampleLevel(samplerLinearClamp, at + float2(groundInfo.x, 0), 0)
+                         - groundHeights.SampleLevel(samplerLinearClamp, at - float2(groundInfo.x, 0), 0),
+                         groundHeights.SampleLevel(samplerLinearClamp, at + float2(0, groundInfo.y), 0)
+                         - groundHeights.SampleLevel(samplerLinearClamp, at - float2(0, groundInfo.y), 0)) * (groundInfo.z * 0.5);
+    steepFade = smoothstep(0.45, 0.7, rsqrt(1 + dot(rise, rise))) * smoothstep(1, 0.7, abs(world.y - i.centre.y) / -i.centre.w);
+  }
+  i.centre.w = abs(i.centre.w);
   [branch] if (i.options.z > 5.5) {
     // hot metal (hot_metal.h): a fresh scorch's or crater's middle glowing on the ground, its light added, through the
     // air as the ground's own (options: x its age, y how long it glows, w its own number)
@@ -183,6 +201,7 @@ float4 PS(VOut i) : SV_Target {
     float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
     float3 glow = HotGroundGlow(local, c.a, i.options.x, i.options.y, i.options.w, i.options.z > 6.5) *  // ([softscorch] light 7)
                   (kHotMetalStrength * pow(falling.w > 0 ? falling.w : 1, 0.6));
+    glow *= steepFade;  // [steep]
     if (max(glow.r, glow.g) <= 0) discard;  // (nothing glows there: nothing written)
     return float4(ThroughAirTo(glow, world) - ThroughAirTo(0, world), 1);
   }
@@ -207,6 +226,7 @@ float4 PS(VOut i) : SV_Target {
   float2 local = float2(d.x * i.shape.z - d.z * i.shape.w, d.x * i.shape.w + d.z * i.shape.z) / i.shape.xy;
   if (any(abs(local) > 1)) discard;
   float4 c = decalTexture.Sample(samplerAniso, local * 0.5 + 0.5);
+  i.options.x *= steepFade;  // [steep] (1 for the water's, a mark's and the map's own)
   if (i.options.z > 3.5) {  // a "Water Albedo" decal: unlit, in its own colours (the original's times the light multiplier)
     c.a *= i.options.x;
     if (c.a <= 0.003) discard;
@@ -542,7 +562,7 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   decals_.back().id = lastId_ = nextId_++;
   decals_.back().tarmac = TarmacOf(texture);  // [tarmac] (a pad's: its material looked up when remastered pads are drawn)
   decals_.back().original = addingOriginal;
-  decals_.back().mapOwn = !settled_;
+  decals_.back().mapOwn = !settled_ && !addingGames;
   return true;
 }
 
@@ -758,7 +778,8 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     n.centre[0] = d.centre.x;
     n.centre[1] = d.centre.y;
     n.centre[2] = d.centre.z;
-    n.halfHeight = halfHeight;
+    // ([steep] one the game laid, not the map: the shader fades it out on steep ground; told by the sign)
+    n.halfHeight = d.mapOwn || d.water || d.mark || d.ramp ? halfHeight : -halfHeight;
     n.halfX = d.halfX;
     n.halfZ = d.halfZ;
     n.cosHeading = std::cos(d.heading);
@@ -811,29 +832,31 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
   const bool water = waterMap_ && waterRamp_ && mapWidth_ > 0 && mapHeight_ > 0;
-  const float cameraConstants[16] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+  const float cameraConstants[20] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
                                      up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
                                      back.x, back.y, back.z, camera.zNear,
-                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f};
+                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f,
+                                     groundHeights_ ? 1 / heightsWidth_ : 0, groundHeights_ ? 1 / heightsHeight_ : 0,  // [steep]
+                                     groundHeights_ ? groundUnit_ : 0, 0};
   // [decalsnow] while the ground lays its snow from its shelter (snowGround): the pictures', and with modernRelief the relief's,
   // pipelines with the snow ground's, their constants after the camera's (the wind's way and the map's size, the tuning, the
   // materials), the shelter at t6. (Not on the water's drawing: its decals take no snow.)
   const bool snowNow = snowGround.shelter && !overWater && snowGround.mapWidth > 0 && snowGround.mapHeight > 0;
   const bool picturesSnow = snowNow && picturesSnow_, normalsSnow = snowNow && modernNormals && normalsModernSnow_;
-  float snowConstants[28] = {};
+  float snowConstants[32] = {};
   if (snowNow) {
-    std::copy(cameraConstants, cameraConstants + 16, snowConstants);
+    std::copy(cameraConstants, cameraConstants + 20, snowConstants);
     const float wind = std::sqrt(snowGround.wind[0] * snowGround.wind[0] + snowGround.wind[1] * snowGround.wind[1]);
-    snowConstants[16] = wind > 0 ? snowGround.wind[0] / wind : 0.0f;
-    snowConstants[17] = wind > 0 ? snowGround.wind[1] / wind : 0.0f;
-    snowConstants[18] = 1 / snowGround.mapWidth;
-    snowConstants[19] = 1 / snowGround.mapHeight;
-    std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 20);
-    snowConstants[24] = snowGround.materials ? 1.0f : 0.0f;
+    snowConstants[20] = wind > 0 ? snowGround.wind[0] / wind : 0.0f;
+    snowConstants[21] = wind > 0 ? snowGround.wind[1] / wind : 0.0f;
+    snowConstants[22] = 1 / snowGround.mapWidth;
+    snowConstants[23] = 1 / snowGround.mapHeight;
+    std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 24);
+    snowConstants[28] = snowGround.materials ? 1.0f : 0.0f;
   }
   // ([padsnow] the pads lay it as the marks do: Tarmacs::snowShelter)
   tarmacs.snowShelter = snowNow ? snowGround.shelter : gfx::Texture{};
-  if (snowNow) std::copy(snowConstants + 16, snowConstants + 28, tarmacs.snow);
+  if (snowNow) std::copy(snowConstants + 20, snowConstants + 32, tarmacs.snow);
   // [whitecaps] the pictures on the water, on the lifted waves (World::oceanLift): their pipeline that rides them (made the
   // first time it is wanted)
   bool riding = false;
@@ -893,6 +916,7 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
       device_->SetTexture(1, sceneDepth);
       device_->SetTexture(3, water ? waterMap_ : textures_->Black());
       device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
+      device_->SetTexture(7, groundHeights_ ? groundHeights_ : textures_->Black());  // [steep]
       device_->SetVertexBuffer(cube_);
     }
     device_->SetTexture(0, gfx::Texture{texture});

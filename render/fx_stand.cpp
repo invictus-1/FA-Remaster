@@ -532,6 +532,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
       const Vec3 along{-right.z, 0, right.x};
       const float step = setup_.decalSize * 1.25f, first = -0.5f * step * static_cast<float>(setup_.decals.size() - 1);
       world.decals.remastered = sides_.size() == 2 ? side.remastered : lookRemastered;
+      world.decals.addingGames = true;  // ([steep] as the game's own, not the map's)
       for (size_t i = 0; i < setup_.decals.size(); ++i) {
         const Vec3 at = place(setup_.at + along * (first + step * static_cast<float>(i)), side);
         const std::string& name = setup_.decals[i];
@@ -540,6 +541,7 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
                       : world.decals.Add(name, at, setup_.decalSize, setup_.decalSize, 0, 0, now, 0)))
           fprintf(stderr, "render: --fx-decal: no decal %s\n", setup_.decals[i].c_str());
       }
+      world.decals.addingGames = false;
       world.decals.remastered = lookRemastered;
     }
     if (again) {
