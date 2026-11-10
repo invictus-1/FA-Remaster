@@ -4186,6 +4186,24 @@ BuildTask* StartFireAtTask(Sim& sim, Unit* u, const UnitCommand& c) {
   return r;
 }
 
+// The launcher's walk (TaskTick 0x60b380, state 0; order audit D1.1 - D1.3, READ, seen in ours with the scene
+// d1_walk): the task makes no CUnitMoveTask. Too far (0x60b5dc..0x60b675) and too close (0x60b47a..0x60b5ab) alike:
+// the navigator's GetStatus (vt+0x24) not 0 -> wait a beat; else the point goes through Unit::PrepareMove 0x62b780
+// (spacing 0, a zero exclusion rect, the army's UseWholeMap) and the navigator gets the unit's footprint cell there
+// (0x579300, SNavGoal 0x5a2cb0, SetGoal vt+0x08). So the unit is never in the state Moving for this walk. Before,
+// ours walked with a task move (Moving set), to the raw point, and asked motion.hasGoal.
+int FireAtNavStatus(Sim& sim, const Unit* u) {  // (as UnitIsBusy / the scripts' navigator:GetStatus read it)
+  if (u->motion.navDriven) return LandNavStatus(u);
+  if (u->motion.hasGoal) return sim.tick() < u->motion.driveTick ? 1 : 2;
+  return 0;
+}
+void FireAtWalk(Sim& sim, Unit* u, Vec3 p) {
+  static const float none[4] = {0, 0, 0, 0};
+  if (u->motion.bp && u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+  else GroundPrepareMove(sim, u, &p, none, 0);
+  AttackSetPosGoal(sim, u, p);
+}
+
 // TaskTick 0x60b380. States: 0 get in range and see to a missile, 1 wait for it, 2 fire, 3 wait for the launch to
 // begin (the unit turns Busy), 4 wait for it to end.
 int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
@@ -4206,28 +4224,25 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
   for (int guard = 0; guard < 4; ++guard) {
     switch (t.state) {
       case 0:
-        if (minR > d) {  // too close: back off to 1.1 x the minimum range (the spot's PrepareMove: not built)
+        if (minR > d) {  // too close: back off to 1.1 x the minimum range
           if (!mobile) return kTaskFailed;
-          if (!u->motion.hasGoal) {
+          if (FireAtNavStatus(sim, u) == 0) {
             Vec3 away{u->position.x - tp.x, u->position.y - tp.y, u->position.z - tp.z};
             const float len = std::sqrt(away.x * away.x + away.y * away.y + away.z * away.z);
             const float k = len > 0 ? minR * 1.1f / len : 0.0f;
-            TaskMoveToward(sim, u, Vec3{tp.x + away.x * k, tp.y + away.y * k, tp.z + away.z * k});
+            FireAtWalk(sim, u, Vec3{tp.x + away.x * k, tp.y + away.y * k, tp.z + away.z * k});
           }
           return kTaskRunning;
         }
         if (d > maxR) {  // too far: go to the target
           if (!mobile) return kTaskFailed;
-          if (!u->motion.hasGoal) TaskMoveToward(sim, u, tp);
+          if (FireAtNavStatus(sim, u) == 0) FireAtWalk(sim, u, tp);
           return kTaskRunning;
         }
         // 0x60b684..0x60b696: IsMobile and a navigator -> the navigator's AbortMove (vt+0x10), with no test of a
         // goal: an idle navigator's AbortMove still brakes the motion (see AbortNavigation; its IgnoreFormation is
         // not called here). READ, not run: order audit D1.4; before, ours stopped only when a goal was set.
-        if (mobile) {
-          MotionStop(u);
-          u->unitStates.Erase(US("Moving"));  // (ours: the walk above is a task move, which sets it)
-        }
+        if (mobile) MotionStop(u);
         if (CheckSilo(w)) {
           t.state = 2;
           continue;

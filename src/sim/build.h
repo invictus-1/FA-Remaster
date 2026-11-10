@@ -118,6 +118,8 @@ void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal);
 // CUnitReclaimTask's command listener 0x620160: the target of the command it listens to changed.
 void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd);
 void RepairTaskCommandEvent(Sim& sim, Unit* h, BuildTask& ch, const UnitCommand& c);
+// CUnitCaptureTask's command listener 0x604fc0 (Receive): the command it listens to changed.
+void CaptureTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& c);
 // CUnitMobileBuildTask's command listener 0x5f80c0: the command it listens to changed.
 void MobileBuildCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& cmd);
 // CUnitMoveTask::OnEvent 0x618c40 for a task's walk under way (it links the queue's head command): the navigator's goal

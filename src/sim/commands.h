@@ -195,6 +195,8 @@ void RetargetMoveTasks(Sim& sim, UnitCommand& c);
 // CUnitPatrolTask's listener 0x61c3e0 (and its reclaim child's 0x620160) for a retargeted patrol command
 void RetargetPatrolTasks(Sim& sim, UnitCommand& c);
 void RetargetMobileBuildTasks(Sim& sim, UnitCommand& c);
+// CUnitCaptureTask's listener 0x604fc0 for a retargeted Capture command (sim/build.cpp CaptureTaskCommandEvent)
+void RetargetCaptureTasks(Sim& sim, UnitCommand& c);
 // CUnitAttackTargetTask's command listener 0x5f4000 for a retargeted command: the running attack tasks of the units
 // it heads, in unit id order (sim/combat.cpp AttackTaskCommandEvent)
 void RetargetAttackTasks(Sim& sim, UnitCommand& c);

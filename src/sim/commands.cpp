@@ -1025,6 +1025,27 @@ void RetargetMobileBuildTasks(Sim& sim, UnitCommand& c) {
   }
 }
 
+// A Capture order whose target was set again while its task runs (order audit D9.4; seen in ours with the scene
+// d9_4: before, nothing listened and the engineer went on capturing the old target). The task's listener
+// (CaptureTaskCommandEvent) first, then the walk's own (the move task links the same command after it), and the
+// thread woken; the holders in unit id order (the listener order is inferred, as for the mobile build's).
+void RetargetCaptureTasks(Sim& sim, UnitCommand& c) {
+  if (c.type != CommandType::Capture) return;
+  std::vector<Unit*> holders(c.units.begin(), c.units.end());
+  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  for (Unit* u : holders) {
+    if (!IsAlive(u) || u->commands.empty() || u->commands.front().get() != &c) continue;
+    if (u->headState != kRunning || !u->task || u->task->type != CommandType::Capture) continue;
+    const bool asleep = TaskThreadAsleepOnMove(u, u->task);  // (asked before the event changes the task)
+    CaptureTaskCommandEvent(sim, u, *u->task, c);
+    u->task->waitUntil = 0;  // (woken: counter 0)
+    if (asleep && IsAlive(u)) {
+      TaskWalkCommandEvent(sim, c, u);
+      sim.ResumeCommandThread(u);
+    }
+  }
+}
+
 namespace {
 
 void StartHead(Sim& sim, Unit* u) {
