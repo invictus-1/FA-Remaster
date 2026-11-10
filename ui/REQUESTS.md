@@ -1333,7 +1333,7 @@ What I build meanwhile on ui's side: the missing case of RequestFocusArmyChecked
 source in no army's `sources` of the sync copy) and SessionIsObservingAllowed from the option; the automatic part
 only after your answer.
 
-### 59. `hostfs::ReplaceFile` does not link from a file without `<windows.h>` (2026-11-09 17:55, not blocking)
+### 59. `hostfs::ReplaceFile` does not link from a file without `<windows.h>` (2026-11-09 17:46, not blocking)
 
 Who: ui. Found when the preferences save was moved onto it (request 57's item 2).
 
