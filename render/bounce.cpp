@@ -264,7 +264,7 @@ void BounceLight::Update(const View& view, RayScene& rays, gfx::Texture groundNo
   k.map[1] = rays.MapHeight();
   k.map[2] = static_cast<float>(frame_ & 0xffffff);
   k.map[3] = reach;
-  k.blend[0] = keep;
+  k.blend[0] = std::pow(std::clamp(keep, 0.0f, 1.0f), frameShare);  // [cloudkeep]
   k.blend[1] = static_cast<float>(level_);
   device_->SetConstants(0, &view.constants, sizeof view.constants);
   device_->SetConstants(1, &k, sizeof k);

@@ -60,6 +60,10 @@ class Clouds {
   float density = 0.09f;     // how much light a world unit of full cloud takes
   int steps = 64;            // steps through the layer
   float keep = 0.85f;        // how much of the frame before a pixel keeps
+  // [cloudkeep] (the review of 2026-11-09, light 13) this frame's length in 60ths of a second, at most 1 (World sets
+  // it): `keep` is what a 60th of a second keeps, so that at 240 frames a second the clouds settle in the same time
+  // as at 60 and do not flicker four times as fast. Not under 60 frames a second: there a frame keeps what it did.
+  float frameShare = 1;
   int shrink = 2;            // the march at the picture's size (1) or at half its width and height (2)
   float shapeSize = 600;     // the shapes' noise repeats every this many world units
   float detailSize = 110;    // the detail's
