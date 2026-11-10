@@ -51,6 +51,7 @@ class BounceLight {
   bool followZoom = true;
   float layers[kLayers] = {1.5f, 5, 12, 26};  // the probes' heights over the ground
   float keep = 0.97f;                      // what a probe keeps of what it held each frame
+  float frameShare = 1;                    // [cloudkeep] this frame's length in 60ths of a second, at most 1 (Clouds::frameShare)
   float reach = 300;                       // how far a ray looks (world units)
 
   // [views] What it keeps for one view (its pictures at that view's size, what it keeps of the frames before) swapped

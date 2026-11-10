@@ -74,6 +74,7 @@ class Air {
   float lampGlowInAir = 0.25f;  // of a beam's glow to all sides near its lamp (lights.h), what the air shows (all of it made halos)
   float sunForward = 0.6f, lampForward = 0.35f;      // how much of it goes on forward (0: alike to all sides)
   float keep = 0.9f;                   // how much of last frame's a cell keeps
+  float frameShare = 1;                // [cloudkeep] this frame's length in 60ths of a second, at most 1 (Clouds::frameShare)
   // [airjitter] at most this much while FSR 3 brings the frame up (`unjittered` set): the upscaler gathers the frames
   // itself, and on the air's own 0.9 it held the air's brighter frames of a camera move for some seconds after (the
   // picture dimmed by about 1% over 3 to 4 s after each zoom at night, Chris's re-test 2026-11-06); at 0.5 that is

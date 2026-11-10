@@ -71,6 +71,7 @@ cbuffer Fall : register(b1) {
   float4 shape;     // x: half its width in pixels; y: world units per pixel at distance 1; z: how see-through; w: how much it sways
   float4 tint;      // its colour, linear
   float4 under;     // [rainunder] x: how much the fall keeps under the clouds (0: everywhere, as before; 1: none in their gaps)
+                    // [rainladder] y: how many of this box's drops show; z: over how many of them the last ones fade out
 #if LIT
   float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`); y 1: the
                     // layer near the ground, seen only where the small lights light it; z: that layer's height
@@ -128,6 +129,8 @@ VOut VS(uint id : SV_VertexID) {
   // [rainunder] (Chris, through visuals' section 99/100: rain that follows the storm's cells) where the clouds' shadow
   // says the sky above is open, less of it: the storm's rain falls from its cover, its pockets of sun dry
   [branch] if (under.x > 0) o.fade *= lerp(1, saturate((1 - CloudShadow(p)) * 1.8), under.x);
+  // [rainladder] one of two boxes on the ladder of sizes: its last drops fade as its share of the fall goes to the other
+  if (under.z > 0) o.fade *= saturate((under.y - n) / under.z);
 #if LIT
   float3 small;
   float3 sun = DropLight(p, toEye, small);
@@ -583,12 +586,25 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
   device_->SetPipeline(reactive ? reactivePipeline_ : lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
   // `low`: the lit drops' layer near the ground (seen only where the small lights light it)
-  auto draw = [&](float amount, bool flakes, bool low) {
+  // [rainladder] (the review of 2026-11-09, light 5: "rain shifts while zooming") a drop's place is its number times the
+  // box's edge, and the edge followed the zoom, so every drop jumped at every frame of a zoom. The edge now comes from a
+  // ladder of fixed sizes (each the last times the root of two), on which a drop keeps its place in the world; the two
+  // sizes round the wanted one are both drawn, each with its share of the drops by where the wanted size lies between
+  // them and as dense as the one box was, so that during a zoom some drops fade out and others in, and none moves.
+  auto draw = [&](float amount, bool flakes, bool low, int rung) {
+    const float wanted = low ? std::clamp(edge * 0.5f, 30.0f, 200.0f) : edge;
+    const float place = std::log2(wanted) * 2;
+    const float size = std::exp2((std::floor(place) + static_cast<float>(rung)) * 0.5f);
+    const float share = rung ? place - std::floor(place) : 1 - (place - std::floor(place));
+    const float ratio = size / wanted;
+    // (as dense as the one box was: by the box's volume; the layer near the ground is flat)
+    const float count = (low ? 6000.0f : flakes ? 12000.0f : 14000.0f) * std::clamp(amount, 0.0f, 1.0f) * ratio * ratio * (low ? 1.0f : ratio);
+    const float kBand = 0.15f;
     FallConstants f{};
     f.box[0] = camera.target.x;
     f.box[1] = low ? camera.target.y + kLowLayer * 0.5f : camera.target.y + edge * 0.25f;
     f.box[2] = camera.target.z;
-    f.box[3] = low ? std::clamp(edge * 0.5f, 30.0f, 200.0f) : edge;
+    f.box[3] = size;
     // [rainpace] (Chris's re-test, 2026-11-06: "the rain speeds up when zooming in and out"; it was as fast as the box is
     // large, so that from far it did not stand still) one speed at every zoom
     const float speed = flakes ? 2.5f : 30.0f;
@@ -606,6 +622,8 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
     f.under[0] = std::clamp(underClouds, 0.0f, 1.0f);  // [rainunder]
+    f.under[1] = count * share * (1 + kBand);  // [rainladder]
+    f.under[2] = std::max(count * kBand, 1.0f);
     // how much of the light on it goes on to the eye (snow is white); near the ground three times that, as a glint: a
     // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris, 2026-10-17:
     // the sparkle is fine as it is)
@@ -613,13 +631,15 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.lit[1] = low ? 1.0f : 0.0f;
     f.lit[2] = low ? kLowLayer : 0.0f;
     device_->SetConstants(1, &f, sizeof f);
-    const uint32_t drops = static_cast<uint32_t>((low ? 6000.0f : flakes ? 12000.0f : 14000.0f) * std::clamp(amount, 0.0f, 1.0f));
+    const uint32_t drops = static_cast<uint32_t>(std::ceil(std::min(count, f.under[1])));
     if (drops) device_->Draw(drops * 6);
   };
-  if (rain > 0) draw(rain, false, false);
-  if (snow > 0) draw(snow, true, false);
-  if (lit && rain > 0) draw(rain, false, true);
-  if (lit && snow > 0) draw(snow, true, true);
+  for (int rung = 0; rung < 2; ++rung) {
+    if (rain > 0) draw(rain, false, false, rung);
+    if (snow > 0) draw(snow, true, false, rung);
+    if (lit && rain > 0) draw(rain, false, true, rung);
+    if (lit && snow > 0) draw(snow, true, true, rung);
+  }
 }
 
 }  // namespace render

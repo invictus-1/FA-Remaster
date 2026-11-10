@@ -1514,6 +1514,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     frameSeconds_ = lastFrameAt_ > 0 ? static_cast<float>(std::clamp(now - lastFrameAt_, 0.001, 0.25)) : 1 / 60.0f;
     lastFrameAt_ = now;
   }
+  // [cloudkeep] what is kept of the frames before, by the time a frame took where it is shorter than a 60th of a second
+  clouds.frameShare = air.frameShare = bounce.frameShare =
+      steadyFrames || photo || photoTiled ? 1.0f : std::clamp(frameSeconds_ * 60, 0.25f, 1.0f);
   // motion: the view without its jitter kept, this frame's and the frame before's; with the temporal
   // upscaler, the view shifted by this frame's jitter
   const bool moving = (motionOn || motionView > 0 || temporalNow_ || framegenNow_) && gSceneSamples == 1 && !sidePicture && !photo;

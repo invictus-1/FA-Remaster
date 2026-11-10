@@ -2473,6 +2473,7 @@ int main(int argc, char** argv) {
   bool lowLatency = opt.lowLatency && device->SetLatencyLimiter(true);
   if (opt.sunSize > 0) world.sunSize = opt.sunSize;
   world.volumetricClouds = opt.clouds3d;
+  world.steadyFrames = automatic;  // [cloudkeep]
   if (opt.cloudsFull) world.clouds.shrink = 1;
   if (opt.cloudsMix >= 0) world.clouds.mix = opt.cloudsMix;  // [cloudmix]
   world.stormCells = opt.stormCells;  // [stormcells]

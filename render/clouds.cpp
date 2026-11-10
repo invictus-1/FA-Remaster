@@ -361,7 +361,24 @@ float Cloud(float3 p, float h, bool frayed) {
 #endif
   int2 full = min(int2((id.xy + 0.5) * float2(fullWidth, fullHeight) / cloudSize.xy), int2(fullWidth, fullHeight) - 2);
   float nearest = min(min(DepthAt(full), DepthAt(full + int2(1, 0))), min(DepthAt(full + int2(0, 1)), DepthAt(full + int2(1, 1))));
-  [branch] if (nearest <= 0 && d.y > 0.012) {
+  // [cloudkeep] (the review of 2026-11-09, light 4) what this direction showed the frame before: where something covers
+  // the sky now, that is kept as it was (it was blended toward "no cloud" there, 15 % a frame: behind every aircraft,
+  // ridge and tree that moved on, the clouds had to grow back from thin, pale sky), and a covered place that holds
+  // nothing yet is marched once all the same, so that what is kept there is always a cloud that was seen
+  float4 last = 0;
+  bool held = false;
+  [branch] if (cloudSize.w > 0) {
+    float4 clip = mul(lastViewProj, float4(d, 0));
+    if (clip.w > 1e-4) {
+      float2 lastUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+      if (all(lastUv >= 0) && all(lastUv <= 1)) {
+        last = lastClouds.SampleLevel(samplerLinearClamp, lastUv, 0);
+        held = true;
+      }
+    }
+  }
+  const bool open = nearest <= 0;
+  [branch] if ((open || !held) && d.y > 0.012) {
     float bottom = max(cloudRight.w, cameraPosition.y + 40), thick = cloudUp.w;
     float t0 = (bottom - cameraPosition.y) / d.y, t1 = (bottom + thick - cameraPosition.y) / d.y;
     t1 = min(t1, t0 + 5000);  // (low toward the horizon: a long way through it)
@@ -374,7 +391,10 @@ float Cloud(float3 p, float h, bool frayed) {
     float lightStep = thick * 0.1;
     float3 light = 0;
     float through = 1;
-    float t = t0 + dt * cloudAhead.w;
+    // [cloudkeep] (light 13) each pixel starts its steps at its own place within the first (interleaved gradient noise
+    // on top of the frame's step): one start for the whole picture made bands of the too few steps toward the horizon,
+    // all alike, which only the frames before hid; what a turn newly uncovered showed one frame's bands
+    float t = t0 + dt * frac(cloudAhead.w + frac(52.9829189 * frac(dot(float2(id.xy), float2(0.06711056, 0.00583715)))));
     const bool flashing = boltLight.r + boltLight.g + boltLight.b > 0;
     for (int k = 0; k < steps && through > 0.01; ++k, t += dt) {
       float3 p = cameraPosition + d * t;
@@ -405,14 +425,8 @@ float Cloud(float3 p, float h, bool frayed) {
     result = float4(light * fade, lerp(1, through, fade));
   }
   // built up over frames: what this direction showed the frame before (the clouds are far: the camera's
-  // turn moves them, its going hardly)
-  [branch] if (cloudSize.w > 0) {
-    float4 clip = mul(lastViewProj, float4(d, 0));
-    if (clip.w > 1e-4) {
-      float2 lastUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
-      if (all(lastUv >= 0) && all(lastUv <= 1)) result = lerp(result, lastClouds.SampleLevel(samplerLinearClamp, lastUv, 0), cloudSize.w);
-    }
-  }
+  // turn moves them, its going hardly); under what covers the sky above the horizon, that alone
+  if (held) result = open || d.y <= 0.012 ? lerp(result, last, cloudSize.w) : last;
   cloudsOut[id.xy] = result;
 }
 )hlsl";
@@ -618,7 +632,7 @@ void Clouds::Build(const View& view, const Camera& camera, const SkyLight& sky, 
   k.ahead[3] = std::fmod(static_cast<float>(frame_ % 610) * 0.6180339887f, 1.0f);  // (as the air's: the float keeps its fraction)
   k.size[0] = static_cast<float>(width_);
   k.size[1] = static_cast<float>(height_);
-  k.size[3] = haveLast_ ? std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 0.97f) : 0.0f;
+  k.size[3] = haveLast_ ? std::clamp(std::pow(std::clamp(zoomedNow_ ? zoom.history : keep, 0.0f, 1.0f), frameShare), 0.0f, 0.97f) : 0.0f;  // [cloudkeep]
   k.lastViewProj = lastViewProj_;
   {  // ([stormcells] section 99: in a storm two thirds of the sun on the clouds: the thin edges at the gaps glared white)
     const float sunOn = 1 - 0.35f * std::clamp(storm, 0.0f, 1.0f);
