@@ -682,10 +682,12 @@ void FxStand::Update(World& world, double now, Vec3 right, const std::function<f
         if (personalShield_) {
           const double age = now - side.lastHit;
           const bool hit = age >= 0 && age < 1;
-          if (!own.any || (own.hitOnly && !own.capsule && hit)) built = 3;
+          // ([shieldhit] World::personalShieldsAtRest off, the modern look: only while hit, fading with the hit)
+          const bool onlyHits = world.ShieldOnlyHits(shieldUnit_);
+          if ((!own.any && (!onlyHits || hit)) || (own.hitOnly && !own.capsule && hit)) built = 3;
           if (own.any && own.capsule) built = 1;
           if (built > 2 && hit) {
-            built = 3.001f + 0.9f * static_cast<float>(age);
+            built = (onlyHits ? 5.001f : 3.001f) + 0.9f * static_cast<float>(age);
             hitAt = &side.hitPoint;
           }
         }

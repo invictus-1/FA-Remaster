@@ -49,6 +49,7 @@
 #include "debug_draw.h"
 #include "decals.h"
 #include "effects.h"
+#include "effect_files.h"  // [shieldhit] (UnitFaction)
 #include "energy_shields.h"
 #include "frame.h"
 #include "frame_generation.h"
@@ -712,6 +713,13 @@ class World {
   // by their own shapes instead of laid as pictures. [dents] Shots that strike the ground leave shell holes in it
   // (DentGround), deepest in snow and mud. Modern look; off by default.
   bool deepTracks = false;
+  // [churn] Shell holes one over another (deep_tracks.h, DeepTracks::churnedHoles; Chris's test of 2026-11-09): where many
+  // shots strike one spot each new hole is dug into what is there - whole within its lip, its earth thrown over the
+  // older holes beside it, none deeper than a hole can be - so the spot reads as one churned field of bowls; and the
+  // flat marks the game lays (the shots' scorches, kept as battle scars) give way where the ground shows a hole
+  // (decals.h, Decals::holes), so that none lies over a hole like a sheet of mud. False: every hole added to what is
+  // there and the marks over them, as before (the middle of such a spot one flat dark sheet; the viewer's --holes-added).
+  bool churnedHoles = true;
   // [parallax] The ground's relief close by (terrain.h, Terrain::parallax; Chris, 2026-10-19): on a remastered map, the
   // ground's stones, pebbles and clods stand up out of it and its hollows sink as the eye passes, from the height its
   // materials' scans hold; with a low sun its high places shade the hollows. Only near the eye at close zoom (nothing
@@ -775,6 +783,23 @@ class World {
   // weakens, and its light falls on what is inside it. Drawn by `energy` (at the end of the class) in place of the
   // plain bubble (not for the effects stand's original side). Modern look; off by default.
   bool energyShields = false;
+  // [shieldhit] Personal shields at rest (Chris, 2026-11-09, of the Dragonite's after its lattice was made finer: "just
+  // needs to be off unless hit"). A unit whose script has put its personal shield's mesh on it (a commander's upgrade, an
+  // Obsidian, a Harbinger, a mod's Dragonite) is drawn in the modern look with its faction's shield light along its
+  // outline and its lattice over its hull for as long as the shield is up, as the original draws its shield mesh
+  // always. False (as of 2026-11-10): nothing of it at rest; a hit lights the whole shield for its second - outline and
+  // lattice at twice their rest strength, the cells round the hit bright, a ring running out from it - and it goes out
+  // again. All personal shields drawn along the unit's outline, the game's and the mods'; a mod's own capsule shell
+  // (Display.PersonalShield) showed only its hits already. True: as before. The original look keeps its glow always.
+  // (The renderer chat, the same day: Chris spoke of the Dragonite, and a commander's shield upgrade is something
+  // players read off the unit at rest, as in the original. So three values: 0 no personal shield shows at rest; 1 (the
+  // default) the game's own units keep their rest light - ids the game and FAF give, UnitFaction - and a mod's unit
+  // shows only its hits; 2 all at rest, as before. ShieldOnlyHits says which holds for a unit.)
+  int personalShieldsAtRest = 1;
+  bool ShieldOnlyHits(const std::string& unit) const {
+    if (look != Look::Modern || personalShieldsAtRest >= 2) return false;
+    return personalShieldsAtRest <= 0 || UnitFaction(unit).empty();
+  }
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
   // before), or in its faction's own, the colour its lamps' file gives (UEF blue whatever its army's colour)
   bool lampsTeamColour = true;
