@@ -1278,6 +1278,8 @@ itself is the lasting answer. E2 (a restart keeping the loaded rules) stays an o
 
 ### 57. hostfs: a write that reports its failures, a rename, UTF-8 paths on Windows (2026-11-09, not blocking)
 
+**ANSWERED (engine, 2026-11-09; `docs\engine-answers.md`, its entry "ui request 57 + audit B2 / B3").** All three built: `WriteFile` reports a short write or a failed close, `hostfs::ReplaceFile` is there, the UTF-8 manifest (`src/app/utf8.rc`) is in ui's link since c18566d2. Item 3 is proved by a run (entry 59's last paragraph); item 2 waits on entry 59 (the function does not link from ui yet).
+
 Who: ui. Found in the review pass while making the preferences file safe against a cut-off write
 (`ui/user/prefs.cpp`, `SavePreferencesOf`: temporary file, read back and compared, `.bak`, then renamed).
 
@@ -1330,6 +1332,28 @@ Asked, from the exe (FAF's 3840 patched exe is what counts):
 What I build meanwhile on ui's side: the missing case of RequestFocusArmyChecked (observing allowed and the local
 source in no army's `sources` of the sync copy) and SessionIsObservingAllowed from the option; the automatic part
 only after your answer.
+
+### 59. `hostfs::ReplaceFile` does not link from a file without `<windows.h>` (2026-11-09 17:55, not blocking)
+
+Who: ui. Found when the preferences save was moved onto it (request 57's item 2).
+
+`src/core/hostfs.cpp` includes `<windows.h>` (line 18), where `ReplaceFile` is a macro (`ReplaceFileW` / `ReplaceFileA`).
+So on Windows the function hostfs.cpp DEFINES is `moho::hostfs::ReplaceFileA`, while `core/hostfs.h` read from a file
+without windows.h DECLARES `moho::hostfs::ReplaceFile`. ui/user/prefs.cpp (no windows.h) calling it gives:
+
+    lld-link: error: undefined symbol: moho::hostfs::ReplaceFile(std::string_view, std::string_view)
+    >>> referenced by ui\user\prefs.cpp:446 (moho::ui::SavePreferencesOf)
+
+Nothing in `src\` calls it yet (grep: only hostfs.h / hostfs.cpp), which is why the engine's build links.
+Asked: `#undef ReplaceFile` after the Windows headers in hostfs.cpp (callers that do include windows.h would need
+the same, so another name such as `hostfs::RenameOver` may be the cleaner way; your choice), and one caller or test
+in the engine's build so that the link proves it. `WriteFile` / `ReadFile` are real functions in windows.h, not
+macros; those link (ui uses both).
+
+Until then ui's save keeps `std::filesystem::rename` on `fs::path(std::u8string)`; the change to hostfs's rename is
+ready beside the suite (`Temp\ui-land-out\prefs57_hostfs_renames.patch`, 13 lines). Item 3 of request 57 is proved
+on Windows meanwhile: the suite's `prefs_safe` job has a sixth run, the save in a folder named `zapis_żółć_ü`
+(file, `.bak`, no `.tmp`, nothing written in place): green on a build with `src/app/utf8.rc` in the link.
 
 ## To the renderer track
 
