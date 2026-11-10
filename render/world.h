@@ -585,6 +585,16 @@ class World {
   // and their beams through their shadows, sent on mostly forward, so rain shows in a headlight's beam and shines
   // toward a light. Modern look; off by default.
   bool litRain = false;
+  // [fallsize] Rain's and snow's widths in the window's pixels when an upscaler brings the scene up (FSR 1 or FSR 3 at a
+  // share under 1; weather.h, Precipitation::windowShare): a flake as large on the screen as without the upscaler. False:
+  // in the smaller picture's pixels (1.7 times as large on the screen at 59 %), as before.
+  bool fallWindowSize = true;
+  // [fallpace] The fall as fast on the screen at every zoom, and a flake's sway by its own box on the ladder (weather.h,
+  // Precipitation::steadyPace). False: one speed in the world and the sway by the zoom, as before.
+  bool fallSteadyPace = true;
+  // [falltrail] With FSR 3, what falls marked in its transparency and composition mask too (Fsr3::Inputs::composition): no
+  // lock on a flake, so no trail of its light where it was. False: the reactive mask alone, as before.
+  bool fallNoLocks = true;
   // Rain's splashes (weather.h): where rain meets what faces up (the ground, a unit's top) and the picture shows it,
   // small crowns that rise and fade. Modern look; off by default.
   bool rainSplashes = false;
@@ -1037,6 +1047,17 @@ class World {
   // Seton's at 1080p from 720p it moves the picture further from today's at the screen's size and flickers
   // a third more where nothing moves (2026-10-16), so 0.
   float temporalMipBias = 0;
+  // [uplod] (Chris's test, 2026-11-09: "units seem to lack a lot of details ... Up close the details are there but it seems
+  // like at normal view they lose that sharpness") With an upscaler at a share under 1 (FSR 1 or FSR 3) a model's level of
+  // detail is chosen by its size in the WINDOW's pixels (View::lodPixels), as the comment at the choice always said ("its
+  // size on the SCREEN"): by its size in the smaller picture a unit went to its coarser level at 59 % of the distance (at
+  // 59 % of a 1080p window from 50 units away the row of UEF units had 0.74 million triangles for 1.52 million, a factory
+  // its far level). False: by the smaller picture's pixels, as before (fewer triangles: a speed setting's saving).
+  bool upscaleLod = true;
+  // [upmip] With FSR 1 at a share under 1 the textures are read log2(share) finer, as with FSR 3 (and as AMD asks for
+  // FSR 1: -0.38 at 77 %, -0.58 at 67 %, -0.79 at 59 %, -1 at 50 %): without it they were read for the smaller picture
+  // and then stretched, a level blurrier than the window could show. False: no bias with FSR 1, as before.
+  bool upscaleMipBias = true;
   Fsr3 fsr3;
   bool TemporalNow() const { return temporalNow_; }  // this frame brought up by FSR 3
   // AMD's FSR 3 frame generation (frame_generation.h): a picture made between each two frames from the scene's

@@ -283,13 +283,14 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_, opaque_, reactive_})
+    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_, opaque_, reactive_, composition_})
       if (t) device_->Destroy(t);
     drawn_ = {};
     behind_ = {};
     ldr_ = {};
     opaque_ = {};
     reactive_ = {};
+    composition_ = {};  // [falltrail]
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
@@ -382,6 +383,23 @@ gfx::Texture Post::Reactive(const std::function<void()>& more) {
   if (more) more();
   keptOpaque_ = false;
   return reactive_;
+}
+
+gfx::Texture Post::Composition(const std::function<void()>& draw) {  // [falltrail]
+  if (!draw || width_ <= 0 || height_ <= 0) return {};
+  if (!composition_) {
+    gfx::TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = gfx::Format::R8;
+    composition_ = device_->CreateTarget(td);
+    if (!composition_) return {};
+  }
+  gfx::PassDesc pass;
+  pass.color = composition_;
+  device_->BeginPass(pass);
+  draw();
+  return composition_;
 }
 
 bool Post::BeginKept() {

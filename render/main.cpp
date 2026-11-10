@@ -607,6 +607,17 @@
 //           detail beyond the share's (World::temporalMipBias; 0 at first; AMD advises -1)
 // --fsr off|ultra|quality|balanced|performance  the scene drawn at 1/1.3, 1/1.5, 1/1.7 or 1/2 of the window's
 //           width and height and brought up to it by AMD's FSR 1 (upscale.h); or the share itself (0.25..1)
+// --lod-by-scene  [uplod] with an upscaler the models' levels of detail chosen by their size in the smaller picture, as
+//           before (World::upscaleLod off; by default by their size in the window's pixels: the levels the window's size has)
+// --fsr1-no-bias  [upmip] with FSR 1 the textures read for the smaller picture, as before (World::upscaleMipBias off; by
+//           default log2(share) finer, for the window's size, as with FSR 3)
+// --fall-size scene  [fallsize] with an upscaler rain's and snow's widths in the smaller picture's pixels, as before
+//           (World::fallWindowSize off; by default in the window's: a flake as large on the screen as without the upscaler)
+// --fall-pace world  [fallpace] rain and snow at one speed in the world at every zoom and the flakes' sway by the zoom,
+//           as before (World::fallSteadyPace off; by default as fast on the screen at every zoom, each box of the ladder
+//           at its own speed, the sway by the flake's own box)
+// --fall-trails  [falltrail] with FSR 3 what falls marked in the reactive mask alone, as before (World::fallNoLocks off; by
+//           default in the transparency and composition mask too: no lock on a flake, no trail of light behind it)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
 // --shadow-size <texels>  the sun's shadow maps' width and height (2048; 4096 sharper, 1024 and 512 cheaper)
 // --texture-detail 0|1|2  textures larger than 256 without their largest size (1) or two (2): for cards
@@ -1095,6 +1106,11 @@ struct Options {
   float wet = 0;                        // --wet
   bool fsr3 = false;                    // --fsr3
   float fsr3Bias = 0;                   // --fsr3-bias
+  bool lodByScene = false;              // --lod-by-scene [uplod]
+  bool fsr1NoBias = false;              // --fsr1-no-bias [upmip]
+  bool fallSceneSize = false;           // --fall-size scene [fallsize]
+  bool fallWorldPace = false;           // --fall-pace world [fallpace]
+  bool fallTrails = false;              // --fall-trails [falltrail]
   int shadowSize = 2048;                // --shadow-size
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
@@ -1265,6 +1281,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       }
     }
     else if (a == "--lit-rain") o->litRain = true;
+    else if (a == "--lod-by-scene") o->lodByScene = true;  // [uplod]
+    else if (a == "--fsr1-no-bias") o->fsr1NoBias = true;  // [upmip]
+    else if (a == "--fall-trails") o->fallTrails = true;   // [falltrail]
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--lit-smoke") o->litSmoke = true;
     else if (a == "--smoke-shadows") o->smokeShadows = true;
@@ -1680,6 +1699,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--jobs-awake") o->jobsAwake = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
     else if (a == "--fsr3-bias") o->fsr3Bias = static_cast<float>(atof(v));
+    else if (a == "--fall-size") o->fallSceneSize = std::string(v) == "scene";  // [fallsize]
+    else if (a == "--fall-pace") o->fallWorldPace = std::string(v) == "world";  // [fallpace]
     else if (a == "--fsr") {  // FSR 1's modes, or the share itself
       const std::string m = v;
       o->upscale = m == "off" ? 1.0f : m == "ultra" ? 1 / 1.3f : m == "quality" ? 1 / 1.5f : m == "balanced" ? 1 / 1.7f
@@ -2554,6 +2575,11 @@ int main(int argc, char** argv) {
   world.upscale = opt.upscale;
   world.temporalUpscale = opt.fsr3;
   world.temporalMipBias = opt.fsr3Bias;
+  world.upscaleLod = !opt.lodByScene;          // [uplod]
+  world.upscaleMipBias = !opt.fsr1NoBias;      // [upmip]
+  world.fallWindowSize = !opt.fallSceneSize;   // [fallsize]
+  world.fallSteadyPace = !opt.fallWorldPace;   // [fallpace]
+  world.fallNoLocks = !opt.fallTrails;         // [falltrail]
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
   if (opt.shadowFitMargin >= 0) world.shadows.fitMargin = opt.shadowFitMargin;  // [shadowtri]

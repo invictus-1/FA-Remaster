@@ -555,6 +555,7 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
   const uint32_t shadingX = groups(static_cast<int>(static_cast<float>(in.renderWidth) * 0.5f), 8);
   const uint32_t shadingY = groups(static_cast<int>(static_cast<float>(in.renderHeight) * 0.5f), 8);
   const gfx::Texture reactive = in.reactive ? in.reactive : m->zeroMask;
+  const gfx::Texture composition = in.composition ? in.composition : m->zeroMask;  // [falltrail]
   auto run = [&](gfx::Pipeline p, uint32_t x, uint32_t y, bool spdConstants = false) {
     d->SetPipeline(p);
     d->SetConstants(0, &c, sizeof c);
@@ -574,7 +575,7 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
   run(m->shadingChangePyramid, spdX, spdY, true);
   bind({m->spdMips}, {{m->shadingChange, 0}});
   run(m->shadingChangePass, shadingX, shadingY);
-  bind({m->reconstructedDepth, m->dilatedMotion, m->dilatedDepth, reactive, m->zeroMask, accumulationRead, m->shadingChange, currentLuma,
+  bind({m->reconstructedDepth, m->dilatedMotion, m->dilatedDepth, reactive, composition, accumulationRead, m->shadingChange, currentLuma,
         m->exposure},
        {{m->dilatedReactive, 0}, {m->newLocks, 0}, {accumulationWrite, 0}});
   run(m->prepareReactivity, srcX, srcY);

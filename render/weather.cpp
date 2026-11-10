@@ -72,6 +72,7 @@ cbuffer Fall : register(b1) {
   float4 tint;      // its colour, linear
   float4 under;     // [rainunder] x: how much the fall keeps under the clouds (0: everywhere, as before; 1: none in their gaps)
                     // [rainladder] y: how many of this box's drops show; z: over how many of them the last ones fade out
+                    // [falltrail] w: in the TRAIL variant, each drawn as its path of late, that many of the picture's pixels back
 #if LIT
   float4 lit;       // x: how much of the light on it a drop or flake sends on (on top of the sky's, `tint`); y 1: the
                     // layer near the ground, seen only where the small lights light it; z: that layer's height
@@ -95,6 +96,15 @@ struct VOut {
 
 
 float Hash1(float n) { return frac(sin(n * 12.9898) * 43758.5453); }
+
+#if TRAIL
+// [falltrail] Where drop `n` was or will be at time `t`, before its box wraps it (as VS works out where it is now).
+float3 FallenTo(float n, float3 start, float t) {
+  float3 moved = start + velocity.xyz * (t * (0.8 + 0.4 * Hash1(n + 7.7)));
+  moved.xz += shape.w * float2(sin(t * (0.7 + Hash1(n + 2.2)) + n), cos(t * (0.6 + Hash1(n + 3.3)) + n * 1.3));
+  return moved;
+}
+#endif
 
 VOut VS(uint id : SV_VertexID) {
   uint drop = id / 6, corner = id % 6;
@@ -120,6 +130,28 @@ VOut VS(uint id : SV_VertexID) {
     side = normalize(cross(float3(0, 1, 0), toEye)) * (shape.x * pixel);
     along = normalize(cross(toEye, side)) * (shape.x * pixel * 2);
   }
+  // [falltrail] for the temporal upscaler's composition mask: the flake's path of late, from a little ahead of where it is
+  // back to where it was `under.w` of the picture's pixels ago (by its own pace: its fall and its sway; at most two
+  // seconds back, a flake that hardly moves on the screen), a little wider than the flake. FSR 3 holds what it gathered
+  // to what this frame shows nearby wherever the mask is set: without it a share of the flake's light stayed behind in
+  // what it had gathered, long after the flake had moved on (a faint white line along its path). (A variant of its own,
+  // TRAIL: the fall's own shaders are compiled from the text they always had.)
+#if TRAIL
+  {
+    float3 was = FallenTo(n, start, time - 0.5);
+    float pace = length(moved - was) * 2;  // (world units a second)
+    float back = clamp(under.w * pixel / max(pace, 1e-4), 0.1, 2.0);
+    was = FallenTo(n, start, time - back);
+    float3 path = moved - was;
+    float far = length(path);
+    float3 way = far > 1e-5 ? path / far : float3(0, -1, 0);
+    float wide = shape.x * pixel * 1.25;
+    float3 across = cross(way, toEye);
+    side = (dot(across, across) > 1e-8 ? normalize(across) : float3(1, 0, 0)) * wide;
+    along = way * (far + wide);
+    p += way * wide;
+  }
+#endif
   VOut o;
   o.position = mul(viewProj, float4(p + side * uv.x - along * uv.y, 1));
   o.across = uv;
@@ -146,6 +178,9 @@ VOut VS(uint id : SV_VertexID) {
 }
 
 float Soft(VOut i) {
+#if TRAIL
+  return saturate((1 - abs(i.across.x)) * 3);  // ([falltrail] the path: whole along its length)
+#endif
   return velocity.w > 0 ? (1 - abs(i.across.x)) * saturate(i.across.y * 4) * saturate((1 - i.across.y) * 1.5)
                         : saturate(1 - length(float2(i.across.x, i.across.y * 2 - 1)));
 }
@@ -548,11 +583,21 @@ void Precipitation::Draw(const View& view, const Camera& camera, float rain, flo
 void Precipitation::DrawReactive(const View& view) {
   if (!drawn_) return;
   drawn_ = false;
-  if (!reactiveTried_) {
-    reactiveTried_ = true;
+  if (ReactiveReady()) Fall(view, drawnCamera_, drawnRain_, drawnSnow_, false, true);
+}
+
+void Precipitation::DrawComposition(const View& view) {  // [falltrail] (the snow alone, each flake as its path of late)
+  if (WantsComposition() && ReactiveReady(true)) Fall(view, drawnCamera_, 0, drawnSnow_, false, true, trailPixels);
+}
+
+bool Precipitation::ReactiveReady(bool trail) {
+  bool& tried = trail ? trailTried_ : reactiveTried_;
+  gfx::Pipeline& pipeline = trail ? trailPipeline_ : reactivePipeline_;
+  if (!tried) {
+    tried = true;
     gfx::PipelineDesc pd;
-    std::string source = std::string(kViewShaderBlock) + kShader;
-    pd.name = "precipitation, into the reactive mask";
+    std::string source = std::string(trail ? "#define TRAIL 1\n" : "") + kViewShaderBlock + kShader;
+    pd.name = trail ? "precipitation's paths, into the composition mask" : "precipitation, into the reactive mask";
     pd.vertexSource = pd.pixelSource = source;
     pd.pixelEntry = "ReactivePS";
     pd.cull = gfx::Cull::None;
@@ -562,13 +607,13 @@ void Precipitation::DrawReactive(const View& view) {
     pd.samples = 1;
     pd.alphaWrite = false;
     std::string why;
-    reactivePipeline_ = device_->CreatePipeline(pd, &why);
-    if (!reactivePipeline_) fprintf(stderr, "render: rain and snow cannot mark the upscaler's reactive mask (%s)\n", why.c_str());
+    pipeline = device_->CreatePipeline(pd, &why);
+    if (!pipeline) fprintf(stderr, "render: rain and snow cannot mark the upscaler's %s mask (%s)\n", trail ? "composition" : "reactive", why.c_str());
   }
-  if (reactivePipeline_) Fall(view, drawnCamera_, drawnRain_, drawnSnow_, false, true);
+  return static_cast<bool>(pipeline);
 }
 
-void Precipitation::Fall(const View& view, const Camera& camera, float rain, float snow, bool lit, bool reactive) {
+void Precipitation::Fall(const View& view, const Camera& camera, float rain, float snow, bool lit, bool reactive, float trail) {
   if ((rain <= 0 && snow <= 0) || view.height <= 0) return;
   if (lit && !litTried_) {  // (the lit shader the first time it is wanted; where it cannot be made, unlit as before)
     litTried_ = true;
@@ -583,7 +628,7 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
                           c.skyZenith[2] * 0.6f + c.skyHorizon[2] * 0.6f};
   const float edge = std::clamp(camera.distance * 1.6f, 30.0f, 900.0f);
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height) * pixelScale;  // (photofix: the window's pixel)
-  device_->SetPipeline(reactive ? reactivePipeline_ : lit ? litPipeline_ : pipeline_);
+  device_->SetPipeline(trail > 0 ? trailPipeline_ : reactive ? reactivePipeline_ : lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
   // `low`: the lit drops' layer near the ground (seen only where the small lights light it)
   // [rainladder] (the review of 2026-11-09, light 5: "rain shifts while zooming") a drop's place is its number times the
@@ -607,15 +652,26 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.box[3] = size;
     // [rainpace] (Chris's re-test, 2026-11-06: "the rain speeds up when zooming in and out"; it was as fast as the box is
     // large, so that from far it did not stand still) one speed at every zoom
-    const float speed = flakes ? 2.5f : 30.0f;
+    // [fallpace] (Chris's test, 2026-11-09: "snow seems to speed up as I zoom in": with one speed in the world the flakes
+    // cross the screen the faster the nearer the camera is) by default each box on the ladder falls as fast as it is large,
+    // that speed at the box of 181 (the camera 113 away: a playing distance falls as it did); a drop belongs to one box and
+    // keeps its speed, so none changes pace during a zoom. The layer near the ground, half the box's size while it follows
+    // the zoom, as fast as the fall above it.
+    constexpr float kPaceBox = 181.02f;  // (2^7.5: a rung of the ladder)
+    const float pace = steadyPace ? size * (low ? 2.0f : 1.0f) / kPaceBox : 1.0f;
+    const float speed = (flakes ? 2.5f : 30.0f) * pace;
     f.velocity[0] = speed * (flakes ? 0.25f : 0.18f);
     f.velocity[1] = -speed;
     f.velocity[2] = speed * 0.08f;
     f.velocity[3] = flakes ? 0.0f : 0.05f;
-    f.shape[0] = flakes ? 1.6f : 0.9f;
+    // [fallsize] its width in the window's pixels (windowShare: under an upscaler the picture's pixels are larger), at
+    // least 0.9 of the picture's own to each side
+    const float halfWidth = flakes ? 1.6f : 0.9f;
+    f.shape[0] = std::max(halfWidth * std::clamp(windowShare, 0.25f, 1.0f), std::min(halfWidth, 0.9f));
     f.shape[1] = perPixel;
     f.shape[2] = flakes ? 0.8f : 0.2f;
-    f.shape[3] = flakes ? edge * 0.01f : 0.0f;
+    // ([fallpace] the sway as wide as the flake's own box asks: by the zoom of the moment every flake moved with the zoom)
+    f.shape[3] = !flakes ? 0.0f : steadyPace ? size * (low ? 0.02f : 0.01f) : edge * 0.01f;
     const float bright = flakes ? 2.0f : 1.2f;
     f.tint[0] = light[0] * bright;
     f.tint[1] = light[1] * bright;
@@ -624,6 +680,7 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.under[0] = std::clamp(underClouds, 0.0f, 1.0f);  // [rainunder]
     f.under[1] = count * share * (1 + kBand);  // [rainladder]
     f.under[2] = std::max(count * kBand, 1.0f);
+    f.under[3] = trail;  // [falltrail]
     // how much of the light on it goes on to the eye (snow is white); near the ground three times that, as a glint: a
     // thin drop in a beam is seen against the patch of ground the beam lights, and would hardly show (Chris, 2026-10-17:
     // the sparkle is fine as it is)

@@ -2142,7 +2142,7 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   const char* outer = CpuTimes::Current();
   CpuTimes::Part("models: tested for each pass");
   items_.clear();
-  const float focal = static_cast<float>(view.height) / (2 * std::tan(view.fovY * 0.5f));
+  const float focal = static_cast<float>(view.height) * view.lodPixels / (2 * std::tan(view.fovY * 0.5f));  // ([uplod]: the window's pixels)
   const float smallest = shadowPass ? shadowMinPixels : minPixels;
   const float wish = trianglesPerPixel * detail * (shadowPass ? shadowDetail : 1.0f) * 0.7854f;  // x pi / 4: a circle's area
   const uint8_t needed = glass ? kHasGlass : kHasSolid;  // (a model with no level of this pass's kind is passed over at once)

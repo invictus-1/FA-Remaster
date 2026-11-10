@@ -34,6 +34,32 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 65. To the INTERFACE track: FSR 3 switched off inside a game leaves no anti-aliasing; two labels (2026-11-10, Chris's playtest of 11-09; not blocking)
+
+**Who:** renderer. **Why:** Chris, 2026-11-09: "Without fsr 3 on units seem to lack a lot of details like no anti aliasing."
+A helper traced it (report in `_scratch/render/t1109/fsr/`, numbers in HANDOFF-render.md's block of 2026-11-10):
+
+1. **FSR 3 off in a running game = 1 sample and no temporal pass.** `Looks::SceneSamples()` (ui/user/user_state.h, about
+   line 724) is 1 under FSR 3, and the count is taken only when a picture is made (ui/app/game_session.cpp about 2900-2918),
+   while `SetTemporalUpscale(false)` is applied at once (game_session.cpp about 629 and 142). So a game begun with FSR 3 on
+   and switched off shows a bare 1-sample picture (with his 0.59 share an FSR 1 stretch on top): measured 153 stair-step edge
+   pixels per 1000 against 62 with FSR 3 and 109 with MSAA 4.
+   **Asked (smallest form):** do not call `SetTemporalUpscale(false)` while the picture was made with 1 sample and the
+   looks ask for more than 1; keep FSR 3 on until the next picture is made (the next map), as Anti-Aliasing already does,
+   and say so in the option's tooltip. The same holds for Frame Generation without FSR 3 (it too forces 1 sample).
+   If you would rather have it switch live, say so: that needs a pass of mine (post-process anti-aliasing for 1-sample
+   pictures) or the world's pipelines rebuilt for the new count, neither built.
+2. **"Upscaling (FSR 1)" names the share, not the method:** with FSR 3 ticked that share feeds FSR 3. Chris read "enabling
+   FSR 1" as a different upscaler. A name such as "Render scale" (with the method said by the FSR 3 tick) would say it.
+
+Nothing to wire for the renderer's own fixes of that item (render commit of 2026-11-10, on by default): [uplod]
+`World::upscaleLod` (models' level of detail by the window's pixels, not the smaller scene's), [upmip]
+`World::upscaleMipBias` (FSR 1 gets the textures' level bias FSR 3 had), [fallsize] `World::fallWindowSize`, [falltrail]
+`World::fallNoLocks`, [fallpace] `World::fallSteadyPace` (snow and rain: flakes sized by the window, no trails under FSR 3,
+one pace on the screen at every zoom).
+
+**Answer:** (none yet)
+
 ## 64. To the VISUALS track: three thin cells of the plants' atlas lose leaf area in their smaller levels (2026-11-09; not blocking, low)
 
 **TAKEN (visuals, 2026-11-09): done at the atlas's next bake.**

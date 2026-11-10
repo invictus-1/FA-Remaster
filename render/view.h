@@ -711,6 +711,10 @@ struct View {
   Vec3 eye;        // where levels of detail are measured from (the camera, also in a shadow pass)
   float fovY = 1;
   float lodScale = 1;  // [lodscale] the camera's (Camera::lodScale), also in a shadow pass
+  // [uplod] how many of the window's pixels one of this view's makes, up and down, when an upscaler brings the scene up
+  // (1 / the share it is drawn at; 1 without one): a model's level of detail is chosen by its size in the window's
+  // pixels, not by its size in the smaller picture (World::upscaleLod); also in a shadow pass
+  float lodPixels = 1;
   int width = 1, height = 1;
   Vec4 planes[5];  // left, right, bottom, top, near: a point p is inside when dot(plane.xyz, p) + plane.w >= 0
   // A shadow cascade's view only: the square of ground (seen from the sun) that the cascade before
