@@ -20,6 +20,36 @@ do
         end
     end
 
+    -- A 'button' option's row cleans up after itself. The game's dialog makes such a row as a Bitmap and then gives it
+    -- an OnDestroy of its own (controlTypeCreate.button: `bg.OnDestroy = function ... end`), which hides Bitmap's
+    -- OnDestroy: the row's texture stays tied to the skin after the row is gone, and the next change of skin calls
+    -- SetNewTexture on a destroyed control ("Game object has been destroyed"). The game's own options have no button
+    -- row, so it never shows there; ours have two (Interface: Import from FAF..., Remastered: Go to Section's Show),
+    -- and the score screen sets the skin first thing (score.lua CreateSkirmishScreen): after one look at those tabs in
+    -- a game, End Game brought no score screen (Chris's playtest, 2026-11-09: "End game doesn't work anymore").
+    -- Here the row's own OnDestroy runs, then Bitmap's. (The factory table is a local of the module, read through the
+    -- functions that use it; if a later dialog changes that, a warning says so.)
+    do
+        local types = Upvalue(Upvalue(RemasterGameCreateDialog, 'CreateOption'), 'controlTypeCreate')
+        if type(types) == 'table' and type(types.button) == 'function' then
+            local gameButton = types.button
+            local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
+            types.button = function(parent, optionItemData)
+                local bg = gameButton(parent, optionItemData)
+                local rowOnDestroy = bg and rawget(bg, 'OnDestroy')
+                if rowOnDestroy then
+                    bg.OnDestroy = function(self)
+                        rowOnDestroy(self)
+                        Bitmap.OnDestroy(self)
+                    end
+                end
+                return bg
+            end
+        else
+            WARN("FA Remastered: the Options dialog's button rows left as the game makes them (its locals not found): a skin change after them may fail")
+        end
+    end
+
     -- the width each of n tab buttons gets: the texture's (the game's) where they fit, else what fills the panel
     function RemasterTabWidth(n)  -- (also for the tests)
         local UIUtil = import('/lua/ui/uiutil.lua')
