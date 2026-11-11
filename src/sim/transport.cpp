@@ -1356,7 +1356,26 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
       // pickup facing by a few 1e-6 rad)
       float inv = 1.0f / static_cast<float>(d.assigned);
       d.pickupPoint = {d.pickupPoint.x * inv, inv * d.pickupPoint.y, inv * d.pickupPoint.z};
-      if (CanFly(T)) AirPrepareMove(sim, T, &d.pickupPoint);
+      // 0x6255e1..0x625619: Unit::PrepareMove 0x62b780 for every transport that is not a staging platform (spacing
+      // 0, a zero rect, the army's UseWholeMap), then 0x62561e..0x6256c4: ReserveOgridRect 0x6ab6f0 takes the
+      // transport's footprint rect at the prepared point (x0 = fistp(x - sizeX / 2), z0 = fistp(z - sizeZ / 2), as
+      // 16-bit). A flying transport's landing move takes its own rect in the same pass (state 1), and a landed
+      // one's is given back by its air motion's touchdown block within the beat (0x6bfb1d..0x6bfb40, READ:
+      // FreeLandRectOnTouchdown), so this rect shows only inside the command stage it is made in: a second
+      // transport whose load starts later in the same stage with its cargo's centre on the first's rect gets a
+      // point beside it. The dtor frees whatever rect the transport holds (EndLoad). (READ, order audit D5.1; seen
+      // in ours with the scene d5_1: before, the second transport of that scene took the first's point.)
+      if (CanFly(T)) {
+        AirPrepareMove(sim, T, &d.pickupPoint);
+      } else {
+        static const float none[4] = {0, 0, 0, 0};
+        GroundPrepareMove(sim, T, &d.pickupPoint, none, 0);
+      }
+      const NamedFootprint& tfp = Fp(T);
+      const int x0 = static_cast<int16_t>(std::nearbyint(d.pickupPoint.x - tfp.sizeX * 0.5f));
+      const int z0 = static_cast<int16_t>(std::nearbyint(d.pickupPoint.z - tfp.sizeZ * 0.5f));
+      const int rr[4] = {x0, z0, x0 + tfp.sizeX, z0 + tfp.sizeZ};
+      GroundReserveRect(sim, T, rr);
     } else {
       d.pickupPoint = T->position;
     }
@@ -1484,6 +1503,7 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
 
 void EndLoad(Sim& sim, Unit* T, TransportTaskData& d) {
   Callback(sim, T, "OnStopTransportLoading");
+  GroundFreeRect(sim, T);  // 0x624cfb..0x624cfe: FreeOgridRect 0x6ab760 on the transport, whatever rect it holds
   SetState(T, US("TransportLoading"), false);
   SetState(T, US("HoldingPattern"), false);
   if (!T->transport) return;
@@ -1696,6 +1716,12 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
           AirSpeedThroughEvent(sim, T);
         }
         t.state = 3;
+        // 0x626507..0x62650b: state 2 returns 0 always ("run the top task again at once"). With a move child
+        // pushed the top task is that move; with none (a staging platform, task+0x54, or a transport that is not
+        // mobile) it is the unload itself, so state 3 (the detach, the launch's Move) runs in this same pass, the
+        // pass of the dispatch (order audit D3.2; seen in ours with the scene d3_2: the platform's
+        // OnTransportDetach came one beat after the dispatch, and a beat's end showed it in TransportUnloading).
+        if (!d.moving) continue;
         return kTaskRunning;
       case 3: {
         if (d.moving) {

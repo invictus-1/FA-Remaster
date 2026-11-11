@@ -562,6 +562,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
       RetargetAttackTasks(sim, *c);
       RetargetPatrolTasks(sim, *c);
       RetargetMobileBuildTasks(sim, *c);
+      RetargetCaptureTasks(sim, *c);
       RefreshGuardTasks(sim, *c);
       GuardRepairChildrenCommandEvent(sim, *c, nullptr);
       GuardWalksCommandEvent(sim, *c);

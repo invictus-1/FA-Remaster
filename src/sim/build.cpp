@@ -2744,11 +2744,29 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   return kTaskRunning;
 }
 
-// DispatchAssistOrCaptureTask 0x613a80 (capture: not carried out yet)
+// DispatchAssistOrCaptureTask 0x613a80
 BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
   bool shieldOn = ScriptBool(sim, c, "ShieldIsOn");
   bool ally = c->army == U->army || combat::IsAlly(U->army, c->army);
-  if (!ally) return nullptr;
+  if (!ally) {
+    // 0x613ad3..0x613af7 (read): a candidate whose army is not own / allied (IArmy::GetAllianceWith 0x579430 != 1)
+    // is CAPTURED: a CAiTarget of the candidate unit is made (0x5d55b0 at 0x613ae4) and handed to
+    // CUnitCaptureTask::Create 0x604360 with the guard task as the parent (esi). The ctor 0x603f90 holds the UNIT
+    // (not a blip: the capturable test, the skirt rect and the "being captured and more than 10 away" test all
+    // apply from its first tick), makes its own CAiTarget of it (0x604020), takes the focus (unit+0x4d0) and calls
+    // OnAssignedFocusEntity (0x604043..0x604056). Each of the two CAiTarget makers draws a target point for a unit
+    // with target bones (TargetPointDraw, as the Capture order's ctor does). The child then runs CaptureStep as an
+    // order's task does: with the guarded engineer capturing, the target's capturers count is 2, 3 ... and state 3
+    // adds it to every capturer's progress. (Order audit D9.2; seen in ours with the scene d9_2: before, the guards
+    // stood GuardBusy and the capture took the single engineer's 125 beats.)
+    BuildTask* t = NewChild(sim, CommandType::Capture, "Capture");
+    t->goalId = EntityRef(c);
+    TargetPointDraw(sim, c);  // 0x613ae4
+    TargetPointDraw(sim, c);  // 0x604020
+    U->focusId = EntityRef(c);
+    sim.CallMethod(sim.L(), U, "OnAssignedFocusEntity", 0);
+    return t;
+  }
   bool shieldDamaged = false;
   if (shieldOn && Cat(sim, c, "SHIELD"))
     if (Entity* s = sim.FindEntity(c->focusId)) shieldDamaged = s->maxHealth > s->health;
@@ -2808,6 +2826,37 @@ void CaptureCallback(Sim& sim, lua_State* L, Unit* u, BuildTask& t, bool start) 
   PushObject(L, T);
   sim.CallMethod(L, u, "OnFailedCapture", 1);
 }
+
+}  // namespace
+
+// CUnitCaptureTask::Receive 0x604fc0..0x6050e2 (read whole): the listener the ctor links into the unit's first command
+// (0x6040aa..0x604106), told by CUnitCommand::SetTarget 0x6e8820. DoCallback(0) (0x604fd0: the start undone, with the
+// OnFailed... scripts); the held entity becomes the command target's UNIT (CAiTarget::GetEntity 0x5e2ce0, also for a
+// blip target: from here on the task holds a unit); the focus is that unit, with OnAssignedFocusEntity when there is
+// one (0x60500e..0x605023); work progress 0 (0x605068); the request deleted (0x605070..0x60508f); progress and total
+// 0, state 0 (0x60509b..0x6050a1). Capturing is not cleared and the reserved cells are not freed. The caller wakes
+// the thread (0x6050a4..0x6050d9: counter 0, a suspended thread re-linked).
+void CaptureTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& c) {
+  lua_State* L = sim.L();
+  CaptureCallback(sim, L, u, t, false);
+  Entity* e = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  t.goalId = e && e->kind == Entity::Kind::Unit ? EntityRef(e) : 0;
+  t.targetViaBlip = false;
+  t.targetBlipRef = 0;
+  t.targetFakeId = 0;
+  u->focusId = t.goalId;
+  if (t.goalId) sim.CallMethod(L, u, "OnAssignedFocusEntity", 0);
+  u->workProgress = 0;
+  if (t.capRequest) {
+    t.capRequest->live = false;
+    t.capRequest.reset();
+  }
+  t.capProgress = 0;
+  t.capTotal = 0;
+  t.state = 0;
+}
+
+namespace {
 
 // capturer:GetCaptureCosts(target) -> time (seconds), energy, mass; false unless it gives three values
 bool CaptureCosts(Sim& sim, lua_State* L, Unit* u, Unit* T, float out[3]) {
@@ -3009,6 +3058,12 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
 // 2370, engineer 7 arrives, is Capturing and the target BeingCaptured in the same beat (the request counted at 2371);
 // ours one beat apart
 int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
+  // a walk under way when the command's event set state 0 (CaptureTaskCommandEvent): the woken move task ends
+  // (its TaskTick returns -1 and its dtor aborts the move, as for a repair's walk: TickRepair)
+  if (t.moving && t.state == 0) {
+    t.moving = false;
+    EndWalk(u);
+  }
   if (t.moving) {  // the move child: the task runs again when it ends
     if (u->motion.hasGoal) return kTaskRunning;
     t.moving = false;
@@ -3356,6 +3411,20 @@ void GuardRepairChildrenCommandEvent(Sim& sim, UnitCommand& c, Unit* self) {
       // same engineer 0x200028, building): the original's guard 0x200024 is out of Moving at 2938; ours walked on.
       const bool asleep = TaskThreadAsleepOnMove(h, &ch);
       MobileBuildCommandEvent(sim, h, ch, c);
+      gt->gdata->childFrom = 0;
+      if (asleep && Alive(h)) {
+        TaskWalkCommandEvent(sim, c, h);
+        sim.ResumeCommandThread(h);
+      }
+      continue;
+    }
+    if (ch.type == CommandType::Capture) {
+      // A guard's capture child (AssistTask) listens to the unit's first command as well, the Guard order (ctor
+      // 0x6040aa: unit+0x4b4's first command). Receive 0x604fc0 restarts it on that command's target, the guarded
+      // unit: own or allied, so its next tick ends it (TaskTick 0x604461..0x6044e3, result 2). Its walk (NewMoveTask
+      // 0x60477d with 0, 0, 0) is re-goaled by its own listener and ended by the wake, as the mobile build child's.
+      const bool asleep = TaskThreadAsleepOnMove(h, &ch);
+      CaptureTaskCommandEvent(sim, h, ch, c);
       gt->gdata->childFrom = 0;
       if (asleep && Alive(h)) {
         TaskWalkCommandEvent(sim, c, h);
@@ -5331,10 +5400,10 @@ void SiloTick(Sim& sim, Unit* u) {
       return;
     }
     case 3: {
-      if (s->request) {
-        s->request->live = false;
-        s->request.reset();
-      }
+      // (The economy request stays alive: state 3 0x5cf4dd..0x5cf57c does not touch silo+0x2c, the next build's
+      // state 1 replaces it, 0x5cf3af..0x5cf3bc. So the beats between two missiles still take the request's share
+      // of the army's income. Order audit D1.11, CONFIRMED by the original 2026-11-10 with the scene d1_11: a
+      // launcher's army fed 10 energy a beat holds 8, 18, 28 after the missile, where ours gave 10, 20, 30.)
       u->consumptionShown[0] = u->consumptionShown[1] = 0;
       u->unitStates.Erase(US("SiloBuildingAmmo"));
       u->workProgress = 0;
@@ -5408,12 +5477,7 @@ int l_StopSiloBuild(lua_State* L) {
     s->stage = 0;
     s->queue.clear();
     s->progress = 0;
-    // OURS, kept: the economy request is released here. The original leaves silo+0x2c as it is (the next
-    // build's state 1 replaces it); what a request without a taker does to the economy is not read yet.
-    if (s->request) {
-      s->request->live = false;
-      s->request.reset();
-    }
+    // (the economy request is left as it is, SiloStopBuild 0x5cf130 does not touch silo+0x2c: order audit D1.11)
   }
   return 0;
 }
