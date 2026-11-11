@@ -174,6 +174,8 @@
 // --ground-matt  [leftover] dry ground matt at grazing light (World::groundMatt; modern look): the sun's highlight on the
 //           ground fades as the sun sinks toward it (dusk and dawn), where the ground is dry; wet ground, puddles and
 //           lying snow keep theirs
+// --surround-shine  [surmatt] with --ground-matt: the land outside the map keeps its highlight at grazing light, as before
+//           (World::surroundMatt off)
 // --ground-matt-light-only  [matteye] with --ground-matt: the fade by the light's height over the ground alone, as before
 //           (World::groundMattEye off; by default the highlight fades as the eye skims the ground's slope too)
 // --puddle-sun-mirror  [puddlesun] the sun's highlight on rain puddles as sharp as the mirror they are, as before
@@ -1210,6 +1212,7 @@ struct Options {
   bool plantMotion = true;              // [leftover] --no-plant-motion
   bool groundMatt = false;              // [leftover] --ground-matt
   bool groundMattEye = true;            // [matteye] --ground-matt-light-only
+  bool surroundMatt = true;             // [surmatt] --surround-shine
   bool puddleSunSoft = true;            // [puddlesun] --puddle-sun-mirror
   bool layerNormalsOwn = true;          // [layernormals] --layer-normals-raw
   float pan[2] = {0, 0};                // --pan
@@ -1481,6 +1484,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-plant-motion") o->plantMotion = false;  // [leftover]
     else if (a == "--ground-matt") o->groundMatt = true;        // [leftover]
     else if (a == "--ground-matt-light-only") o->groundMattEye = false;  // [matteye]
+    else if (a == "--surround-shine") o->surroundMatt = false;           // [surmatt]
     else if (a == "--puddle-sun-mirror") o->puddleSunSoft = false;       // [puddlesun]
     else if (a == "--layer-normals-own") o->layerNormalsOwn = true;      // [layernormals] (the default)
     else if (a == "--layer-normals-raw") o->layerNormalsOwn = false;
@@ -2861,6 +2865,7 @@ int main(int argc, char** argv) {
   world.plantMotion = opt.plantMotion;  // [leftover]
   world.groundMatt = opt.groundMatt;    // [leftover]
   world.groundMattEye = opt.groundMattEye;      // [matteye]
+  world.surroundMatt = opt.surroundMatt;        // [surmatt]
   world.puddleSunSoft = opt.puddleSunSoft;      // [puddlesun]
   world.layerNormalsOwn = opt.layerNormalsOwn;  // [layernormals]
   if (opt.airDust >= 0) world.air.dust = opt.airDust;

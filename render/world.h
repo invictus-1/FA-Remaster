@@ -898,6 +898,11 @@ class World {
   // like metal, most of all under the moon. On by default; false (the viewer's --ground-matt-light-only): by the light's
   // height alone, as before.
   bool groundMattEye = true;
+  // [surmatt] The same on the sculpted land outside the map (surround.cpp's detail look; view.h's groundLook.w), with
+  // groundMatt: its ground had no such fade at all, and its pale scree and sand lay under the moon as white patches
+  // beside the map's dark ground (the map scan of 2026-11-11, the north-east corner at night). On by default; false
+  // (the viewer's --surround-shine): as before.
+  bool surroundMatt = true;
   // [puddlesun] The sun's highlight on still water on the ground soft (lighting.h's ModernLight, view.h's groundLook.x): a
   // rain puddle, a rut's water and the mud's pools mirror the sky as sharply as before, but the sun's (or the moon's)
   // highlight on them takes a lobe as wide as wind and rain leave it, not the mirror's: no white-hot fill and no dotted
