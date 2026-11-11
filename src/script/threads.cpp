@@ -246,6 +246,7 @@ void ThreadScheduler::WaitCurrentOn(int ref, void** box) {
   current_->waitBox = box;
   current_->waitEpoch = ObjectRebinds();
   current_->waitSeq = ++waitCount_;
+  current_->woken = false;
   if (!current_->inWaiters) {
     current_->inWaiters = true;
     waiters_.push_back(current_);
@@ -393,7 +394,7 @@ void ThreadScheduler::WakeSignalled() {
         waiters_.pop_back();
         continue;
       }
-      if (!any && !w->dead && w != current_) {
+      if (!any && !w->dead && w != current_ && !w->woken) {
         ScriptObject* o = WaitObject(*w);
         any = !(o && o->EventState() == 0);  // = !StillWaiting, without its clean-up
       }
@@ -406,7 +407,7 @@ void ThreadScheduler::WakeSignalled() {
     const bool atLast = it == last;
     const auto next = std::next(it);
     Thread& t = *it;
-    if (!t.dead && t.waitRef != LUA_NOREF && &t != current_ && !StillWaiting(t) && !atLast)
+    if (!t.dead && t.waitRef != LUA_NOREF && !t.woken && &t != current_ && !StillWaiting(t) && !atLast)
       threads_.splice(threads_.end(), threads_, it);
     if (atLast) break;
     it = next;
@@ -424,19 +425,28 @@ void ThreadScheduler::WakeSignalled() {
 // same beat and draw at 4703; ours ran them in the other order, so they drew each other's numbers. The probe
 // (mp3_rand) shows the original's dish that draws at 4765 drawing again at 4827 (no WaitTicks(11)); ours' dish of
 // 4765 had waited and drew at 4837, and the random stream went apart at 4827.
+// The woken thread is NOT done with its wait: its CWaitForTask is still its top task (Execute 0x4ca660 returned 0),
+// and the thread's tick 0x4091f0 runs it again when the thread's turn comes: 0x406e20 tests event+4 afresh, and
+// while it is 0 suspends the thread again and hangs a new node on the event. So a thread whose event was signalled
+// and then un-signalled before its turn (EventSetSignaled with 0 only writes event+4, 0x406e17) goes on waiting.
+// Seen: weapons range cybair, ura0104's EMPCannon (RackSalvoChargeTime 1, RackRecoilDistance 0.2) fires its last
+// charged shot at 195 after landing. FAF's IdleState.Main does WaitFor(recoil slider) (WaitForAndDestroyManips);
+// the slider reaches its goal in the unit's step (signal, 0x647488); at 196 PlayRackRecoilReturn, forked before,
+// runs first and SetGoal(0, 0, 0) un-signals it (0x6475ac); the original's slider then slides back over three
+// beats (the aim pitch changes at 198, 199, 200 with the muzzle's place), ours was destroyed at 196.
 void ThreadScheduler::Signal(const ScriptObject* o) {
   if (!o || waiters_.empty()) return;
   std::vector<Thread*> hit;
   for (Thread* w : waiters_) {
-    if (w->dead || w == current_ || w->waitRef == LUA_NOREF) continue;
+    // (a woken thread has no node on the event until its turn hangs a new one: a second signal does not move it)
+    if (w->dead || w == current_ || w->waitRef == LUA_NOREF || w->woken) continue;
     const ScriptObject* p = WaitObject(*w);
     if (p == o) hit.push_back(w);
   }
   if (hit.empty()) return;
   std::sort(hit.begin(), hit.end(), [](const Thread* a, const Thread* b) { return a->waitSeq > b->waitSeq; });
   for (Thread* w : hit) {
-    luaL_unref(L_, LUA_REGISTRYINDEX, w->waitRef);
-    w->waitRef = LUA_NOREF;  // (no longer waiting: WakeSignalled and RunTick leave it where it is now)
+    w->woken = true;  // (WakeSignalled and RunTick leave it where it is now; RunTick tests its event at its turn)
     const auto it = byCo_.find(w->co);  // (a listed thread is in byCo_ under its coroutine, which is its own)
     if (it != byCo_.end()) threads_.splice(threads_.end(), threads_, it->second);
   }
@@ -451,14 +461,19 @@ void ThreadScheduler::RunTick(uint32_t tick) {
     if (!t.dead && !t.suspended && t.wakeTick <= tick) {
       const bool waited = t.waitRef != LUA_NOREF;
       if (StillWaiting(t)) {
+        if (t.woken) {  // (un-signalled since its wake: it waits again, on a new node, 0x406e2d..0x406ebb)
+          t.woken = false;
+          t.waitSeq = ++waitCount_;
+        }
         t.wakeTick = tick + 1;
-      } else if (waited && std::next(it) != threads_.end()) {
+      } else if (waited && !t.woken && std::next(it) != threads_.end()) {
         // (its event was signalled while this pass runs, by a thread before it: it goes to the pass's end)
         const auto next = std::next(it);
         threads_.splice(threads_.end(), threads_, it);
         it = next;
         continue;
       } else {
+        t.woken = false;
         Step(t);
         for (int n = 0; t.again && !t.dead && !t.suspended && n < 100000; ++n) {
           t.again = false;

@@ -5011,9 +5011,9 @@ void SliderStep(Unit* u, SlideManipulator* m) {
 
 namespace {
 
-// func_NormalizeAngle 0x62fb50
+// func_NormalizeAngle 0x62fb50 (the remainder by the double of the float 2 pi, 0xe4f780: see vm::WrapPi)
 float WrapAngle(float a) {
-  float r = static_cast<float>(std::fmod(static_cast<double>(a), 6.283185307179586));
+  float r = static_cast<float>(std::fmod(static_cast<double>(a), static_cast<double>(6.28318548f)));
   if (r < -3.14159265f) r += 6.28318531f;
   else if (r > 3.14159265f) r -= 6.28318531f;
   return r;
