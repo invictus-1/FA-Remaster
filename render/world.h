@@ -467,6 +467,13 @@ class World {
   float surroundSceneryLod = 1.5f;
   float surroundSceneryFrom = 500, surroundSceneryTo = 1100;
   int surroundForestFloor = -1;
+  // [edgeband] (Chris, 2026-11-10, shown the game's picture over the edge with the surround on, the edge not to be
+  // found: "Faint dimming".) The land past the edge is a quarter dimmer and a little greyer (lighting.h BeyondFar, as
+  // all that lies beyond the edge), but over the soft edge's 60 world units, which on ground this alike told nobody
+  // where units cannot go. With a sculpted surround the dimming comes in over this many world units instead (12: a
+  // soft step that reads from the game's height and is no line; it lies on the ground, so it does not shift with
+  // the zoom). 0: the soft edge's own band, as before (viewer --surround-edge-band 0).
+  float surroundEdgeBand = 12;
   int surroundPropsListed = 0;  // (of the frame last begun: pieces of the surround's scenery in the squares in view)
   size_t SurroundProps() const { return surroundProps_.size(); }
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
