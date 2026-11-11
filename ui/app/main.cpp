@@ -54,6 +54,7 @@
 #include "sound/sound_system.h"
 #include "user/bindings.h"
 #include "user/keymap.h"
+#include "user/notices.h"
 #include "user/user_state.h"
 
 using namespace moho;
@@ -316,7 +317,22 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  if (!o.logFile.empty()) LogOpenFile(o.logFile);
+  // The run's log. One named by --log; without it a run with a window writes one all the same (ours; Chris's pick of
+  // 2026-11-09, "always-on log": the engine's LogOpenDefault, core/log.h): moho64ui_<date>_<time>.log in the folder
+  // "logs" beside the preferences, its first line the build, the newest ten kept. A run without a window (tests,
+  // probes) writes none unless --log names it; MOHO64UI_DEFAULT_LOG=1 is a test's switch for the window's way.
+  std::string logName = o.logFile, dumpName;
+  if (!o.logFile.empty()) {
+    LogOpenFile(o.logFile);
+    dumpName = o.logFile + ".dmp";
+  } else if (windowed || std::getenv("MOHO64UI_DEFAULT_LOG")) {
+    const std::string prefs = hostfs::CleanPath(o.prefsFile.empty() ? DefaultPrefsFile() : o.prefsFile);
+    const size_t slash = prefs.find_last_of('/');
+    logName = LogOpenDefault((slash == std::string::npos ? std::string(".") : prefs.substr(0, slash)) + "/logs", "moho64ui");
+    // (the dump's name is the log's with .dmp, so that the clean-up of old logs takes it along)
+    if (logName.size() > 4) dumpName = logName.substr(0, logName.size() - 4) + ".dmp";
+  }
+  ui::SetMenuNoticeLog(logName);
   if (!optionError.empty()) {  // (to the console as an unknown option is, and to the log when one is named)
     std::fprintf(stderr, "moho64ui: %s: not started\n", optionError.c_str());
     LogSetEcho(false);
@@ -325,6 +341,9 @@ int main(int argc, char** argv) {
   }
   ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
+  // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
+  // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
+  if (!logName.empty()) CrashSetReport(logName.c_str(), dumpName.c_str(), windowed);
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
@@ -512,7 +531,10 @@ int main(int argc, char** argv) {
   // them aloud; a run without a window mixes them when a test asks.
   ui::sound::SoundSystem sounds(&vfs);
   cfg.sound = &sounds;
-  if (windowed && !noSound && !sounds.OpenDevice()) Logf(LogLevel::Warning, "moho64ui: no sound device: the run is silent");
+  if (windowed && !noSound && !sounds.OpenDevice()) {
+    Logf(LogLevel::Warning, "moho64ui: no sound device: the run is silent");
+    ui::AddMenuNotice("No sound device was found: the game is silent until one is there.");
+  }
   // (ours) A live window with no device still moves its sounds on, by the clock (SoundSystem::RunWithoutDevice).
   if (windowed) sounds.RunWithoutDevice();
   // A live window never waits for the disk on its frame: a wave's bytes are brought in on the sound
@@ -639,6 +661,7 @@ int main(int argc, char** argv) {
       ui::SavePreferencesOf(front->L());
     } else {
       Logf(LogLevel::Warning, "moho64ui: the original game's preferences were not taken over (%s: %s): a fresh start", source.c_str(), why.c_str());
+      ui::AddMenuNotice("The original game's profile and settings could not be taken over (" + why + "): this is a fresh start.");
     }
   }
   bool ok = front->Boot();
@@ -838,6 +861,7 @@ int main(int argc, char** argv) {
     }
     if (!started) {
       Logf(LogLevel::Error, "moho64ui: Unable to launch %s: %s", commandLineMap.c_str(), lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
+      ui::AddMenuNotice("The map " + commandLineMap + " could not be launched.");
       commandLineMap.clear();
     }
     lua_settop(L, top);
@@ -1050,6 +1074,7 @@ int main(int argc, char** argv) {
       lap("(start: the session's load finished)");
       if (!finished) {  // (the original: "map %s failed. aborting session.", back to the front end)
         Logf(LogLevel::Error, "moho64ui: the game did not load: %s; back to the front end", why.c_str());
+        ui::AddMenuNotice("The game could not start: " + why + ".");
         prepared = Prepared{};  // (made before the session's end: its categories are the session's)
         if (!sessionIn.empty() || !commandLineMap.empty()) ok = false;  // (the run's own game: its exit code says so)
         session.End();
@@ -1217,6 +1242,7 @@ int main(int argc, char** argv) {
     std::string why;
     if (session.Rewind(&why)) return;
     Logf(LogLevel::Error, "moho64ui: the replay could not be started over: %s", why.c_str());
+    ui::AddMenuNotice("The replay could not be started over: " + why + ".");
     session.End();
     Logf(LogLevel::Info, "moho64ui: the game is left: back to the front end");
     freshFrontEnd();
@@ -1258,6 +1284,7 @@ int main(int argc, char** argv) {
         return;
       }
       Logf(LogLevel::Error, "moho64ui: the game could not be started over: %s", why.c_str());
+      ui::AddMenuNotice("The game could not be started over: " + why + ".");
     }
     session.End();
     Logf(LogLevel::Info, "moho64ui: the game is left: back to the front end");

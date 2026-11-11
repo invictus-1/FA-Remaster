@@ -59,6 +59,7 @@
 #include "user/bindings.h"
 #include "user/keymap.h"
 #include "user/replay_timeline.h"
+#include "user/notices.h"
 #include "user/user_state.h"
 #include "sound/sound_system.h"
 
@@ -3050,6 +3051,7 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   std::string error;
   if (!made->picture.Open(vfs_, "", &error)) {
     Logf(LogLevel::Warning, "moho64ui: the window's picture did not open (%s): the interface is shown without the renderer", error.c_str());
+    AddMenuNotice("The world's picture could not be opened (" + error + "): games are shown without it.");
     windowPictureFailed_ = true;
     return false;
   }

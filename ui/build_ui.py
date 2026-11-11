@@ -166,7 +166,8 @@ def main():
     # (src/ai: our own AI's native core, the engine's, from its batch 25; none of it before that, so nothing to compile)
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
-            add(f, cxxflags, True)
+            if os.path.basename(f) != "build_stamp.cpp":  # (added below, with the commit as its stamp)
+                add(f, cxxflags, True)
     if a.tracy:  # Tracy's client, unchanged (third_party/tracy), once
         add(os.path.join(ROOT, "third_party", "tracy", "TracyClient.cpp"), ["-std=c++20", "-w"], True)
     for f in sorted(glob.glob(os.path.join(UI, "**", "*.cpp"), recursive=True)):
@@ -190,6 +191,11 @@ def main():
         with open(stamp, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     add(stamp, ["-std=c++20"], True)
+    # The engine's build stamp (src/core/build_stamp.h: the first line of a default log, core/log.h LogOpenDefault, and
+    # a crash's "crash: build" line): this build's commit, "-dirty" with uncommitted changes. Without the build's
+    # time, unlike tools/build_zig.py's: the option would then differ at every build and the object be compiled each
+    # time (Flags); the exe's own time says when it was built.
+    add(os.path.join(ROOT, "src", "core", "build_stamp.cpp"), cxxflags + ['-DMOHO64_BUILD_STAMP="' + commit + ', moho64ui"'], True)
 
     newest_header = max(os.path.getmtime(h)
                         for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h")
