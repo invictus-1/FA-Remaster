@@ -101,6 +101,16 @@ int ScriptTraceback(lua_State* L) {
 
 void LogScriptError(const std::string& message) { LogWrite(LogLevel::Warning, message); }
 
+bool GetTableProtected(lua_State* L, int idx) {
+  if (lua_gpg_pgettable(L, idx) == 0) return true;
+  LogScriptError(std::string("Error running lua script: ") +
+                 (lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)") +
+                 " (in a table read of the engine's; the value counts as nil)");
+  lua_pop(L, 1);
+  lua_pushnil(L);
+  return false;
+}
+
 void ScriptState::AddExtraHooks(const std::map<std::string, ExtraHook>& hooks) {
   for (const auto& [path, h] : hooks) {
     auto it = extraHooks_.find(path);

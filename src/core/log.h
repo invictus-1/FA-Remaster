@@ -23,6 +23,13 @@ void LogSetEcho(bool echoToStdout);
 // digits (a digit among them) as '#' (addresses and large numbers differ run to run). Counting only: the log is
 // the same with it as without.
 void LogTallyToFile(const std::string& path);
+// A tripwire at a declared gap: something the engine knowingly does not carry out yet has just happened in a game (an
+// order with no task behind it, a script calling an engine function that is a stub). Log only: nothing of the game
+// changes. The message is written as a warning the first time it comes in this process (a gap an AI reaches every
+// beat would fill the log), and EVERY case is counted for MOHO64_WARNINGS (`times` cases at once, for a count taken
+// elsewhere), so the gate's warning check sees a gap that a change newly reaches, or reaches more often. Keep what
+// differs from case to case (ticks, unit ids) out of the message: the same kind of case must give the same text.
+void LogTripwire(std::string_view message, int times = 1);
 void LogWrite(LogLevel level, std::string_view message);
 void Logf(LogLevel level, const char* fmt, ...)
 #if defined(__GNUC__)

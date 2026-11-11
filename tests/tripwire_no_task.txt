@@ -1,0 +1,16 @@
+# An order with no task behind it is finished at once, and the game shows nothing of it. The tripwire (core/log.h
+# LogTripwire; sim/commands.cpp, the dispatcher's last case) makes each such case a counted warning: the log names
+# the kind once, MOHO64_WARNINGS counts every case (the gate's warning lists). An --orders file for moho64, with any
+# two-army session file, e.g.
+#   set MOHO64_WARNINGS=out.warn
+#   moho64 --init offline\bin\init_lab.lua --session fa-remaster\tests\reclaim_two_games_a.lua --seed 1 --ticks 120
+#          --orders fa-remaster\tests\tripwire_no_task.txt --log out.log
+# Army 1's commander (unit id 0) is given TransportUnloadSpecificUnits (command type 25), which has no task for a unit
+# that is no transport, three times, once it has warped in (an order given earlier waits in its queue, and the next
+# order replaces it there: three orders at beats 10, 20 and 30 were one case). out.log must hold the line once and
+# out.warn must count it three times:
+#   warning: moho64 tripwire: command TransportUnloadSpecificUnits has no task for uel0001 (mobile): the order is finished at once, not carried out
+#   3	moho64 tripwire: command TransportUnloadSpecificUnits has no task for uel0001 (mobile): the order is finished at once, not carried out
+80 issue 25 0 300 0 300
+90 issue 25 0 300 0 300
+100 issue 25 0 300 0 300

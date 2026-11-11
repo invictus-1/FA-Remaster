@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include "core/build_stamp.h"
@@ -20,8 +21,10 @@ bool g_echo = true;
 std::map<std::string, int>* g_tally = nullptr;
 std::string* g_tallyPath = nullptr;
 int g_tallyTotal = 0;
+// LogTripwire: the messages this process has written already (log only; never freed)
+std::set<std::string>* g_tripped = nullptr;
 
-void TallyMessage(std::string_view message) {  // (the caller holds g_mutex)
+void TallyMessage(std::string_view message, int times = 1) {  // (the caller holds g_mutex)
   const std::string_view first = message.substr(0, message.find('\n'));
   auto digit = [](char c) { return c >= '0' && c <= '9'; };
   auto alnum = [&](char c) { return digit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
@@ -48,8 +51,8 @@ void TallyMessage(std::string_view message) {  // (the caller holds g_mutex)
     else key.append(word);
     i = j;
   }
-  ++(*g_tally)[key];
-  ++g_tallyTotal;
+  (*g_tally)[key] += times;
+  g_tallyTotal += times;
 }
 
 void TallyWrite() {
@@ -134,9 +137,26 @@ void LogTallyToFile(const std::string& path) {
   std::atexit(TallyWrite);
 }
 
+namespace {
+void WriteLines(LogLevel level, std::string_view message);  // (the caller holds g_mutex)
+}
+
 void LogWrite(LogLevel level, std::string_view message) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (g_tally && (level == LogLevel::Warning || level == LogLevel::Error)) TallyMessage(message);
+  WriteLines(level, message);
+}
+
+void LogTripwire(std::string_view message, int times) {
+  if (times <= 0) return;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (g_tally) TallyMessage(message, times);
+  if (!g_tripped) g_tripped = new std::set<std::string>();
+  if (g_tripped->insert(std::string(message)).second) WriteLines(LogLevel::Warning, message);
+}
+
+namespace {
+void WriteLines(LogLevel level, std::string_view message) {
   const char* prefix = Prefix(level);
   // Every line of a multi-line message carries the level prefix, as in the original log.
   size_t start = 0;
@@ -164,6 +184,7 @@ void LogWrite(LogLevel level, std::string_view message) {
     start = nl + 1;
   }
 }
+}  // namespace
 
 void Logf(LogLevel level, const char* fmt, ...) {
   char buf[4096];

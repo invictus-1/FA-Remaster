@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,6 +72,11 @@ class ScriptState {
 
   static ScriptState* From(lua_State* L);
 
+  // What script/fastlib_reclaim.cpp keeps about this state's tables (the reclaim cells' cache, made at its first
+  // use). It names tables, strings and handle boxes by address, and a table's serial starts again in every state,
+  // so it lives and goes with the state: the next game of the same program run never meets it.
+  std::shared_ptr<void> reclaimCells;
+
   // Called for every Register*Blueprint(bp) with the blueprint table at stack index 1.
   std::function<void(lua_State*, const char* kind)> onRegisterBlueprint;
   std::function<void()> onLoaderProgress;
@@ -92,6 +98,13 @@ int ScriptTraceback(lua_State* L);
 
 // Log a script error the way the original does (WARN with the message and traceback).
 void LogScriptError(const std::string& message);
+
+// lua_gettable for host code that may run outside a protected call (the table at idx, the key on top; the key is
+// replaced by the value): a class in an imported module's table, a method of an object's table. Without an error it
+// is lua_gettable (lua_gpg_pgettable: the same value, nothing made, no collector check). A metamethod that raises
+// (an imported module's table falls back to the globals, and FAF's globals raise for an unknown name; a mod's own
+// __index) is logged as a script error and the answer is nil: false. It used to end the program (ScriptPanic).
+bool GetTableProtected(lua_State* L, int idx);
 
 // Load the concatenation of a script and its hooks as one chunk and push it.
 // Returns 0 on success (function on the stack) or a Lua error code (message on the stack).

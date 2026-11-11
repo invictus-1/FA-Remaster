@@ -1108,6 +1108,37 @@ LUA_API int lua_cpcall (lua_State *L, lua_CFunction func, void *ud) {
 }
 
 
+/*
+** moho64: lua_gettable in a protected call of its own (review of 2026-11-09, R3). Host code that reads a script's
+** table outside any lua_pcall (a class in a module's table, a method of an object's table) ended the program when
+** an __index raised: an imported module's table falls back to the globals, and FAF's globals raise for an unknown
+** name ("access to nonexistent global variable"), so one missing name in a mod's file was enough; luaD_throw found
+** no handler and called the panic function. Without an error this is lua_gettable: the same value in the key's
+** place, no object made, no collector check (the state's heap and serials are what they were). With one: the
+** error's code is returned and its message is in the key's place (no error function runs: no traceback).
+*/
+struct PGetS {  /* data to `f_pgettable' */
+  int idx;
+};
+
+
+static void f_pgettable (lua_State *L, void *ud) {
+  StkId t = luaA_index(L, cast(struct PGetS *, ud)->idx);
+  setobj2s(L->top - 1, luaV_gettable(L, t, L->top - 1, 0));
+}
+
+
+LUA_API int lua_gpg_pgettable (lua_State *L, int idx) {
+  struct PGetS c;
+  int status;
+  lua_lock(L);
+  c.idx = idx;
+  status = luaD_pcall(L, f_pgettable, &c, savestack(L, L->top - 1), 0);
+  lua_unlock(L);
+  return status;
+}
+
+
 LUA_API int lua_load (lua_State *L, lua_Chunkreader reader, void *data,
                       const char *chunkname) {
   ZIO z;

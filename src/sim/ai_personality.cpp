@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "core/log.h"
+#include "script/script_state.h"
 #include "sim/sim.h"
 
 namespace moho {
@@ -51,7 +52,7 @@ void ReadData(Sim& sim, lua_State* L, AiPersonality* p) {
     return;
   }
   lua_pushstring(L, "AIPersonalityTemplate");
-  lua_gettable(L, -2);
+  GetTableProtected(L, -2);
   if (!lua_istable(L, -1)) {
     Logf(LogLevel::Warning, "Can't find AIPersonalityTemplate");
     lua_settop(L, top);
@@ -159,7 +160,7 @@ AiPersonality* CreateAiPersonality(Sim& sim, lua_State* L) {
   bool haveClass = false;
   if (sim.PushImport(L, "/lua/aipersonality.lua")) {
     lua_pushstring(L, "AIPersonality");
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     haveClass = lua_istable(L, -1);
   }
   if (!haveClass) {

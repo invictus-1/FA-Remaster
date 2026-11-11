@@ -410,7 +410,7 @@ Platoon* Sim::CreatePlatoon(lua_State* L, Army* army, const std::string& name, c
   int top = lua_gettop(L);
   if (!PushImport(L, "/lua/platoon.lua")) return nullptr;
   lua_pushstring(L, "Platoon");
-  lua_gettable(L, -2);
+  GetTableProtected(L, -2);
   auto owned = std::make_unique<Platoon>();
   Platoon* p = owned.get();
   p->army = army;

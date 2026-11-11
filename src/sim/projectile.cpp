@@ -1082,11 +1082,9 @@ int l_weapon_CreateProjectile(lua_State* L) {
   if (!w->bp) InitUnitWeapon(L, w);
   Unit* u = w->unit;
   if (!w->projBp) {
-    static std::atomic<bool> logged{false};  // (once a process)
-    if (!logged.exchange(true)) {
-      Logf(LogLevel::Debug, "moho64: %s:%s:CreateProjectile: no projectile blueprint (instahit not implemented)",
-           u->blueprint ? u->blueprint->id.c_str() : "?", w->label.c_str());
-    }
+    // (a tripwire, core/log.h: every case counted as a warning, the log names each weapon once)
+    LogTripwire(std::string("moho64 tripwire: ") + (u->blueprint ? u->blueprint->id : "?") + ":" + w->label +
+                ":CreateProjectile: the weapon has no projectile blueprint (an instant hit is not carried out)");
     lua_pushnil(L);
     return 1;
   }

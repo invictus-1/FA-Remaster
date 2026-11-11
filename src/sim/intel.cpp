@@ -407,7 +407,7 @@ ReconBlip* MakeBlip(Sim& sim, lua_State* L, Unit* u, bool fake = false) {
   bool ok = lua_pcall(L, 1, 1, top + 1) == 0 && lua_istable(L, -1);
   if (ok) {
     lua_pushstring(L, "Blip");
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     lua_pushcfunction(L, ScriptTraceback);
     lua_insert(L, -2);
     ok = lua_pcall(L, 0, 1, lua_gettop(L) - 1) == 0 && lua_istable(L, -1);

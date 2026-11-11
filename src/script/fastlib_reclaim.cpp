@@ -33,12 +33,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 #include "script/fastlib.h"
 #include "script/script_handle.h"
+#include "script/script_state.h"
 
 namespace moho {
 namespace {
@@ -192,8 +193,20 @@ struct CellCache {
   }
   static size_t Hash(const void* p) { return static_cast<size_t>((reinterpret_cast<uintptr_t>(p) >> 4) * 0x9E3779B97F4A7C15ull >> 20); }
 };
-std::mutex g_cellsMutex;  // (two sims in one process: one lock, the tables' addresses are distinct)
-std::unordered_map<const void*, CellCache> g_cells;
+// The cells' caches of one Lua state, owned by its ScriptState (reclaimCells). Until 2026-11-10 this was one map for
+// the process, never cleared: an entry is recognised by addresses (the cell's table, the id string, the prop's table)
+// and by serials and write stamps, which start again in every state. A second game of the same program run whose
+// state lands on the first game's addresses then takes entries of the first: its three values, and a handle box in
+// the first state's freed memory (review of 2026-11-09, R7). Not seen with the game's allocator (16 games in one run
+// put the same table at 16 addresses); tests/reclaim_state_cache_test.cpp forces the addresses and shows it.
+// A state runs on one thread at a time and the Lua API is never called from a pool task, so there is no lock.
+using CellMap = std::unordered_map<const void*, CellCache>;
+CellMap* Cells(lua_State* L) {
+  ScriptState* st = ScriptState::From(L);
+  if (!st) return nullptr;  // (a state the engine did not make: no cache, the full re-sum)
+  if (!st->reclaimCells) st->reclaimCells = std::make_shared<CellMap>();
+  return static_cast<CellMap*>(st->reclaimCells.get());
+}
 
 // The box of the handle the value at idx carries (IsDestroyedValue's reads, without the collector's check: the full
 // re-sum calls it with checkGc false). nullptr: no handle.
@@ -267,6 +280,8 @@ int CachedCellTotals(lua_State* L) {
 int CachedCellTotalsImpl(lua_State* L) {
   if (lua_type(L, 1) != LUA_TTABLE) return 0;
   lua_settop(L, 1);
+  CellMap* cells = Cells(L);
+  if (!cells) return FullCellTotals(L);
   static thread_local std::vector<lua_GpgPair> pairs;
   if (pairs.size() < 64) pairs.resize(64);
   int n = lua_gpg_tablepairs(L, 1, pairs.data(), static_cast<int>(pairs.size()));
@@ -279,8 +294,7 @@ int CachedCellTotalsImpl(lua_State* L) {
   const void* cell = lua_topointer(L, 1);
   unsigned cellSerial = 0, cellStamp = 0;
   lua_gpg_tablestamp(cell, &cellSerial, &cellStamp);
-  std::lock_guard<std::mutex> lock(g_cellsMutex);
-  CellCache& cache = g_cells[cell];
+  CellCache& cache = (*cells)[cell];
   if (cache.serial != cellSerial) {
     cache = CellCache{};
     cache.serial = cellSerial;
