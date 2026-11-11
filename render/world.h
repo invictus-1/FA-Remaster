@@ -736,6 +736,13 @@ class World {
   // Battle scars (decals.h, Decals::battleScars): the scorches and craters of the fighting stay on the ground,
   // weathering, up to a most for cost. Off by default (the game's own times).
   bool battleScars = false;
+  // [settled] Settled scars (decals.h, Decals::settleScars; the review of 2026-11-09, ground 14): a battle scar that has
+  // weathered to its floor is kept for the whole game (the most of the scars then only bounds the fresh ones: the first
+  // battles' scars no longer go in a long game), and where the settled scars in view lie thick they are laid into one
+  // picture and lit once over the ground, in place of each lit by itself (a spot shelled many times cost one lighting
+  // a layer). A lost graphics device loses none of them (Keep). With battle scars; a scene none of whose scars has
+  // settled is to the last pixel as before. On by default; false (the viewer's --scars-unsettled): as before.
+  bool settledScars = true;
   // [scars] The marks' relief lit as the ground (decals.h, Decals::modernRelief; Chris, 2026-10-20): the normal decals
   // (craters' dents, the remastered map's trenches and old craters) lit by the modern light, so that they keep their
   // look by night (no dark squares, white rims, doubled rings), soften under lying snow, and the map's plain normal maps
@@ -1668,11 +1675,13 @@ class World {
   //   Carried over: how the blueprints look (SetLooks); the ground as the game laid it flat; the scenery as it stands
   //   (wreckage where it lies, burnt and felled trees, what was reclaimed gone; a wreck's age, so one still hot goes on
   //   cooling); the scripts' effects that last (Effects::Keep: what hangs on units, the pads under buildings, the
-  //   deposits' marks, scorches and craters not yet run out); how wet the ground is and how much snow lies; the
+  //   deposits' marks, scorches and craters not yet run out); [settled] with settledScars the battle scars past their
+  //   time (Decals::KeepScars: where each lies, when it was laid; settled or still weathering; not the burnt plants,
+  //   the holes or the debris beside them); how wet the ground is and how much snow lies; the
   //   interface's lists and the switches WorldPicture sets (selection, hover, ghosts, shapes, ranges, order lines, meshes,
   //   decals, borders, the playable part, the icons' colours; life bars, work bars, unexplored, icons, selection marks).
   //   Not carried over, because it lives on the card or is the renderer's own doing over the frames, and begun afresh:
-  //   the battle scars burnt into the ground and the burnt plants, tracks and dents in the ground and in the snow, the
+  //   the battle scars burnt into the ground (without settledScars) and the burnt plants, tracks and dents in the ground and in the snow, the
   //   marks on units (hits, dirt, snow on them), rocks' scars, debris lying, the smoke, fire and dust in the air (what
   //   still burns smokes again), explosions under way, ripples and surf, the lamps' fading, and what the picture keeps
   //   from frame to frame (the temporal upscaler, the light in the air, the clouds, the bounce light: settled again
@@ -1690,6 +1699,7 @@ class World {
     std::vector<Prop> props;                   // in the order of their beats
     std::vector<FramePropEvent> propsPending;  // (told and not yet due)
     std::vector<FrameEffectEvent> effects;
+    std::vector<Decals::KeptScar> scars;  // [settled] (Decals::KeepScars: with settledScars)
     float wet = 0, snowLying = 0;
     std::unordered_set<uint32_t> selected;
     uint32_t hover = 0xffffffffu;

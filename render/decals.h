@@ -129,6 +129,80 @@ class Decals {
   int mostScars = 2000;
   float scarWeathering = 600, scarFloor = 0.5f;
   int Scars() const { return scars_; }  // (scars there now, the ones fading out included)
+  // [settled] Settled scars (World::settledScars, set by the world each frame; the review of 2026-11-09, ground 14; Chris:
+  // a place that looks lived in and fought over). As above, the scars are kept as single pictures, each drawn and lit by
+  // itself, and only `mostScars` of them: in a long game the scars of the first battles went as the most was passed, and
+  // where a battle piled dozens on one spot the ground there was lit once for every layer (500 scorches on one patch
+  // seen from close: 2.6 ms of the card's time at 1920 x 1080, 2.4 times the ground's own). With this on:
+  //   - a scar that has weathered to its floor, and its glow gone out (hot metal), is SETTLED: it leaves the list the
+  //     most counts and is kept, by where it lies (squares of kSettledCell world units, so that a frame looks only at the
+  //     squares in view), for the whole game, up to `mostSettled`. Past `mostScars` the oldest scar no longer fades out:
+  //     it settles as it is (once its glow is out) and goes on weathering there. So the most only bounds the fresh ones.
+  //   - it settles while no view shows it (not shown for half a second: off the screen, or beyond its cutoff), so that
+  //     what changes when it does (its place in the order, below) is never seen to change; only one that settles
+  //     because the most is passed may do so in view, where before it faded out altogether. (`settleInView`: at once,
+  //     for tests.)
+  //   - where the settled scars in view cover much (layer by layer more than 0.6 of the scene's pixels: a patch shelled
+  //     for minutes, seen from close) they are laid, unlit, into one picture of the scars as large as the scene's
+  //     (LaySettled, before Draw: first what the place itself leaves of any of them - the slope, the shell holes - once a
+  //     pixel; then each scar's box draws its colour and how much of it is there over what is there, and a second time
+  //     its relief's lean and its share of the snow: three texture reads a layer), and that picture is then lit ONCE over
+  //     the ground, as a mark is (Draw). The light of a mark is its colour times the light plus what is the same for
+  //     every mark, so one lighting of the layers laid over each other is the layers lit one by one and laid over each
+  //     other; only where scars with different relief overlap does the lean of the upper one count by how much of it is
+  //     there, in place of each lit by its own (500 on one patch: 0.5 % of the picture's pixels differ by more than 2 of
+  //     255; scars apart from each other: none by more than 2). The same 500: 1.05 ms. Under that cover their own picture
+  //     would cost more than it saves (three passes over the whole scene, 0.13 ms): each settled scar in view is then
+  //     drawn as a picture is, to the last pixel as before it settled (`litOnce`: 1 always their own picture, 0 never,
+  //     -1 as it pays; tests).
+  // A settled scar is in everything else a scar as before: faded by its distance as its cutoff says, gone on steep
+  // ground and over a shell hole, under or on the snow by when it was laid. A crater's dent (a normal decal) settles too
+  // and is drawn as before (it multiplies the ground's light: the order does not count).
+  // What changes when a scar settles is its place in the order: the settled ones stand together where the lowest
+  // texture of them stands among the pictures (their own picture is lit there; drawn one by one they are drawn there),
+  // so a settled scar lies under every scar of a higher texture not yet settled, where before the two were drawn in
+  // the order of their textures, the older over the newer as often as not. (60 scars on a patch, half of them settled:
+  // 0.2 % of the picture's pixels differ by more than 2 of 255, none by more than 13.)
+  // Why not a picture kept in the ground's own space, as the deep tracks' field (the review's sketch): every scar has
+  // its own cutoff (10 to 600 world units: a bullet's scuff is drawn from close only, a death's scorch from far), its own
+  // relief, and a size from 0.04 to 28 world units (in a late 4v4 half of the 1083 under 0.5 units across) with a
+  // picture of 128 and more texels across: no texture over the map can hold them (a 0.5-unit scuff wants 250 texels a
+  // unit close by; 4 a unit, 4096 x 4096 on a 20 km map, would blur every scar the moment it settled), only a picture
+  // made for where the camera is and what it shows - which this is, each frame, at the screen's own detail, from the
+  // scars' own pictures. What is kept for the whole game is the list (some 130 bytes a scar), not a texture: so a lost
+  // graphics device loses none of it (KeepScars).
+  // The scars' picture: two targets of four half floats a pixel and one of one byte, as large as the scene (1920 x 1080:
+  // 35 MB; made when first needed, let go ten seconds after no view needed one).
+  // false: as before, to the last pixel. Scars settled while it was on go back among the others when it is turned off.
+  bool settleScars = false;
+  bool settleInView = false;
+  int litOnce = -1;
+  void SetSettleScars(bool on);  // (each frame, after battleScars: its shaders made the first time it is on)
+  int mostSettled = 60000;
+  int Settled() const { return settledCount_; }  // (settled scars kept now)
+  int settledLaid = 0;                           // (the last frame: settled pictures laid into the scars' picture)
+  static constexpr float kSettledCell = 32.0f;
+  // [settled] The settled scars' picture for this frame (above): what has weathered to its floor settles, and the settled
+  // pictures in view are laid into a picture of their own, in passes of its own: so called by the world after the
+  // ground is drawn and BEFORE the pass Draw is in (`sceneDepth` as Draw's: the scene's depth with the ground in it,
+  // not bound to be drawn into). Not called in a frame: Draw draws no settled scar.
+  void LaySettled(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now);
+  // [settled] (World::Keep / Give, [devicelost]) The battle scars a world made anew on another graphics device takes
+  // over, with settleScars: every scar past the time the game gave it, settled or not (those not yet past it the scripts'
+  // effects lay again, Effects::Keep), as it was laid: its picture's name, place, size, when, and how much of the lying
+  // snow covers it. KeepScars reads this object's own memory alone, nothing of the device; GiveScars gives them to a
+  // map just opened, before its first frame: they are laid with that frame (LaySettled), when the host has set the looks
+  // their pictures are read by (they are the game's, not the map's own). Without settleScars: none, as before.
+  struct KeptScar {
+    std::string texture;
+    Vec3 centre;
+    float sizeX = 0, sizeZ = 0, heading = 0, cutoff = 0;
+    double born = 0;
+    float seconds = 0, snow = 1;
+    bool normal = false, settled = false;
+  };
+  void KeepScars(double now, std::vector<KeptScar>* out) const;
+  void GiveScars(const std::vector<KeptScar>& scars) { givenScars_ = scars; }
   static bool IsScar(const std::string& texture);
   // Hot metal (World::hotMetal, hot_metal.h; set by the world each frame, with `heat` for its timing): a scorch or a
   // crater laid while it is on (IsScar) has its middle glowing and cooling, seconds to a minute by its size, from when
@@ -246,7 +320,7 @@ class Decals {
 
   float glow = 2.5f;  // the modern look's brightness of a light on the ground (as Particles::glow)
   int drawn = 0;  // in the last Draw
-  int Count() const { return static_cast<int>(decals_.size() + marks_.size()); }
+  int Count() const { return static_cast<int>(decals_.size() + marks_.size()) + settledCount_; }
 
  private:
   struct Decal {
@@ -269,6 +343,8 @@ class Decals {
     bool original = false;  // [tarmac] laid by the original effects (`addingOriginal`)
     bool mapOwn = false;    // [tarmac] one of the map's own (laid before the first frame)
     float nearCutoff = 0;   // [decalfade] (SetNearCutoff)
+    mutable double seenAt = -1e30;  // [settled] when a view last showed it (Show; seconds of the wall's clock, wall_)
+    uint16_t name = 0xffff;         // [settled] a scar's picture's name among scarNames_ (KeepScars)
   };
   // [decalfade] How much of a decal its distance from the eye leaves (fadeFraction, lod): 0..1, or -1 where it is not
   // drawn at all (beyond its cutoff).
@@ -320,8 +396,58 @@ class Decals {
     int kind;  // drawn in this order: 0 pictures, 1 normal decals, 2 lights, 3 marks
     Instance instance;
     bool mapOwn = false;  // [tarmac] (with remastered pads drawn: the map's own pictures before them, the rest after)
+    bool settled = false;  // [settled] not a decal: the place the settled scars' picture is lit at
+    bool old = false;      // [settled] a settled scar drawn as a picture is (too few in view for their own picture)
+    uint32_t id = 0;       // [settled] (a settled picture's own number: laid in the order they were made)
   };
   std::vector<Visible> visible_;
+  // [settled] (settleScars) The settled scars of one square of the ground (the oldest first), and what a frame has to
+  // know of them all to pass the square over: how far a scar of it reaches past its middle, the lowest and highest of
+  // their middles, the farthest cutoff (anyCutoff false: one of them has none).
+  struct Cell {
+    std::vector<Decal> scars;
+    float reach = 0, low = 1e30f, high = -1e30f, cutoff = 0;
+    bool anyCutoff = true;
+  };
+  std::unordered_map<uint64_t, Cell> cells_;
+  int settledCount_ = 0;
+  static uint64_t CellKey(float x, float z) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / kSettledCell)))) << 32) |
+           static_cast<uint32_t>(static_cast<int32_t>(std::floor(z / kSettledCell)));
+  }
+  // How much of a battle scar is there by its age (weathering after the game's time; fading out once the most is passed).
+  float ScarAlpha(const Decal& d, double now) const;
+  bool Glowing(const Decal& d, double now) const;  // (hot metal: its middle still glows)
+  void Settle(Decal&& d);                          // (into its square; past mostSettled the oldest of all goes)
+  void Unsettle(double now);                       // (settleScars turned off: all back among the others)
+  // A decal as the shader draws it this frame, or false: not in view, beyond its cutoff, or not yet there.
+  bool Show(const Decal& d, const View& view, double now, bool overWater, Visible* out);
+  std::vector<Visible> settledVisible_;       // this frame's settled pictures, in the order they are laid
+  std::vector<Visible> settledDents_;         // this frame's settled dents in view (drawn by Draw as before)
+  bool settledNow_ = false;                   // LaySettled has been called for the frame Draw draws
+  bool settledLit_ = false;                   // (and has laid a picture for Draw to light)
+  uint32_t settledFirst_ = 0;                 // (the lowest texture among those laid: where their picture is lit, Draw)
+  struct SettledPicture {                     // the scars' picture at one size of the scene (a side picture has its own)
+    int width = 0, height = 0;
+    gfx::Texture colour, lean, place;         // (place: what the slope and the holes leave of a scar at each pixel)
+    double usedAt = 0;                        // (wall_)
+  };
+  std::vector<SettledPicture> settledPictures_;
+  int settledPicture_ = -1;                   // (this frame's)
+  gfx::Pipeline settledLay_[2][2];            // [colour; lean and snow][without, with the snow ground's]
+  gfx::Pipeline settledLight_[2];             // [without, with the snow ground's]
+  gfx::Pipeline settledPlace_;
+  bool settledTried_[2] = {};
+  bool settledSnow_ = false;                  // (this frame's are laid, and so lit, with the snow ground's)
+  bool settledPays_ = false;                  // (the scars in view had their own picture last frame: litOnce)
+  double wall_ = 0;                           // (the wall's clock at this drawing, seconds: Decal::seenAt)
+  std::vector<std::string> scarNames_;        // (the scars' pictures' names as the scripts gave them: Decal::name)
+  uint16_t ScarName(const std::string& texture);
+  std::vector<KeptScar> givenScars_;          // (GiveScars: laid by the next LaySettled)
+  void LayGivenScars();
+  bool SettledPipelines(bool snow);
+  void CameraConstants(const View& view, const Camera& camera, float* twenty) const;
+  void SnowConstants(const float* cameraConstants, float* thirtyTwo) const;
   // [tarmac] the pads' names (Tarmacs::Key) and the material each is drawn in (-2: not looked up yet); this frame's pads
   std::vector<std::string> tarmacKeys_;
   std::vector<int> tarmacMaterial_;

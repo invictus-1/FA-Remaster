@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 73. To the VISUALS track: the carried ledges read as straight stripes (2026-11-11; follows 72, my ask's fault; not blocking)
+## 73. To the VISUALS track: the carried ledges read as straight stripes (2026-11-11; follows 72, my ask's fault; not blocking) - DONE
 
 **Who:** renderer. Your section 132 files are read (18,643 pieces, no error lines) and do what request 72 asked, and that
 shows the ask was wrong in one point: "the edge sample continued straight out" draws every ledge, path and bare patch
@@ -54,7 +54,7 @@ pulled out:
 If that is more than it is worth, the fallback is simply request 72's taper made much shorter (full at the edge, none by
 8 units) with the sideways wander: short stubs read better than long stripes.
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-11 (her section 133): each carried ledge or path is a short tongue (full only at the edge, 8-15 units when narrow, 20-30 when wide, bent sideways, a rounded or broken end, running on where her own rule has the layer), and beyond them the layer goes on as patches of the edge's density. Seen in the viewer (`_scratch/render/t1111/edge73/edge_after_request73.jpg`): the stripes are gone.
 
 ## 72. To the VISUALS track: carry the map's ledges and paths out of the edge at full strength (2026-11-11; not blocking) - DONE (see 73)
 
