@@ -34,7 +34,24 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking) - A + C DONE, B in work
+## 72. To the VISUALS track: carry the map's ledges and paths out of the edge at full strength (2026-11-11; not blocking)
+
+**Who:** renderer. The surround no longer mirrors the map's ground over the first 16-40 units (the doubled pattern gave
+the edge away): the map's masks are now held at the edge and handed over to yours within 6 units. The symmetry across
+the edge is gone (north 0.23 -> 0.07, south 0.28 -> 0.00, west 0.17 -> 0.00, east 0.32 -> 0.06), but now the map's rock
+ledges, paths and bare patches END at the edge line, because your masks agree with the map's in their shares but not
+place by place (the same layer leads at 49 % of the edge's places). A ledge stopping in a straight line is its own tell
+(`_scratch/render/t1109/surround/sheets4/1b`, the game's camera at the north edge; `pics/game_n_crop.png`).
+
+**Asked:** carry the map's scree, rock and pale rock, and its soil paths, out of the edge at FULL strength over the first
+20-30 units (the map's own shares at the edge sample, continued along the way out), tapering to your 0.62-0.68 after
+that and ending them naturally (narrowing, breaking up) rather than at a fixed distance. Then the short hand-over has
+nothing to cut. Under partial snow this also matters: the map's bare ledges end at the edge and your smoother ground
+beyond holds more snow (the north edge's step at snow 0.5 grew from +11 to +18.5 luma).
+
+**Answer:** (none yet)
+
+## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking) - DONE
 
 **Who:** renderer.
 
@@ -75,7 +92,7 @@ run, and written but untested are: a loss while a map opens behind, the second w
 `std::string why; if (!render::WorldPicture::ShaderCompilerReady(&why))` -> show "FA Remastered cannot start: " + why
 and exit. Without that call `Open` fails with the same sentence in `error` (no hang any more).
 
-**Answer:** 2026-11-10 (main 33a78b7c; docs/ui-answers.md). A: Map Edge's 'beyond' (the saved default of every player) now sets mapSurround on, a third choice "Mirrored Map" ('mirror') sets it off, the key 'surround' is read as 'beyond'; the menu's flight shows the land. C: ShaderCompilerReady is asked at the start, "FA Remastered cannot start: <why>", exit 3. B: being built by the ui's helper since 21:05.
+**Answer:** 2026-11-10 (main 33a78b7c; docs/ui-answers.md). A: Map Edge's 'beyond' (the saved default of every player) now sets mapSurround on, a third choice "Mirrored Map" ('mirror') sets it off, the key 'surround' is read as 'beyond'; the menu's flight shows the land. C: ShaderCompilerReady is asked at the start, "FA Remastered cannot start: <why>", exit 3. B: being built by the ui's helper since 21:05. B: BUILT 2026-11-11 (the ui's helper; headless cases green: a game's picture and the menu background's, a real loss by LoseDeviceForTest noticed at Present, back after 4 to 7 s at 1080p, a photo dropped and the next made, five rounds without a device then the orderly close); LANDED 2026-11-11 (main 013b30dd, in build-ui since 06:48); its test runs pass their own --shader-cache folder. In a LIVE WINDOW at 1920x1080: a running game recovered four times (back after 5.1 to 9.4 s) and from a REAL removal (0x887a0005 noticed at Present), 49 checks, 0 failed, the game's beats going on meanwhile; the menu with its flight twice (10.5 and 11.9 s). NOT yet run: the live window's path (layers, SetBackdrop, the second window, a map opening behind); the program never has two pictures alive at once today.
 
 ## 70. To the VISUALS track: the surround's soil share, my wrong number (2026-11-10; not blocking) - DONE
 
@@ -137,7 +154,7 @@ shadows from or onto the surround's trees (the shade under them is painted).
 
 **Answer:** done the same evening (her section 124): SETONS_R_surround_masks2.png (RGB = layers 4, 6, 8, json "masks2"; the first masks picture changed with it, seven shares in the map's order), the woods matched at the edge (18,400 entries, 8,487 tree groups), json "decor_trees": [150, 420]. The reading of masks2 is being built.
 
-## 67. To the INTERFACE track: a player option for the warp-in in faction colours (2026-11-10, Chris's standing rule; not blocking)
+## 67. To the INTERFACE track: a player option for the warp-in in faction colours (2026-11-10, Chris's standing rule; not blocking) - DONE
 
 **Who:** renderer; the ui asked for the entry (every new remastered look is a player option with the earlier look as Off).
 
@@ -152,7 +169,7 @@ shadows from or onto the surround's trees (the shade under them is painted).
   of a warp-in, and one more small texture set kept (four 1024 sheets). Fine in every preset from Low up.
 - **Name:** "Warp-in in Faction Colours" is right.
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-10 (main c43c0b59; docs/ui-answers.md): Options > Remastered > Effects & Battle > "Warp-in in Faction Colours" (remaster_warpin_colours; off in the Off preset, on from Low).
 
 ## 66. To the VISUALS track: the surround's detail files, two changes (2026-11-10; not blocking, the drawing goes on meanwhile) - DONE
 

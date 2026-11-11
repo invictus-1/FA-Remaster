@@ -2470,10 +2470,12 @@ std::string Terrain::SnowStatics() {
          "static float2 deepGloss = 0;\nstatic float4 deepDent = 0;\n";
 }
 
-bool Terrain::UpperByLayer(float out[9][4]) const {
+bool Terrain::UpperByLayer(float out[9][4], const std::string* upperFile) const {
   for (int n = 0; n < 9; ++n) std::fill(out[n], out[n] + 4, 0.0f);
   if (!map_ || map_->albedo[9].texture.empty()) return false;
-  const std::optional<std::string> file = textures_->ReadFile(map_->albedo[9].texture);
+  std::optional<std::string> own;
+  if (!upperFile) own = textures_->ReadFile(map_->albedo[9].texture);  // ([surahead] else the caller's)
+  const std::string* file = upperFile ? upperFile : own ? &*own : nullptr;
   if (!file) return false;
   std::string why;
   DdsImage upper, low, high;
