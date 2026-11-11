@@ -140,6 +140,34 @@ DXGI_FORMAT ToDxgi(AttrType t) {
 void Complain(const char* what, HRESULT hr) {
   fprintf(stderr, "render: Direct3D 12: %s failed (0x%08lx)\n", what, static_cast<unsigned long>(hr));
 }
+// [devicelost] (the same under a name the device's own Complain, which hides this one in its functions, can call)
+void ComplainPlain(const char* what, HRESULT hr) { Complain(what, hr); }
+
+// [devicelost] Whether a device of this program was lost before (any device's: a device made afterwards treats the kept
+// pipelines' file with care, D3D12PipelineStore::Open).
+std::atomic<bool> gDeviceLostHere{false};
+
+// [devicelost] Direct3D's device under every device of this program alive now (one entry for each of ours). Direct3D 12
+// keeps ONE device a card for the whole program: two of ours on one card are the same device underneath, and lost
+// together. A new one made while another of ours still holds the lost one is a second Direct3D device beside it, and
+// that state is not sound: measured in the viewer (its own device held while the picture made a new one), the new device
+// took none of the kept pipelines (0x887e0001) and hung within a few frames of a game (DXGI_ERROR_DEVICE_HUNG, three
+// times of three; with the old one let go of first, neither). So Init makes no device while a lost one is held.
+std::mutex gDevicesLock;
+std::vector<ID3D12Device*> gDevices;
+
+// [devicelost] What a device's removal reason means, for the one line said of it (GetDeviceRemovedReason's values).
+const char* RemovedReason(HRESULT hr) {
+  switch (static_cast<unsigned long>(hr)) {
+    case 0x887A0005ul: return "DXGI_ERROR_DEVICE_REMOVED: the card was taken out, its driver was updated, or the device was removed on purpose";
+    case 0x887A0006ul: return "DXGI_ERROR_DEVICE_HUNG: the card stopped answering and Windows reset it (commands of this program took too long, or were bad)";
+    case 0x887A0007ul: return "DXGI_ERROR_DEVICE_RESET: the driver was reset because of another program, or of the card itself";
+    case 0x887A0020ul: return "DXGI_ERROR_DRIVER_INTERNAL_ERROR: the driver failed inside itself";
+    case 0x887A0001ul: return "DXGI_ERROR_INVALID_CALL: a call this program made was not allowed";
+    case 0x8007000Eul: return "E_OUTOFMEMORY: no memory left for the device";
+    default: return "a reason Direct3D gives only as a number";
+  }
+}
 
 D3D12_HEAP_PROPERTIES HeapProps(D3D12_HEAP_TYPE type) {
   D3D12_HEAP_PROPERTIES p = {};
@@ -374,6 +402,13 @@ class D3D12Device final : public Device {
   void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   bool RayTracing() const override { return rayTracing_; }
+  // [devicelost] (gfx.h)
+  bool Lost() const override { return lost_.load(std::memory_order_acquire); }
+  std::string LostReason() const override {
+    std::lock_guard<std::mutex> lock(lostMutex_);
+    return lostReason_;
+  }
+  bool LoseForTest() override;
   Structure CreateGeometry(const GeometryPart* parts, int count) override;
   std::unique_ptr<Prepared> DescribeGeometry(const GeometryPart* parts, int count) override;  // [warmtarget]
   void SizeGeometry(Prepared* prepared) override;
@@ -498,7 +533,7 @@ class D3D12Device final : public Device {
   void Presenter();
   void WaitPresented(int slot);
   uint64_t Show(ID3D12Resource* picture, bool vsync, double* at);
-  static void WaitOn(ID3D12Fence* fence, uint64_t value, HANDLE event);
+  void WaitOn(ID3D12Fence* fence, uint64_t value, HANDLE event);  // ([devicelost] the device's own: its wait ends when the device is lost)
   // ray tracing: a buffer on the card for a structure or a build's room; the scratch room grown to `size`; the
   // geometry made since the last build, built
   Com<ID3D12Resource> RayBuffer(uint64_t size, D3D12_RESOURCE_STATES state);
@@ -510,6 +545,24 @@ class D3D12Device final : public Device {
   bool CreateTargets();
   void WaitFence(uint64_t value);
   void WaitIdle();
+  // [devicelost] The device's removal noticed and said (gfx.h, Device::Lost). Gone: whether the device is lost, by a
+  // call's result (`hr`: one of DXGI's device-removed kind) or, whatever it is, by the device's own word
+  // (GetDeviceRemovedReason); the first time, the reason is kept and one line said of it, with DRED's breadcrumbs where
+  // they were switched on (a device made with `debug`). Asked of every call that fails (Complain below, which then says
+  // nothing more: after a removal every call fails, an error line each), of every frame's end, and of a wait for the card
+  // that takes long. Any thread (the presenter's Present among them).
+  bool Gone(const char* where, HRESULT hr);
+  // (a call of this device's that failed: said as before, unless the device is lost, which is said once by Gone. It
+  // hides the plain function of the same name in the device's own functions, so that none of them need know.)
+  void Complain(const char* what, HRESULT hr) {
+    if (!Gone(what, hr)) ComplainPlain(what, hr);
+  }
+  void SayBreadcrumbs();  // (DRED: what the card was doing, where it kept it)
+  std::atomic<bool> lost_{false};
+  mutable std::mutex lostMutex_;
+  std::string lostReason_;
+  bool dred_ = false;  // (the breadcrumbs asked for before the device was made: Init, with `debug`)
+  bool listed_ = false;  // (in gDevices)
   // Uploads (a new texture's or buffer's contents) go into one open batch, sent to the card ahead of
   // the next frame's own work (FlushUploads, from EndFrame), without the processor waiting for them:
   // a texture made in the middle of a game no longer stops everything until the card is idle. A
@@ -900,6 +953,10 @@ class D3D12Device::ParallelRecorder final : public Recorder {
 };
 
 D3D12Device::~D3D12Device() {
+  if (listed_) {  // [devicelost] (no longer one of the program's devices: gDevices)
+    std::lock_guard<std::mutex> lock(gDevicesLock);
+    if (auto it = std::find(gDevices.begin(), gDevices.end(), device_.Get()); it != gDevices.end()) gDevices.erase(it);
+  }
   // (--marks: what nobody destroyed before the device went. A number that grows from one build to the next is a leak.)
   render::Mark("alive at the device's end: buffers", buffers_.size() - freeBuffers_.size(), 0);
   render::Mark("alive at the device's end: textures", textures_.size() - freeTextures_.size(), 0);
@@ -919,7 +976,8 @@ D3D12Device::~D3D12Device() {
   if (releaser_.joinable()) releaser_.join();
   if (generating_) StopPresenter();
   if (queue_ && fence_) WaitIdle();
-  pipelineStore_.Save();  // [hitches] (the pipelines made since the map opened, for the next run)
+  // ([devicelost] not a lost device's: what it would write of its library is not to be trusted over the kept file)
+  if (!Lost()) pipelineStore_.Save();  // [hitches] (the pipelines made since the map opened, for the next run)
   if (measureLatency) {
     latencyRecord_.Print(latency_ ? "Direct3D 12 (low latency)" : "Direct3D 12", vsync_ ? grid_.Period() * Interval() : 0, grid_.Period());
     fprintf(stderr, "render: Direct3D 12: the frame statistics asked for %ld times, not given %ld\n", statsAsked_, statsMissing_);
@@ -966,6 +1024,17 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
       fprintf(stderr, "render: the Direct3D 12 debug layer is not installed; running without it\n");
     }
   }
+  // [devicelost] (checks' runs only: with `debug`, or with MOHO64_DRED=1 for a run without the validation layer. DRED
+  // keeps what each command list last did and what memory a fault touched, read when the device is lost, SayBreadcrumbs.
+  // It costs a few percent of the card's time, so not in a player's run.)
+  if (const char* env = getenv("MOHO64_DRED"); desc.debug || (env && *env == '1')) {
+    Com<ID3D12DeviceRemovedExtendedDataSettings> dred;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(dred.Put())))) {
+      dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+      dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+      dred_ = true;
+    }
+  }
   HRESULT hr = CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(factory_.Put()));
   if (FAILED(hr)) return fail("CreateDXGIFactory2", hr);
 
@@ -987,8 +1056,23 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
     BOOL allow = FALSE;
     if (SUCCEEDED(factory6->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof allow))) tearing_ = allow != FALSE;
   }
+  {  // [devicelost] (gDevices says why)
+    std::lock_guard<std::mutex> lock(gDevicesLock);
+    for (ID3D12Device* held : gDevices)
+      if (held->GetDeviceRemovedReason() != S_OK) {
+        if (error)
+          *error = "Direct3D 12: a lost device is still held by this program (another picture's device, or another window's): every device "
+                   "of the program has to be let go of before a new one is made";
+        return false;
+      }
+  }
   hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device_.Put()));
   if (FAILED(hr)) return fail("D3D12CreateDevice", hr);
+  {
+    std::lock_guard<std::mutex> lock(gDevicesLock);
+    gDevices.push_back(device_.Get());
+    listed_ = true;
+  }
   if (adapter) adapter->QueryInterface(IID_PPV_ARGS(adapter3_.Put()));
   if (factoryFlags & DXGI_CREATE_FACTORY_DEBUG) device_->QueryInterface(IID_PPV_ARGS(infoQueue_.Put()));
   if (adapter) {
@@ -1003,10 +1087,19 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   dxil_ = !desc.oldShaderCompiler && SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &model, sizeof model)) &&
           model.HighestShaderModel >= D3D_SHADER_MODEL_6_0;
   // (decided here for every shader: see DxcPresent)
+  // [nodxc] Without DXC no device (gfx.h, ShaderCompilerReady: Device::Create has asked already and says the player's
+  // sentence; this is for a device made some other way). It used to go on with Direct3D's own compiler, which never
+  // finishes the horizon's pixel shader (the interface's request 51: a frozen window at the first map frame). The old
+  // compiler is left for a host that asks for it by name (oldShaderCompiler) and for a card whose driver takes no
+  // shader model 6.0, where there is no other.
   if (dxil_ && !DxcPresent()) {
-    fprintf(stderr, "render: Direct3D 12: no dxcompiler.dll beside the program; the shaders compiled by Direct3D's own compiler\n");
-    dxil_ = false;
+    if (error) *error = "Direct3D 12: dxcompiler.dll is not beside the program (the shader compiler)";
+    return false;
   }
+  if (!dxil_)
+    fprintf(stderr, "render: Direct3D 12: the shaders compiled by Direct3D's own old compiler (%s); it does not finish the horizon's pixel "
+                    "shader: a map in the modern look hangs with it\n",
+            desc.oldShaderCompiler ? "asked for" : "the card's driver takes no shader model 6.0");
 
   D3D12_COMMAND_QUEUE_DESC qd = {};
   qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1173,7 +1266,8 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   if (FAILED(hr)) return fail("CreateRootSignature", hr);
   // [hitches] (beside the shaders; not under the validation layer, --debug, where a pipeline not kept yet would be
   // reported as an error by the library's "not found" answer)
-  pipelineStore_.Open(device_.Get(), desc.debug ? std::string() : shaderCache_, blob->GetBufferPointer(), blob->GetBufferSize());
+  pipelineStore_.Open(device_.Get(), desc.debug ? std::string() : shaderCache_, blob->GetBufferPointer(), blob->GetBufferSize(),
+                      gDeviceLostHere.load(std::memory_order_acquire));  // ([devicelost])
   {  // [gpuscenery] indirect draws: one indexed draw's five arguments (none where the driver will not: IndirectDraws false)
     D3D12_INDIRECT_ARGUMENT_DESC arg = {};
     arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
@@ -1622,7 +1716,9 @@ void D3D12Device::WaitPresented(int slot) {
 void D3D12Device::WaitOn(ID3D12Fence* fence, uint64_t value, HANDLE event) {
   if (!fence || fence->GetCompletedValue() >= value) return;
   fence->SetEventOnCompletion(value, event);
-  WaitForSingleObject(event, INFINITE);
+  // [devicelost] (as WaitFence's)
+  while (WaitForSingleObject(event, 250) == WAIT_TIMEOUT)
+    if (Gone("a wait for the card", S_OK)) break;
 }
 
 // The presenter's thread: for each frame handed to it, once the card has finished it, the picture made between
@@ -1691,7 +1787,67 @@ uint64_t D3D12Device::Show(ID3D12Resource* picture, bool vsync, double* at) {
 void D3D12Device::WaitFence(uint64_t value) {
   if (fence_->GetCompletedValue() >= value) return;
   fence_->SetEventOnCompletion(value, fenceEvent_);
-  WaitForSingleObject(fenceEvent_, INFINITE);
+  // [devicelost] A removed device completes all its fences (Direct3D: GetCompletedValue is then UINT64_MAX), so the wait
+  // ends by itself; should a driver not do so, or the event not be set on a removed device, it still ends: the device is
+  // asked four times a second while the wait goes on. (With the device there this is the wait it was.)
+  while (WaitForSingleObject(fenceEvent_, 250) == WAIT_TIMEOUT)
+    if (Gone("a wait for the card", S_OK)) break;
+}
+
+// [devicelost] (the class says what these are)
+bool D3D12Device::Gone(const char* where, HRESULT hr) {
+  if (lost_.load(std::memory_order_acquire)) return true;
+  const unsigned long code = static_cast<unsigned long>(hr);
+  const bool removedKind = code == 0x887A0005ul || code == 0x887A0006ul || code == 0x887A0007ul || code == 0x887A0020ul;
+  const HRESULT reason = device_ ? device_->GetDeviceRemovedReason() : S_OK;
+  if (!removedKind && reason == S_OK) return false;
+  std::lock_guard<std::mutex> lock(lostMutex_);
+  if (lost_.load(std::memory_order_acquire)) return true;  // (another thread said it meanwhile)
+  const HRESULT said = reason != S_OK ? reason : hr;
+  char buf[512];
+  snprintf(buf, sizeof buf, "the graphics device is lost (0x%08lx, %s); noticed at: %s", static_cast<unsigned long>(said), RemovedReason(said), where);
+  lostReason_ = buf;
+  lost_.store(true, std::memory_order_release);
+  gDeviceLostHere.store(true, std::memory_order_release);
+  fprintf(stderr, "render: Direct3D 12: %s. Nothing more is drawn with this device; the host makes a new one\n", buf);
+  if (dred_) SayBreadcrumbs();
+  return true;
+}
+
+void D3D12Device::SayBreadcrumbs() {
+  Com<ID3D12DeviceRemovedExtendedData> data;
+  if (!device_ || FAILED(device_->QueryInterface(IID_PPV_ARGS(data.Put())))) return;
+  D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT crumbs = {};
+  if (SUCCEEDED(data->GetAutoBreadcrumbsOutput(&crumbs))) {
+    int said = 0;
+    for (const D3D12_AUTO_BREADCRUMB_NODE* n = crumbs.pHeadAutoBreadcrumbNode; n && said < 8; n = n->pNext) {
+      const UINT done = n->pLastBreadcrumbValue ? *n->pLastBreadcrumbValue : 0;
+      if (!n->BreadcrumbCount || done >= n->BreadcrumbCount) continue;  // (a list the card finished: not where it stopped)
+      fprintf(stderr, "render: Direct3D 12: (DRED) the command list \"%s\" on the queue \"%s\" stopped after %u of its %u operations; the next was of kind %d\n",
+              n->pCommandListDebugNameA ? n->pCommandListDebugNameA : "", n->pCommandQueueDebugNameA ? n->pCommandQueueDebugNameA : "", done,
+              n->BreadcrumbCount, n->pCommandHistory ? static_cast<int>(n->pCommandHistory[done]) : -1);
+      ++said;
+    }
+    if (!said) fprintf(stderr, "render: Direct3D 12: (DRED) no command list was stopped half way (the card was not working on one of this program's)\n");
+  }
+  D3D12_DRED_PAGE_FAULT_OUTPUT fault = {};
+  if (SUCCEEDED(data->GetPageFaultAllocationOutput(&fault)) && fault.PageFaultVA) {
+    fprintf(stderr, "render: Direct3D 12: (DRED) the card faulted at its address 0x%llx\n", static_cast<unsigned long long>(fault.PageFaultVA));
+    // (what lies at that address, or lay there until just before: a fault in something let go of is a use after its end)
+    const auto say = [](const char* which, const D3D12_DRED_ALLOCATION_NODE* n) {
+      for (int k = 0; n && k < 6; n = n->pNext, ++k)
+        fprintf(stderr, "render: Direct3D 12: (DRED)   %s: \"%s\", of kind %d\n", which, n->ObjectNameA ? n->ObjectNameA : "", static_cast<int>(n->AllocationType));
+    };
+    say("there now", fault.pHeadExistingAllocationNode);
+    say("let go of shortly before", fault.pHeadRecentFreedAllocationNode);
+  }
+}
+
+bool D3D12Device::LoseForTest() {
+  Com<ID3D12Device5> five;
+  if (!device_ || FAILED(device_->QueryInterface(IID_PPV_ARGS(five.Put())))) return false;
+  five->RemoveDevice();
+  return true;
 }
 
 void D3D12Device::WaitIdle() {
@@ -2720,11 +2876,12 @@ bool D3D12Device::MakePipelineWith(const PipelineDesc& desc, PipelineRec* out, s
                blob(v, vs) && (!hasPixelShader || blob(p, ps));
     if (!compiled) {
       if (missing) {
-        fprintf(stderr, "render: Direct3D 12: %s; the shaders compiled by Direct3D's own compiler\n", why.c_str());
-        dxil_ = false;
-      } else {
-        fprintf(stderr, "render: Direct3D 12: %s: DXC: %s; Direct3D's own compiler instead\n", desc.name, why.c_str());
+        // [nodxc] (DXC gone, or one too old to sign its shaders: no going on with Direct3D's own compiler for every shader
+        // from here, which hung in the horizon's; the pipeline is not made and its error says why)
+        if (error) *error = std::string(desc.name) + ": " + why + " (dxcompiler.dll beside the program is missing or too old)";
+        return false;
       }
+      fprintf(stderr, "render: Direct3D 12: %s: DXC: %s; Direct3D's own compiler instead\n", desc.name, why.c_str());
       vs.Reset();
       ps.Reset();
     }
@@ -2854,7 +3011,10 @@ bool D3D12Device::MakeComputeWith(const ComputeDesc& desc, PipelineRec* out, std
     if (compiled) {
       std::memcpy(cs->GetBufferPointer(), code.data(), code.size());
     } else {
-      if (missing) dxil_ = false;
+      if (missing) {  // [nodxc] (as for the drawing pipelines: not made, and said why)
+        if (error) *error = std::string(desc.name) + ": " + why + " (dxcompiler.dll beside the program is missing or too old)";
+        return false;
+      }
       fprintf(stderr, "render: Direct3D 12: %s: DXC: %s; Direct3D's own compiler instead\n", desc.name, why.c_str());
       cs.Reset();
     }
@@ -3054,7 +3214,7 @@ bool D3D12Device::EndPipelineBatch(std::string* error) {
     std::string why;
     if (pipelines_[i].pending && !Realize(i, &why) && batchError_.empty()) batchError_ = why;
   }
-  pipelineStore_.Save();  // [hitches] (what the driver made of them kept for the next run, now: a game may end any way)
+  if (!Lost()) pipelineStore_.Save();  // [hitches] (what the driver made of them kept for the next run, now: a game may end any way; [devicelost] not a lost device's)
   if (batchError_.empty()) return true;
   if (error) *error = batchError_;
   return false;
@@ -4065,6 +4225,9 @@ void D3D12Device::EndFrame(std::vector<uint8_t>* capture, bool present) {
   f.fence = fenceNext_++;
   queue_->Signal(fence_.Get(), f.fence);
   inFrame_ = false;
+  // [devicelost] (once a frame, whatever the frame's calls said: ExecuteCommandLists says nothing, and a frame not shown
+  // makes no Present. The device's own word, no call to the driver.)
+  if (!lost_.load(std::memory_order_relaxed)) Gone("a frame's end", S_OK);
   if (present && window) {  // handed to the presenter, which shows it once the card has finished it
     {
       std::lock_guard<std::mutex> lock(presentMutex_);

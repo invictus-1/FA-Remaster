@@ -34,6 +34,8 @@ cbuffer Surround : register(b1) {
   float4 surTrees;    // x, y from how far past the edge to how far the scenery's single trees thin out to none (y 0: none
                       // stand); z the map's specular (as the ground's roughness counts it)
   float4 surSight;    // x, y from how far from the eye to how far the scenery's trees are left out (y 0: none are)
+  float4 surPictures2; // x the second masks' samples per world unit, y 1 / its samples across (x 0: none)
+  float4 surKinds2;   // which of the map's layers the second masks' red, green, blue and alpha are the shares of (-1: none)
   float4 albedoTile[10];  // as the ground's (terrain.cpp): x a layer's repeats per world unit; y 1 = it has its third map
   float4 normalTile[9];   // x its normal's repeats per world unit; y 1 = +y is up in its texture
   float4 upperOf[9];      // the map's upper layer where each layer shows, on the whole (rgb as stored, a its share)
@@ -47,6 +49,7 @@ Texture2D surMasks : register(t1);           // which layer lies where: four lay
 Texture2D maskLow : register(t2);            // the map's own masks (read on past its edge, mirrored)
 Texture2D maskHigh : register(t3);
 Texture2D<float> surForest : register(t4);   // 1 closed forest
+Texture2D surMasks2 : register(t5);          // more layers' shares (surKinds2), where the surround brings them
 Texture2D albedoMaps[10] : register(t6);
 Texture2D normalMaps[9] : register(t16);
 Texture2DArray materialMaps : register(t25);  // per layer: r creases' shading, g roughness, b height
@@ -130,9 +133,19 @@ float4 PS(VOut i) : SV_Target {
     forest = surForest.Sample(samplerLinearClamp, ((place + off) * surPictures.z + 0.5) * surPictures.w);
   }
 
-  // each layer's share here: the masks' four and what they leave; under the forest its floor, over the layers below it
+  // each layer's share here: the masks' four (and the second masks' up to four more) and what they leave; under the
+  // forest its floor, over the layers below it
   float share[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-  share[(int)surMore.x] = saturate(1 - (m.r + m.g + m.b + m.a));
+  float taken = m.r + m.g + m.b + m.a;
+  [branch] if (surPictures2.x > 0) {
+    float4 m2 = surMasks2.SampleGrad(samplerLinearClamp, (place * surPictures2.x + 0.5) * surPictures2.y, ddx(xz) * surPictures2.x * surPictures2.y,
+                                     ddy(xz) * surPictures2.x * surPictures2.y);
+    if (surKinds2.x >= 0) { share[(int)surKinds2.x] += m2.r; taken += m2.r; }
+    if (surKinds2.y >= 0) { share[(int)surKinds2.y] += m2.g; taken += m2.g; }
+    if (surKinds2.z >= 0) { share[(int)surKinds2.z] += m2.b; taken += m2.b; }
+    if (surKinds2.w >= 0) { share[(int)surKinds2.w] += m2.a; taken += m2.a; }
+  }
+  share[(int)surMore.x] += saturate(1 - taken);
   share[(int)surKinds.x] += m.r;
   share[(int)surKinds.y] += m.g;
   share[(int)surKinds.z] += m.b;
@@ -329,7 +342,7 @@ float4 PS(VOut i) : SV_Target {
 struct SurroundConstants {
   float grid[4], levels[4], look[4];
   // (the detail look's, after the block-out's)
-  float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4];
+  float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4], pictures2[4], kinds2[4];
   float albedoTile[10][4], normalTile[9][4], upperOf[9][4];
 };
 
@@ -390,8 +403,13 @@ void Surround::Forget() {
   if (device_) {  // (the detail look's)
     if (masksTexture_) device_->Destroy(masksTexture_);
     if (forestTexture_) device_->Destroy(forestTexture_);
+    if (masks2Texture_) device_->Destroy(masks2Texture_);
   }
-  masksTexture_ = forestTexture_ = {};
+  masksTexture_ = forestTexture_ = masks2Texture_ = {};
+  masks2_.clear();
+  masks2Samples_ = 0;
+  std::fill(kinds2_, kinds2_ + 4, -1);
+  treesGiven_[0] = treesGiven_[1] = 0;
   masks_.clear();
   forest_.clear();
   masksSamples_ = forestSamples_ = 0;
@@ -561,9 +579,53 @@ bool Surround::Open(const MapData& map, const std::string& json, const ReadFn& r
     if (const JsonValue& colour = root["forest_colour"]; colour.items.size() == 3)
       for (int k = 0; k < 3; ++k) canopyColour_[k] = std::clamp(static_cast<float>(colour.items[static_cast<size_t>(k)].NumberOr(0.08)), 0.0f, 1.0f);
     decor_ = root["decor"].StringOr("");
+    // the second masks, with the first: up to four more layers' shares (a picture of three channels or of four)
+    const JsonValue& masks2 = root["masks2"];
+    if (const std::string file = masks2["file"].StringOr(""); !file.empty() && !masks_.empty()) {
+      static const char* const kNames[4] = {"r", "g", "b", "a"};
+      int kinds[4];
+      bool ok = true, any = false;
+      for (int k = 0; k < 4; ++k) {
+        kinds[k] = masks2[kNames[k]].kind == JsonValue::Number ? static_cast<int>(masks2[kNames[k]].number) : -1;
+        ok = ok && kinds[k] >= -1 && kinds[k] <= 8;
+        any = any || kinds[k] >= 0;
+      }
+      std::string bad;
+      int w = 0, h = 0, channels = 3;
+      std::vector<uint8_t> pixels;
+      const std::optional<std::string> bytes = ok && any ? read(file) : std::nullopt;
+      if (!ok || !any) bad = "its r, g, b and a must each name one of the map's layers 0 to 8 (or be left out), one of them at least";
+      else if (!bytes) bad = "no such file";
+      else if (!ReadPng8(*bytes, 3, &w, &h, &pixels, &bad)) {
+        channels = 4;
+        if (ReadPng8(*bytes, 4, &w, &h, &pixels, &bad)) bad.clear();
+        else bad = "neither an 8-bit RGB nor an 8-bit RGBA PNG without interlace";
+      }
+      if (bad.empty() && (w != h || w < 2)) bad = "not square";
+      if (bad.empty() && channels == 3 && kinds[3] >= 0) bad = "its a names a layer, but the picture has no alpha";
+      if (bad.empty()) {
+        masks2_.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+        for (size_t i = 0, n = static_cast<size_t>(w) * static_cast<size_t>(h); i < n; ++i) {
+          for (int k = 0; k < 3; ++k) masks2_[i * 4 + static_cast<size_t>(k)] = pixels[i * static_cast<size_t>(channels) + static_cast<size_t>(k)];
+          masks2_[i * 4 + 3] = channels == 4 ? pixels[i * 4 + 3] : 0;
+        }
+        masks2Samples_ = w;
+        std::copy(kinds, kinds + 4, kinds2_);
+      } else {
+        fprintf(stderr, "render: the surround's second masks %s: %s (its ground is drawn by the first alone)\n", file.c_str(), bad.c_str());
+      }
+    }
+    // from where to where the scenery's trees thin out, where the json says
+    if (const JsonValue& thin = root["decor_trees"]; thin.items.size() == 2) {
+      treesGiven_[0] = static_cast<float>(thin.items[0].NumberOr(0));
+      treesGiven_[1] = static_cast<float>(thin.items[1].NumberOr(0));
+    }
     if (!masks_.empty())
-      printf("render: the map's surround: its ground's masks %d x %d (the map's layers %d, %d, %d, %d, the rest %d)%s%s\n", masksSamples_, masksSamples_,
-             kinds_[0], kinds_[1], kinds_[2], kinds_[3], kinds_[4], forest_.empty() ? "" : ", its forest", decor_.empty() ? "" : ", its scenery");
+      printf("render: the map's surround: its ground's masks %d x %d (the map's layers %d, %d, %d, %d, the rest %d)%s%s%s\n", masksSamples_, masksSamples_,
+             kinds_[0], kinds_[1], kinds_[2], kinds_[3], kinds_[4],
+             masks2_.empty() ? "" : (", its second masks (the layers " + std::to_string(kinds2_[0]) + ", " + std::to_string(kinds2_[1]) + ", " +
+                                     std::to_string(kinds2_[2]) + ", " + std::to_string(kinds2_[3]) + "; -1: none)").c_str(),
+             forest_.empty() ? "" : ", its forest", decor_.empty() ? "" : ", its scenery");
   }
   printf("render: the map's surround: %d x %d heights %.4g world units apart, %.0f past the map's edges; along the edge %d of %d are more "
          "than 1 from the map's own (the most %.2f), joined over %.0f world units (read in %.0f ms)\n",
@@ -706,6 +768,16 @@ void Surround::Make() {
     td.data = all.data();
     td.dataSize = all.size();
     masksTexture_ = device_->CreateTexture(td);
+  }
+  if (!masks2_.empty()) {
+    std::vector<uint8_t> all(masks2_);
+    gfx::TextureDesc td;
+    td.width = td.height = masks2Samples_;
+    td.mips = WithLevels(&all, masks2Samples_, 4);
+    td.format = gfx::Format::RGBA8;
+    td.data = all.data();
+    td.dataSize = all.size();
+    masks2Texture_ = device_->CreateTexture(td);
   }
   if (!forest_.empty()) {
     std::vector<uint8_t> all(forest_);
@@ -876,6 +948,9 @@ void Surround::Draw(const View& view) {
     c.trees[2] = tiles.specular;
     c.sight[0] = sightFrom;
     c.sight[1] = c.trees[1] > 0 && sightTo > sightFrom ? sightTo : 0.0f;
+    c.pictures2[0] = masks2Texture_ ? static_cast<float>(masks2Samples_ - 1) / side : 0.0f;
+    c.pictures2[1] = masks2Texture_ ? 1 / static_cast<float>(masks2Samples_) : 0.0f;
+    for (int k = 0; k < 4; ++k) c.kinds2[k] = static_cast<float>(kinds2_[k]);
     std::memcpy(c.albedoTile, tiles.albedoTile, sizeof c.albedoTile);
     std::memcpy(c.normalTile, tiles.normalTile, sizeof c.normalTile);
     std::memcpy(c.upperOf, upperOf_, sizeof c.upperOf);
@@ -884,6 +959,7 @@ void Surround::Draw(const View& view) {
     device_->SetTexture(0, texture_);
     device_->SetTexture(1, masksTexture_);
     device_->SetTexture(4, forestTexture_ ? forestTexture_ : texture_);
+    device_->SetTexture(5, masks2Texture_ ? masks2Texture_ : masksTexture_);
   } else {
     device_->SetPipeline(pipeline_);
     device_->SetConstants(0, &view.constants, sizeof view.constants);

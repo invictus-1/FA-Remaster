@@ -1,6 +1,8 @@
 // What gfx.h's backends share: format sizes, and the choice of backend.
 #include "gfx.h"
 
+#include "gfx_vulkan_dxc.h"  // [nodxc] (DxcLoad)
+
 namespace render::gfx {
 
 bool IsBlockCompressed(Format f) { return f >= Format::BC1 && f <= Format::BC7; }
@@ -92,8 +94,38 @@ std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* 
 std::unique_ptr<Device> CreateD3D12Device(const DeviceDesc& desc, std::string* error);  // gfx_d3d12.cpp
 #endif
 
+// [nodxc] (gfx.h) One sentence a player can act on: what is missing, and the one place it must be.
+bool ShaderCompilerReady(std::string* message) {
+  std::string where, why;
+  if (DxcLoad(&where, &why)) return true;
+#if defined(_WIN32)
+  if (message)
+    *message = "the shader compiler is missing: dxcompiler.dll must be beside the program, at " + where + " (" + why +
+               "); copy it there from the folder FA Remastered came in, or install FA Remastered again";
+#else
+  if (message)
+    *message = "the shader compiler is missing: " + where + " (" + why + "); it comes with FA Remastered: put it where the system finds " +
+               "libraries, or install FA Remastered again";
+#endif
+  return false;
+}
+
 // Direct3D 12 on Windows unless Vulkan is asked for; Vulkan on every other system.
 std::unique_ptr<Device> Device::Create(const DeviceDesc& desc, std::string* error) {
+  // [nodxc] No device without DXC: every shader of either backend is compiled by it (Vulkan has no other compiler; Direct3D
+  // 12 used to go on with its own old one, which hangs in the horizon's pixel shader). Said here, before a window's swap
+  // chain or any shader is made, so that a host gets the reason in a second and not a frozen window. Direct3D 12 with the
+  // old compiler asked for by name (oldShaderCompiler: the viewer's --fxc) is made as before.
+#if defined(_WIN32)
+  const bool wantsDxc = desc.backend != DeviceDesc::Backend::Direct3D12 || !desc.oldShaderCompiler;
+#else
+  const bool wantsDxc = true;
+#endif
+  if (std::string missing; wantsDxc && !ShaderCompilerReady(&missing)) {
+    fprintf(stderr, "render: %s\n", missing.c_str());
+    if (error) *error = missing;
+    return nullptr;
+  }
 #if defined(_WIN32)
   if (desc.backend == DeviceDesc::Backend::Direct3D12) return CreateD3D12Device(desc, error);
 #endif

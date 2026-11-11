@@ -76,6 +76,7 @@ struct WorldPicture::Impl {
   bool lowLatency = false;             // SetLowLatency
   bool vulkan = false;                 // SetVulkan
   bool debug = false;                  // SetDebug
+  std::string shaderCache;             // SetShaderCache
   std::vector<uint8_t>* checkCapture = nullptr;  // CaptureNextWindowFrame
   std::unique_ptr<World> world;
   SimFrames frames;
@@ -288,6 +289,8 @@ struct WorldPicture::Impl {
   // world, the thread opening it, and how it went
   struct Load {
     std::string path;
+    std::function<void(World&)> before;  // [devicelost] (BeginMap's, kept: the map is opened again with it after a device's loss)
+    double warmClock = 0;                // [devicelost] (its warm frames' clock, seconds: 0, or the game's when it is opened again in a game)
     std::unique_ptr<LoadingDevice> device;
     std::unique_ptr<World> world;
     std::thread thread;
@@ -355,9 +358,37 @@ struct WorldPicture::Impl {
   };
   std::vector<std::unique_ptr<Going>> going;
   WorldPicture::LoadNumbers loadNumbers;  // (the last map opened behind)
+  // [devicelost] (RecoverDevice) the map of the world shown and BeginMap's `before` it was opened with, to open it again;
+  // the camera it was last drawn by (its warm frames'); whether a recovery's swap is under way (the game's beats and what
+  // was read of it stay); the last recovery's numbers
+  std::string shownPath;
+  std::function<void(World&)> shownBefore;
+  Camera shownCamera;
+  bool shownCameraKnown = false;
+  bool recovering = false;
+  WorldPicture::RecoverNumbers recoverNumbers;
+  // (a recovery that let go of the old device and could make no new one yet: what it kept of the game and of the picture,
+  // held for the next RecoverDevice; the picture is lost meanwhile and has no device)
+  struct Recovery {
+    bool pending = false, hadWorld = false;
+    std::string why, path;
+    std::function<void(World&)> before;
+    std::shared_ptr<World::Kept> kept;
+    uint32_t tick = 0;
+    struct Behind {  // (the map that was being opened behind, to begin again)
+      bool on = false, cameraGiven = false, loadWeather = false;
+      std::string path;
+      std::function<void(World&)> before;
+      Camera camera;
+      float loadDay = -1;
+    } behind;
+  } recovery;
+  bool MakeDevice(std::string* error);    // (the device on the picture's window, and the picture's own pipelines)
+  void LetGoForRecovery();                // (a recovery's first half: `recovery` filled, the device and all on it let go of)
+  bool Lost() const { return recovery.pending || (device && device->Lost()); }
   void ServiceLoads(double budgetMs);     // [bgload] (between frames)
   void LetGo(std::unique_ptr<World> old, std::unique_ptr<LoadingDevice> oldDevice);
-  void ForgetWorld();                     // (the picture's own of the world shown, begun afresh for another)
+  void ForgetWorld(bool keepGame = false);  // (the picture's own of the world shown, begun afresh for another; [devicelost] keepGame: the same game's on another world)
   void WarmFrame(Load& l);                // (the map opened behind drawn once unseen: MapReady waits for it)
   void AskWarm(Load& l);                  // [warmtarget] (the frames' thread: a warm frame asked of the loading thread)
   static void WarmBehind(Load& l, bool withBeat = false);  // [warmtarget] (the loading thread: the warm frames asked for, recorded)
@@ -400,17 +431,20 @@ WorldPicture::WorldPicture() : impl_(std::make_unique<Impl>()) {}
 
 void WorldPicture::SetVulkan(bool on) { impl_->vulkan = on; }
 void WorldPicture::SetDebug(bool on) { impl_->debug = on; }
+void WorldPicture::SetShaderCache(const std::string& folder) { impl_->shaderCache = folder; }
 WorldPicture::~WorldPicture() = default;
 
-bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error) {
-  Impl& m = *impl_;
-  m.vfs = vfs;
+// The picture's device on its window (the host's, or an invisible one of its own), with what the picture itself draws
+// with it: Open's first half, and [devicelost] RecoverDevice's again on the same window.
+bool WorldPicture::Impl::MakeDevice(std::string* error) {
+  Impl& m = *this;
   gfx::DeviceDesc dd;
   dd.backend = m.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
   dd.width = 640;
   dd.height = 360;
   dd.vsync = false;
   dd.debug = m.debug;
+  dd.shaderCache = m.shaderCache;
   if (m.HostShows()) {  // (the host's window: the picture is shown there, at its size)
     dd.window = m.hostWindow;
     dd.display = m.hostDisplay;
@@ -431,7 +465,7 @@ bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::s
     dd.vsync = m.vsync;
   } else {
 #if defined(_WIN32)
-    m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
+    if (!m.window) m.window = Window::Create("FA Remastered (world picture)", 640, 360, error, false, true);
     if (!m.window) return false;
     dd.window = m.window->Handle();
 #else
@@ -488,6 +522,13 @@ float4 PS(float4 at : SV_Position) : SV_Target {
     m.backdropPipeline = m.device->CreatePipeline(bd, error);
     if (!m.backdropPipeline) return false;
   }
+  return true;
+}
+
+bool WorldPicture::Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error) {
+  Impl& m = *impl_;
+  m.vfs = vfs;
+  if (!m.MakeDevice(error)) return false;
   // (in the host's window with no map: no world at all, only the interface shown - the menu's)
   if (m.HostShows() && mapPath.empty()) return true;
   // (the surfaces' shaders built to trace rays, for reflections and the small lights' shadows, where the device can:
@@ -499,6 +540,8 @@ float4 PS(float4 at : SV_Position) : SV_Target {
   Impl::ApplyBundlesTo(*m.world, m.BundlesNow());  // (the lighting options, as set before Open; held or not)
   if (!m.world->Open(mapPath, World::Options{}, error)) return false;
   m.frames.SetSightGrid(static_cast<float>(m.world->map.width), static_cast<float>(m.world->map.height));
+  m.shownPath = mapPath;  // [devicelost]
+  m.shownBefore = nullptr;
   return true;
 }
 
@@ -513,6 +556,7 @@ bool WorldPicture::BeginMap(const std::string& mapPath, std::function<void(World
   // (its surfaces' shaders built to trace rays as Open would build them now; the world shown keeps its own: gRayShadersHere)
   load->rays = (m.rayReflections || m.rayTracing > 0) && m.device->RayTracing();
   load->device = std::make_unique<LoadingDevice>(m.device.get());
+  load->before = before;  // [devicelost] (kept with the map: RecoverDevice opens it again)
   Impl::Load* l = load.get();
   // (all of it on the loading thread, the world's making too: its parts' making took half a second on the frames' thread;
   // `before` there as well; the picture's settings as they are now)
@@ -608,13 +652,19 @@ bool WorldPicture::SwapMap() {
     w.orders.markMinPixels = old->orders.markMinPixels;
     w.orders.markMaxPixels = old->orders.markMaxPixels;
   }
-  m.holdLooks = false;  // [ui 39] (the looks held for this map: laid on now)
+  // [devicelost] (a recovery's swap: the same map again for the same game - the looks held for a map opening behind stay
+  // held for it, the beats and what was read of the game stay, RecoverDevice)
+  if (!m.recovering) m.holdLooks = false;  // [ui 39] (the looks held for this map: laid on now)
   m.ApplyBundles();  // (as set now: they may have changed while it opened)
   w.lens = m.lens;
-  m.ForgetWorld();
-  if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the simulation's first props: the first beat's)
-  if (!m.heldEffects.empty()) m.frames.HoldEffectEvents(&m.heldEffects);  // [deposits] (and its first effects: the deposits' marks)
-  m.sessionArmies = std::move(load->beatFrames);  // [session] (the game read already: GameStarted takes it)
+  m.shownPath = load->path;  // [devicelost]
+  m.shownBefore = std::move(load->before);
+  m.ForgetWorld(m.recovering);
+  if (!m.recovering) {
+    if (!m.heldProps.empty()) m.frames.HoldPropEvents(&m.heldProps);  // [session] (the simulation's first props: the first beat's)
+    if (!m.heldEffects.empty()) m.frames.HoldEffectEvents(&m.heldEffects);  // [deposits] (and its first effects: the deposits' marks)
+    m.sessionArmies = std::move(load->beatFrames);  // [session] (the game read already: GameStarted takes it)
+  }
   m.LetGo(std::move(old), std::move(oldDevice));
   return true;
 }
@@ -635,6 +685,254 @@ bool WorldPicture::RestartMap() {
     m.heldEffects.clear();
   }
   return true;
+}
+
+// --- [devicelost] the graphics device lost, and made again (world_picture.h) ---
+
+bool WorldPicture::ShaderCompilerReady(std::string* message) { return gfx::ShaderCompilerReady(message); }  // [nodxc]
+
+bool WorldPicture::DeviceLost() const { return impl_->Lost(); }
+std::string WorldPicture::DeviceLostReason() const { return impl_->device ? impl_->device->LostReason() : impl_->recovery.why; }
+bool WorldPicture::LoseDeviceForTest() { return impl_->device && impl_->device->LoseForTest(); }
+WorldPicture::RecoverNumbers WorldPicture::LastRecoverNumbers() const { return impl_->recoverNumbers; }
+
+bool WorldPicture::LetGoOfLostDevice() {
+  Impl& m = *impl_;
+  if (!m.device || m.recovery.pending) return m.recovery.pending;
+  m.LetGoForRecovery();
+  return true;
+}
+
+// [devicelost] The first half of a recovery (RecoverDevice, LetGoOfLostDevice): what the picture keeps of the game and of
+// a map opening behind taken from the worlds' own memory, then everything on the device let go of, and the device.
+void WorldPicture::Impl::LetGoForRecovery() {
+  Impl& m = *this;
+  Recovery& r = m.recovery;
+  r = Impl::Recovery{};
+  r.why = m.device->LostReason();
+
+  // 1. what is kept of the world shown (its own memory: nothing of the device is asked), and of a map opening behind
+  if (m.photo.worker.joinable()) m.photo.worker.join();  // (a photo being made: dropped, its frames were the old device's)
+  m.photo.on = m.photo.assembling = m.photo.done = m.photo.held = m.photo.frameKept = false;
+  m.photo.ready.store(false);
+  m.photo.heldPicture = {};
+  m.photo.drawn.clear();
+  m.photoFrame = false;
+  m.prepared = false;  // (a frame LifeBarAnchors began: gone with the device)
+  r.kept = std::make_shared<World::Kept>();
+  r.hadWorld = m.world && m.world->HaveMap() && !m.shownPath.empty();
+  r.tick = static_cast<uint32_t>(std::max(m.lastTick, 0.0));
+  if (r.hadWorld) m.world->Keep(r.kept.get(), r.tick);
+  r.path = m.shownPath;
+  r.before = m.shownBefore;
+  Impl::Recovery::Behind& behind = r.behind;
+  if (m.load) {
+    behind.on = true;
+    behind.path = m.load->path;
+    behind.before = m.load->before;
+    behind.cameraGiven = m.load->cameraGiven;
+    behind.camera = m.load->camera;
+    behind.loadDay = m.load->loadDay;
+    behind.loadWeather = m.load->loadWeather;
+    // (not wanted as it is: finished and let go of below. Not CancelMap: what PrepareSession took of the game - its first
+    // props' and effects' events - stays held for the same map begun again)
+    m.load->cancelled = true;
+    Impl::Abandon(*m.load);
+    m.cancelled.push_back(std::move(m.load));
+  }
+
+  // 2. everything on the old device let go of, as when a picture goes, and then the device
+  m.sides.clear();
+  m.sideKinds.clear();
+  m.mapSide.reset();
+  m.viewLayer.reset();
+  m.viewLayerTried = m.viewLayerOk = false;
+  m.focus.reset();
+  m.LetGo(std::move(m.world), std::move(m.worldDevice));
+  while (!m.cancelled.empty() || !m.going.empty()) {
+    m.ServiceLoads(-1);
+    if (!m.cancelled.empty() || !m.going.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  // (the picture's own on the device: the handles mean nothing on the next one, which makes them again at need)
+  m.layer = {};
+  m.layerPipeline = {};
+  m.layerMadeWidth = m.layerMadeHeight = 0;
+  m.dirtyW = m.dirtyH = 0;
+  m.backdrop = {};
+  m.backdropPipeline = {};
+  m.backdropMadeWidth = m.backdropMadeHeight = 0;
+  m.head2.window = 0;
+  m.head2.picture = {};
+  m.head2.layer = {};
+  m.head2.pictureWidth = m.head2.pictureHeight = m.head2.layerMadeWidth = m.head2.layerMadeHeight = 0;
+  m.head2.asked = m.head2.free = m.head2.composed = m.head2.drawnLast = false;
+  m.checkCapture = nullptr;
+  m.depthIsWindow = false;
+  m.device.reset();
+  r.pending = true;
+}
+
+// The cheapest sound way: nothing of the old device's is mended. Every world and everything else made on it is let go of
+// by the ways a picture's end uses (the loading threads finished, what they ask of this thread done, the worlds destroyed
+// on their own threads: all of it right on a lost device, whose calls do nothing), the device made again on the same
+// window, and the map shown opened again by the way every map is opened behind (BeginMap: its own LoadingDevice, its
+// warm frames, so that the world is let go of later as any other). What the simulation told the old world once only
+// comes from that world's own memory (World::Keep, Give); the beats and all the picture's settings were never on the
+// device and stay where they are.
+bool WorldPicture::RecoverDevice(std::string* error) {
+  Impl& m = *impl_;
+  std::string unused;
+  if (!error) error = &unused;
+  error->clear();
+  Impl::Recovery& r = m.recovery;
+  if ((!m.device && !r.pending) || !m.vfs) {
+    *error = "the picture is not open";
+    return false;
+  }
+  const double t0 = SteadySeconds();
+  m.recoverNumbers = RecoverNumbers{};
+  RecoverNumbers& n = m.recoverNumbers;
+  if (!r.pending) m.LetGoForRecovery();  // (not when an earlier call got this far: what it kept is still held)
+  const std::shared_ptr<World::Kept> kept = r.kept;
+  const bool hadWorld = r.hadWorld;
+  const uint32_t tick = r.tick;
+  const std::string shownPath = r.path, why = r.why;
+  const std::function<void(World&)> shownBefore = r.before;
+  const Impl::Recovery::Behind behind = r.behind;
+  n.props = static_cast<int>(kept->props.size());
+  n.effects = static_cast<int>(kept->effects.size());
+  n.looks = static_cast<int>(kept->looks.size());
+  n.groundChanged = !kept->heights.empty();
+
+  // 3. the device again, on the same window (after a driver's reset the card may not be back at once: tried for ten seconds)
+  for (;;) {
+    ++n.deviceTries;
+    std::string problem;
+    if (m.MakeDevice(&problem) && m.device && !m.device->Lost()) break;
+    m.device.reset();
+    // (no waiting where waiting cannot help: another picture of the program still holds the lost device)
+    if (SteadySeconds() - t0 > 10 || problem.find("still held by this program") != std::string::npos) {
+      *error = "no graphics device could be made again: " + problem;
+      // (the picture stays lost, DeviceLost: what was kept of the game is held for the next call)
+      fprintf(stderr, "render: the graphics device was lost (%s) and %s\n", why.c_str(), error->c_str());
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  }
+  n.deviceSeconds = SteadySeconds() - t0;
+  r = Impl::Recovery{};  // (the device is there: what was held is in this call's hands)
+
+  // 4. the map shown, opened again as one opened behind, given the game, warmed with the game's last frame, and shown
+  bool ok = true;
+  if (hadWorld) {
+    n.world = true;
+    if (!BeginMap(shownPath, shownBefore)) {
+      *error = "the map could not be begun again";
+      ok = false;
+    } else {
+      Impl::Load* l = m.load.get();
+      l->warmClock = static_cast<double>(tick) * 0.1;
+      if (m.shownCameraKnown) {
+        l->camera = m.shownCamera;
+        l->cameraGiven = true;
+      }
+      if (m.dayStart >= 0) {  // (the hour its frames will have, as PrepareWorld reckons it: the sky made for it unseen)
+        const double hours = m.dayLength > 0 ? static_cast<double>(m.dayStart) + static_cast<double>(tick) * 0.1 / static_cast<double>(m.dayLength) * 24.0
+                                             : static_cast<double>(m.dayStart);
+        l->loadDay = static_cast<float>(std::fmod(hours, 24.0));
+        l->loadWeather = m.weather;
+      }
+      // (the game's last frame for its warm frames, as PrepareSession's first beat: its units' models made unseen)
+      if (!m.frame.units.empty() || !m.frame.projectiles.empty()) l->beat = std::make_unique<Frame>(m.frame);
+      l->beatColors = m.armyColors;
+      const uint32_t seed = m.frames.Seed();
+      l->sessionDone.store(false, std::memory_order_release);
+      l->session = std::thread([l, kept, seed] {
+        CpuTimes::elsewhere = true;  // (as the loading thread's)
+        gRayShadersHere = l->rays ? 1 : 0;
+        // (the world is the loading thread's until it is done: opened, and its warm frames recorded)
+        while (!l->finished.load(std::memory_order_acquire) && !l->stopSession.load(std::memory_order_acquire))
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (l->ok && !l->stopSession.load(std::memory_order_acquire)) {
+          World& w = *l->world;
+          if (seed) w.weatherSeed = seed;  // (the game's weather, as the picture's frames give it)
+          w.Give(*kept);
+          {  // the warm frames again, with what was given: the scenery, the ground, and the game's frame
+            std::lock_guard<std::mutex> lock(l->warmLock);
+            l->roundFrames = 0;
+            l->scenesBuilt = false;
+            l->warmed = false;
+            l->warm = Impl::Load::Warm::Idle;
+          }
+          Impl::WarmBehind(*l, true);
+          l->beat.reset();
+        }
+        l->sessionDone.store(true, std::memory_order_release);
+      });
+      const double began = SteadySeconds();
+      double turned = began;
+      std::string failed;
+      while (!MapReady()) {
+        if (MapFailed(&failed)) {
+          *error = "the map could not be opened again: " + failed;
+          ok = false;
+          break;
+        }
+        if (m.device->Lost()) {
+          *error = "the new device was lost while the map opened: " + m.device->LostReason();
+          ok = false;
+          break;
+        }
+        if (SteadySeconds() - began > 300) {
+          *error = "the map was not ready again after five minutes";
+          ok = false;
+          break;
+        }
+        m.ServiceLoads(20);  // (what the opening asks of this thread, and its warm frames: no frame of the window's between)
+        // (a frame of the device's every 10 ms, unseen: its uploads go to the card as they come and their staging memory comes
+        // free again, as between a game's frames. Without it Vulkan waited two seconds for staging memory in every recovery.)
+        if (const double now = SteadySeconds(); now - turned > 0.010 && !m.device->Lost()) {
+          turned = now;
+          const float black[4] = {0, 0, 0, 1};
+          m.device->BeginFrame(black);
+          m.device->EndFrame(nullptr, false);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      if (ok) {
+        m.recovering = true;
+        ok = SwapMap();
+        m.recovering = false;
+        if (!ok) *error = "the map opened again could not be shown";
+      }
+      if (ok) {
+        if (!m.seen.empty()) m.world->sight.Set(m.seen, m.seenCells);  // (what the focus army sees, as last worked out)
+      } else if (m.load) {
+        CancelMap();
+        m.shownPath.clear();
+        m.shownBefore = nullptr;
+      }
+    }
+    n.mapSeconds = SteadySeconds() - t0 - n.deviceSeconds;
+  }
+
+  // 5. the map that was being opened behind, begun again
+  if (ok && behind.on && !m.device->Lost()) {
+    if (BeginMap(behind.path, behind.before)) {
+      n.loadBegunAgain = true;
+      m.load->cameraGiven = behind.cameraGiven;
+      m.load->camera = behind.camera;
+      m.load->loadDay = behind.loadDay;
+      m.load->loadWeather = behind.loadWeather;
+    }
+  }
+  n.seconds = SteadySeconds() - t0;
+  printf("render: the graphics device made again in %.2f s (%s; the device after %.2f s and %d %s, the map %.2f s): %s; carried over: %d props' "
+         "states, %d effects' events, %d blueprints' looks%s%s%s\n",
+         n.seconds, why.empty() ? "it was not lost" : why.c_str(), n.deviceSeconds, n.deviceTries, n.deviceTries == 1 ? "try" : "tries", n.mapSeconds,
+         !hadWorld ? "no map was shown" : ok ? shownPath.c_str() : error->c_str(), n.props, n.effects, n.looks, n.groundChanged ? ", the ground as the game laid it" : "",
+         n.loadBegunAgain ? "; the map opening behind begun again" : "", ok ? "" : " (NOT as it was)");
+  return ok;
 }
 
 void WorldPicture::SetLoadDayAndWeather(float startHour, float dayLengthSeconds, bool weather) {  // [session]
@@ -722,7 +1020,7 @@ void WorldPicture::Impl::WarmBehind(Load& l, bool withBeat) {
     }
     l.device->BeginRecording();
     w.photo = true;
-    w.Begin(camera, s.width, s.height, 0, 0);
+    w.Begin(camera, s.width, s.height, static_cast<float>(l.warmClock), l.warmClock);  // ([devicelost] 0 but for a map opened again in a game)
     if (withBeat && l.beat) {  // [session]
       w.warmAll = true;
       w.AddFrame(*l.beat, l.beatColors);
@@ -797,28 +1095,31 @@ void WorldPicture::Impl::WarmFrame(Load& l) {
 }
 
 // The picture's own of the world shown, begun afresh for another (SwapMap).
-void WorldPicture::Impl::ForgetWorld() {
+void WorldPicture::Impl::ForgetWorld(bool keepGame) {
   // [views] (the views' own pictures and what they kept of their frames are the world before's: let go of while it is
   // still there, through its device, and made afresh for the world now shown)
   sides.clear();
   sideKinds.clear();
   mapSide.reset();  // [minimap]
-  frames.~SimFrames();  // (the beats of the game before: none; it holds a lock, so it is made anew in its place)
-  new (&frames) SimFrames();
-  frames.SetFocusArmy(focusArmy);
-  if (world) frames.SetSightGrid(static_cast<float>(world->map.width), static_cast<float>(world->map.height));
-  frame = Frame{};
-  events.clear();
-  simArmyColors.clear();
-  armyColors.clear();
-  lastTick = 0;
+  if (!keepGame) {  // ([devicelost] not for the same game on a world made anew: its beats, its armies and what was seen stay)
+    frames.~SimFrames();  // (the beats of the game before: none; it holds a lock, so it is made anew in its place)
+    new (&frames) SimFrames();
+    frames.SetFocusArmy(focusArmy);
+    if (world) frames.SetSightGrid(static_cast<float>(world->map.width), static_cast<float>(world->map.height));
+    frame = Frame{};
+    events.clear();
+    simArmyColors.clear();
+    armyColors.clear();
+    lastTick = 0;
+    seen.clear();
+    seenCells = 0;
+  }
   mapGround.clear();
   mapPixels.clear();
   mapWidth = mapHeight = 0;
   mapHour = mapWeather = -100;
+  mapWaiting = false;  // ([devicelost] a ground's picture left on a card that is gone)
   std::fill(mapRect, mapRect + 4, 0.0f);
-  seen.clear();
-  seenCells = 0;
   iconKinds.clear();  // (the old world's icons')
   depthIsWindow = false;
   lightKnown = false;
@@ -1020,6 +1321,7 @@ const std::vector<uint32_t>& WorldPicture::Draw(const Camera& camera, int width,
   Impl& m = *impl_;
   width = std::max(width, 16);
   height = std::max(height, 16);
+  if (m.Lost()) return m.pixels;  // [devicelost] (the last picture, until RecoverDevice)
   if (!m.world) {
     m.pixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
     m.ServiceLoads(m.loadBudgetMs);  // [bgload]
@@ -1076,7 +1378,7 @@ void WorldPicture::SetLowLatency(bool on) {
 }
 
 void WorldPicture::WaitForNextFrame() {
-  if (impl_->device && impl_->HostShows()) impl_->device->WaitForNextFrame();
+  if (impl_->device && impl_->HostShows() && !impl_->Lost()) impl_->device->WaitForNextFrame();  // ([devicelost] no wait on a lost device)
 }
 
 void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int height, int pitch, int x, int y, int w, int h) {
@@ -1110,6 +1412,7 @@ void WorldPicture::SetInterfaceLayer(const uint32_t* pixels, int width, int heig
 void WorldPicture::DrawToWindow(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
   if (!m.device || !m.HostShows()) return;
+  if (m.Lost()) return;  // [devicelost] (nothing is drawn with a lost device: the host calls RecoverDevice)
   width = std::max(width, 16);
   height = std::max(height, 16);
   if (m.world && m.photo.on) {  // (photomode) a frame of the photo being made, then the window as it was when it began
@@ -1277,7 +1580,7 @@ void WorldPicture::Impl::LayBackdrop(int width, int height, bool worldDrawn) {
 void WorldPicture::LifeBarAnchors(const Camera& camera, int width, int height, double tick, std::vector<LifeBarAnchor>* out) {
   Impl& m = *impl_;
   out->clear();
-  if (!m.world || !m.device) return;
+  if (!m.world || !m.device || m.Lost()) return;  // ([devicelost] no frame begun on a lost device)
   if (!m.prepared) {
     PrepareWorld(camera, std::max(width, 16), std::max(height, 16), tick);
     m.prepared = true;
@@ -1337,6 +1640,7 @@ void WorldPicture::TakeStats(float endMs) {
 void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, double tick) {
   Impl& m = *impl_;
   const auto t0 = std::chrono::steady_clock::now();
+  if (!m.photoFrame) m.shownCamera = camera, m.shownCameraKnown = true;  // [devicelost] (RecoverDevice warms the world made anew by it)
   // (photomode: a photo's frame is drawn at its own size into the device's photo window; the window keeps its size)
   if (!m.photoFrame && (m.device->Width() != width || m.device->Height() != height)) m.device->Resize(width, height);
   if (m.simArmyColors.empty()) m.simArmyColors = m.frames.ArmyColors();
@@ -1746,6 +2050,10 @@ const std::vector<uint32_t>& WorldPicture::DrawMinimap(int width, int height, bo
     m.mapPixels.assign(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
     return m.mapPixels;
   }
+  if (m.Lost()) {  // [devicelost] (as last drawn, until RecoverDevice)
+    m.mapPixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height), 0xff000000u);
+    return m.mapPixels;
+  }
   if (m.photo.on && m.mapWidth == width && m.mapHeight == height) return m.mapPixels;  // (photomode: as last drawn while a photo's frames are)
   World& w = *m.world;
   // the ground is drawn anew when the light has changed: the hour by a quarter, or the weather
@@ -2045,7 +2353,7 @@ bool WorldPicture::TakePhoto(const Camera& camera, int width, int height, double
   pixels->clear();
   if (madeWidth) *madeWidth = 0;
   if (madeHeight) *madeHeight = 0;
-  if (!m.world || !m.device || width < 16 || height < 16) return false;
+  if (!m.world || !m.device || m.Lost() || width < 16 || height < 16) return false;  // ([devicelost] no photo on a lost device)
   if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares its own)
     m.device->EndFrame(nullptr, false);
     m.prepared = false;
@@ -2256,7 +2564,7 @@ WorldPicture::WeatherNames WorldPicture::WeatherKinds() {
 float WorldPicture::FocusAt(float x, float y) {
   Impl& m = *impl_;
   gfx::CardMemoryWarmUp();  // (photofix2: as SetPhotoMoment)
-  if (!m.world || !m.device || m.photo.on || !m.depthIsWindow) return 0;
+  if (!m.world || !m.device || m.Lost() || m.photo.on || !m.depthIsWindow) return 0;  // ([devicelost])
   if (m.prepared) {  // (a frame LifeBarAnchors began for the next Draw: ended unseen; that Draw prepares its own)
     m.device->EndFrame(nullptr, false);
     m.prepared = false;
@@ -2278,7 +2586,7 @@ bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, doubl
     p.assembling = false;
     p.done = true;
   }
-  if (!m.world || !m.device || p.on || p.assembling) return false;
+  if (!m.world || !m.device || m.Lost() || p.on || p.assembling) return false;  // ([devicelost])
   if (p.done) {  // (one made and never taken: let go of)
     p.done = false;
     p.pixels.clear();

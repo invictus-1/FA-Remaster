@@ -45,7 +45,14 @@ class D3D12PipelineStore {
   }
   // Opens the library kept in `folder` (empty: none is kept), for pipelines made with the root signature whose
   // serialized form is `rootSignature`.
-  void Open(ID3D12Device* device, const std::string& folder, const void* rootSignature, size_t rootSignatureSize) {
+  // [devicelost] `afterLoss`: this program lost a device before this one. Should Direct3D then refuse the kept file for
+  // the new device although card and driver are the same, the library is begun empty as ever, but it is NOT written back
+  // by this run: the file is good, the next start of any program takes it, and writing this run's few pipelines over it
+  // would throw away everyone's. (Measured with ID3D12Device5::RemoveDevice: refused, 0x887e0001 "another adapter's",
+  // whenever the program still held the lost device somewhere while it made the new one - the file went from all the
+  // game's pipelines to one map's at the first try of the recovery; taken as ever once the lost device was let go of
+  // first, which gfx_d3d12.cpp's Init now insists on. What a real driver reset does to it is not known: hence the care.)
+  void Open(ID3D12Device* device, const std::string& folder, const void* rootSignature, size_t rootSignatureSize, bool afterLoss = false) {
     if (folder.empty() || !device) return;
     ID3D12Device1* device1 = nullptr;
     if (FAILED(device->QueryInterface(__uuidof(ID3D12Device1), reinterpret_cast<void**>(&device1))) || !device1) return;
@@ -64,7 +71,13 @@ class D3D12PipelineStore {
     HRESULT hr = E_FAIL;
     if (!blob_.empty()) hr = device1->CreatePipelineLibrary(blob_.data(), blob_.size(), __uuidof(ID3D12PipelineLibrary), reinterpret_cast<void**>(&library_));
     if (FAILED(hr)) {  // (none yet, or another driver's or card's: begun empty)
-      if (!blob_.empty()) fprintf(stderr, "render: Direct3D 12: the kept pipelines are another driver's (0x%08lx): begun afresh\n", static_cast<unsigned long>(hr));
+      if (!blob_.empty() && afterLoss) {
+        frozen_ = true;  // [devicelost]
+        fprintf(stderr, "render: Direct3D 12: the kept pipelines are not taken by the device made after the loss (0x%08lx): this run makes its pipelines "
+                        "anew and leaves the kept file as it is\n", static_cast<unsigned long>(hr));
+      } else if (!blob_.empty()) {
+        fprintf(stderr, "render: Direct3D 12: the kept pipelines are another driver's (0x%08lx): begun afresh\n", static_cast<unsigned long>(hr));
+      }
       blob_.clear();
       library_ = nullptr;
       hr = device1->CreatePipelineLibrary(nullptr, 0, __uuidof(ID3D12PipelineLibrary), reinterpret_cast<void**>(&library_));
@@ -114,7 +127,7 @@ class D3D12PipelineStore {
   // Writes the library back to its file when pipelines were added since it was read or last written.
   void Save() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!library_ || !added_) return;
+    if (!library_ || !added_ || frozen_) return;  // ([devicelost] frozen: Open)
     added_ = 0;
     SIZE_T size = library_->GetSerializedSize();
     if (size >= kMostBytes && !Afresh(&size)) return;
@@ -229,6 +242,7 @@ class D3D12PipelineStore {
   std::string path_;
   uint64_t root_ = 0;
   int added_ = 0;
+  bool frozen_ = false;  // [devicelost] (never written back: Open, afterLoss)
   std::mutex mutex_;
 };
 

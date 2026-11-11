@@ -577,7 +577,25 @@
 //           and sea go on beyond the edge in the modern look
 // --no-frame  the map's frame (--border) is not drawn
 // --vulkan  the Vulkan backend (gfx_vulkan.cpp) in place of Direct3D 12 (also for --picture, --window-cycle)
-// --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler)
+// --fxc  Direct3D 12's shaders compiled by Direct3D's own compiler, not DXC (DeviceDesc::oldShaderCompiler). [nodxc] For
+//           checks of single shaders only: it does not finish the horizon's pixel shader, so a map in the modern look
+//           hangs with it. Without --fxc the viewer does not start when dxcompiler.dll is not beside it: it says which
+//           file is missing and where it must be (a dialog too, in a run a person watches) and ends with exit code 4.
+// --lose-device-at <frame>  [devicelost] the graphics device lost on purpose after that frame (gfx.h, Device::LoseForTest:
+//           Direct3D 12 by ID3D12Device5::RemoveDevice, for real; with --vulkan made up, the next submit's result taken
+//           for a loss), to try what notices it and what is done then; no driver is reset and no other program touched.
+//           Here, in the viewer's own loop (a world of its own, dressed from the command line), the loss is noticed and
+//           said once and the viewer ends with exit code 3: this path is not made again. The game's path is:
+// --recover-test  [devicelost] with --map, or --session (with --init, --maps, --seed, --tick as there): the picture as
+//           the interface's game has it (WorldPicture on a window, recover_test.h), its device lost at
+//           --lose-device-at <frame>[,<frame>...] (counted from --tick, each frame a third of a beat on) and made again
+//           (WorldPicture::RecoverDevice), the times and what was carried over printed; --frames <n> counted frames,
+//           the last written to --screenshot, and --recover-shots a,b,... those frames as <name>_f<frame>.png (to
+//           compare with the same run without --lose-device-at); --lose-device-ignore <n>: n frames more asked of the
+//           lost picture first (what a host that does not look gets: nothing drawn, no error line a frame). --size,
+//           --vulkan, --debug, --time-of-day, --day-length, --weather auto, --settings, --cam and --focus as for --picture.
+//           --shader-cache <folder>: the picture's device keeps its shaders and pipelines there (a test's own folder:
+//           what a recovery does with the kept pipelines is then not done to the player's).
 // --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
 //           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
 // --fsr3-check  AMD's FSR 3 upscaler (fsr3.h) tried on a made-up scene and checked against the scene drawn at
@@ -699,9 +717,10 @@
 //           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
 //           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
 //           end, hills, mountains, islands, farLand, snowline, softness, reach)
-// --surround  (surround) with the world beyond the map's edge, on a map that brings a sculpted surround (x_surround.json
-//           beside its x.scmap): that land drawn past the map's edges, not the map laid out again mirrored
-//           (World::mapSurround, surround.h; modern look). Where the surround brings its ground's masks, its forest and
+// --no-surround  (surround) with the world beyond the map's edge, a map that brings a sculpted surround (x_surround.json
+//           beside its x.scmap) has that land drawn past its edges (World::mapSurround, surround.h; modern look; Chris,
+//           2026-11-10: on by default; --surround is still taken and changes nothing). --no-surround: the map laid out
+//           again mirrored there, as on every map without a surround. Where the surround brings its ground's masks, its forest and
 //           its scenery (the detail look), its ground is drawn in the map's own ground layers and its scenery stands on it;
 //           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
 //           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
@@ -867,6 +886,7 @@
 #include "world.h"
 #include "world_picture.h"
 #include "load_test.h"  // [bgload]
+#include "recover_test.h"  // [devicelost]
 #include "core/trace.h"  // [tracy]
 
 using namespace render;
@@ -1123,6 +1143,11 @@ struct Options {
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
   bool windowCycle = false;             // --window-cycle
   std::string loadTest;                 // [bgload] --load-test
+  bool recoverTest = false;             // [devicelost] --recover-test
+  int loseDeviceAt = -1;                // [devicelost] --lose-device-at (the first frame given)
+  std::vector<int> loseDeviceAts;       // (all of them: --recover-test's)
+  int loseDeviceIgnore = 0;             // [devicelost] --lose-device-ignore
+  std::vector<int> recoverShots;        // [devicelost] --recover-shots
   bool loadTestOpen = false;            // [bgload] --load-test-open
   int loadBackdrop = -1;                // [backdrop] --load-backdrop
   std::string loadGameLooks;            // [ui 39] --load-game-looks
@@ -1147,7 +1172,7 @@ struct Options {
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
-  bool surround = false;  // --surround
+  bool surround = true;   // --no-surround (Chris, 2026-11-10: on by default; --surround is taken and changes nothing)
   bool surroundBlockOut = false;        // --surround-blockout (the detail look)
   bool surroundScenery = true;          // --no-surround-scenery
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
@@ -1295,6 +1320,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-compare") o->fx.compare = true;
     else if (a == "--fx-death-unseen") o->fx.deathUnseen = true;  // [debrispile]
     else if (a == "--vulkan") o->vulkan = true;
+    else if (a == "--recover-test") o->recoverTest = true;  // [devicelost]
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
@@ -1441,7 +1467,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fog-old") o->fogOld = true;  // [weather]
     else if (a == "--fog-even") o->fogEven = true;  // [mistpatch]
     else if (a == "--beyond-land") o->beyondLand = true;
-    else if (a == "--surround") o->surround = true;  // (beyondland)
+    else if (a == "--surround") o->surround = true;  // (beyondland; the default now)
+    else if (a == "--no-surround") o->surround = false;
     else if (a == "--surround-blockout") o->surroundBlockOut = true;  // (surround: the detail look's switches)
     else if (a == "--no-surround-scenery") o->surroundScenery = false;
     else if (a == "--noicons") o->icons = false;
@@ -1683,6 +1710,22 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-decal-size") o->fx.decalSize = std::max(0.1f, static_cast<float>(atof(v)));
     else if (a == "--picture") o->picture = v;
     else if (a == "--load-test") o->loadTest = v;  // [bgload]
+    else if (a == "--lose-device-at") {  // [devicelost] <frame>[,<frame>...]
+      for (const char* p = v; *p;) {
+        o->loseDeviceAts.push_back(atoi(p));
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+      }
+      if (!o->loseDeviceAts.empty()) o->loseDeviceAt = o->loseDeviceAts[0];
+    }
+    else if (a == "--lose-device-ignore") o->loseDeviceIgnore = std::max(0, atoi(v));  // [devicelost]
+    else if (a == "--recover-shots") {  // [devicelost]
+      for (const char* p = v; *p;) {
+        o->recoverShots.push_back(atoi(p));
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+      }
+    }
     else if (a == "--load-backdrop") o->loadBackdrop = atoi(v);  // [backdrop]
     else if (a == "--load-game-looks") o->loadGameLooks = v;  // [ui 39]
     else if (a == "--load-session") o->loadSession = v;  // [session]
@@ -2099,6 +2142,17 @@ int main(int argc, char** argv) {
   const bool automatic = opt.frames > 0;
   // (and a run that only writes a picture shows no window at all: it would lie over whatever the
   // person is doing, a game of their own included; --show brings it back)
+  // [nodxc] (Chris, 2026-11-09; the interface's request 51) The shader compiler first, before any window or device: without
+  // dxcompiler.dll beside the program nothing can be drawn, and going on with Direct3D's old compiler hung at the first map
+  // frame with no word why. Said on stderr and in the log; a run a person watches also gets the system's dialog (it has
+  // no window yet to say it in); then exit code 4. --fxc (the old compiler asked for by name) goes on without it.
+  if (std::string missing; !(opt.fxc && !opt.vulkan) && !gfx::ShaderCompilerReady(&missing)) {
+    fprintf(stderr, "render: %s\n", missing.c_str());
+    moho::Logf(moho::LogLevel::Error, "render: %s", missing.c_str());
+    moho::LogFlush();
+    if (!automatic) ShowMessage("FA Remastered cannot start", "FA Remastered cannot start: " + missing + ".");
+    return 4;
+  }
   auto window = Window::Create("FA Remastered", opt.width, opt.height, &error, automatic, automatic && !opt.screenshot.empty() && !opt.show);
   if (!window) {
     fprintf(stderr, "render: no window: %s\n", error.c_str());
@@ -2172,6 +2226,40 @@ int main(int argc, char** argv) {
     t.maps = opt.maps;
     t.seed = opt.seed;
     return LoadTest(vfs, t);
+  }
+  if (opt.recoverTest) {  // [devicelost] --recover-test
+    RecoverTestSetup t;
+    t.map = opt.map;
+    t.width = opt.width;
+    t.height = opt.height;
+    t.vulkan = opt.vulkan;
+    t.vsync = opt.vsync;
+    t.debug = opt.debug;
+    t.pictures = opt.screenshot;
+    t.timeOfDay = opt.timeOfDay;
+    t.dayLength = opt.dayLength;
+    t.weatherAuto = opt.weather == "auto";
+    t.settings = opt.settings;
+    t.session = opt.session;
+    t.initFile = opt.init;
+    t.modUids = opt.modUids;
+    t.maps = opt.maps;
+    t.seed = opt.seed;
+    t.focus = opt.focus;
+    t.tick = std::max(opt.tick, 0.0);
+    if (opt.frames > 0) t.frames = opt.frames;
+    t.loseAt = opt.loseDeviceAts;
+    t.ignore = opt.loseDeviceIgnore;
+    t.shots = opt.recoverShots;
+    t.hasCam = opt.hasCam;
+    std::copy(opt.cam, opt.cam + 5, t.cam);
+    t.shaderCache = !opt.shaderCache ? std::string("-") : opt.shaderCacheDir;
+    // (the viewer's own device, made above, let go of first: Direct3D 12 keeps ONE device a card for the whole program,
+    // so it and the picture's were the same device underneath - lost together, and the lost one still held here while
+    // the picture made its new one, which the interface's program, with its one device, never has. With it held the
+    // picture's new device hung within a few frames of a game: DXGI_ERROR_DEVICE_HUNG, three times of three.)
+    device.reset();
+    return RecoverTest(vfs, t);
   }
   if (opt.windowCycle) {  // --window-cycle
     std::string error;
@@ -4868,6 +4956,17 @@ int main(int argc, char** argv) {
       continue;
     }
     device->EndFrame(shoot ? &capture : nullptr);
+    // [devicelost] (--lose-device-at in the viewer's own loop: the device lost on purpose after that frame; and any loss,
+    // made or real, noticed here after the frame's end: said once more with the frame, and the viewer ends with exit code
+    // 3. This world is dressed by some hundreds of the command line's switches and is not made again; the game's is,
+    // WorldPicture::RecoverDevice, which --recover-test tries.)
+    if (opt.loseDeviceAt >= 0 && frameCount == opt.loseDeviceAt && !device->Lost())
+      printf("render: --lose-device-at: the device lost on purpose after frame %d: %s\n", frameCount, device->LoseForTest() ? "done" : "this device cannot");
+    if (device->Lost()) {
+      printf("render: frame %d: %s. The viewer's own world is not made again on a new device (the game's is: --recover-test); ending\n", frameCount,
+             device->LostReason().c_str());
+      return 3;
+    }
     render::HangDumpBeat();  // [hangdump]
     MOHO_FRAME_MARK;  // [tracy] (the viewer's displayed frame)
     if (opt.timings) {  // (every frame, the first ones too: the slowest, part by part)

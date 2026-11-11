@@ -185,6 +185,9 @@ struct FrameEffectEvent {
   // Create: whose faction's effects it plays in the remastered look, when the one who made it says so
   // (the effects stand); "": as the thing it is made on or at is (Effects).
   std::string faction;
+  // [devicelost] Given again to a world made anew after the graphics device was lost (Effects::Keep): what it made is
+  // made as it was, but it is no news - a scorch laid again is no explosion (no blast's wave, dust or burn).
+  bool replayed = false;
 };
 
 // What damage, shots' impacts and health changes the simulation had (the engine's HitEvent, ImpactEvent and

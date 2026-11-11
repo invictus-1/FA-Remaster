@@ -52,6 +52,58 @@ class WorldPicture {
   // Makes an invisible window and a graphics device and loads the map. `vfs` must outlive this.
   // After UseWindow: the device draws into the host's window instead (no invisible window).
   bool Open(const moho::Vfs* vfs, const std::string& mapPath, std::string* error);
+  // [nodxc] (Chris, 2026-11-09; the interface's request 51) Whether the shader compiler is beside the program
+  // (dxcompiler.dll, gfx.h's ShaderCompilerReady): false with one sentence for the player in `message`, naming the full
+  // path it must be at. For a host to ask at its start, before it makes its window, and say so in a dialog of its own.
+  // Without it Open fails with the same sentence as its error (no device is made: it used to go on with Direct3D's old
+  // compiler and hang at the first map frame).
+  static bool ShaderCompilerReady(std::string* message);
+
+  // --- [devicelost] the graphics device lost, and made again (Chris, 2026-11-09, the review's A4) ---
+  // The card's device can go while a game runs: the driver is reset (another program's fault, or the card's: it happened
+  // here on 2026-11-06, a bake beside the game), updated, or the card hangs. The game is the simulation's and is not
+  // lost; what is, is everything made on the device. From the frame that notices it (the device says it once on stderr
+  // with its reason) DeviceLost is true and this picture draws nothing: Draw gives its last pixels, DrawToWindow,
+  // DrawMinimap and the photo calls do nothing, no error line a frame. The host then calls RecoverDevice, on the thread
+  // that draws, between frames; Beat may go on meanwhile (the beats are kept and go on being taken).
+  bool DeviceLost() const;
+  std::string DeviceLostReason() const;  // (one sentence, for a log or a message; empty while it is not lost)
+  // Everything made anew on a new device, the same game going on: every world and everything else on the old device is
+  // let go of, the device made again on the same window (tried for up to ten seconds: after a reset the driver may not
+  // be back at once), and the map shown opened again as BeginMap opens one (with its `before`, where it had one), given
+  // what the old world kept of the game (World::Kept says what is carried over and what begins afresh), drawn unseen
+  // with the game's last frame until warm, and shown. It returns when that is done: some seconds, the window not
+  // drawn meanwhile. Kept besides: every setting of the picture's own, the beats (GameStarted and Beat are NOT to be
+  // called again; the simulation need not stop), the focus army and what it has seen, the second window. A map being
+  // opened behind when the device went is begun again (BeginMap with the same path and `before`, its SetLoadCamera and
+  // SetLoadDayAndWeather; a session handed to it by PrepareSession is not made ahead again, its events are kept).
+  // The host's part afterwards, as after SwapMap: the switches it set on world() itself set again (world() is another
+  // object); the interface layer given again (any SetInterfaceLayer call with the pixels: the whole of it is handed
+  // over), and the backdrop where one is on (SetBackdrop). A photo being made is dropped (TakeDonePhoto gives none).
+  // Also right when the device is not lost (it is made anew all the same: for checks). False with `error`: no device
+  // could be made (DeviceLost stays true: try again later, or close), or the map could not be opened again (the
+  // picture is then as opened without a map: MapSize 0, world() null).
+  // A program with MORE THAN ONE picture (the interface's menu background beside its window's): Direct3D 12 keeps one
+  // device a card for the whole program, so all its pictures lose their device together, and none can make a new one
+  // while another still holds the lost one (RecoverDevice then fails at once and says so). Such a program first calls
+  // LetGoOfLostDevice on every picture (or destroys those it does not need), then RecoverDevice on each.
+  bool RecoverDevice(std::string* error = nullptr);
+  // RecoverDevice's first half alone: what is kept of the game taken, everything on the device and the device let go
+  // of. The picture stays lost (DeviceLost) and draws nothing until RecoverDevice, which then does the rest. For a
+  // program with several pictures, see there. False: the picture has no device.
+  bool LetGoOfLostDevice();
+  // What the last RecoverDevice took: seconds in all, until the new device was there (the old let go of first) and for
+  // the map (opened, given the game, warmed, shown); what was carried over; whether a map opening behind was begun again.
+  struct RecoverNumbers {
+    double seconds = 0, deviceSeconds = 0, mapSeconds = 0;
+    int deviceTries = 0;
+    int props = 0, effects = 0, looks = 0;
+    bool world = false, groundChanged = false, loadBegunAgain = false;
+  };
+  RecoverNumbers LastRecoverNumbers() const;
+  // (checks: the viewer's --lose-device-at) Loses this picture's device on purpose (gfx.h, Device::LoseForTest: Direct3D
+  // 12 for real, by ID3D12Device5::RemoveDevice; Vulkan made up); the next frame notices. False: no device, or it cannot.
+  bool LoseDeviceForTest();
 
   // --- [bgload] a map opened behind the one shown (the interface's request 37) ---
   // A picture that goes from map to map (the menu's, a game's, the menu's again) is opened once on the host's window
@@ -179,6 +231,10 @@ class WorldPicture {
   void SetVulkan(bool on);
   // (checks) Before Open: the graphics API's validation layer, where installed (the viewer's --debug).
   void SetDebug(bool on);
+  // (checks) Before Open: where the device keeps its compiled shaders and the driver's pipelines (gfx.h,
+  // DeviceDesc::shaderCache: "" the user's own folder, as at first; "-" none kept), for a test that must not write into
+  // the folder the player's game uses (the viewer's --recover-test with --shader-cache).
+  void SetShaderCache(const std::string& folder);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels
   // (the window's size), each 0xAARRGGBB with the colour already multiplied by its alpha (alpha 0:
   // the world shows through), `pitch` pixels from one row to the next. (x, y, w, h) is the part that

@@ -45,6 +45,12 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
 // shaders from the cache even where DXC is missing, and a program that switched to Direct3D's own compiler at
 // its first shader not kept would draw with a mix of both, different from run to run as the cache fills.
 bool DxcPresent();
+// [nodxc] DXC loaded now, as the first shader compiled would load it (once; later calls say the same): true when it is
+// there to compile with. False with where it was looked for in `where` (Windows: the full path of dxcompiler.dll beside
+// the program, the only place; elsewhere the library's name, which the system searches for) and what was wrong in `why`
+// (the file is not there, or it is and the system could not load it). gfx.h's ShaderCompilerReady makes the player's
+// sentence of the two.
+bool DxcLoad(std::string* where, std::string* why);
 
 // Compiles `source` at `entry` for `stage` ("vs", "ps" or "cs") into DXIL, shader model 6.0, for Direct3D 12,
 // signed (by DXC itself, or by an older DXC's dxil.dll beside the program). Kept in `cacheDir` as
