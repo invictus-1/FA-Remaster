@@ -209,6 +209,14 @@ struct ViewConstants {
   // heights are read for that, w the share of the weak sun's light on open level snow the sky's light there is cut by.
   float snowShade[4];
   float snowShadeMore[4];
+  // The ground's drawing, three faults mended (the map scan of 2026-11-11; each 0: as before). x [puddlesun]
+  // (World::puddleSunSoft; lighting.h's ModernLight): 1 = the sun's (or the moon's) highlight on still water on the ground (a
+  // rain puddle, the water in a rut or in the mud's low places) takes a lobe no sharper than wind and the rain's drops leave
+  // it, not the mirror's own. y [matteye] (World::groundMattEye; terrain.cpp, with GROUND_MATT): 1 = dry ground is matt
+  // also where the eye skims the ground's slope, not only where the light does. z [layernormals] (World::layerNormalsOwn;
+  // terrain.cpp's RICH): 1 = a remastered layer's small shapes are laid by the share its colour is laid with, not by the
+  // mask's raw value. w unused.
+  float groundLook[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -273,6 +281,8 @@ cbuffer View : register(b0) {
                           // z the sky's lean toward the sun's side; w the shade's blue
   float4 snowShadeMore;   // [snowshade] x the snow's cut of the sky deeper; y the hollows' shade; z the reach they are read over;
                           // w the share of the weak sun's light the sky's light is cut by
+  float4 groundLook;      // x [puddlesun] 1 = the sun's highlight on still ground water soft; y [matteye] 1 = dry ground matt
+                          // where the eye skims it too; z [layernormals] 1 = a remastered layer's shapes laid as its colour
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

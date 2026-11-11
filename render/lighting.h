@@ -688,6 +688,8 @@ float3 LeafLight(float3 albedo, float through, float3 world, float shadow, float
   return deep * falls * (through * shadow * CloudShadow(world) * thin * leaves.y);
 }
 
+// [puddlesun] The roughness the sun's highlight takes on still water on the ground at the least (ModernLight, below).
+static const float kStillSun = 0.35;
 // The modern light on a surface. `albedo` is linear; `occlusion` dims the sky's light (1: open).
 // Returns linear colour, unbounded.
 float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusion, float3 emission, float3 N, float3 world, float shadow) {
@@ -695,6 +697,7 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   shadow *= cloudHere;  // (a computed sky's clouds)
   float snowLyingHere = 0;  // [snowlamps] how much snow lies here (for the small lights on it, below)
   float snowShadeHere = 0;  // [snowshade] how much of the shade on lying snow this surface takes (view.h's snowShade, as snow lies)
+  float stillHere = 0;  // [puddlesun] how much of the surface is still water (a puddle), for the sun's highlight on it, below
 #ifdef GROUND_MATT
   // [leftover] (the ground's shaders: Terrain::mattGrazing) how much of the sun's highlight the ground loses here: how low the
   // sun stands over the ground's own slope (groundGraze, the ground's shader's), where it is dry (groundDry: the ground's own
@@ -717,6 +720,10 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
       albedo *= 1 - 0.45 * puddle;
       roughness = lerp(roughness, 0.07, puddle);
     }
+    stillHere = puddle;  // [puddlesun]
+#ifdef GROUND_STILL
+    stillHere = max(stillHere, groundStill);  // [puddlesun] (the ground's shader's: the still water in the mud's low places)
+#endif
     roughness = lerp(roughness, 0.6, SURFACE_WET * (0.35 + 0.5 * upward) * (1 - puddle));  // [unit dirt] (SURFACE_WET; not over still water: the puddles keep their mirror, Chris 2026-10-20)
 #ifdef SURFACE_DEEP_TRACKS
     roughness = lerp(roughness, deepGloss.x, deepGloss.y * (1 - puddle));  // [mud ruts] (wet mud in the ruts keeps its own gloss, terrain.cpp; still water over it its own)
@@ -884,6 +891,29 @@ float3 ModernLight(float3 albedo, float metallic, float roughness, float occlusi
   float k = a * 0.5;
   float Vis = 0.25 / ((nDotL * (1 - k) + k) * (nDotV * (1 - k) + k));
   float3 F = f0 + (1 - f0) * pow(1 - vDotH, 5);
+  // [puddlesun] The sun's (or the moon's) highlight on still water on the ground (a rain puddle, the water in a rut, on a
+  // pad or in the mud's low places: stillHere). A puddle is drawn as a mirror, roughness 0.07, for the sky it shows. Taken
+  // for the sun's highlight as well, that is a lobe some 13000 times the falling light at its middle and under two degrees
+  // wide: where the eye looked at a puddle along the sun's mirrored ray (the sun ahead of the camera and as high over the
+  // ground as the eye looks down on it) the puddle's fill blazed white, in the rain clouds' shadow too (which leaves a
+  // fifth of the sun and more); and round it, where the ground's normal goes over to the water's level one, the one
+  // normal on the way that mirrored the sun exactly drew a white line a pixel wide and dotted, an outline (the map scan of
+  // 2026-11-11, the west start's foot at 15 h in rain: "glowing stickers"). No puddle out of doors is that still for the
+  // sun: wind ruffles it and the drops' rings cross it, and a pixel takes in many such ripples (as the sea's glint does,
+  // water_glint.h), so the sun's image in it is a soft sheen. There the highlight's lobe is no sharper than roughness
+  // kStillSun (ripples' slopes of about a tenth; at its middle about as strong as the sea's own glint); the sky the puddle
+  // mirrors is as sharp as it was, and so are the small lights' highlights. groundLook.x 0: as before.
+  [branch] if (stillHere > 0 && groundLook.x > 0.5) {
+    float aSun = max(a, kStillSun * kStillSun), a2Sun = aSun * aSun, kSun = aSun * 0.5;
+    float dSun = nDotH * nDotH * (a2Sun - 1) + 1;
+    D = a2Sun / (3.14159265 * dSun * dSun);
+    // and under the clouds no image of the sun at all: what comes through an overcast comes from the whole sky, not from
+    // one place in it, and the sky is what the puddle mirrors already. The clouds' shadow leaves a fifth of the sun as
+    // light on the ground; taken as a beam, that fifth still made a rain puddle a flat pale patch, four times its
+    // ground's brightness. From a sun half covered on, its image comes back.
+    D *= lerp(1, smoothstep(0.3, 0.8, cloudHere), saturate(stillHere * 4));  // (whole from a quarter of water on: the rim)
+    Vis = 0.25 / ((nDotL * (1 - kSun) + kSun) * (nDotV * (1 - kSun) + kSun));
+  }
 #ifdef GROUND_MATT
   // [leftover] dry ground is matt at grazing light: a scan's roughness (soil some 0.5) says how glossy its grains are seen from
   // above; with the sun skimming the ground, the light reaches only their tops and the clods' and blades' shade takes the
