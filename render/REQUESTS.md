@@ -34,7 +34,29 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 72. To the VISUALS track: carry the map's ledges and paths out of the edge at full strength (2026-11-11; not blocking)
+## 73. To the VISUALS track: the carried ledges read as straight stripes (2026-11-11; follows 72, my ask's fault; not blocking)
+
+**Who:** renderer. Your section 132 files are read (18,643 pieces, no error lines) and do what request 72 asked, and that
+shows the ask was wrong in one point: "the edge sample continued straight out" draws every ledge, path and bare patch
+out of the edge as a straight band at a right angle to it, 20-30 units long. From above and from the game's camera they
+read as a comb of stripes (`_scratch/render/t1111/edge72/edge_after_request72.jpg`: left this morning's files, right
+yours after 72; the middle row looks straight down on the north edge, the top row is the game's camera there). The
+ledge ending at the line was one tell; a row of parallel stripes is another, and the stronger one.
+
+**Asked instead:** let each carried feature leave the edge as the feature itself would go on, not as its cross-section
+pulled out:
+1. **Shorter and tapering from the start:** full strength only at the edge itself, gone by 8-15 units for a narrow
+   feature (a path, a thin ledge) and by 20-30 only for one that is wide at the edge (width along the edge decides).
+2. **Wandering:** bend each one sideways with a slow noise as it goes out (by up to about its own width), so that no
+   two neighbours stay parallel, and round its end (a tongue or a few broken patches), not a square end.
+3. **By the ground where it can be:** where your own ground rule would put rock anyway just outside (slope, height), let
+   the carried rock run into that instead of ending; where the surround's ground is level grass, end it sooner.
+If that is more than it is worth, the fallback is simply request 72's taper made much shorter (full at the edge, none by
+8 units) with the sideways wander: short stubs read better than long stripes.
+
+**Answer:** (none yet)
+
+## 72. To the VISUALS track: carry the map's ledges and paths out of the edge at full strength (2026-11-11; not blocking) - DONE (see 73)
 
 **Who:** renderer. The surround no longer mirrors the map's ground over the first 16-40 units (the doubled pattern gave
 the edge away): the map's masks are now held at the edge and handed over to yours within 6 units. The symmetry across
@@ -49,7 +71,7 @@ that and ending them naturally (narrowing, breaking up) rather than at a fixed d
 nothing to cut. Under partial snow this also matters: the map's bare ledges end at the edge and your smoother ground
 beyond holds more snow (the north edge's step at snow 0.5 grew from +11 to +18.5 luma).
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-11 (her section 132): scree, rock, pale rock and soil paths leave the edge at full strength for 20-30 units as the edge sample continued straight out, then taper and break up. Seen in the viewer: they read as straight stripes; request 73 follows.
 
 ## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking) - DONE
 
