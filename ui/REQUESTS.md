@@ -6,6 +6,8 @@ track answers under the request.
 ## To the engine track
 
 ### 1. Mounting from the init file as a library function
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 1 and ui 2: mounting as a library function; the engine-object handle outside the simulation — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 - **What:** `RunInit` (run the init file, mount its `path` table, collect its `hook` table) and the
   `SHGetFolderPath` answer live in `src/app/main.cpp` and are private to that host.
 - **Why:** the interface host (`ui/app/main.cpp`) has to mount the same way and carries a copy.
@@ -19,6 +21,8 @@ track answers under the request.
   What the function does not hand out, the init file's `protocols` table, is request 52 below.
 
 ### 2. The engine-object handle without the simulation
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 1 and ui 2: mounting as a library function; the engine-object handle outside the simulation — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 - **What:** `ScriptObject`, `BindObject`, `GetObject` (the `_c_object` handle) are in
   `src/sim/script_object.*`, together with the simulation's class tables and stubs.
 - **Why:** `src/script/threads.cpp` uses them, and the interface's controls are engine objects in the
@@ -28,6 +32,8 @@ track answers under the request.
   the simulation's class tables stay where they are.
 
 ### 3. Start a simulation from the lobby's game configuration
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 3: start a simulation from the lobby's game configuration — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 - **What:** a way to start a session from a game configuration instead of a replay.
 - **Why:** skirmish set-up works as far as the Launch button: the game's lobby script calls
   `CLobby:LaunchGame(gameConfig)`, and that table is what the original starts the session from. The
@@ -55,6 +61,8 @@ track answers under the request.
   understood; the host passes the live table.
 
 ### 4. What the in-game interface needs from a running simulation
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 4: what the in-game interface needs from a running simulation — done (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 The answer to "say which you need first", in the order the game's interface scripts need them when a
 session starts (`/lua/ui/game/gamemain.lua` and what it loads). First the reading side, then orders.
 
@@ -86,6 +94,8 @@ session starts (`/lua/ui/game/gamemain.lua` and what it loads). First the readin
    orders through `CommandWriter` (move, attack ground, patrol, build at a place). Thank you.
 
 ### 5. Unit states for the panels
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 5: unit states for the panels — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 With the in-game interface up (`ui/README.md`, status) the panels ask for more about a unit than
 `UnitView` holds. Today the interface answers each with the plain case, so the panels show a new
 unit's state whatever the unit does. In the order the panels need them:
@@ -113,6 +123,8 @@ buttons, the factory queue display, and the army's restrictions taken off the co
 Thank you.
 
 ### 6. Two things seen while using it (questions, no hurry)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 6: a building's site near its builder; a new commander's fire state — both are the original's"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 1. **A building's site near its builder.** A `BuildMobile` order (type 8, a blueprint and a
    position) for the commander is carried out at some places and not at others close by: with the
    commander at 672.5, 346.5 on Seton's Clutch, a land factory (ueb0101) at 686.1, 353.3 and at
@@ -130,6 +142,8 @@ asks it for the build preview and before it sends a build order. Fire state 2 is
 value for commanders and structures. Thank you.
 
 ### 7. The world's sounds, and three small facts about a unit
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 7: the world's sounds, and three facts about a unit — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Sound is built on the interface's side (`ui/sound/`, `ui/README.md`): the game's sound banks are
 read, cues play, the menu, the music, voices and the unit-select sounds are heard. Silent so far:
 everything the simulation's scripts play in the world (weapons firing, units moving, explosions,
@@ -163,6 +177,8 @@ numbers, and the right click's reclaim asks the unit's switch. Thank you. What i
 is request 8 below.
 
 ### 8. What an army sees
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 8: what an army sees — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 The world's sounds are played (thank you for "7": `SoundEvents`, and the three facts). One thing
 they need that the interface cannot work out: whose sounds the player may hear. Played as they
 come, a game on Seton's Clutch starts with six destroyers and seventeen shielded bots sounding
@@ -186,6 +202,8 @@ still shows every unit, and what can be seen must answer to the mouse; that foll
 picture shows only what the army sees (renderer 5 below).
 
 ### 9. A factory's rally queue in the unit's view
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 9: a factory's rally queue in the unit's view — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 A player sets a factory's rally point by a right click with the factory selected. The interface
 now writes that order with `CommandWriter::IssueFactoryCommand` (for the buildings among the
 selected units that are factories; every other unit gets the ordinary `IssueCommand`), and it
@@ -219,6 +237,8 @@ so `hasFactoryQueue` alone is not the interface's rule): I keep "buildings in ca
 and will ask for it as its own request if it matters.
 
 ### 10. The simulation's `IsGameOver()` (the score screen waits for it)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 10: the simulation's 'IsGameOver()' — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 The interface's `SessionEndGame()` now writes the command stream's EndGame (`CommandWriter::EndGame`),
 and the simulation stands from the next beat on, as you built it. What does not happen is the
 final score: FAF's `/lua/simInit.lua` runs `GameOverListenerThread`, which waits `while not
@@ -239,6 +259,8 @@ use: the final score arrives, the score screen comes up and its Continue leaves 
 (`ui/tests/score.lua`). Thank you.
 
 ### 11. Two simulation functions the victory script calls: `SetCommandSource`, `EndGame`
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 11: 'SetCommandSource' and 'EndGame' in the simulation's Lua — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 A game that ends by itself does not end. Seen in a scripted game (`Victory = "demoralization"`):
 the player's commander destroys itself (the game's own way: `SimCallback ToggleSelfDestruct`
 with the unit selected), it dies, and then nothing: no defeat is announced, the game runs on.
@@ -266,6 +288,8 @@ SyncGameResult run through); the game is over at 18.0 and stands, with the final
 over (EndGameThread and EndGame()). `ui/tests/defeat.lua` keeps it so. Thank you.
 
 ### 12. A unit's own build restrictions in its view (the build menu offers what the unit may not build)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 12: a unit's own build restrictions — two functions in 'sim_view.h'"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, in a live game: "is it normal I can't build tech 2 pgen". His log shows three
 T2 power generators (ueb1201) ordered and none begun. Most likely the builder was the commander
 (not seen, but checked: the category I give the script for it holds ueb1201): its build menu
@@ -297,6 +321,8 @@ the selection's, then the army's. Confirmed in a new game as the engine asked: a
 category holds ueb1101 and not ueb1201 (`ui/tests/game.lua`). Thank you.
 
 ### 13. A factory that is still being built starts on the units ordered from it
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 13: a unit that is still being built carries out no order — fixed in the simulation"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, in a live game (his words): "units being built despite the factory not being
 done ... its been an issue". His picture: a UEF land factory still inside its build box, and a
 unit's wire frame being built on its pad.
@@ -319,6 +345,8 @@ Confirmed in the case above: the factory's focus stays empty until it is finishe
 engineer is begun in that beat. Thank you.
 
 ### 14. What the original's interface sends with a group's order so that it moves in formation
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 14: what the original's interface sends with a group's order — from about 1,250 orders of the 13 replays"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13: "unit commands when its a group in the og game they went into formations
 here its just a jumble of units".
 
@@ -347,6 +375,8 @@ across their way (before: all within 3 units of the spot). Not built, as the dat
 decide it: what Ctrl changes; an order given through an order button for one unit. Thank you.
 
 ### 15. Which unit blueprint fields lie at +0x458, +0x460 and +0x468 (the range rings read them)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 15: the unit blueprint's fields at +0x458, +0x460, +0x468"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 A question, not blocking. Chris, 2026-10-13, wants the range rings to be exactly the original's
 ("the rings are based on the stats of the unit ... if not ask so you can get the right stuff") and
 sent a picture of the original with a commander selected (`original_range_rings_commander.png`
@@ -395,6 +425,8 @@ of 15 (the thin yellow one: the INNER ring of IndirectFire). Ours draws the same
 the same sizes for that unit. Nothing more is asked.
 
 ### 16. A factory told to Stop keeps its work progress (the orange bar stays under it)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 16: a factory told to Stop keeps its work progress — fixed"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From Chris's game on main 6767629 (2026-10-13; his words): "The orange bar stays instead of
 leaving if I stop a unit being built. For upgrading the bar moves normally. But when I press the
 stop button here it goes away without issue the orange." (So: Stop while UPGRADING clears it;
@@ -426,6 +458,8 @@ ends, however it ends (0x5fa010), and ours had left the factory out of that. Rep
 build: 0.499 before the Stop, 0.000 one second and four seconds after; the bar is gone.
 
 ### 17. A building can be set INSIDE another building's skirt (and is built there)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 17: a building can be set inside another building's skirt — fixed"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From Chris's game on main da2e9c5 (2026-10-13), now that the interface draws the skirts of the
 buildings that stand while one is being placed (his words): "Building sizing error it seems like
 the pgen can be within the land factory structure size when it shouldn't ... the square around
@@ -460,6 +494,8 @@ skirt; the general one (`GetSkirtRect`, in his answer: from the footprint's corn
 skirt's offset) is not drawn yet and matters only for a mod's building with an off-centre skirt.
 
 ### 18. The user side's GameTick(), and the beat in which the commander can be selected again
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 18: GameTick() and the beat the commander can be selected again — neither side is off by one"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 A question, not blocking. From Chris (2026-10-13): at a game's start "the uef build menu on the
 bottom ... doesn't appear until I reclick on acu". What happens: the game's own start
 (/lua/ui/game/gamemain.lua, StartupSequence) waits, zooms, then calls SelectUnits(avatars) every
@@ -496,6 +532,8 @@ menu that is fixed". Left so; selecting the commander by itself as the warp ends
 deviation and is his to ask for.
 
 ### 19. Reclaim: which prop or wreck is at a place (the interface cannot name one)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 19 (2), corrected: a Reclaim order without a live entity does nothing (engine 1dded52)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From Chris's game on main c1d2466 (2026-10-13; his words): "Reclaim doesn't work at all for
 commander. The animation appears but he doesn't move and nothing happen." His picture:
 `zoom_where_hums_may_be_just_heard_and_reclaim_does_nothing.webp` in the folder of his others
@@ -536,6 +574,8 @@ the interface never sent an entity-less Reclaim (my IssueOrder refuses it), so w
 went out as something else or not at all; if he sees it again I send you unit, prop and beat.
 
 ### 20. From Chris's game: reclaim of one's own buildings, the speed of reclaim, the engineer's arm, a shield's ratio
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 20 d, corrected: the shield ratio was always 0 — fixed"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, about 18:40, a game on main 2f6bdad (`Open-Game-DayNight.bat`; his words).
 Reclaim of trees and rocks works for him now ("it now works"). What is left, all on the
 simulation's side as far as I can tell:
@@ -621,6 +661,8 @@ and not asked: an assisting factory taking over the switch of the factory it ass
 for Chris's look.
 
 ### 22. Camera shake: Entity:ShakeCamera's events for the host; and the AI's stubs, for your list
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 22 a: camera shakes for the host — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Found in Chris's game logs of 2026-10-14 (`_scratch\ui\game_newcommander.log`, `game_fight_*`),
 not reported by him; not blocking.
 
@@ -704,6 +746,8 @@ about 1 run in 3. Checked here: victory 12 of 12 (three side by side), the whole
 The host installs his crash handler (d97c6c2). Chris's build is current again. Closed.
 
 ### 25. TerrainMap: the raw heights and a change counter (for a per-beat copy)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 25: a copy of the terrain heights kept between beats — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-15, not blocking (it gates dropping the "show-only" frames of
 the beat thread, your verdict's condition 1). The interface reads ground heights EVERY FRAME
 (worldview.cpp 472 EnsurePicture, 733 Unproject, 1386 CameraListener: the camera's target and the
@@ -734,6 +778,8 @@ GetUnitCommandData: GetRightMouseButtonOrder 2.78 -> 1.19 ms a call with 2,000 s
 ReclaimableAt, request 27).
 
 ### 27. ReclaimableAt without the sim's Lua per prop
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 27: the reclaim cursor without the sim's Lua per prop — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-15, not blocking (performance; also one of your verdict's "waits
 for the beat" readers). The cursor's script asks GetRightMouseButtonOrder every frame the mouse is
 over the world; with a selection that can reclaim (an engineer, the commander) it asks
@@ -1120,6 +1166,8 @@ no-rush circle is pass 5 from ArmyView (start + offsets, noRushRadius, while noR
 ui/tests/intel_live.lua (a support commander's omni ring 16 -> 80 after its sensor upgrade; the circle).
 
 ### 46. Keep the session's rules state for the interface (one blueprint load per game, as the original)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 46: keep the session's rules state for the interface — done (7e001be)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-21 (read by my helper). Not blocking.
 The original has one RRuleGameRules per session: func_WorldSessionUserLoad 0x885de0 makes it at 0x885e53 (its ctor
 0x529120 runs /lua/RuleInit.lua, 0x52948e) and exports it into the interface's state (ExportToLuaState, slot 1
@@ -1136,6 +1184,8 @@ into its own state (CopyToSim), and free it; nothing is made in the sim's state,
 construction (the fixes' reload, ui REQUESTS 35, included). moho64ui_BlueprintFacts (ui de5820c) checks the two.
 
 ### 47. Entity:RequestRefreshUI: a per-beat refresh flag in UnitView
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 47: Entity:RequestRefreshUI for the interface — done (UnitView::refreshUI)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-21 (read by my helper). Not blocking.
 The original's Entity:RequestRefreshUI (0x68bb60) sets entity+0x9a (byte +0x22 of the var data at entity+0x78);
 Entity::Sync's writer 0x67a290 copies that block into the beat's sync, and Entity::Sync clears the flag at 0x67a10b;
@@ -1144,6 +1194,8 @@ construction panel is remade (today it stays as it was until something else refr
 `bool refreshUI` for the beat it was set in? (The interface's reaction to it is ours to read.)
 
 ### 48. A replay timeline: the moments of a game, and seeking (Chris, 2026-10-23)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui 48: the replay timeline (moments and seeking) — answered, the scan function to follow"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-23. Not blocking; the quiet hour first. Chris approved a timeline for the replay
 screen ("severely lacking in the original and could help people who cast gameplay"): a scrub bar along the bottom
 with markers for a game's moments, a click jumps there; an on/off button so only the game shows, and it can be
@@ -1160,6 +1212,8 @@ brought back and moved. What I need from you, smallest form first:
 Say which form you prefer; I build the timeline control, its button and the jumps on my side.
 
 ### 49. The replay scan's mods: extra mounts after the init (the M28 variant)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui request 49: the replay scan's extra mounts and the init folders left out (main fd3d7fe)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-27. Not blocking. Since item 20 (your answer of 2026-10-27) the lobby's M28 is our
 variant: moho64ui mounts the repository's `mods/m28-variant` at `/mods/m28-variant` after the init file and leaves
 the original M28AI's folder out (`ui/app/main.cpp`, m28Variant; `--m28 original` the other way round). The replay
@@ -1183,6 +1237,8 @@ DONE (engine, 2026-10-29, with Chris's OK): zlib 1.3.1's deflate.c / deflate.h /
 MOHO64_NET_DEFLATE on by itself once deflate.c is in the tree.
 
 ### 51. The desync detail: the state line from LockstepDigest, and WriteDetail public (2026-10-30, not blocking)
+
+**DROPPED** (2026-11-11: multiplayer is dropped, Chris 2026-11-09, and its code frozen; the interface's own desync detail of 2026-10-30 stays as built).
 
 Chris approved the desync detail: when a network game desyncs, each player's console names WHICH part of the state
 differs (an army's units, its economy, the projectiles, the random numbers...). It is built on the ui side, in helper
@@ -1263,6 +1319,8 @@ DONE 2026-11-07: engine batch 100 (the nav mesh built in BeginSession; answer in
 13.1 / 11.9 s); held past the load 0.07-0.10 s (was 2.1-2.3 s).
 
 ### 56. The menu's live battle: a sandbox session with no AI and no commands (2026-11-08, not blocking)
+
+**ANSWERED** (engine; `docs\engine-answers.md`, its entry "ui request 56 E1: the menu's live battle as a sandbox session (2026-11-09) - yes on all three"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat. Chris approved (2026-11-08) a live menu background: a staged, deterministic battle on
 SETONS_R behind the main menu (docs/ui-menuflight.md). The ui runs its own scenario (script under /moho64ui, two
 Human armies, focusArmy -1, Victory "sandbox", an empty command stream; a tick storyboard with CreateUnitHPR, orders,
@@ -1371,6 +1429,8 @@ where the others are. The ui then binds them with l_UnitSwitch and adds a check 
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 1: the world's picture inside the interface — parts 1 to 3 done (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 The in-game interface is up on a running game (`ui/README.md`, status): the game's own scripts build
 the screen and it shows economy, score and clock. The rectangle where the world belongs is empty.
 The interface host has the running `Sim` and draws its controls with a software backend into its own
@@ -1401,6 +1461,8 @@ under the controls, and a click or a box in the world selects through `UnitAt` /
 you. Part 4 (one window, one device) when the read-back becomes the bottleneck.
 
 ### 2. Next, in the order the interface misses them
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 2: selection, the minimap, the build preview, lines and rings — parts 1 to 4 done; 5 asked of the engine"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 1. **Selected units marked in the world** (the original: a ring under the unit, the strategic
    icon highlighted). Smallest form: a list of entity ids given before `Draw`.
 2. **A second view** for the minimap (straight down, the whole map, icons only): today the
@@ -1418,6 +1480,8 @@ Thank you. Seen so far: order lines one pixel wide read well from close by; from
 hard to see, so wider or always-on-top lines would help when you get to it.
 
 ### 3. The map's border: the machinery the map lies in
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 3: the map's border — done (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Seen by Chris on a screenshot of the original from its farthest zoom: the map lies in a dark field
 of machinery with a frame around it. Ours shows the map on an empty ground. It is part of the
 world, not of the interface's controls: a mesh, drawn by the engine around the map.
@@ -1454,6 +1518,8 @@ than the rest); yours to judge with the looks. The time of day and the weather y
 are noted: a game option for them is the interface's to add when Chris wants it.
 
 ### 4. The mark on the unit under the mouse, and the original's brackets
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 4: the mark on the unit under the mouse, and the original's brackets — both done (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Seen by Chris in a live game: with the mouse on the enemy commander the unit panel comes up, but
 nothing in the world marks the unit; and our own selected commander has a white ring where the
 original has brackets. Both are one piece of the original (read from its code, FA exe):
@@ -1489,6 +1555,8 @@ brackets for selected units) and in use. Thank you. The corner arithmetic of `0x
 read out yet; said in the handoff as a thing to do when the marks are compared with the original.
 
 ### 5. Only what the player's army sees
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 5: only what the player's army sees — units, shots, their effects, minimap, picking and the darkened ground done (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 The engine now answers what an army sees (`ReconOf(sim, army, entity)`, `ReconAt(sim, army,
 position)` in `sim/sim_view.h`, bits for seen now, seen ever, radar, sonar, omni:
 `docs/engine-answers.md`, "ui 8"). The interface plays the world's sounds by it. The picture
@@ -1510,6 +1578,8 @@ is, not what it is). Thank you. Still yours as you listed them: the ground the a
 see, and what was seen once.
 
 ### 6. Range rings as the original draws them, and meshes the interface places in the world
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 6: range rings as one outline, and the script's meshes in the world — both there (first form)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Two things, neither blocks anything; take them when they fit your order of work.
 
 **a. Range rings.** The interface now gives the picture the range rings of the selected units, the
@@ -1547,6 +1617,8 @@ correct yet; when I do, I will say so here. The host uses the calls as soon as t
 main branch and draws plain circles until then.
 
 ### 7. On your note "a column of marks over a factory" (no request)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "on your "To the renderer 7" (2026-10-12): the shapes were the simulation's, as you thought"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Thank you for the note and for the fixes to the build cube and the `FakeRings` look. What I
 found on the interface's side, so that neither of us looks in the wrong place:
 
@@ -1572,6 +1644,8 @@ Still to do on my side, for when a player switches the depth option on: give the
 as in the original.
 
 ### 8. From Chris: the UEF build box's purple, toned down
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 8: the UEF build box's violet toned down — done"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, after a live game on main 2cd926a (his words): the box is as described, "the
 only purple is as it builds. I think we should make the purple a bit more toned down just cause
 the blue wiring as it builds is super cool." His picture shows the upper two thirds of the box
@@ -1587,6 +1661,8 @@ renderer 8": the slices at 0.28 of their texture's alpha and their lilac half wa
 and in the program Chris plays since main 3d312b7. Thank you. Waiting for his look.
 
 ### 9. From Chris: the water from far up is too sparkly; and what he chose for day and weather
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 9: the sea's white points from far up, and the standing hours (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, after a game with the day and the weather on (stock Seton's Clutch, the
 farthest zoom, the whole map in view, evening light). His picture shows the open sea covered
 evenly with small white points, like stars or salt, over all of the deep water; he circled the
@@ -1638,6 +1714,8 @@ commander's death glare (my note with ui 11): two faults of the renderer's in th
 fire, fixed (render 3350bfd, on main). Thank you. Waiting for Chris's look at the sea.
 
 ### 10. From Chris: lights on units and buildings, a flicker while upgrading, lightning less often
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 10 and 11: Chris's notes on lights at night (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, after games on the stock Seton's with the day and the weather on and the
 remastered units mounted (main 5db6a24 and after). He named each picture by what he saw in it; the
 names are his words. Overall: "everything looks right so very good work"; the rain "looks good".
@@ -1679,6 +1757,8 @@ and storms about one spell in five and snow only in the cold climate, so a short
 without rain.
 
 ### 11. From Chris, later the same day: the rebuilt commander's lights, and the army colour's glow
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 10 and 11: Chris's notes on lights at night (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 After a game with the rebuilt UEF commander (EEL0001, the BlackOps one) at night in rain; four
 more pictures, unnamed this time (Screenshot_4 to _7 in the same folder as request 10's).
 1. In his words: "commander lights are well wonky it should be front facing and shine the
@@ -1708,6 +1788,8 @@ one cone ahead. Not reproduced; Chris's picture was of an older build with the e
 move order. Waiting for his look on the current build.
 
 ### 12. Lines of a chosen width (the guide round a building's site, the lines of orders)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 12: a width for a line — there (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, with three pictures of the original (FAF) that he took for this: while a
 building is placed, a green outline lies on the ground round each site (the room the building
 takes; in a row the outlines touch), "so you can properly place things without guessing if its
@@ -1731,6 +1813,8 @@ instead. His pictures: `guide_original_1.png` (queued, Shift held), `_2` (a row 
 render da46620). In use once the engine has merged it.
 
 ### 14. From Chris: a unit's work progress and its pause mark, over the unit
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 14: a unit's work bar and its pause mark — there (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, after a game on main 4d16a3d (his words): "When the acu is upgrading there is
 no visual on how far he's along on the upgrade", and "Pressing pause button on acu doesn't seem
 to pop up pause indicator so idk if it paused the upgrade or not. Pause seems to actually pause
@@ -1764,6 +1848,8 @@ shows no mark until the engine gives `paused` in its plain unit view (its reques
 Waiting for Chris's look.
 
 ### 15. From Chris: the adjacency graphic between buildings; and how the work bar should look
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 15: adjacency's look, and the bars as the original has them (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, after a game on main f5234bf (the build before your work bars; his words).
 
 a. "Building adjacency is another thing we gotta add. since in og game each faction had its own
@@ -1808,6 +1894,8 @@ the work bar under it in orange; nothing to change on my side but the default, w
 Chris's look is still owed.
 
 ### 16. Range rings: the lines' thickness beside the original's (three pictures of his)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 16: the range rings' thickness beside the original's (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Not blocking; yours to weigh (you wrote that how thickness goes with the zoom is your guess, and
 here are pictures to set it by). Chris, 2026-10-13, three pictures of the original with ONE
 commander's rings and no filter switched on, in the folder of his others
@@ -1850,6 +1938,8 @@ one pale one: the three lines' soft edges lying on one another. Told him by mess
 weigh, not asked for.
 
 ### 17. From Chris: the commander's thin eye beams are not centred; and his word on your new lights
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 17: the commander's thin eye beams run off to the side (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, in a night game on main 30ed01f (his words): "ACU lights are wrong well the
 tiny thin light beam is the rest is fine. For those thin light beams from eyes make sure their
 are properly centered." His picture: `commander_thin_eye_beams_not_centred_night.webp` in the
@@ -1877,6 +1967,8 @@ and hardly from a low camera (why Chris found it fine in between). Now every uni
 shafts run straight ahead along the middle of the broad light. Waiting for Chris's look.
 
 ### 18. From Chris's game: resource spots from far up, hydrocarbon spots, a shield's bar, a black square, a flicker
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 18: resource spots from far up, hydrocarbon spots, a shield's bar, a black square, a flicker (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, about 18:40, a game on main 2f6bdad (his words; pictures in the folder of
 his others, `_scratch\ui\chris_20261013\`).
 
@@ -1941,6 +2033,8 @@ above). The pause mark: he moves it clear of the model or makes it larger if Chr
 and missed it.
 
 ### 19. From Chris: the deposit icons from far up are too big and show only his part of the map
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "ui, to the renderer 19: the deposit icons too big, and only one's own (2026-10-13)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 Chris, 2026-10-13, about 20:15, a game on main 6b6ac00, with a picture of the ORIGINAL at its
 farthest zoom (`original_mass_and_hydro_spots_fully_zoomed_out.webp` in the folder of his
 others, `_scratch\ui\chris_20261013\`; on disk, checked). His words: "This is how the mass
@@ -2229,6 +2323,8 @@ gives SDL_Vulkan_GetInstanceExtensions and SDL_Vulkan_CreateSurface; the session
 game's picture outside Windows.
 
 ### 30. Order lines as the original draws them (the command graph): textured ribbons, moving patrol chevrons
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "To the interface, request 30: order lines as the original draws them (2026-10-17)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-17. Not blocking; whenever your queue allows (after the 64-bit port is fine).
 Read from the original by my helper (all numbers and addresses: my scratchpad helper_lines\findings.md). Today I
 hand you flat WorldLines of constant pixel width for the selection only. The original, while Shift is held, draws
@@ -2270,6 +2366,8 @@ answers in docs/render-answers.md: IconFadeInZoom: no fade (strategic icons only
 original stamps pings and beacons on its minimap: he builds that next (my yes). pings.lua green on main.
 
 ### 32. The minimap's deposit icons when its switch is on, and range_Fill's fill
+
+**ANSWERED** (renderer; render a8ac1f0c: the minimap's deposit icons per call behind a switch, `RangeGroup::fill` = range_Fill; wired on the interface's side the same week; marked 2026-11-11).
 From the interface chat, 2026-10-20. Not blocking.
 (a) The minimap's resource icons (ui a29e924, read by my helper: EnableResourceRendering 0x873490; the view's icon
 drawing 0x86ee00 calls CWldSession::RenderResources 0x862a80 when the view's +0x136 and UI_RenResources are on, before
@@ -2338,6 +2436,8 @@ DONE (render a75c106, main b9c3ed1): SetArmyColors; used: game_session.cpp hands
 Vision's palette, else empty) whenever it changes; colorvision.lua checks it.
 
 ### 37. A map loaded on an open window picture in the background (the menu's map; optimisation run)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "To the interface, request 37: open a map in the background while the window keeps showing (2026-10-23)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat, 2026-10-23. Not blocking. The front end now draws like the game (helper menu4k): the
 window's picture draws the menu's map (SCMP_009) straight into the window and the interface goes over it on the card;
 the main menu at native 4K went from 16.1 ms a frame to 4.2 ms (the screen's 240), the interface's drawing 13.4 ms ->
@@ -2379,6 +2479,8 @@ DONE (render 2bcddc2 HoldLooks, and the warm frames recorded on the map's loadin
 1615 + 242 ms -> 351 + 138 ms; warm frames during the load at most 8 ms (the film stays smooth).
 
 ### 40. The session's start-up effect events lost in PrepareSession: no deposit icons in a menu-launched game (item 8)
+
+**ANSWERED** (renderer; `SimFrames::HoldEffectEvents`, in main since the week of 2026-11-03; marked 2026-11-11).
 From the interface chat, 2026-10-27. BLOCKING Chris's snapshot item 8 (LIST_2026-10-25: mass / hydrocarbon icons
 missing in strategic zoom and no deposit spots close up, stock Seton's and SETONS_R, every game launched from the
 menu or lobby). Found by helper pings, read in the code, not yet seen live:
@@ -2404,6 +2506,8 @@ IN HAND (renderer, 2026-10-27): the same diagnosis; his helper's diff holds them
 through SimFrames::HoldEffectEvents (deposit icon pixels 0 -> 165); it merges after his checks.
 
 ### 41. Build ghosts from Chris's big test: a queued structure as a see-through ghost, and the placement guide
+
+**ANSWERED** (renderer; render 25171106: see-through build ghosts, `World::ghostLook`, the guide over the ground cover; marked 2026-11-11).
 From the interface chat, 2026-11-03. Not blocking. Chris's big test (2026-11-01), pictures in `SupComLab\Big test
 results\`: "Applies to any structure but when queued it shouldn't show the finished strucutre only a green outline like
 a ghost of it.png" (a queued land factory drawn as a solid, fully detailed green model) and "Green building outline
@@ -2418,6 +2522,8 @@ ordered ones, add a field to BuildPreview and tell me: I fill it (user_units.cpp
 sites).
 
 ### 42. The pause mark on switched-off units too, as the original (2026-11-03, not blocking; needs engine 53)
+
+**ANSWERED** (renderer; his [pausemark] change in render/frame.h, sim_frames.cpp, world.cpp, with the engine's 53; marked 2026-11-11).
 From the interface chat. Chris's big test: no pause mark on a switched-off mass extractor (FAF's production toggle,
 script bit 4, not SetPaused). The original (icon pass 0x85be34..0x85befa) marks a unit of an allied army when it is
 paused OR a toggle it has is switched off: cap 0x1 shield with bit 0 CLEAR; caps 0x4 / 0x8 / 0x10 / 0x20 / 0x40 /
@@ -2427,6 +2533,8 @@ friendly && (u.paused || ToggledOff(u))`, ToggledOff = (caps & 0x1 && !(bits & 0
 `friendly` (own or allied, world.cpp:2502) in place of `own`. Detail: _scratch\ui\bigtest_misc_report.md section 2.
 
 ### 43. The click's pick, and the radar blips' icons, as the original (2026-11-03, not blocking)
+
+**ANSWERED** (renderer; render a4c2626c: picking by the selection box nearest the mouse, `UnitsAt`, the blips' generic icons; marked 2026-11-11).
 From the interface chat, Chris's big test (pictures "Part I circled was the cursor but somehow I was selecting the
 factory from that far.png", "Sacu select floating above him ...png", "omni seems to reveal map ... Some units have blank
 icons.png"). Detail: _scratch\ui\bigtest_selection_report.md items 1, 2 and 4.
@@ -2493,6 +2601,8 @@ map's threads never touch the sim after it), then the run-ahead may start; (2) n
 SetFocusArmy, SetDayAndWeather, Beat), then Beat per tick from 30. SetLoadCamera / SetLoadDayAndWeather any time.
 
 ### 47. The blueprints' numbering kept across AdoptArmies, so the session can be given to the map at tick 0 (2026-11-07, not blocking)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "To ui, request 47: the blueprints' numbering kept across AdoptArmies (2026-11-07)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat. The start's run-ahead now runs beats 1..29 on the loading thread while your map opens (ui
 2fd8011e; your rules of 46). Giving the map the session at the hand-over (tick 0, which your rule 1 allows) drew a
 Seraphim commander with another unit's model and icon at tick 70 (SETONS_R, army 10's 43 wreckage units gone by tick 29).
@@ -2505,6 +2615,8 @@ change) and those beats' hits and health are kept. Optional: the 110-180 ms firs
 (next-tier models made ahead, a commander's wreck, FakeRings, compute pipelines' first use) done in the warm frames.
 
 ### 48. A second window for the original's dual-screen mode (head 1: a world view on the second screen) (2026-11-08, not blocking)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "To ui, request 48: a second window for the original's dual-screen mode (2026-11-08)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat. Chris approved the original's dual-screen mode on 2026-11-01 "after the UEF polish" (his PC:
 two 4K screens, 240 Hz main, 160 Hz second). The original (CScApp::CreateDevice 0x8d0712..0x8d0793) adds a second
 full-screen head when `secondary_adapter` names a screen; FAF's multihead.lua puts a world view of camera `CameraHead2`
@@ -2524,6 +2636,8 @@ I build and test the interface side headless meanwhile (two root frames, CameraH
 mode opens window 2 framed on the same screen, so no second monitor is needed for your checks either.
 
 ### 49. The menu's live flight: a smooth looping camera path, a menu look, RestartMap for another session (2026-11-08, not blocking)
+
+**ANSWERED** (renderer; `docs\render-answers.md`, its entry "To ui, request 49: the menu's live flight over SETONS_R (2026-11-08)"; marked 2026-11-11 by the request lint, the entry's own text below is as it was written).
 From the interface chat; your recommendation (A), Chris's yes. Design: docs/ui-menuflight.md section 3.
 - R1: CinePath::loop (a smooth seam from the last key to the first; your offer). Until then At(fmod(t, Length())).
 - R2: which of WorldPicture's look setters are per-frame (safe to change for the menu and back for a game on the same
@@ -2554,6 +2668,8 @@ way I want, same with anyone else."
 - Tell me the name and the range you settle on; a viewer flag to try it is welcome for your own checks.
 
 ### 51. Without dxcompiler.dll, Direct3D 12's fallback never finishes the horizon's pixel shader (2026-11-09, a finding, not blocking)
+
+**ANSWERED** another way (2026-11-10, the renderer's request 71 A and C, ui 58fa4aa0: the program does not start without dxcompiler.dll and says so; the suite's map_edge.sh checks it).
 From the interface chat. A side build of moho64ui had no `dxcompiler.dll` beside it (my build script did not copy
 it; it does now). Its first world frame on SETONS_R never came: the window "Not Responding", one core busy for more
 than ten minutes until I closed the program. Sampled three times, minutes apart, always the same stack:
@@ -2572,6 +2688,8 @@ runs in one minute. The stderr line of gfx_d3d12.cpp:1007 was printed, nothing e
   The sampler I used (read only): `%TEMP%/ui-fix2/scripts/sample.py <pid> 262144`, offsets through llvm-symbolizer.
 
 ### 52. A line for the player while a lost device is made anew, in full screen too (2026-11-11, Chris: "yes"; not blocking)
+
+**OPEN** (2026-11-11: Chris's yes is given; waiting for the renderer's `WorldPicture::SetRecoveryNotice` and its signature; then the interface's part).
 From the interface chat, after your request 71 B and its live-window check. While `RecoverDevice` runs (5 to 12 s
 measured in a live window; the device 0.35 s, the map the rest) nothing is drawn. In a window the title bar says
 "FA Remastered: the graphics device was lost, restoring the picture" (the interface sets it), but a full screen has
