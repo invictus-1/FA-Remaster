@@ -55,6 +55,7 @@
 #include "user/bindings.h"
 #include "user/keymap.h"
 #include "user/notices.h"
+#include "user/retest.h"
 #include "user/user_state.h"
 
 using namespace moho;
@@ -161,6 +162,7 @@ int scanTicks = 0;              // --scan-ticks N: the replay timeline's scan st
 uint32_t fastForward = 0;         // --fast-forward N: a game runs ahead to beat N as fast as it goes (for measurements)
 std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
+std::string retestFile;           // --retest file.md: the re-test list for the panel of our own (user/retest.h); none: no panel
 
 // The system's folders as this program answers SHGetFolderPath(name): the init file's (through the engine's
 // MountFromInitFile, given them as its answers: AnswerSystemFolders) and the preferences' places (BelowFolder).
@@ -307,6 +309,7 @@ int main(int argc, char** argv) {
     else if (a == "--scan-ticks") scanTicks = std::atoi(next().c_str());
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
+    else if (a == "--retest") retestFile = next();
     else if (a == "--size") {
       // (a size without its x, or of nothing, is said and nothing starts: until 2026-11-10 "--size 1920" kept
       // 1920x1080 and still counted as the command line's choice of the display mode, modeGiven)
@@ -346,6 +349,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
+  ui::SetRetestFile(retestFile);  // (--retest: the re-test list and its verdicts read, the panel of our own exists)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
   // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
@@ -357,7 +361,8 @@ int main(int argc, char** argv) {
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--import-prefs file|none]\n"
                  "                [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
+                 "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen]\n"
+                 "                [--retest list.md] [-- game arguments]\n");
     return 2;
   }
   // The shader compiler must be beside the program (dxcompiler.dll; the renderer's request 71 C, its answer to ui

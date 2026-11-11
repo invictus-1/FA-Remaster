@@ -21,6 +21,7 @@
 #include "script/script_state.h"
 #include "user/bindings.h"
 #include "user/replay_timeline.h"
+#include "user/retest.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -1304,6 +1305,10 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   // front end and in a game. Its key action "Command palette" (Ctrl-Shift-P at first) runs it.
   if (Upper(name) == "REMASTER_PALETTE") return CallScript(L, "/moho64ui/lua/palette.lua", "Command", rest);
   if (Upper(name) == "REMASTER_TIMELINE") return TimelineCommand(L, rest);  // the replay timeline (replay_timeline.cpp)
+  // The re-test panel (ours: user/retest.h, ui/data/lua/retest.lua): remaster_retest [on|off] (no word: it turns
+  // over), in the front end and in a game; its key action "Re-test list" (Ctrl-Shift-R at first) runs it. Only in a
+  // program started with --retest: without it there is no such command (it falls through to the unknown ones).
+  if (Upper(name) == "REMASTER_RETEST" && RetestCommand(L, rest)) return;
   // The follow camera (ours: ui/data/lua/followcam.lua, its camera maui/worldview.cpp): remaster_follow_cam [on|off]
   // (no word: it turns over), in a game or a replay. Its key action "Follow camera" (Ctrl-Alt-V at first) runs it.
   if (Upper(name) == "REMASTER_FOLLOW_CAM") {

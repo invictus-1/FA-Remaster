@@ -35,6 +35,15 @@ end
 for remasterSpot = 1, 9 do
     table.insert(RemasterOwnKeys, { key = 'Alt-' .. remasterSpot, action = 'RestoreCameraPosition' .. remasterSpot })
 end
+-- The re-test panel (Chris's pick of 2026-11-09; /moho64ui/lua/retest.lua), only in a program started with --retest:
+-- Ctrl-Shift-R (R for re-test). Free in FAF's three presets and its debug keys, 3839 and 3840 (Ctrl-R is its
+-- "toggle economy", Shift-R and Alt-R its repair / spread attack / reclaim labels, Ctrl-Alt-R the hotbuild preset's
+-- reclaim labels). Without --retest the action does not exist, and a saved key map that holds it from a run with
+-- --retest is read without it (GetUserKeyMap below), so the game's key mapper never meets an action it does not know.
+local remasterRetest = rawget(_G, 'moho64ui_RetestList') and moho64ui_RetestList() and true or false
+if remasterRetest then
+    table.insert(RemasterOwnKeys, { key = 'Ctrl-Shift-R', action = 'remaster_retest' })
+end
 local remasterSeenKey = 'UserKeyMapRemasterActions'
 local remasterHotbuild = { hotbuilding = true, hotbuildingAlternative = true, hotbuildingExtra = true }
 
@@ -75,6 +84,13 @@ local RemasterGetUserKeyMap = GetUserKeyMap
 function GetUserKeyMap()
     local map = RemasterGetUserKeyMap()
     if not map then return nil end
+    if not remasterRetest then  -- (the re-test panel's key from a run with --retest: see RemasterOwnKeys above)
+        local left = {}
+        for key, action in map do
+            if action ~= 'remaster_retest' then left[key] = action end
+        end
+        map = left
+    end
     local seen = {}
     for _, action in RemasterPrefs.GetFromCurrentProfile(remasterSeenKey) or {} do seen[action] = true end
     return RemasterAddOwn(map, seen)

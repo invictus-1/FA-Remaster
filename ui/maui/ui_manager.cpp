@@ -353,6 +353,7 @@ void UiManager::Forget(Control* c) {
   if (hover == c) hover = nullptr;
   if (cursorView == c) cursorView = nullptr;
   if (engineDragger == c) engineDragger = nullptr;
+  if (overCapture == c) overCapture = nullptr;
   inputCapture.erase(std::remove(inputCapture.begin(), inputCapture.end(), c), inputCapture.end());
 }
 

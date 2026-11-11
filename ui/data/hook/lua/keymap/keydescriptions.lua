@@ -10,6 +10,10 @@ keyDescriptions['remaster_bookmark_next'] = 'Replay bookmark: jump to the next o
 keyDescriptions['remaster_bookmark_previous'] = 'Replay bookmark: jump to the one before'
 keyDescriptions['remaster_follow_cam'] = 'Follow camera on the selected unit (open / close)'
 keyDescriptions['remaster_radial_ping'] = 'Radial ping menu (hold, point, let go)'
+-- (the re-test panel's: only in a program started with --retest, as its action in keyactions.lua)
+if rawget(_G, 'moho64ui_RetestList') and moho64ui_RetestList() then
+    keyDescriptions['remaster_retest'] = 'Re-test list (open / close)'
+end
 -- FAF's own camera spots (/lua/usercamera.lua's SaveCameraPosition0..9 / RestoreCameraPosition0..9: FAF 3839 and 3840
 -- give them no names, so the key binding screen and the command palette showed their ids), remembered per map by
 -- this program (ui/data/hook/lua/usercamera.lua); only where the game's files leave them without a name.
