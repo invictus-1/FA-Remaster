@@ -4614,6 +4614,34 @@ void World::Render() {
   if (exhaustsNow_) exhausts.AddLights(&lights, lights.night);  // (unitsfx: a light per drive)
   lights.shade = lightShade && look == Look::Modern;  // [lightshade] (the larger lights behind the map's ridges)
   lights.ground = haveMap_ ? &map : nullptr;
+  // [hullshade] what stands on the ground this frame, as boxes (units and buildings: not scenery, not what is in the
+  // air, not light shown as a model), only while a light large enough for a ground table is there
+  lights.hulls = hullShade;
+  lights.rayBallMost = hullShade ? 8.0f : 0.0f;
+  lights.StandsNone();
+  float large[4];
+  if (lights.shade && hullShade && haveMap_ && lights.LargeReach(&large[0], &large[1], &large[2], &large[3])) {
+    const float waterAt = map.water.present ? map.water.elevation : -1e30f;
+    meshes.ForEachAdded([&](const Model* model, const float* row0, const float* row1, const float* row2, const float* color, bool scenery) {
+      if (scenery || !model || !model->ok || model->lods.empty()) return;
+      if (row0[3] < large[0] - 24 || row2[3] < large[1] - 24 || row0[3] > large[2] + 24 || row2[3] > large[3] + 24) return;  // (no large light reaches it)
+      const ModelLod& l = model->lods[0];
+      if (l.glass || l.shield || l.impact || l.frame || l.nuke || l.fades || l.unlit || l.shell) return;  // (light, not a body)
+      const Vec3 lo = model->boundsMin, hi = model->boundsMax;
+      const float cx = 0.5f * (lo.x + hi.x), cz = 0.5f * (lo.z + hi.z);
+      const Vec3 forward{row0[2], row1[2], row2[2]}, side{row0[0], row1[0], row2[0]};
+      const float halfLength = 0.5f * (hi.z - lo.z) * Length(forward), halfWidth = 0.5f * (hi.x - lo.x) * Length(side);
+      if (std::min(halfLength, halfWidth) < 0.35f) return;  // (under the finest table's squares)
+      const float x = row0[0] * cx + row0[2] * cz + row0[3], z = row2[0] * cx + row2[2] * cz + row2[3];
+      const float bottom = row1[0] * cx + row1[1] * lo.y + row1[2] * cz + row1[3];
+      // (its top as far as it is built: a structure just begun casts next to nothing)
+      const float top = bottom + (row1[1] * (hi.y - lo.y)) * std::clamp(color ? color[3] : 1.0f, 0.0f, 1.0f);
+      if (bottom > std::max(GroundHeight(x, z), waterAt) + 1.5f) return;  // (in the air)
+      const float flat = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+      if (flat < 1e-5f) return;
+      lights.Stands(x, z, forward.x / flat, forward.z / flat, halfLength, halfWidth, top);
+    });
+  }
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;

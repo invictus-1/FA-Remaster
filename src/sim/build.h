@@ -74,7 +74,7 @@ struct BuildTask : public ScriptObject {
   std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
   std::shared_ptr<struct AttackData> adata;         // the attack task (CUnitAttackTargetTask)
   std::shared_ptr<struct PatrolData> pdata;         // the patrol / attack-move task (CUnitPatrolTask)
-  // MOHO64_FREE_DEAD (Sim::SweepTasks; nothing in the simulation reads these): its place in Sim::owned_ (a task
+  // For Sim::SweepTasks (nothing in the simulation reads these): its place in Sim::owned_ (a task
   // that went through Sim::Own), and the sweep that last reached it from a holder
   uint32_t ownedSlot = 0xffffffffu, reachedSweep = 0;
   static void* operator new(size_t n);  // (MOHO64_DEAD_TRAP: pages of its own, sim/write_trap.cpp)

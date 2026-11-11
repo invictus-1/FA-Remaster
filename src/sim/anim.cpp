@@ -488,6 +488,16 @@ void AnimTick(Sim& sim) {
   v.resize(w);
 }
 
+void AnimatorsDropPurged(Sim& sim) {
+  if (!sim.animState) return;
+  for (Animator* a : AS(sim).animators) {
+    const Entity* e = a->entity;
+    if (!e || a->unit || !e->destroyQueued || sim.FindEntity(e->handle) == e) continue;
+    a->entity = nullptr;  // (its methods take a missing entity: PlayAnim, SetBoneEnabled)
+    a->alive = false;     // (Gone: AnimTick takes it off the list)
+  }
+}
+
 void ReleaseAnimators(Sim& sim) { sim.animState.reset(); }
 
 void RegisterAnimBindings(lua_State* L) {

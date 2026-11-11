@@ -21,7 +21,9 @@
 // number (-1 none; -2 none, and it rides on the model standing at y, z, w), then the lamps' maps'
 // matrices, then the larger lights' ground tables ([lightshade], below: a light to all sides that has one says in its
 // third row where it begins, x, and how strongly it counts, y; a table's first row says where its middle lies, x and
-// z, how wide its squares are and how many it has each way).
+// z, how wide its squares are and how many it has each way). [hullshade]: z of that third row, where the light's
+// second table begins (the ground with what stands on it; 0: it has none), and its w, -2 less the most its own ball
+// is for the rays (a light to all sides is told by a w below -1.5, as before).
 //
 // Only the modern look uses them. The original game has no such lights: there the "light particle"
 // of an explosion is a glow laid on the ground (decals.h), which the original look keeps.
@@ -157,7 +159,36 @@ class Lights {
   const MapData* ground = nullptr;
   void GroundChanged(float x0, float z0, float x1, float z1);
   static constexpr int kShadeMost = 64;         // (a fight's shells and deaths: some fifty flashes of a reach of 10 to 24 at once)
-  static constexpr int kShadeRowsMost = 49152;  // (768 KB of the buffer: six of the largest tables, or all kShadeMost of the smallest and one of the largest)
+  static constexpr int kShadeRowsMost = 98304;  // (1.5 MB of the buffer: twelve of the largest tables, or all kShadeMost of the smallest and their second ones and four of the largest)
+  // [hullshade] (the follow-up to [lightshade]: "hulls and buildings do not shadow the light in the air") What stands on
+  // the ground shadows the larger lights too, wherever no ray finds it: a flash or a big glow behind a factory lit the
+  // mist, the smoke and the rain in front of it in both modes, and without ray tracing the ground and the units there
+  // as well. Each frame the host says what stands (Stands: a unit's or a building's box on the ground, turned as it is,
+  // and how high its top lies); a light with a ground table whose reach holds such a box gets a second table, worked
+  // out as the first from the ground with the boxes laid on it (a square a box covers in part is raised by that part,
+  // so a box that moves moves its shadow evenly). The shaders read the second table wherever rays do not look for
+  // what stands there (light_shade.h's LightShadeHulls: the air, smoke, dust, spray, rain, what the rays meet, leaves,
+  // and every lit surface while the small lights' shadows by rays are off) and the first where they do (lighting.h's
+  // SmallLightAt: the rays find the hull itself, not its box). A box counts for a table when its narrower half is
+  // `hullLeast` of that table's square at least (a tank beside a nuke's flash casts none: under the table's grain), and
+  // not when the light stands in it or rides on it (a fire on a building, a unit's own glow, a wreck's flash).
+  // `rayBallMost`: with it, the most a light's own ball is for the rays too (lighting.h's RayLightSeen; World::
+  // rayLightSize of a reach of 320 is 64 world units, in which no hull shadowed a nuke's flash); 0: as before.
+  // Off (`hulls` false): no second tables, the buffer as before, to the byte.
+  bool hulls = true;
+  float hullLeast = 0.6f;
+  float rayBallMost = 0;
+  void Stands(float x, float z, float forwardX, float forwardZ, float halfLength, float halfWidth, float top) {
+    hulls_.push_back({x, z, forwardX, forwardZ, halfLength, halfWidth, top});
+  }
+  // The ground this frame's lights large enough for a ground table reach, all of them in one rectangle (the lights so
+  // far and the flashes alive now; false: there is none): only what stands in it is worth listing. StandsNone: the
+  // list emptied (before it is filled anew for another Build of the same frame).
+  bool LargeReach(float* x0, float* z0, float* x1, float* z1) const;
+  void StandsNone() { hulls_.clear(); }
+  int hullTables = 0;      // lights with a second table in the last Build
+  int hullTablesMost = 0;  // (the most in one Build so far; and second tables made in all)
+  int hullMadeAll = 0;
   double shadeMs = 0;    // the processor's time for the tables made, in all (MOHO64_DEBUG_LIGHTSHADE says each one made)
   int shaded = 0;        // lights with a table in the last Build
   int shadeMade = 0;     // tables worked out in it (the others kept from frames before)
@@ -197,14 +228,25 @@ class Lights {
   };
   const std::vector<Vec3>* Ramp(const std::string& path);
   // [lightshade] a light's ground table: n x n squares, two heights each (nothing seen below, all above)
-  void ShadeTable(Vec3 at, float radius, int n, float* lines);
+  // ([hullshade] `raised`: n x n heights the ground is at least in each square, what stands there; null: the ground alone)
+  void ShadeTable(Vec3 at, float radius, int n, float* lines, const float* raised = nullptr);
   struct Shade {
     Vec3 position;
     float radius = 0;
     int cells = 0;      // (squares each way)
     uint64_t used = 0;  // (the last Build that read it)
     std::vector<float> lines;
+    std::vector<float> hullLines;  // [hullshade] (its second table, made for the boxes `hullKey` stands for; 0: none)
+    uint64_t hullKey = 0;
   };
+  struct Hull {  // [hullshade] (Stands)
+    float x, z, forwardX, forwardZ, halfLength, halfWidth, top;
+  };
+  std::vector<Hull> hulls_;
+  // (the boxes sorted into squares of the ground, so that a light looks only at those near it: a late game has
+  // thousands, and sixty lights)
+  std::vector<uint32_t> hullFirst_, hullItems_;
+  std::vector<float> shadeRaised_;  // (the boxes laid over a table's squares: Build's working room)
   std::vector<Shade> shades_;  // (tables kept: a light that stands where it stood keeps its own)
   std::vector<float> shadeSlopes_;  // (ShadeTable's working room)
   const uint16_t* shadeHeights_ = nullptr;  // (the heights the tables kept were made from: another map's are let go of)

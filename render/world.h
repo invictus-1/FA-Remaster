@@ -395,6 +395,12 @@ class World {
   // mist on the ridge's near side. By the map's heights alone (a table per light, no rays): hills and ridges, with and
   // without ray tracing; hulls and buildings only by the rays (rayLightShadows), as before. Modern look. Off: as before.
   bool lightShade = true;
+  // [hullshade] What stands on the ground shadows them too (Lights::hulls, lights.h): a flash or a big glow behind a
+  // factory or a big unit no longer lights the mist, the smoke and the rain in front of it, nor, without ray tracing,
+  // the ground and the units there. By the units' and buildings' boxes laid into a second table of each light (soft,
+  // no rays); with ray tracing the lit surfaces keep the rays' own shadows of the hulls themselves, and a large light's
+  // own ball is 8 world units at most for them (Lights::rayBallMost). Needs lightShade. Off: as before.
+  bool hullShade = true;
   // The sun's shadow maps' size in texels (2048 at first; 4096 sharper, 1024 and 512 for slower cards).
   int shadowSize = kShadowMapSize;
   // [cardcost] The sun's shadow maps draw only what can cast a shadow onto what the camera sees (shadows.h, Shadows::
