@@ -35,8 +35,9 @@ class Post {
   // scene's depth while it changes the colour (decals). ContinueScene afterwards.
   void BeginColorOnly();
   // Copies the picture as it is now into a texture that can be read (one sample a pixel), for
-  // what looks through to what is behind it (water). False when the scene has one sample a
-  // pixel (then there is no copy). It ends the pass: begin one again.
+  // what looks through to what is behind it (water): resolved from several samples a pixel, drawn
+  // across with one. False when there is no copy (its texture or its shader was not made). It
+  // ends the pass: begin one again.
   bool CopyBehind();
   gfx::Texture Behind() const { return behind_; }
   // For the temporal upscaler (fsr3.h), with one sample a pixel. KeepOpaque, once the solid scene and the

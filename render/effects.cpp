@@ -66,6 +66,11 @@ bool IsTeleportEffect(const std::string& path) {
 // [restart] (effects.h)
 void Effects::Clear() {
   pending_.clear();
+  held_.clear();  // [heldworld]
+  heldOf_.clear();
+  heldLater_.clear();
+  heldSwept_ = 0;
+  heldNow_ = 0;
   effects_.clear();
   decalOf_.clear();
   decalMade_.clear();  // [devicelost]
@@ -83,7 +88,125 @@ void Effects::Clear() {
 }
 
 void Effects::Queue(std::vector<FrameEffectEvent>&& events) {
+  if (!held_.empty() || !heldLater_.empty()) ReleaseHeld();  // [heldworld] (what a hold kept came before these)
   for (FrameEffectEvent& e : events) pending_.push_back(std::move(e));
+}
+
+// [heldworld] (effects.h)
+void Effects::QueueHeld(std::vector<FrameEffectEvent>&& events, double tick) {
+  heldNow_ = std::max(heldNow_, tick);
+  for (FrameEffectEvent& event : events) {
+    // (the simulation runs two beats ahead of what is shown; a host that holds the picture may give no moment at all)
+    heldNow_ = std::max(heldNow_, static_cast<double>(event.tick) - 2);
+    heldLater_.push_back(std::move(event));
+  }
+  while (!heldLater_.empty() && static_cast<double>(heldLater_.front().tick) <= heldNow_) {
+    Hold(std::move(heldLater_.front()));
+    heldLater_.pop_front();
+  }
+  // (a long hold: what has run out meanwhile is let go of now and then, so that the list stays about as long as the list
+  // of what would be alive)
+  if (held_.size() > heldSwept_ * 2 + 4096) SweepHeld();
+}
+
+// [heldworld] One event whose beat has come while the world is not shown: kept, or let go of with what it ends.
+void Effects::Hold(FrameEffectEvent&& event) {
+  auto pendingMade = [&](uint32_t id) {  // (made before the hold and not yet due: it will be)
+    for (const FrameEffectEvent& p : pending_)
+      if (p.id == id && p.kind == FrameEffectEvent::Create) return true;
+    return false;
+  };
+  auto keep = [&](FrameEffectEvent&& e, bool listed) {
+    if (listed) heldOf_[e.id].push_back(heldNext_);
+    held_.emplace(heldNext_++, std::move(e));
+  };
+  const uint32_t id = event.id;
+  auto of = heldOf_.find(id);
+  if (event.kind == FrameEffectEvent::Destroy) {
+    // all that was kept of it goes; the Destroy itself is for an effect or a mark from before the hold
+    bool madeHere = false;
+    if (of != heldOf_.end()) {
+      for (uint64_t at : of->second)
+        if (auto it = held_.find(at); it != held_.end()) {
+          madeHere = madeHere || it->second.kind == FrameEffectEvent::Create;
+          held_.erase(it);
+        }
+      heldOf_.erase(of);
+    }
+    if (!madeHere && (effects_.count(id) || decalOf_.count(id) || pendingMade(id))) keep(std::move(event), false);
+    return;
+  }
+  if (event.kind == FrameEffectEvent::Call) {
+    if (of == heldOf_.end() && !effects_.count(id) && !pendingMade(id)) return;  // (on something let go of)
+    // (the last call of each kind is enough, as Remember keeps them: a script that scales an emitter every beat)
+    if (of != heldOf_.end())
+      for (auto at = of->second.begin(); at != of->second.end(); ++at)
+        if (auto it = held_.find(*at); it != held_.end() && it->second.kind == FrameEffectEvent::Call && it->second.name == event.name &&
+                                       it->second.text == event.text) {
+          held_.erase(it);
+          of->second.erase(at);
+          break;
+        }
+    keep(std::move(event), true);
+    return;
+  }
+  const std::string& f = event.name;
+  const bool lasts = f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateTrail" || f == "CreateBeamEmitter" ||
+                     f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity" ||
+                     f == "CreateAttachedBeam" || f == "CreateBeamToEntityBone" || f == "CreateDecal" || f == "CreateSplat" ||
+                     f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity";
+  if (lasts) keep(std::move(event), true);
+}
+
+void Effects::SweepHeld() {
+  for (auto it = held_.begin(); it != held_.end();) {
+    const FrameEffectEvent& e = it->second;
+    bool over = false;
+    if (e.kind == FrameEffectEvent::Create) {
+      if (e.name == "CreateDecal" || e.name == "CreateSplat") {  // (numbers[4]: the seconds it lies; 0 or less: for good)
+        over = e.numbers.size() >= 5 && e.numbers[4] > 0 && static_cast<double>(e.tick) * 0.1 + static_cast<double>(e.numbers[4]) < heldNow_ * 0.1;
+      } else if (e.name == "CreateAttachedEmitter" || e.name == "CreateEmitterOnEntity" || e.name == "CreateEmitterAtBone" || e.name == "CreateEmitterAtEntity") {
+        const float shows = particles_->ShowsFor(e.blueprint);
+        over = shows >= 0 && heldNow_ - static_cast<double>(e.tick) > static_cast<double>(shows);
+        // (but not one a script gave another lifetime)
+        if (over)
+          if (auto of = heldOf_.find(e.id); of != heldOf_.end())
+            for (uint64_t at : of->second)
+              if (auto call = held_.find(at); call != held_.end() && call->second.kind == FrameEffectEvent::Call && call->second.name == "SetEmitterParam") over = false;
+      }
+    }
+    if (!over) {
+      ++it;
+      continue;
+    }
+    const uint32_t id = e.id;
+    it = held_.erase(it);
+    if (auto of = heldOf_.find(id); of != heldOf_.end()) {  // (and the calls on it)
+      for (uint64_t at : of->second)
+        if (auto call = held_.find(at); call != held_.end()) {
+          if (it != held_.end() && it->first == at) ++it;
+          held_.erase(call);
+        }
+      heldOf_.erase(of);
+    }
+  }
+  heldSwept_ = held_.size();
+}
+
+void Effects::ReleaseHeld() {
+  SweepHeld();
+  for (auto& [at, e] : held_) {
+    // (what was made more than a second ago is no news: a mark is laid without a blast's wave, dust or burn, as one laid
+    // again in a world made anew, Keep; an emitter at a place is started however long ago it began, Update's stale rule)
+    if (e.kind == FrameEffectEvent::Create && heldNow_ - static_cast<double>(e.tick) > 10) e.replayed = true;
+    pending_.push_back(std::move(e));
+  }
+  for (FrameEffectEvent& e : heldLater_) pending_.push_back(std::move(e));  // (not yet due: as they came, nothing let go of)
+  held_.clear();
+  heldOf_.clear();
+  heldLater_.clear();
+  heldSwept_ = 0;
+  heldNow_ = 0;
 }
 
 bool Effects::Hidden(const Frame& frame, uint32_t entity) const {
@@ -326,6 +449,8 @@ void Effects::Keep(std::vector<FrameEffectEvent>* out, uint32_t tick) const {
   std::stable_sort(out->begin() + static_cast<std::ptrdiff_t>(marks), out->end(),
                    [](const FrameEffectEvent& a, const FrameEffectEvent& b) { return a.id < b.id; });
   for (const FrameEffectEvent& e : pending_) out->push_back(e);  // (not yet due: as they came)
+  for (const auto& [at, e] : held_) out->push_back(e);  // [heldworld] (and what a hold has kept, which came after those)
+  for (const FrameEffectEvent& e : heldLater_) out->push_back(e);
 }
 
 void Effects::End(uint32_t id) {
@@ -482,7 +607,8 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     // only a frame later, and the flash was already made)
     // ([fogbeam] on an entity in none of the frame's lists - a script's Entity() without a mesh, as the Cybran build beams'
     // far ends that carry their sparks: by its place when made, as long as it lasts)
-    e.unlistedUnseen = e.attached && !event.seen && !Listed(frame, event.entity);
+    e.unlisted = e.attached && !Listed(frame, event.entity);
+    e.unlistedUnseen = e.unlisted && !event.seen;
     const bool unseen = Hidden(frame, event.entity) || e.unlistedUnseen;
     // [snowkick] a ground effect of the map's terrain type, its snow's for the share of the snow lying (which ones: by the
     // effect's number, so that the same ones always are)
@@ -498,14 +624,25 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     e.attached = true;
     e.handle = ribbons_->StartTrail(e.blueprint, e.position, e.faction);
     if (!e.handle) return;
+    e.unlisted = !Listed(frame, event.entity);  // [fogbeam] (as a beam's, below)
+    e.unlistedUnseen = e.unlisted && !event.seen;
   } else if (f == "CreateBeamEmitter" || f == "CreateBeamEmitterOnEntity" || f == "CreateBeamEntityToEntity" || f == "AttachBeamEntityToEntity") {
     e.kind = Kind::Beam;
     e.attached = e.entity != kNone;
     e.buildBeam = BuildEffects::IsBuildBeam(event.blueprint);  // (buildfx)
     e.original = event.original;
+    // [fogbeam] (review of 2026-11-09, effects 5) a beam hung on an entity in none of the frame's lists (a script's Entity()
+    // without a mesh: the corner nodes of an adjacency's link, a mod's helpers): no list says whether the army sees it, and
+    // Update draws it where it was made, so that it was drawn in the fog of war, a glowing band that gave an unseen base
+    // away. Like the emitters above it is hidden where the army did not see the place when it was made; and since a beam
+    // lasts (an adjacency's as long as its structures), Update asks again each frame what the army sees of the place.
+    e.unlisted = e.attached && !Listed(frame, event.entity);
+    e.unlistedUnseen = e.unlisted && !event.seen;
   } else if (f == "CreateAttachedBeam" || f == "CreateBeamToEntityBone") {
     e.kind = Kind::TextureBeam;
     e.attached = true;
+    e.unlisted = !Listed(frame, event.entity);  // [fogbeam] (as a beam's, above)
+    e.unlistedUnseen = e.unlisted && !event.seen;
     const std::vector<float>& n = event.numbers;
     if (f == "CreateAttachedBeam" && n.size() >= 2) {
       e.length = n[0];
@@ -621,11 +758,14 @@ void Effects::Update(double tick, const Frame& frame) {
   if (VolfxLog* log = VolfxLog::Get()) log->SeeShots(frame);  // (MOHO64_DEBUG_VOLFX: an impact's shot, once it is gone)
   if (build_ && build_->On()) build_->TakeSites(frame, models_);  // (buildfx: the units under construction)
 
+  if (!held_.empty() || !heldLater_.empty()) ReleaseHeld();  // [heldworld] (the world is shown again)
   while (!pending_.empty() && static_cast<double>(pending_.front().tick) <= tick) {
     FrameEffectEvent& event = pending_.front();
     // when the game has run ahead: what began long ago and does not hang on anything is over, or
     // would only now throw out all it should have thrown over that time
-    const bool stale = event.kind == FrameEffectEvent::Create && tick - static_cast<double>(event.tick) > 100 &&
+    // ([heldworld] but not one a hold kept, ReleaseHeld: it has let go of those with nothing left to show, and the
+    // particles make up no more than an emitter's last 24 ticks)
+    const bool stale = event.kind == FrameEffectEvent::Create && tick - static_cast<double>(event.tick) > 100 && !event.replayed &&
                        (event.name == "CreateEmitterAtBone" || event.name == "CreateEmitterAtEntity");
     if (!stale) {
       Apply(event, frame);
@@ -634,6 +774,7 @@ void Effects::Update(double tick, const Frame& frame) {
     pending_.pop_front();
   }
 
+  unlistedHidden = 0;  // [fogbeam]
   for (auto it = effects_.begin(); it != effects_.end();) {
     Effect& e = it->second;
     bool here = false;  // is what it hangs on in this frame
@@ -649,9 +790,17 @@ void Effects::Update(double tick, const Frame& frame) {
         here = true;  // (hung on a thing the frame never listed: it stands where it was made)
       }
     }
+    // [fogbeam] (a beam or a trail on a thing in no list: by what the army sees of its place now, where the world can say;
+    // once the thing is in a list, by the thing, as any other. An emitter on such a thing stays by the place's answer
+    // when it was made, as before.)
+    if (e.unlisted) {
+      if (Listed(frame, e.entity)) e.unlisted = e.unlistedUnseen = false;
+      else if (seenAt && e.kind != Kind::Emitter) e.unlistedUnseen = !seenAt(e.position);
+    }
     // what hangs on something the army the picture is for does not see is not shown
     // ([fogbeam] also one on a beam or on a script's entity without a mesh, which AttachPoint may not place)
     const bool hidden = e.attached && (Hidden(frame, e.entity) || (e.unlistedUnseen && !Listed(frame, e.entity)));
+    if (hidden && e.unlistedUnseen) ++unlistedHidden;
     switch (e.kind) {
       case Kind::Emitter:
         // one that is not attached and has run out is forgotten (the particle system has ended it)

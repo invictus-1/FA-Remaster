@@ -538,6 +538,7 @@ struct TextureRec {
   int width = 0, height = 0, layers = 1, samples = 1, mips = 1;
   VkFormat format = VK_FORMAT_UNDEFINED;
   int pixelBytes = 4;  // textures: bytes a pixel (UpdateTexture; 0 for the block-compressed)
+  int blockBytes = 0;  // [terraform] the block-compressed: bytes a 4x4 block (UpdateTexture)
   VkImage image = VK_NULL_HANDLE;
   Allocation memory;
   VkImageView view = VK_NULL_HANDLE;      // as shaders read it (2D, array, cube, multi-sample)
@@ -3026,6 +3027,7 @@ Texture VulkanDevice::CreateTexture(const TextureDesc& desc) {
   rec.mips = desc.mips;
   rec.format = format;
   rec.pixelBytes = IsBlockCompressed(desc.format) ? 0 : BytesPerPixelOrBlock(desc.format);
+  rec.blockBytes = IsBlockCompressed(desc.format) ? BytesPerPixelOrBlock(desc.format) : 0;  // [terraform]
   VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ii.flags = desc.cube && desc.layers == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
   ii.imageType = VK_IMAGE_TYPE_2D;
@@ -3178,6 +3180,7 @@ std::unique_ptr<Device::Prepared> VulkanDevice::PrepareTexture(const TextureDesc
   rec.mips = desc.mips;
   rec.format = format;
   rec.pixelBytes = IsBlockCompressed(desc.format) ? 0 : BytesPerPixelOrBlock(desc.format);
+  rec.blockBytes = IsBlockCompressed(desc.format) ? BytesPerPixelOrBlock(desc.format) : 0;  // [terraform]
   VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ii.flags = desc.cube && desc.layers == 6 ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
   ii.imageType = VK_IMAGE_TYPE_2D;
@@ -3332,13 +3335,17 @@ Buffer VulkanDevice::FinishBuffer(std::unique_ptr<Prepared> prepared) {
 
 void VulkanDevice::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
   TextureRec* rec = Find(texture);
+  // [terraform] (a block-compressed texture: whole blocks only, its rows rows of blocks; gfx.h)
+  const bool blocks = rec && rec->pixelBytes <= 0 && rec->blockBytes > 0;
   if (!rec || rec->target || rec->storage || !inFrame_ || width <= 0 || height <= 0 || !data || rec->mips != 1 || rec->layers != 1 || x < 0 || y < 0 ||
-      x + width > rec->width || y + height > rec->height || rec->pixelBytes <= 0)
+      x + width > rec->width || y + height > rec->height || (rec->pixelBytes <= 0 && !blocks))
     return;
-  const size_t row = static_cast<size_t>(width) * static_cast<size_t>(rec->pixelBytes);
-  Span s = Allocate(row * static_cast<size_t>(height), 16);
+  if (blocks && ((x | y | width | height) & 3)) return;
+  const int rows = blocks ? height / 4 : height;
+  const size_t row = blocks ? static_cast<size_t>(width / 4) * static_cast<size_t>(rec->blockBytes) : static_cast<size_t>(width) * static_cast<size_t>(rec->pixelBytes);
+  Span s = Allocate(row * static_cast<size_t>(rows), 16);
   if (!s.cpu) return;
-  for (int r = 0; r < height; ++r) std::memcpy(s.cpu + static_cast<size_t>(r) * row, static_cast<const uint8_t*>(data) + static_cast<size_t>(r) * pitch, row);
+  for (int r = 0; r < rows; ++r) std::memcpy(s.cpu + static_cast<size_t>(r) * row, static_cast<const uint8_t*>(data) + static_cast<size_t>(r) * pitch, row);
   // (a copy cannot lie inside a pass: the pass is left and begun again after it, keeping what it drew)
   const bool wasRendering = rendering_;
   const bool hadDepth = renderingDepth_;

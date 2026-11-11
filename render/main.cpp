@@ -81,6 +81,22 @@
 // --picture-restart  [restart] with --picture: after its checks, the moment drawn, the map begun again in place
 //           (WorldPicture::RestartMap), the same game started again in a simulation of its own and run to that moment,
 //           drawn again; the pixels that differ printed, both pictures beside the --picture file
+// --picture-restart-held  [heldworld] --picture-restart as the interface's jump back in a replay does it: while the game
+//           played again runs ahead to the moment, the picture is asked for every few milliseconds with the world not shown
+//           (WorldPicture::SetWorldShown(false), a black frame), then shown again and drawn; printed too: the effects alive,
+//           the marks on the ground and the emitters at the moment, the first game's and the second's (review of
+//           2026-11-09, effects 3: what the game said of lasting effects during the hold was let go of)
+// --picture-hold <beats>[,shown]  [heldworld] with --picture: from where --tick asks the game is played on for that many
+//           beats, three frames a beat, with the world not shown (WorldPicture::SetWorldShown(false), as the game's
+//           ren_Oblivion under a cinematic), then shown again: the effects alive, the marks on the ground and the emitters
+//           printed, the picture written beside the --picture file (<base>_hold.png). `shown`: the same beats with the
+//           world shown all the while (what the numbers should be).
+// --views-fx <x>,<z>|alone[,<frames>[,<every>]]  [views] with --picture: the game played on for <frames> frames (90), a third
+//           of a beat each, drawn as a split screen: the left half the game's camera, the right a second camera of the same
+//           distance, pitch and heading over x, z; every <every>-th frame (6) written beside the --picture file
+//           (<base>_vfx_<frame>.png) and every frame's living particles and emitters printed. `alone`: the same frames
+//           with the game's camera alone, no views (to compare a half with: --size of the half, --cam over its place).
+//           (review of 2026-11-09, effects 4: an effect that only a further view sees)
 // --views split|inset[:<unit id>]  [views] with --picture: several views in one picture (WorldPicture::SetViews, views.h;
 //           views_test.h): the window split in two halves (the right a second camera), or a follow camera behind a unit
 //           (480x270, every 2nd frame) over the game's; pictures beside the --picture file, the picking calls and the times
@@ -284,6 +300,10 @@
 //           redrawn ground read back at once, waiting for the card, as before WorldPicture's read-back later; `step=<s>`: how far
 //           the clouds move each time (0.25 unless given: past a tenth it is a weather cut, World::weatherCuts, which restarts the
 //           air's and the clouds' histories at once; a game's weather moves by less, 0.08 is one)
+// --side-check off|minimap  (gate G7) with --picture: thirty frames of the game's one moment (--tick's beat) through the pixel
+//           interface, in steady rain, the last written to the --picture file; `minimap`: the minimap's ground drawn before the last
+//           four of them (a side picture: WorldPicture::DrawMinimap, its first drawing). A side picture leaves the game's
+//           next frames alone, so the two runs' files must be the same picture: the renderer's gate_side.sh compares them
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
@@ -643,6 +663,9 @@
 // --jobs-awake <us>  [mcrec] how long the jobs pool's workers wait awake for the next job before they sleep (Jobs::
 //           awakeMicroseconds; 0, the default: they sleep at once, as before), to measure it
 // --no-ground-changes  the ground stays as the map file has it where the game lays it flat under structures (to compare)
+// --stored-normals  [terraform] where the game changes the ground's heights its shading stays the map file's normal map's, as
+//           before (Terrain::normalsFollow off; by default the stored normals follow the heights there: a hillside laid flat
+//           is lit as level ground)
 // --no-bloom  no glow (World::bloom off: the modern look's glow and the original look's bloom, the game's Bloom Render)
 // --fsr3    AMD's FSR 3 (fsr3.h, World::temporalUpscale) in place of FSR 1: the scene drawn a little shifted every
 //           frame and brought up to the window's size from the frames before, at --fsr's share (without --fsr:
@@ -954,6 +977,7 @@ struct Options {
   int jobsAwake = -1;                   // --jobs-awake [mcrec] (-1: Jobs' own)
   int cardScenery = -1;                 // --card-scenery 2, --no-card-scenery 0 [gpuscenery] [step2b] (-1: World's own)
   bool groundChanges = true;            // --no-ground-changes
+  bool storedNormals = false;           // --stored-normals [terraform]
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
   bool fxc = false;                     // --fxc
@@ -1171,6 +1195,9 @@ struct Options {
   int gateLook = -1;                    // [glitches] --gate-look
   bool pictureWindow = false;           // --picture-window
   bool pictureRestart = false;          // [restart] --picture-restart
+  bool pictureRestartHeld = false;      // [heldworld] --picture-restart-held
+  std::string viewsFx;                  // [views] --views-fx
+  std::string pictureHold;              // [heldworld] --picture-hold
   bool photoTest = false;               // (photomode) --photo-test
   std::string photoCases;               // (photofix) --photo-cases
   std::vector<std::pair<int, int>> photoTestSizes = {{2560, 1440}, {3840, 2160}};  // --photo-test-sizes
@@ -1271,6 +1298,7 @@ struct Options {
   bool minimapTestOld = false;
   bool minimapTestSpaced = false, minimapTestWait = false;  // [weather] (,spaced  ,wait)
   float minimapTestStep = 0.25f;  // [weather] (,step=<s>: how far the clouds move each time)
+  std::string sideCheck;          // (gate G7) --side-check
   bool rangeFill = false;                       // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
@@ -1485,6 +1513,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
     else if (a == "--picture-restart") o->pictureRestart = true;  // [restart]
+    else if (a == "--picture-restart-held") o->pictureRestart = o->pictureRestartHeld = true;  // [heldworld]
     else if (a == "--photo-test") o->photoTest = true;  // (photomode)
     else if (a == "--window-cycle") o->windowCycle = true;
     else if (a == "--load-test-open") o->loadTestOpen = true;  // [bgload]
@@ -1503,6 +1532,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--card-scenery") o->cardScenery = 2;  // [gpuscenery]
     else if (a == "--no-card-scenery") o->cardScenery = 0;  // [step2b]
     else if (a == "--no-ground-changes") o->groundChanges = false;
+    else if (a == "--stored-normals") o->storedNormals = true;  // [terraform]
     else if (a == "--no-bloom") o->bloom = false;
     else if (a == "--no-frame") o->frame = false;
     else if (a == "--no-beyond-haze") o->beyondHaze = false;
@@ -1781,6 +1811,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--load-budget") o->loadBudget = static_cast<float>(atof(v));  // [bgload]
     else if (a == "--load-cycles") o->loadCycles = std::max(1, atoi(v));  // [bgload]
     else if (a == "--views") o->views = v;  // [views]
+    else if (a == "--views-fx") o->viewsFx = v;  // [views]
+    else if (a == "--picture-hold") o->pictureHold = v;  // [heldworld]
     else if (a == "--photo-cases") o->photoCases = v, o->photoTest = true;  // (photofix)
     else if (a == "--photo-test-sizes") {  // (photomode)
       o->photoTestSizes.clear();
@@ -1949,6 +1981,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->minimapTestWait = std::string(v).find(",wait") != std::string::npos;
       if (const char* s = std::strstr(v, ",step=")) o->minimapTestStep = std::clamp(static_cast<float>(atof(s + 6)), 0.0f, 1.0f);
       o->minimapTestSize = std::clamp(o->minimapTestSize, 16, 2048);
+    }
+    else if (a == "--side-check") {  // (gate G7) off|minimap
+      o->sideCheck = v;
+      if (o->sideCheck != "off" && o->sideCheck != "minimap") return false;
     }
     else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
       char from[32] = "", to[32] = "";
@@ -2647,6 +2683,7 @@ int main(int argc, char** argv) {
   if (opt.debrisSag >= 0) world.debris.baked.meltSag = std::min(opt.debrisSag, 1.0f);  // [debrispile]
   world.deepTracks = opt.deepTracks;
   world.terrain.mudRuts = !opt.noMudRuts;  // [mud ruts]
+  world.terrain.normalsFollow = !opt.storedNormals;  // [terraform]
   world.churnedHoles = !opt.holesAdded;    // [churn]
   world.groundParallax = opt.groundParallax;  // [parallax]
   world.mudMask = opt.mudMask;  // [ground mud]
@@ -4028,6 +4065,93 @@ int main(int argc, char** argv) {
       }
     }
 
+    if (!opt.picture.empty() && !opt.pictureHold.empty() && playing && !liveBusy && frameCount >= 3) {  // [heldworld] --picture-hold
+      const int w = device->Width(), h = device->Height();
+      const std::string base = opt.picture.substr(0, opt.picture.rfind('.'));
+      const int beats = std::max(atoi(opt.pictureHold.c_str()), 1);
+      const bool shownAll = opt.pictureHold.find("shown") != std::string::npos;
+      auto counts = [&](const char* when) {
+        const World* pw = picture.world();
+        printf("render: --picture-hold: %s: effects alive %d of %d started, marks on the ground %d, emitters %d\n", when, pw ? pw->effects.live : 0,
+               pw ? pw->effects.started : 0, pw ? pw->decals.Count() : 0, pw ? static_cast<int>(pw->particles.liveEmitters) : 0);
+      };
+      for (int i = 0; i < 6; ++i) picture.Draw(camera, w, h, playTick + 1);
+      counts("before");
+      double moment = playTick + 1;
+      for (int i = 1; i <= beats * 3; ++i) {
+        moment = playTick + 1 + static_cast<double>(i) / 3.0;
+        for (int waited = 0; waited < 60000 && live.GetState() == LiveSim::State::Running && live.LastTick() < static_cast<uint32_t>(moment) + 1; ++waited) {
+          live.RunTo(static_cast<uint32_t>(moment) + 2);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        picture.SetWorldShown(shownAll);
+        picture.Draw(camera, w, h, moment);
+      }
+      picture.SetWorldShown(true);
+      for (int i = 0; i < 3; ++i) picture.Draw(camera, w, h, moment);
+      const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, moment);
+      counts(shownAll ? "after those beats, shown all the while" : "after those beats not shown");
+      std::vector<uint8_t> b(pixels.size() * 4, 255);
+      for (size_t k = 0; k < pixels.size(); ++k) {
+        b[k * 4] = static_cast<uint8_t>(pixels[k] >> 16);
+        b[k * 4 + 1] = static_cast<uint8_t>(pixels[k] >> 8);
+        b[k * 4 + 2] = static_cast<uint8_t>(pixels[k]);
+      }
+      if (pixels.size() >= static_cast<size_t>(w) * static_cast<size_t>(h)) WritePng(base + "_hold.png", b.data(), w, h);
+      printf("render: --picture-hold: %d beats to moment %.2f, %s\n", beats, moment, (base + "_hold.png").c_str());
+      break;
+    }
+    if (!opt.picture.empty() && !opt.viewsFx.empty() && playing && !liveBusy && frameCount >= 3) {  // [views] --views-fx
+      const int w = device->Width(), h = device->Height();
+      const std::string base = opt.picture.substr(0, opt.picture.rfind('.'));
+      float fx[4] = {0, 0, 90, 6};
+      const bool alone = opt.viewsFx.compare(0, 5, "alone") == 0;
+      {
+        std::string rest = alone ? (opt.viewsFx.size() > 6 ? opt.viewsFx.substr(6) : std::string()) : opt.viewsFx;
+        int k = alone ? 2 : 0;
+        for (size_t at = 0; k < 4 && at < rest.size(); ++k) {
+          fx[k] = static_cast<float>(atof(rest.c_str() + at));
+          at = rest.find(',', at);
+          if (at == std::string::npos) break;
+          ++at;
+        }
+      }
+      if (!alone) {
+        WorldPicture::PictureView left, right;
+        left.rect = {0, 0, w / 2, h};
+        left.camera = camera;
+        right.rect = {w / 2, 0, w - w / 2, h};
+        right.camera = camera;
+        right.camera.target = {fx[0], picture.GroundHeight(fx[0], fx[1]), fx[1]};
+        right.kind = WorldPicture::ViewKind::Split;
+        picture.SetViews({left, right});
+      }
+      const int frames = std::max(static_cast<int>(fx[2]), 1), every = std::max(static_cast<int>(fx[3]), 1);
+      for (int i = 0; i < frames; ++i) {
+        const double moment = playTick + 1 + static_cast<double>(i) / 3.0;
+        for (int waited = 0; waited < 60000 && live.GetState() == LiveSim::State::Running && live.LastTick() < static_cast<uint32_t>(moment) + 1; ++waited) {
+          live.RunTo(static_cast<uint32_t>(moment) + 2);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, moment);
+        const World* pw = picture.world();
+        printf("render: --views-fx: frame %d, moment %.2f: %d particles alive, %d emitters, %d effects alive of %d started\n", i, moment,
+               pw ? pw->particles.liveParticles : 0, pw ? pw->particles.liveEmitters : 0, pw ? pw->effects.live : 0, pw ? pw->effects.started : 0);
+        if (i % every == 0 || i == frames - 1) {
+          std::vector<uint8_t> b(pixels.size() * 4, 255);
+          for (size_t k = 0; k < pixels.size(); ++k) {
+            b[k * 4] = static_cast<uint8_t>(pixels[k] >> 16);
+            b[k * 4 + 1] = static_cast<uint8_t>(pixels[k] >> 8);
+            b[k * 4 + 2] = static_cast<uint8_t>(pixels[k]);
+          }
+          char name[32];
+          snprintf(name, sizeof name, "_vfx_%04d.png", i);
+          if (pixels.size() >= static_cast<size_t>(w) * static_cast<size_t>(h)) WritePng(base + name, b.data(), w, h);
+        }
+      }
+      picture.SetViews({});
+      break;
+    }
     if (!opt.picture.empty() && !opt.views.empty() && playing && !liveBusy && frameCount >= 3) {  // [views] --views
       ViewsTestSetup vs;
       vs.base = opt.picture.substr(0, opt.picture.rfind('.'));
@@ -4131,6 +4255,39 @@ int main(int argc, char** argv) {
         const std::string path = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimaptest.png";
         printf("render: --minimap-test: the minimap %s\n", WritePng(path, bytes.data(), size, size) ? path.c_str() : "could not be written");
       }
+      break;
+    }
+    if (!opt.picture.empty() && !opt.sideCheck.empty() && playing && !liveBusy && frameCount >= 3) {
+      // (gate G7) --side-check: the same frames with and without a side picture among them
+      const int w = device->Width(), h = device->Height(), frames = 30, after = 4;
+      const double moment = std::floor(playTick) + 1;  // (a whole beat: how far into it the viewer is differs from run to run)
+      if (World* pw = picture.world()) {
+        pw->steadyFrames = true;  // (each frame a frame's share of the histories, whatever the clock says)
+        pw->cloudCover = 1;       // (steady rain: a weather clock moved by the side picture wets the ground in one step)
+        pw->rain = 1;
+      }
+      std::vector<uint8_t> bytes;
+      for (int i = 0; i < frames; ++i) {
+        if (opt.sideCheck == "minimap" && i == frames - after) picture.DrawMinimap(300, 300, opt.minimapResources);
+        const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, moment);
+        if (i + 1 < frames) continue;
+        if (World* pw = picture.world()) {  // (for a hunt after a failure: the last frame's view as one number, and how wet)
+          uint32_t sum = 2166136261u;
+          const uint8_t* numbers = reinterpret_cast<const uint8_t*>(&pw->view.constants);
+          for (size_t k = 0; k < sizeof pw->view.constants; ++k) sum = (sum ^ numbers[k]) * 16777619u;
+          printf("render: --side-check %s: the last frame's time %.6f, its view's numbers %08x, wet %.5f\n", opt.sideCheck.c_str(),
+                 static_cast<double>(pw->view.constants.time), sum, static_cast<double>(pw->wet));
+        }
+        bytes.resize(pixels.size() * 4);
+        for (size_t k = 0; k < pixels.size(); ++k) {
+          bytes[k * 4] = static_cast<uint8_t>(pixels[k] >> 16);
+          bytes[k * 4 + 1] = static_cast<uint8_t>(pixels[k] >> 8);
+          bytes[k * 4 + 2] = static_cast<uint8_t>(pixels[k]);
+          bytes[k * 4 + 3] = 255;
+        }
+      }
+      printf("render: --side-check %s: %dx%d %s\n", opt.sideCheck.c_str(), w, h,
+             !bytes.empty() && WritePng(opt.picture, bytes.data(), w, h) ? opt.picture.c_str() : "could not be written");
       break;
     }
     if (!opt.picture.empty() && playing && !liveBusy && frameCount >= 3) {
@@ -4422,6 +4579,7 @@ int main(int argc, char** argv) {
         World* pw = picture.world();
         const int madeBefore = pw ? pw->MadeProps() : 0, decalsBefore = pw ? pw->decals.Count() : 0;
         const int particlesBefore = pw ? pw->particles.liveEmitters : 0;
+        const int effectsBefore = pw ? pw->effects.live : 0;  // [heldworld]
         const auto t0 = std::chrono::steady_clock::now();
         const bool restarted = picture.RestartMap();
         const double restartMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -4447,8 +4605,13 @@ int main(int argc, char** argv) {
                 break;
               }
             }
+            if (opt.pictureRestartHeld) {  // [heldworld] (the interface's jump back: frames asked for, the world not shown)
+              picture.SetWorldShown(false);
+              picture.Draw(camera, w, h, 0);
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
           }
+          if (opt.pictureRestartHeld) picture.SetWorldShown(true);
           if (!there) why = again->GetState() == LiveSim::State::Failed ? again->Problem() : "the beat was not reached";
         }
         const double playedS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
@@ -4471,6 +4634,10 @@ int main(int argc, char** argv) {
                  playedS, moment, differ, before.empty() ? 0.0 : 100.0 * static_cast<double>(differ) / static_cast<double>(before.size()), largest,
                  before.empty() ? 0.0 : sum / static_cast<double>(before.size()));
           printf("render: --picture-restart: %s, %s\n", write(base + "_restart_before.png", before).c_str(), write(base + "_restart_after.png", after).c_str());
+          // [heldworld] (what lasts, at the same moment of both games)
+          printf("render: --picture-restart%s: at the moment drawn, the first game / the game again: effects alive %d / %d, marks on the ground %d / %d, emitters %d / %d\n",
+                 opt.pictureRestartHeld ? "-held" : "", effectsBefore, pw ? pw->effects.live : 0, decalsBefore, pw ? pw->decals.Count() : 0, particlesBefore,
+                 pw ? static_cast<int>(pw->particles.liveEmitters) : 0);
         }
       }
       break;
@@ -5161,6 +5328,7 @@ int main(int argc, char** argv) {
       const int timed = haveLive ? std::max(1, frameCount - 1) : frameCount;
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
       if (haveMap) printf("; ground: %d patches, %d triangles, %d changes by the game", terrain->drawnPatches, terrain->drawnTriangles, world.groundChanges);
+      if (haveMap && terrain->normalBlocksChanged) printf(" (%d blocks of its normal map follow them)", terrain->normalBlocksChanged);  // [terraform]
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
       if (world.surround.On())  // (surround)
         printf("; surround: %d triangles of ground (%s), %d pieces of its %zu of scenery in the squares in view", world.surround.Triangles(),
@@ -5228,6 +5396,8 @@ int main(int argc, char** argv) {
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
       if (haveLive && decals.Settled())  // [settled]
         printf(" (%d scars not settled, %d settled, %d of those laid into the scars' picture)", decals.Scars(), decals.Settled(), decals.settledLaid);
+      // [fogbeam] (effects on a thing in none of the frame's lists, not shown because the army does not see their place)
+      if (haveLive && effects.unlistedHidden) printf(" (%d effects on unlisted things hidden in the fog)", effects.unlistedHidden);
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (world.horizonWeather)  // [horizon]

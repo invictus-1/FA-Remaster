@@ -157,6 +157,11 @@ class Particles {
   // The emitter throws out no more; what it threw lives out its time.
   void Stop(uint32_t emitter);
   bool Running(uint32_t emitter) const;
+  // [heldworld] How long an emitter of that blueprint has something to show, in ticks from its start: its own lifetime and
+  // the longest its last particles live. Below 0: until it is stopped. 0: the blueprint cannot be read (nothing would start).
+  // (Effects::QueueHeld asks before it knows whose the emitter is: the longest of the shared blueprint's and, in the
+  // remastered look, each faction's own.)
+  float ShowsFor(const std::string& blueprint);
   // Does that emitter glow (its particles add their light)? Then `rampPath` is its colour ramp's
   // file and `scale` how large a script has made it.
   // The scale an emitter was given (1 when it was not, or it is not running).
@@ -171,6 +176,15 @@ class Particles {
   // (or, hanging on something, farther away than its LODCutoff); when it is seen again it makes up
   // the last ticks it missed.
   void Update(double now, const View* view = nullptr);
+  // [views] The frame's views, all of them, while a frame has several (a split screen, a picture in the picture, the
+  // second window's view: WorldPicture::DrawViews sets them before the first view's Update and takes them away after the
+  // last). Update runs once a view, the first view first, and its rules are the original's for one camera: an emitter out
+  // of the picture waits, one whose blueprint says CreateIfVisible and that was never in it is stopped for good, as is one
+  // whose time ran out unseen. By the first view alone that stopped, before any further view was asked, every explosion
+  // and muzzle effect of such a blueprint (172 of the game's 2724, the units' death explosions among them) that only a
+  // further view showed (review of 2026-11-09, effects 4). With these, "out of the picture" means out of every one of
+  // them, and too far for its LODCutoff means too far from every one's eye. Empty: `view` alone, as with one view.
+  std::vector<View> frameViews;
   // [restart] (World::RestartGame, the interface's request 45 R1) A new game on the same map: every emitter and particle let
   // go of at once, the flashes and the hot air with them, the clock back at 0 and the random numbers begun again as at
   // first. The handles go on counting (one kept from before names nothing: Running says no), the blueprints read stay read.

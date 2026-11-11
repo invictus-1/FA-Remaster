@@ -1,8 +1,10 @@
 // [bgload] (bg_load.h)
 #include "bg_load.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "hitch_log.h"
@@ -166,9 +168,10 @@ gfx::Texture LoadingDevice::CreateTexture(const gfx::TextureDesc& desc) {
     else Ask("CreateTexture", [&] { t = real_->CreateTexture(desc); });
   }
   Made(kTextures, t.id);
-  if (t.id && !gfx::IsBlockCompressed(desc.format) && desc.mips == 1 && desc.layers == 1) {  // [warmtarget] (UpdateTexture's copy)
+  if (t.id && desc.mips == 1 && desc.layers == 1) {  // [warmtarget] (UpdateTexture's copy)
+    // ([terraform] a block-compressed one: its block's bytes, below 0)
     std::lock_guard<std::mutex> lock(kept_);
-    pixelBytes_[t.id] = gfx::BytesPerPixelOrBlock(desc.format);
+    pixelBytes_[t.id] = gfx::IsBlockCompressed(desc.format) ? -gfx::BytesPerPixelOrBlock(desc.format) : gfx::BytesPerPixelOrBlock(desc.format);
   }
   return t;
 }
@@ -378,15 +381,19 @@ void LoadingDevice::UpdateTexture(gfx::Texture texture, int x, int y, int width,
       const auto it = pixelBytes_.find(texture.id);
       if (it != pixelBytes_.end()) unit = it->second;
     }
-    if (unit <= 0 || width <= 0 || height <= 0 || !data) return NotNow("UpdateTexture (of a texture made elsewhere)");
-    const size_t row = static_cast<size_t>(width) * static_cast<size_t>(unit);
+    if (unit == 0 || width <= 0 || height <= 0 || !data) return NotNow("UpdateTexture (of a texture made elsewhere)");
+    // ([terraform] a block-compressed texture's rows are rows of blocks, a quarter as many)
+    const int rows = unit < 0 ? height / 4 : height;
+    const size_t row = unit < 0 ? static_cast<size_t>(width / 4) * static_cast<size_t>(-unit) : static_cast<size_t>(width) * static_cast<size_t>(unit);
+    if (rows <= 0 || row == 0) return;
     Call k{kUpdateTexture};
     k.a = texture.id;
-    k.b = static_cast<uint32_t>(x), k.c = static_cast<uint32_t>(y), k.d = static_cast<uint32_t>(width), k.e = height;
+    k.b = static_cast<uint32_t>(x), k.c = static_cast<uint32_t>(y), k.d = static_cast<uint32_t>(width);
+    k.e = unit < 0 ? -height : height;  // (below 0: rows of blocks, for Replay)
     k.at = rec_.bytes.size();
-    k.size = static_cast<uint32_t>(row * static_cast<size_t>(height));
+    k.size = static_cast<uint32_t>(row * static_cast<size_t>(rows));
     rec_.bytes.resize(k.at + k.size);
-    for (int r = 0; r < height; ++r)
+    for (int r = 0; r < rows; ++r)
       std::memcpy(rec_.bytes.data() + k.at + static_cast<size_t>(r) * row, static_cast<const uint8_t*>(data) + static_cast<size_t>(r) * pitch, row);
     rec_.calls.push_back(k);
     return;
@@ -543,8 +550,9 @@ void LoadingDevice::Replay() {
         if (void* room = WriteBuffer({k.a}, k.size)) std::memcpy(room, r.written[k.at].get(), k.size);
         break;
       case kUpdateTexture:
-        UpdateTexture({k.a}, static_cast<int>(k.b), static_cast<int>(k.c), static_cast<int>(k.d), k.e, r.bytes.data() + k.at,
-                      k.d && k.e ? k.size / static_cast<uint32_t>(k.e) : 0);
+        // ([terraform] `e` below 0: a block-compressed texture's, the copy's rows rows of blocks)
+        UpdateTexture({k.a}, static_cast<int>(k.b), static_cast<int>(k.c), static_cast<int>(k.d), std::abs(k.e), r.bytes.data() + k.at,
+                      k.d && k.e ? k.size / static_cast<uint32_t>(k.e < 0 ? std::max(-k.e / 4, 1) : k.e) : 0);
         break;
       case kBuildScene: BuildScene(k.scene, r.instances.data() + k.at, k.size); break;
       case kSetScene: SetScene(static_cast<int>(k.a), {k.b}); break;

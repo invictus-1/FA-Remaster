@@ -34,7 +34,6 @@ struct FrameUnit {
   float health = 0, maxHealth = 0;
   float fractionComplete = 1;           // below 1 while under construction
   uint32_t layer = 0;                   // 1 land, 2 seabed, 4 sub, 8 water, 0x10 air, 0x20 orbit
-  uint64_t states = 0;                  // the original's unit-state bits
   bool dead = false;
   bool beingBuilt = false;
   // How far its work is (a build, an upgrade, an enhancement), 0..1; 0: none. And whether the

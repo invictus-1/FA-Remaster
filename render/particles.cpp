@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>  // [views] (getenv: MOHO64_DEBUG_VIEWS)
 #include <cstring>
 
 #include "bp_reader.h"
@@ -1115,6 +1116,20 @@ void Particles::Emit(Emitter* emitter, int tick) {
   emitter->positionBefore = emitter->position;
 }
 
+float Particles::ShowsFor(const std::string& blueprint) {  // [heldworld] (particles.h)
+  // (whose the emitter is, is not known yet, and in the remastered look a faction may play a blueprint of its own with
+  // another lifetime: the longest of them all)
+  float longest = 0;
+  for (const char* faction : {"", "uef", "aeon", "cybran", "seraphim"}) {
+    const EmitterBlueprint* bp = Blueprint(blueprint, faction);
+    if (!bp->ok) continue;
+    if (bp->lifetime < 0) return -1;
+    longest = std::max(longest, bp->lifetime + bp->longestLife);
+    if (!remastered) break;  // (one blueprint for all)
+  }
+  return longest;
+}
+
 void Particles::VolumeBorn(Vec3 at, float radius, double born, float seconds) {
   auto under = [&](Vec3 p, float slack) { return std::hypot(p.x - at.x, p.z - at.z) <= radius + 0.5f + slack; };
   bool any = false;  // (one under it, running yet or done already: a short one, a fire's puff of three ticks, may be)
@@ -1181,8 +1196,21 @@ void Particles::Update(double now, const View* view) {
       const Vec3 r{margin, margin, margin};
       // ([lodscale] its distance times the camera's LOD scale, as the original measures an emitter's cutoff by it:
       // CEfxEmitter::CanSeeCam 0x65c420)
-      const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - view->eye) * view->lodScale > e.lodCutoff;
-      if (tooFar || !view->BoxVisible(e.position - r, e.position + r)) {
+      auto unseenBy = [&](const View& v) {
+        const bool tooFar = e.attached && e.lodCutoff > 0 && Length(e.position - v.eye) * v.lodScale > e.lodCutoff;
+        return tooFar || !v.BoxVisible(e.position - r, e.position + r);
+      };
+      bool unseen = unseenBy(*view);
+      if (unseen && !frameViews.empty()) {  // [views] (by none of the frame's)
+        for (size_t k = 0; unseen && k < frameViews.size(); ++k) unseen = unseenBy(frameViews[k]);
+        // (MOHO64_DEBUG_VIEWS=1 says each emitter that this view alone would have stopped for good just now)
+        static const bool say = std::getenv("MOHO64_DEBUG_VIEWS") != nullptr;
+        const bool first = e.blueprint->createIfVisible && e.ticksDone == 0, ranOut = e.lifetime >= 0 && due > last;
+        if (say && !unseen && (first || ranOut))
+          printf("render: particles: [views] an emitter at %.1f %.1f %.1f kept: another view of the frame sees it (%s)\n", e.position.x, e.position.y, e.position.z,
+                 first ? "CreateIfVisible, never seen by this view" : "its time ran out unseen by this view");
+      }
+      if (unseen) {
         ++quietEmitters;
         if (e.blueprint->createIfVisible && e.ticksDone == 0) e.stopped = true;  // never seen: never there
         if (e.lifetime >= 0 && due > last) e.stopped = true;                     // its time ran out unseen

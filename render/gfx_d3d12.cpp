@@ -240,6 +240,7 @@ struct TextureRec {
   uint32_t view = 0;      // its first render-target or depth view (index into that heap)
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
   int pixelBytes = 4;     // textures: bytes a pixel (UpdateTexture; 0 for the block-compressed)
+  int blockBytes = 0;     // [terraform] the block-compressed: bytes a 4x4 block (UpdateTexture)
   // storage targets only
   bool storage = false;
   bool unordered = false;  // currently in the unordered-access state (written by a dispatch)
@@ -2237,6 +2238,7 @@ Texture D3D12Device::CreateTexture(const TextureDesc& desc) {
   TextureRec rec;
   rec.used = true;
   rec.pixelBytes = IsBlockCompressed(desc.format) ? 0 : BytesPerPixelOrBlock(desc.format);
+  rec.blockBytes = IsBlockCompressed(desc.format) ? BytesPerPixelOrBlock(desc.format) : 0;  // [terraform]
   D3D12_RESOURCE_DESC rd = {};
   rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   rd.Width = static_cast<UINT64>(desc.width);
@@ -2472,6 +2474,7 @@ Texture D3D12Device::FinishTexture(std::unique_ptr<Prepared> prepared) {
   TextureRec rec;
   rec.used = true;
   rec.pixelBytes = IsBlockCompressed(p->kind) ? 0 : BytesPerPixelOrBlock(p->kind);
+  rec.blockBytes = IsBlockCompressed(p->kind) ? BytesPerPixelOrBlock(p->kind) : 0;  // [terraform]
   rec.resource = std::move(p->resource);
   textures_[index] = std::move(rec);
   const auto t3 = std::chrono::steady_clock::now();
@@ -4068,17 +4071,21 @@ void D3D12Device::DrawIndexed(uint32_t indexCount, uint32_t firstIndex, int32_t 
 
 void D3D12Device::UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) {
   TextureRec* rec = Find(texture);
-  if (!rec || rec->target || rec->storage || !inFrame_ || width <= 0 || height <= 0 || !data || rec->pixelBytes <= 0) return;
+  // [terraform] (a block-compressed texture: whole blocks only, its rows rows of blocks; gfx.h)
+  const bool blocks = rec && rec->pixelBytes <= 0 && rec->blockBytes > 0;
+  if (!rec || rec->target || rec->storage || !inFrame_ || width <= 0 || height <= 0 || !data || (rec->pixelBytes <= 0 && !blocks)) return;
   const D3D12_RESOURCE_DESC rd = rec->resource->GetDesc();
   if (rd.MipLevels != 1 || rd.DepthOrArraySize != 1 || x < 0 || y < 0 || static_cast<UINT64>(x + width) > rd.Width ||
       static_cast<UINT>(y + height) > rd.Height)
     return;
-  const UINT unit = static_cast<UINT>(rec->pixelBytes);
-  const UINT row = static_cast<UINT>(width) * unit;
+  if (blocks && ((x | y | width | height) & 3)) return;
+  const UINT unit = static_cast<UINT>(blocks ? rec->blockBytes : rec->pixelBytes);
+  const int rows = blocks ? height / 4 : height;
+  const UINT row = static_cast<UINT>(blocks ? width / 4 : width) * unit;
   const UINT rowPitch = (row + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) / D3D12_TEXTURE_DATA_PITCH_ALIGNMENT * D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
-  Span s = Allocate(static_cast<size_t>(rowPitch) * static_cast<size_t>(height), D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+  Span s = Allocate(static_cast<size_t>(rowPitch) * static_cast<size_t>(rows), D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
   if (!s.cpu) return;
-  for (int r = 0; r < height; ++r)
+  for (int r = 0; r < rows; ++r)
     std::memcpy(s.cpu + static_cast<size_t>(r) * rowPitch, static_cast<const uint8_t*>(data) + static_cast<size_t>(r) * pitch, row);
   const D3D12_RESOURCE_STATES readable = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
   D3D12_RESOURCE_BARRIER b = Transition(rec->resource.Get(), readable, D3D12_RESOURCE_STATE_COPY_DEST);

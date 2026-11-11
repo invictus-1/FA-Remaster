@@ -2198,6 +2198,21 @@ bool Terrain::Load(const MapData* map, std::string* error) {
     return t ? t : fallback;
   };
   normalMap_ = embedded(map->normalMap, "the map's normal map", textures_->FlatNormal());
+  {  // [terraform] (where the stored normals can follow the game's changes of the ground: terrain.h, normalsFollow)
+    normalBlocks_ = nullptr;
+    normalWidth_ = normalHeight_ = 0;
+    normalDirty_.clear();
+    normalBlocksChanged = 0;
+    normalsSaid_ = false;
+    DdsImage image;
+    if (normalMap_ && normalMap_.id != textures_->FlatNormal().id && ParseDds(map->normalMap, &image, nullptr) && image.format == gfx::Format::BC3 &&
+        image.mips == 1 && image.layers == 1 && image.converted.empty() && image.width % 4 == 0 && image.height % 4 == 0 &&
+        image.dataSize >= static_cast<size_t>(image.width / 4) * static_cast<size_t>(image.height / 4) * 16) {
+      normalBlocks_ = image.data;
+      normalWidth_ = image.width;
+      normalHeight_ = image.height;
+    }
+  }
   maskLow_ = embedded(map->maskLow, "the map's first layer mask", textures_->Black());
   maskHigh_ = embedded(map->maskHigh, "the map's second layer mask", textures_->Black());
   waterMap_ = embedded(map->waterMap, "the map's water map", textures_->Black());
@@ -2375,11 +2390,227 @@ bool Terrain::Select(const View& view, int level, int ix, int iz) {
   return true;
 }
 
-void Terrain::HeightsChanged(int x0, int z0, int x1, int z1) {
+// [terraform] One 4x4 block of a DXT5 normal map as the ground's shaders read it: `a` its alpha (the normal's x), `g` its
+// green (the normal's z), 0..255, sixteen each, rows first.
+namespace {
+void DecodeNormalBlock(const uint8_t* block, float* a, float* g) {
+  // alpha: two stored values and six between them (or four, and 0 and 255), three bits a texel
+  const int a0 = block[0], a1 = block[1];
+  float alphas[8] = {static_cast<float>(a0), static_cast<float>(a1)};
+  if (a0 > a1) {
+    for (int k = 1; k < 7; ++k) alphas[k + 1] = static_cast<float>((7 - k) * a0 + k * a1) / 7.0f;
+  } else {
+    for (int k = 1; k < 5; ++k) alphas[k + 1] = static_cast<float>((5 - k) * a0 + k * a1) / 5.0f;
+    alphas[6] = 0, alphas[7] = 255;
+  }
+  uint64_t bits = 0;
+  for (int k = 0; k < 6; ++k) bits |= static_cast<uint64_t>(block[2 + k]) << (8 * k);
+  for (int p = 0; p < 16; ++p) a[p] = alphas[(bits >> (3 * p)) & 7];
+  // green: six bits in each of the two stored colours, two between them, two bits a texel
+  const int c0 = block[8] | (block[9] << 8), c1 = block[10] | (block[11] << 8);
+  const float g0 = static_cast<float>((c0 >> 5) & 63) * (255.0f / 63.0f), g1 = static_cast<float>((c1 >> 5) & 63) * (255.0f / 63.0f);
+  const float greens[4] = {g0, g1, (2 * g0 + g1) / 3, (g0 + 2 * g1) / 3};
+  const uint32_t picks = static_cast<uint32_t>(block[12]) | (static_cast<uint32_t>(block[13]) << 8) | (static_cast<uint32_t>(block[14]) << 16) |
+                         (static_cast<uint32_t>(block[15]) << 24);
+  for (int p = 0; p < 16; ++p) g[p] = greens[(picks >> (2 * p)) & 3];
+}
+// The other way: the block that holds those sixteen alphas and greens as nearly as DXT5 can (its red and blue 0: nothing
+// reads them). Alpha's two ends are the block's lowest and highest; green's the six-bit steps just outside its lowest and
+// highest (so that a level block, 127.5, comes out a third of a step off, 0.3 degrees, not half a step).
+void EncodeNormalBlock(const float* a, const float* g, uint8_t* block) {
+  float lowA = 255, highA = 0, lowG = 255, highG = 0;
+  for (int p = 0; p < 16; ++p) {
+    lowA = std::min(lowA, a[p]), highA = std::max(highA, a[p]);
+    lowG = std::min(lowG, g[p]), highG = std::max(highG, g[p]);
+  }
+  const int a0 = std::clamp(static_cast<int>(std::lround(highA)), 0, 255), a1 = std::clamp(static_cast<int>(std::lround(lowA)), 0, 255);
+  block[0] = static_cast<uint8_t>(a0);
+  block[1] = static_cast<uint8_t>(a1);
+  uint64_t bits = 0;
+  if (a0 > a1)
+    for (int p = 0; p < 16; ++p) {
+      // (the eight values run from a0 down to a1 in sevenths: step 0 is index 0, step 7 index 1, the others one more)
+      const int step = std::clamp(static_cast<int>(std::lround((static_cast<float>(a0) - a[p]) * 7.0f / static_cast<float>(a0 - a1))), 0, 7);
+      bits |= static_cast<uint64_t>(step == 0 ? 0 : step == 7 ? 1 : step + 1) << (3 * p);
+    }
+  for (int k = 0; k < 6; ++k) block[2 + k] = static_cast<uint8_t>(bits >> (8 * k));
+  const int q0 = std::clamp(static_cast<int>(std::ceil(highG * (63.0f / 255.0f) - 1e-4f)), 0, 63);
+  const int q1 = std::clamp(static_cast<int>(std::floor(lowG * (63.0f / 255.0f) + 1e-4f)), 0, 63);
+  const float g0 = static_cast<float>(q0) * (255.0f / 63.0f), g1 = static_cast<float>(q1) * (255.0f / 63.0f);
+  const float greens[4] = {g0, g1, (2 * g0 + g1) / 3, (g0 + 2 * g1) / 3};
+  uint32_t picks = 0;
+  for (int p = 0; p < 16; ++p) {
+    int best = 0;
+    for (int k = 1; k < 4; ++k)
+      if (std::abs(greens[k] - g[p]) < std::abs(greens[best] - g[p])) best = k;
+    picks |= static_cast<uint32_t>(best) << (2 * p);
+  }
+  const int c0 = q0 << 5, c1 = q1 << 5;
+  block[8] = static_cast<uint8_t>(c0), block[9] = static_cast<uint8_t>(c0 >> 8);
+  block[10] = static_cast<uint8_t>(c1), block[11] = static_cast<uint8_t>(c1 >> 8);
+  for (int k = 0; k < 4; ++k) block[12 + k] = static_cast<uint8_t>(picks >> (8 * k));
+}
+}  // namespace
+
+// [terraform] (terrain.h, normalsFollow) The stored normals over the grid points [x0, x1] x [z0, z1] brought to what the
+// heights are now. What a texel holds depends only on the file's block, the file's heights and the heights now, never on
+// what was written before: the same call after a game was begun again (the heights the file's once more) writes the
+// file's blocks back, and after a lost device (a new texture, the file's; World::Give) writes the changed ones anew.
+void Terrain::NormalsChanged(int x0, int z0, int x1, int z1, const std::vector<uint16_t>& atOpen) {
+  const int w = map_->width, h = map_->height;
+  const size_t row = static_cast<size_t>(w) + 1;
+  if (atOpen.size() != map_->heights.size() || map_->heights.size() < row * (static_cast<size_t>(h) + 1) || w < 2 || h < 2) return;
+  const int blocksX = normalWidth_ / 4, blocksZ = normalHeight_ / 4;
+  const float texelsX = static_cast<float>(normalWidth_) / static_cast<float>(w), texelsZ = static_cast<float>(normalHeight_) / static_cast<float>(h);
+  // the blocks to look at: a point's normal is of its four neighbours' heights, and it fades into the file's over one more
+  // cell, so the texels up to two cells from the points asked about
+  int bx0 = std::clamp(static_cast<int>(std::floor(static_cast<float>(x0 - 2) * texelsX)) / 4, 0, blocksX - 1);
+  int bz0 = std::clamp(static_cast<int>(std::floor(static_cast<float>(z0 - 2) * texelsZ)) / 4, 0, blocksZ - 1);
+  int bx1 = std::clamp(static_cast<int>(std::ceil(static_cast<float>(x1 + 2) * texelsX)) / 4, 0, blocksX - 1);
+  int bz1 = std::clamp(static_cast<int>(std::ceil(static_cast<float>(z1 + 2) * texelsZ)) / 4, 0, blocksZ - 1);
+  // the grid points those blocks' texels are read between (every one of them: a block is written whole)
+  const int px0 = std::clamp(static_cast<int>(std::floor(static_cast<float>(bx0 * 4) / texelsX)), 0, w);
+  const int pz0 = std::clamp(static_cast<int>(std::floor(static_cast<float>(bz0 * 4) / texelsZ)), 0, h);
+  const int px1 = std::clamp(static_cast<int>(std::ceil(static_cast<float>(bx1 * 4 + 4) / texelsX)), 0, w);
+  const int pz1 = std::clamp(static_cast<int>(std::ceil(static_cast<float>(bz1 * 4 + 4) / texelsZ)), 0, h);
+  const int pw = px1 - px0 + 1, ph = pz1 - pz0 + 1;
+  const uint16_t* now = map_->heights.data();
+  const uint16_t* file = atOpen.data();
+  // per point: 1 where its height or one of its four neighbours' is not the file's (its normal is then not the file's)
+  std::vector<uint8_t> moved(static_cast<size_t>(pw) * static_cast<size_t>(ph), 0);
+  bool any = false;
+  int mx0 = px1, mz0 = pz1, mx1 = px0, mz1 = pz0;  // (the box of such points)
+  for (int z = std::max(pz0 - 1, 0); z <= std::min(pz1 + 1, h); ++z) {
+    const uint16_t* a = now + static_cast<size_t>(z) * row;
+    const uint16_t* b = file + static_cast<size_t>(z) * row;
+    const int from = std::max(px0 - 1, 0), to = std::min(px1 + 1, w);
+    if (!std::memcmp(a + from, b + from, static_cast<size_t>(to - from + 1) * sizeof(uint16_t))) continue;
+    for (int x = from; x <= to; ++x) {
+      if (a[x] == b[x]) continue;
+      for (int k = 0; k < 5; ++k) {
+        const int nx = x + (k == 1) - (k == 2), nz = z + (k == 3) - (k == 4);
+        if (nx < px0 || nx > px1 || nz < pz0 || nz > pz1) continue;
+        moved[static_cast<size_t>(nz - pz0) * static_cast<size_t>(pw) + static_cast<size_t>(nx - px0)] = 1;
+        mx0 = std::min(mx0, nx), mx1 = std::max(mx1, nx), mz0 = std::min(mz0, nz), mz1 = std::max(mz1, nz);
+        any = true;
+      }
+    }
+  }
+  if (normalDirty_.empty()) {
+    if (!any) return;  // (nothing was ever changed, and nothing is now)
+    normalDirty_.assign(static_cast<size_t>(blocksX) * static_cast<size_t>(blocksZ), 0);
+  }
+  // (a large rectangle, as a game begun again or a lost device give it, the whole map: only as far as the blocks that are
+  // not the file's and the points that moved reach)
+  {
+    int dx0 = blocksX, dz0 = blocksZ, dx1 = -1, dz1 = -1;
+    for (int bz = bz0; bz <= bz1; ++bz) {
+      const uint8_t* d = normalDirty_.data() + static_cast<size_t>(bz) * static_cast<size_t>(blocksX);
+      const void* first = std::memchr(d + bx0, 1, static_cast<size_t>(bx1 - bx0 + 1));
+      if (!first) continue;
+      int last = bx1;
+      while (!d[last]) --last;
+      dx0 = std::min(dx0, static_cast<int>(static_cast<const uint8_t*>(first) - d)), dx1 = std::max(dx1, last);
+      dz0 = std::min(dz0, bz), dz1 = std::max(dz1, bz);
+    }
+    if (any) {  // (the texels within a cell of the moved points)
+      dx0 = std::min(dx0, static_cast<int>(std::floor(static_cast<float>(std::max(mx0 - 1, 0)) * texelsX)) / 4);
+      dz0 = std::min(dz0, static_cast<int>(std::floor(static_cast<float>(std::max(mz0 - 1, 0)) * texelsZ)) / 4);
+      dx1 = std::max(dx1, static_cast<int>(std::ceil(static_cast<float>(std::min(mx1 + 1, w)) * texelsX)) / 4);
+      dz1 = std::max(dz1, static_cast<int>(std::ceil(static_cast<float>(std::min(mz1 + 1, h)) * texelsZ)) / 4);
+    }
+    bx0 = std::max(bx0, dx0), bz0 = std::max(bz0, dz0), bx1 = std::min(bx1, dx1), bz1 = std::min(bz1, dz1);
+    if (bx0 > bx1 || bz0 > bz1) return;
+  }
+  // a point's normal from the heights as they are now, packed as the texture's alpha and green (the file's own way, measured
+  // against the stock maps' and SETONS_R's normal maps: half the difference of the two neighbours each way, one-sided at the
+  // map's edge)
+  const float scale = map_->heightScale;
+  auto normalAt = [&](int x, int z, float* alpha, float* green) {
+    const int xa = std::max(x - 1, 0), xb = std::min(x + 1, w), za = std::max(z - 1, 0), zb = std::min(z + 1, h);
+    const float gx = (static_cast<float>(now[static_cast<size_t>(z) * row + static_cast<size_t>(xb)]) -
+                      static_cast<float>(now[static_cast<size_t>(z) * row + static_cast<size_t>(xa)])) * scale / static_cast<float>(xb - xa);
+    const float gz = (static_cast<float>(now[static_cast<size_t>(zb) * row + static_cast<size_t>(x)]) -
+                      static_cast<float>(now[static_cast<size_t>(za) * row + static_cast<size_t>(x)])) * scale / static_cast<float>(zb - za);
+    const float length = std::sqrt(gx * gx + gz * gz + 1);
+    *alpha = (-gx / length * 0.5f + 0.5f) * 255.0f;
+    *green = (-gz / length * 0.5f + 0.5f) * 255.0f;
+  };
+  // the blocks, at most 64 x 64 of them at a time (256 texels a side): such a piece goes to the card when one of its
+  // blocks is no longer what the card has
+  constexpr int kPiece = 64;
+  std::vector<uint8_t> out(static_cast<size_t>(kPiece) * kPiece * 16);
+  for (int sz = bz0; sz <= bz1; sz += kPiece)
+    for (int sx = bx0; sx <= bx1; sx += kPiece) {
+      const int ex = std::min(sx + kPiece, bx1 + 1), ez = std::min(sz + kPiece, bz1 + 1);
+      bool send = false;
+      for (int bz = sz; bz < ez; ++bz)
+        for (int bx = sx; bx < ex; ++bx) {
+          const size_t block = static_cast<size_t>(bz) * static_cast<size_t>(blocksX) + static_cast<size_t>(bx);
+          const uint8_t* stored = normalBlocks_ + block * 16;
+          uint8_t* to = out.data() + (static_cast<size_t>(bz - sz) * kPiece + static_cast<size_t>(bx - sx)) * 16;
+          float share[16], da[16], dg[16];
+          bool some = false;
+          if (any)
+            for (int p = 0; p < 16; ++p) {
+              // (a texel's middle among the grid points: the texture spans the map's cells, read between the four round it)
+              const float tx = (static_cast<float>(bx * 4 + (p & 3)) + 0.5f) / texelsX, tz = (static_cast<float>(bz * 4 + (p >> 2)) + 0.5f) / texelsZ;
+              const int ix = std::clamp(static_cast<int>(tx), 0, w - 1), iz = std::clamp(static_cast<int>(tz), 0, h - 1);
+              const float fx = std::clamp(tx - static_cast<float>(ix), 0.0f, 1.0f), fz = std::clamp(tz - static_cast<float>(iz), 0.0f, 1.0f);
+              share[p] = da[p] = dg[p] = 0;
+              for (int k = 0; k < 4; ++k) {
+                const int qx = ix + (k & 1), qz = iz + (k >> 1);
+                if (qx < px0 || qx > px1 || qz < pz0 || qz > pz1) continue;  // (outside what was asked about: not moved)
+                const size_t at = static_cast<size_t>(qz - pz0) * static_cast<size_t>(pw) + static_cast<size_t>(qx - px0);
+                if (!moved[at]) continue;
+                const float weight = ((k & 1) ? fx : 1 - fx) * ((k >> 1) ? fz : 1 - fz);
+                float alpha, green;
+                normalAt(qx, qz, &alpha, &green);
+                share[p] += weight;
+                da[p] += weight * alpha;
+                dg[p] += weight * green;
+              }
+              some = some || share[p] > 0;
+            }
+          if (some) {
+            float a[16], g[16];
+            DecodeNormalBlock(stored, a, g);
+            for (int p = 0; p < 16; ++p) {
+              // (the moved points' normals with their shares, the rest of the texel the file's own)
+              a[p] = a[p] * (1 - share[p]) + da[p];
+              g[p] = g[p] * (1 - share[p]) + dg[p];
+            }
+            EncodeNormalBlock(a, g, to);
+            if (!normalDirty_[block]) ++normalBlocksChanged;
+            normalDirty_[block] = 1;
+            send = true;
+          } else {  // (the file's own; again, where an earlier change had written it)
+            std::memcpy(to, stored, 16);
+            if (normalDirty_[block]) {
+              normalDirty_[block] = 0;
+              --normalBlocksChanged;
+              send = true;
+            }
+          }
+        }
+      if (send) device_->UpdateTexture(normalMap_, sx * 4, sz * 4, (ex - sx) * 4, (ez - sz) * 4, out.data(), kPiece * 16);
+    }
+}
+
+void Terrain::HeightsChanged(int x0, int z0, int x1, int z1, const std::vector<uint16_t>* atOpen) {
   if (!map_ || levels_.empty() || !heightTexture_) return;
   const int w = map_->width, h = map_->height;
   x0 = std::max(x0, 0), z0 = std::max(z0, 0), x1 = std::min(x1, w), z1 = std::min(z1, h);
   if (x0 > x1 || z0 > z1) return;
+  // [terraform] the stored normals there (terrain.h, normalsFollow)
+  if (atOpen && normalsFollow) {
+    if (normalBlocks_) {
+      NormalsChanged(x0, z0, x1, z1, *atOpen);
+    } else if (!normalsSaid_ && normalMap_.id != textures_->FlatNormal().id) {
+      normalsSaid_ = true;
+      printf("render: this map's normal map is not one level of DXT5: the ground the game changes keeps its stored shading\n");
+    }
+  }
   // the height texture's rectangle, from the map's heights as they are now
   device_->UpdateTexture(heightTexture_, x0, z0, x1 - x0 + 1, z1 - z0 + 1,
                          map_->heights.data() + static_cast<size_t>(z0) * static_cast<size_t>(w + 1) + static_cast<size_t>(x0),

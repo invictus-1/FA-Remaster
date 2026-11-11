@@ -108,7 +108,8 @@ VOut VS(uint id : SV_VertexID) {
   return o;
 }
 
-// smaller: four readings between the pixels (each is the middle of four)
+// smaller: four readings half a pixel of the picture read to each side of the middle: of a picture twice the size, the
+// four pixels under this one
 float4 Down(VOut i) : SV_Target {
   float3 c = 0;
   for (int k = 0; k < 4; ++k) {
@@ -373,6 +374,7 @@ gfx::Texture Post::Reactive(const std::function<void()>& more) {
   }
   gfx::PassDesc pass;
   pass.color = reactive_;
+  pass.clearColor = false;  // (the mask is drawn over every pixel)
   device_->BeginPass(pass);
   device_->SetPipeline(reactiveMask_);
   device_->SetTexture(0, opaque_);
@@ -495,6 +497,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     for (int i = 0; i < kGlowSteps; ++i) {
       gfx::PassDesc step;
       step.color = glowSteps_[i];
+      step.clearColor = false;  // (drawn over every pixel)
       device_->BeginPass(step);
       const int w = i ? glowWidth_[i - 1] : pictureWidth, h = i ? glowHeight_[i - 1] : pictureHeight;
       const float c[4] = {0.5f / static_cast<float>(w), 0.5f / static_cast<float>(h), i ? 0.0f : 1.0f, i ? 1.0f : glow / static_cast<float>(kGlowSteps)};
@@ -524,6 +527,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
     auto run = [&](gfx::Texture into, gfx::Pipeline pipeline, gfx::Texture from, const float c[4]) {
       gfx::PassDesc step;
       step.color = into;
+      step.clearColor = false;  // (drawn over every pixel)
       device_->BeginPass(step);
       device_->SetPipeline(pipeline);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
@@ -555,6 +559,7 @@ void Post::Present(const View& view, Upscaler* upscaler, int screenWidth, int sc
   gfx::PassDesc pass;
   if (scaled && ldr_) {
     pass.color = ldr_;
+    pass.clearColor = photo != nullptr;  // (drawn over every pixel, but for the photographic look's comparison panels)
   } else {
     pass.window = true;
     pass.clearColor = false;

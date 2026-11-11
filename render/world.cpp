@@ -145,6 +145,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
   effects.isProp = [this](uint32_t id) { return IsProp(id); };  // [scars] (a flash made on a prop is no explosion)
+  // [fogbeam] (what hangs on a thing in no list: shown by what the army sees of its place now)
+  effects.seenAt = [this](Vec3 p) {
+    return !haveMap_ || !sight.On() || sight.SeenAt(p.x / static_cast<float>(map.width), p.z / static_cast<float>(map.height));
+  };
   // [whitecaps] (what hangs on a ship's bones follows its hull riding the lifted waves: as the unit's drawing, RideWaves)
   effects.drawnAt = [this](const std::string& blueprint, const FrameUnit& u, const Model* model, Vec3* position, Quat* orientation) {
     const bool building = blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
@@ -582,6 +586,7 @@ void World::RestartGame() {
   unitModels_.clear();
   shotModels_.clear();
   entityModels_.clear();
+  entityMeshes_.clear();
   originalShotModels_.clear();
   originalEntityModels_.clear();
   structureKind_.clear();
@@ -758,6 +763,7 @@ void World::SetLooks(const std::vector<BlueprintLook>& looks) {
   unitModels_.clear();
   shotModels_.clear();
   entityModels_.clear();
+  entityMeshes_.clear();
   originalShotModels_.clear();
   originalEntityModels_.clear();
   int units = 0;
@@ -1223,26 +1229,28 @@ void World::FlushLamps() {
     const float step = aside ? 0.0f : lampClock_ < 0 ? 1.0f : std::clamp(static_cast<float>(time_ - lampClock_), 0.0f, 0.1f) * 4.0f;
     if (!aside) lampClock_ = time_;
     ++lampStamp_;
-    std::vector<uint32_t> order(pendingLamps_.size());
-    for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
-      const PendingLamp &x = pendingLamps_[a], &y = pendingLamps_[b];
-      if (x.order != y.order) return x.order > y.order;
-      const uint64_t ux = x.key >> 8, uy = y.key >> 8;  // (the unit's number; 0 for none)
-      if (ux != uy) return ux < uy;
-      if (x.unit != y.unit) return x.unit < y.unit;
-      return a < b;
-    });
-    std::vector<uint8_t> allowed(pendingLamps_.size(), 1);
-    for (size_t i = 0; i < order.size();) {
+    // (the order as one number a lamp, sorted by itself: the squares' order from 2 down, then the unit's number - 0 for
+    // none, 33 bits at the most - then the lamp's place in the list, which stands for the call of AddLamps it came from
+    // too: each call's lamps lie together, later calls' after them)
+    constexpr uint64_t kPlace = (uint64_t{1} << 29) - 1;
+    lampOrder_.resize(pendingLamps_.size());
+    for (size_t i = 0; i < pendingLamps_.size(); ++i) {
+      const PendingLamp& l = pendingLamps_[i];
+      lampOrder_[i] = static_cast<uint64_t>(2 - l.order) << 62 | (l.key >> 8) << 29 | i;
+    }
+    std::sort(lampOrder_.begin(), lampOrder_.end());
+    auto order = [&](size_t k) { return static_cast<size_t>(lampOrder_[k] & kPlace); };
+    std::vector<uint8_t>& allowed = lampAllowed_;
+    allowed.assign(pendingLamps_.size(), 1);
+    for (size_t i = 0; i < lampOrder_.size();) {
       // one unit's lamps (they do not cut each other: counted into the squares after all of them)
       size_t j = i;
-      while (j < order.size() && pendingLamps_[order[j]].unit == pendingLamps_[order[i]].unit) ++j;
+      while (j < lampOrder_.size() && pendingLamps_[order(j)].unit == pendingLamps_[order(i)].unit) ++j;
       uint64_t taken[16];
       bool takenBeam[16];
       size_t takenCount = 0;
       for (size_t k = i; k < j; ++k) {
-        const PendingLamp& l = pendingLamps_[order[k]];
+        const PendingLamp& l = pendingLamps_[order(k)];
         const auto found = lampSquares_.find(l.square);
         const uint32_t count = found == lampSquares_.end() ? 0 : found->second;
         const uint32_t beamUnits = count & 0xffffu, others = count >> 16;
@@ -1250,11 +1258,11 @@ void World::FlushLamps() {
           bool ownHere = false;
           for (size_t t = 0; t < takenCount; ++t) ownHere = ownHere || (takenBeam[t] && taken[t] == l.square);
           if (beamUnits >= 4 || (beamUnits >= 1 && ownHere)) {
-            allowed[order[k]] = 0;
+            allowed[order(k)] = 0;
             continue;
           }
         } else if (others >= 2) {
-          allowed[order[k]] = 0;
+          allowed[order(k)] = 0;
           continue;
         }
         if (takenCount < 16) {
@@ -1269,7 +1277,8 @@ void World::FlushLamps() {
       }
       i = j;
     }
-    std::vector<float> hullShares;
+    std::vector<float>& hullShares = lampShares_;
+    hullShares.clear();
     if (hullShare) ShareHullGlows(allowed, &hullShares);  // [hullglow]
     for (size_t i = 0; i < pendingLamps_.size(); ++i) {
       const PendingLamp& l = pendingLamps_[i];
@@ -1602,7 +1611,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   barAnchors.clear();
   if (heightsRestored_) {  // [restart] (RestartGame: the ground's heights as the map was opened, drawn so; within a frame)
     heightsRestored_ = false;
-    terrain.HeightsChanged(0, 0, map.width, map.height);
+    // ([terraform] with the file's heights: the stored normals back to the file's, or after a lost device changed anew)
+    terrain.HeightsChanged(0, 0, map.width, map.height, heightsAtOpen_.size() == map.heights.size() ? &heightsAtOpen_ : nullptr);
     lights.GroundChanged(0, 0, static_cast<float>(map.width), static_cast<float>(map.height));  // [lightshade]
   }
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
@@ -2816,7 +2826,8 @@ void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
     ++groundChanges;
   }
   for (const Rect& d : dirty) {
-    terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
+    // ([terraform] with the file's heights: the ground's stored normals follow the change, terrain.h's normalsFollow)
+    terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1, heightsAtOpen_.size() == map.heights.size() ? &heightsAtOpen_ : nullptr);
     // [lightshade] (the ground tables kept of lights that reach there are of the ground as it was)
     lights.GroundChanged(static_cast<float>(d.x0), static_cast<float>(d.z0), static_cast<float>(d.x1), static_cast<float>(d.z1));
   }
@@ -3295,6 +3306,20 @@ const Vec3* World::WreckHeat(uint32_t key, const Model* model, const Mat4& at) {
 
 // Whose a shield's mesh is (effect_files.h, MeshFaction)
 std::string World::MeshFaction(const std::string& mesh) { return render::MeshFaction(mesh); }
+
+World::EntityMesh& World::EntityMeshOf(const Frame& frame, uint32_t mesh) {
+  if (mesh >= entityMeshes_.size()) entityMeshes_.resize(std::max(frame.blueprints->size(), static_cast<size_t>(mesh) + 1));
+  EntityMesh& e = entityMeshes_[mesh];
+  if (!e.known) {
+    const std::string& name = (*frame.blueprints)[mesh];
+    const std::string path = moho::Vfs::Normalize(name);
+    e.known = true;
+    e.section = path.find("shieldsection") != std::string::npos;
+    e.uefShell = path.find("/effects/entities/shield01/") != std::string::npos;
+    e.faction = MeshFaction(name);
+  }
+  return e;
+}
 
 void World::WatchDeaths(const Frame& frame, const std::vector<Vec3>& armyColors) {
   // (a frame without units says nothing of deaths: the effects stand hands the world its frame without them, as it
@@ -4100,24 +4125,27 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   impactBornNext_.clear();
   if (entitiesLook_ != effectsLook) {
     entityModels_.clear();
+    entityMeshes_.clear();
     entitiesLook_ = effectsLook;
   }
   bubbles_.clear();
   if (effectsLook == EffectsLook::Remastered)
     for (const FrameEntity& f : frame.entities)
       if (f.shield && !f.original && f.mesh < frame.blueprints->size()) {
-        std::string faction = MeshFaction((*frame.blueprints)[f.mesh]);
-        if (!faction.empty()) bubbles_.push_back({{f.position[0], f.position[1], f.position[2]}, std::move(faction)});
+        const std::string& faction = EntityMeshOf(frame, f.mesh).faction;
+        if (!faction.empty()) bubbles_.push_back({{f.position[0], f.position[1], f.position[2]}, faction});
       }
   for (const FrameEntity& f : frame.entities) {
     if (!f.seen || f.mesh >= frame.blueprints->size()) continue;
     const std::string& mesh = (*frame.blueprints)[f.mesh];
     const bool original = effectsLook == EffectsLook::Original || f.original;
     std::string faction;
+    EntityMesh* named = nullptr;
     if (!original && !bubbles_.empty()) {
+      named = &EntityMeshOf(frame, f.mesh);
       if (f.shield) {
-        faction = MeshFaction(mesh);
-      } else if (moho::Vfs::Normalize(mesh).find("shieldsection") != std::string::npos) {
+        faction = named->faction;
+      } else if (named->section) {
         const Vec3 at{f.position[0], f.position[1], f.position[2]};
         float best = 1.0f;  // (made at its bubble's centre)
         for (const auto& b : bubbles_)
@@ -4129,7 +4157,13 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     }
     const Model* model = nullptr;
     if (!faction.empty()) {
-      if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction, true);
+      auto made = std::find_if(named->models.begin(), named->models.end(), [&](const auto& m) { return m.first == faction; });
+      if (made == named->models.end()) {
+        if (!mesh.empty() && vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) model = models.Blueprint(mesh + ".bp", false, faction, true);
+        named->models.push_back({faction, model});
+      } else {
+        model = made->second;
+      }
     } else {
       model = Known(original ? originalEntityModels_ : entityModels_, f.mesh, frame.blueprints->size(), [&]() -> const Model* {
         if (mesh.empty() || !vfs_->Exists(moho::Vfs::Normalize(mesh + ".bp"))) return nullptr;  // (a script may write the name in any case)
@@ -4145,7 +4179,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
     // [energy shields] a bubble of energy (energy_shields.h) in place of the plain one; its flashes give it its hits (below)
     const bool energyHere = energyShields && look == Look::Modern && !f.original && !model->lods.empty();
     if (energyHere && model->lods[0].shield) {
-      energy.AddBubble(model, at, moho::Vfs::Normalize(mesh).find("/effects/entities/shield01/") != std::string::npos);  // [litshell] (the UEF's)
+      energy.AddBubble(model, at, EntityMeshOf(frame, f.mesh).uefShell);  // [litshell] (the UEF's)
       continue;
     }
     // (in its own colours where its look has no team colour of its own: the original gives every
@@ -4653,7 +4687,8 @@ void World::Render() {
     // (cinecam: a cinematic camera by the eye's height over the ground under it, grass.cpp)
     const Vec3 eye = placing.Eye();
     if (grassMade_ && ((placing.cinematic ? eye.y - GroundHeight(eye.x, eye.z) : placing.distance) <= grass.farthest || grass.plantsFar)) {
-      std::vector<float> discs;
+      std::vector<float>& discs = coverDiscs_;
+      discs.clear();
       // [nightlight] (steadyLamps: all of them first, then the 4,096 nearest what the camera looks at, nearest first, so that
       // the near field's own 256 (GroundCover::Prepare) are the nearest too; before, the first 1,024 in the order the models
       // came in: in a late game some 3,000 stand on the ground, and which of them cleared the plants round them changed as
@@ -4672,14 +4707,17 @@ void World::Render() {
       if (debugNight_) nightDiscs_ = std::max(nightDiscs_, static_cast<int>(discs.size() / 3));  // (MOHO64_DEBUG_NIGHTLIGHT)
       if (steadyLamps && discs.size() > 3) {  // [nightlight] (the nearest first; ties by place, not by the order they came in)
         const size_t count = discs.size() / 3, kept = std::min<size_t>(count, 4096);
-        std::vector<std::pair<float, uint32_t>> by(count);
+        std::vector<std::pair<float, uint32_t>>& by = coverBy_;
+        by.resize(count);
         for (size_t i = 0; i < count; ++i) {
           const float dx = discs[i * 3] - placing.target.x, dz = discs[i * 3 + 1] - placing.target.z;
           by[i] = {dx * dx + dz * dz, static_cast<uint32_t>(i)};
         }
-        std::partial_sort(by.begin(), by.begin() + static_cast<std::ptrdiff_t>(kept), by.end());
-        std::vector<float> nearest;
-        nearest.reserve(3 * kept);
+        // (those kept parted from the rest first, then only they put in order)
+        if (kept < count) std::nth_element(by.begin(), by.begin() + static_cast<std::ptrdiff_t>(kept), by.end());
+        std::sort(by.begin(), by.begin() + static_cast<std::ptrdiff_t>(kept));
+        std::vector<float>& nearest = coverNearest_;
+        nearest.clear();
         for (size_t k = 0; k < kept; ++k) nearest.insert(nearest.end(), discs.begin() + by[k].second * 3, discs.begin() + by[k].second * 3 + 3);
         discs.swap(nearest);
       }

@@ -264,13 +264,21 @@ void StrategicIcons::Blit(const Kind* kind, Vec3 color, bool selected, int cx, i
   }
 }
 
-void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, int kind, float drop, float thick) {
+// Where a place in the world is in the picture, in pixels; false: behind the camera.
+bool StrategicIcons::OnScreen(Vec3 position, float* x, float* y) const {
   const Mat4& m = view_.constants.viewProj;
   const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
-  if (w <= 1e-4f) return;
+  if (w <= 1e-4f) return false;
   const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
   const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
-  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  *x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width);
+  *y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  return true;
+}
+
+void StrategicIcons::AddBar(Vec3 position, float fraction, float widthPixels, int kind, float drop, float thick) {
+  float x, y;
+  if (!OnScreen(position, &x, &y)) return;
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
   bars_.push_back({x, y + drop, widthPixels, std::clamp(fraction, 0.0f, 1.0f), kind, thick});
 }
@@ -290,24 +298,17 @@ bool StrategicIcons::BarsAnchor(size_t from, float* x, float* y) const {
 
 void StrategicIcons::AddMark(int icon, Vec3 position, float lift) {
   if (icon < 0) return;
-  const Mat4& m = view_.constants.viewProj;
-  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
-  if (w <= 1e-4f) return;
-  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
-  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
-  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height) - lift;
+  float x, y;
+  if (!OnScreen(position, &x, &y)) return;
+  y -= lift;
   if (x < -100 || y < -100 || x > static_cast<float>(view_.width) + 100 || y > static_cast<float>(view_.height) + 100) return;
   marks_.push_back({x, y, icon, 0xffffffffu, 0});
 }
 
 void StrategicIcons::AddUnder(int icon, Vec3 position, float alpha) {
   if (icon < 0 || alpha <= 0.004f) return;
-  const Mat4& m = view_.constants.viewProj;
-  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
-  if (w <= 1e-4f) return;
-  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
-  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
-  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  float x, y;
+  if (!OnScreen(position, &x, &y)) return;
   if (x < -40 || y < -40 || x > static_cast<float>(view_.width) + 40 || y > static_cast<float>(view_.height) + 40) return;
   under_.push_back({x, y, icon, (static_cast<uint32_t>(std::min(alpha, 1.0f) * 255.0f + 0.5f) << 24) | 0xffffffu, 0});
 }
@@ -319,12 +320,8 @@ void StrategicIcons::Add(const Kind* kind, Vec3 position, Vec3 color, bool selec
   float alpha = ComeIn(kind, position);
   if (blip || always) alpha = 1;  // (a blip is all there is to see of the unit; or the player wants them at every distance)
   if (alpha <= 0) return;
-  const Mat4& m = view_.constants.viewProj;
-  const float w = m.m[3][0] * position.x + m.m[3][1] * position.y + m.m[3][2] * position.z + m.m[3][3];
-  if (w <= 1e-4f) return;  // behind the camera
-  const float nx = (m.m[0][0] * position.x + m.m[0][1] * position.y + m.m[0][2] * position.z + m.m[0][3]) / w;
-  const float ny = (m.m[1][0] * position.x + m.m[1][1] * position.y + m.m[1][2] * position.z + m.m[1][3]) / w;
-  const float x = (nx * 0.5f + 0.5f) * static_cast<float>(view_.width), y = (0.5f - ny * 0.5f) * static_cast<float>(view_.height);
+  float x, y;
+  if (!OnScreen(position, &x, &y)) return;
   const Rect& r = rects_[static_cast<size_t>(icon)];
   const float halfW = static_cast<float>(r.width) * pixel_ * 0.5f, halfH = static_cast<float>(r.height) * pixel_ * 0.5f;
   if (x + halfW < 0 || y + halfH < 0 || x - halfW > static_cast<float>(view_.width) || y - halfH > static_cast<float>(view_.height)) return;

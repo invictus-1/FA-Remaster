@@ -1621,7 +1621,9 @@ bool MeshRenderer::Init(std::string* error) {
   }
   int kept = 0;
   auto keep = [&](gfx::Pipeline p, const gfx::PipelineDesc& d) {
-    bending_[kept++] = {p, d, {}};
+    // (bending_ has as many places as there are calls below: one more call needs one more place)
+    if (kept < static_cast<int>(std::size(bending_))) bending_[kept++] = {p, d, {}};
+    else fprintf(stderr, "render: models: the bent variant of \"%s\" cannot be made (MeshRenderer::bending_ is full)\n", d.name);
     buildVariants_.push_back({p, d, {}});  // (buildfx)
   };
   gfx::PipelineDesc pd;
@@ -1662,9 +1664,7 @@ bool MeshRenderer::Init(std::string* error) {
   pd.cull = gfx::Cull::Back;
   ghost_ = device_->CreatePipeline(pd, error);
   if (!ghost_) return false;
-  pd.cull = gfx::Cull::None;
   pd.alphaWrite = true;
-  pd.cull = gfx::Cull::Back;
   pd.depthWrite = true;
   pd.name = "models, a ball of fire";  // (seen from outside only, and it hides what burns inside it)
   dome_ = device_->CreatePipeline(pd, error);
@@ -2345,12 +2345,11 @@ void MeshRenderer::SortItems() {
   // in each of the sort's steps was most of the sort's time)
   auto key = [](const Item& item) { return item.key; };
   // (only the bits that differ between the items need sorting)
-  uint64_t all = 0, any = 0, first = key(items_[0]);
+  uint64_t any = 0, first = key(items_[0]);
   for (const Item& item : items_) {
     const uint64_t k = key(item);
     any |= k ^ first;
   }
-  (void)all;
   if (!any) return;  // one mesh only
   int top = 63;
   while (top > 0 && !((any >> top) & 1)) --top;

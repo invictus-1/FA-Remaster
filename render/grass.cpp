@@ -94,8 +94,7 @@ float2 CoverMoved(float4 here, float4 then) { return (then.xy / then.w - here.xy
 const char kShader[] = R"hlsl(
 cbuffer Grass : register(b1) {
   float4 area;     // xy: the first cell's world x, z; z: a cell's size; w: cells along a side
-  float4 blades;   // x: the tallest blade; y: its width at the foot; z: how far from the eye it thins out to nothing;
-                   // w: world units of the heights' largest value
+  float4 blades;   // x: the tallest blade; y: its width at the foot; z: free; w: world units of the heights' largest value
   float4 mapInfo;  // xy: the map's width and height; z: world units a pixel covers at distance 1; w: the water's level
   float4 table;    // x: 1 where the map's cover table says how many blades grow (densityA's red), else by how grassy;
                    // [tarmac] y: 1 = none where a remastered pad lies (padCover); [foliage] z: 1 = a tuft toward the
@@ -1534,12 +1533,10 @@ void GroundCover::Draw(const View& view, const Camera& camera, gfx::Texture heig
   const bool reacting = plants && plants->Ready() && reactingMade_ > 0;  // [plants]
   const int with = blasts ? 2 : 0;                                       // [plants] (reactingPipelines_: the blasts' pair)
   const int side = static_cast<int>(area_[3]);
-  const float reach = 0.5f * area_[2] * area_[3];
   GrassConstants k{};
   std::copy(area_, area_ + 4, k.area);
   k.blades[0] = bladeHeight;
   k.blades[1] = bladeWidth;
-  k.blades[2] = reach * 1.4f;
   k.blades[3] = heightUnit;
   k.mapInfo[0] = mapWidth;
   k.mapInfo[1] = mapHeight;

@@ -545,8 +545,13 @@ void Ocean::Spectrum() {
   const double w0 = std::sqrt(kGravity * 2 * kPi / kCascadeLength[0]);
   const double w1 = std::sqrt(kGravity * 2 * kPi * 128 * 1.2 / kCascadeLength[kCascades - 1]);
   const double seaVar = (hs_ / 4.0) * (hs_ / 4.0), swellVar = (SwellHeight(r) * heightScale / 4.0) * (SwellHeight(r) * heightScale / 4.0);
-  const double seaAlpha = seaVar / std::max(Integral([wp](double w) { return Jonswap(w, wp); }, w0, w1), 1e-12);
-  const double swellAlpha = swellVar / std::max(Integral([ws](double w) { return SwellShape(w, ws); }, w0, w1), 1e-12);
+  if (wp != seaSumFor_) {
+    seaSum_ = Integral([wp](double w) { return Jonswap(w, wp); }, w0, w1);
+    seaSumFor_ = wp;
+  }
+  if (swellSum_ < 0) swellSum_ = Integral([ws](double w) { return SwellShape(w, ws); }, w0, w1);  // (the same in every sea)
+  const double seaAlpha = seaVar / std::max(seaSum_, 1e-12);
+  const double swellAlpha = swellVar / std::max(swellSum_, 1e-12);
   seaAlpha_ = seaAlpha;
   swellAlpha_ = swellAlpha;
   const float turn = kSwellTurn, c = std::cos(turn), s = std::sin(turn);
@@ -661,8 +666,13 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const double wCut = std::sqrt(kGravity * std::min(kCut, 2 * kPi * 128 / static_cast<double>(kCascadeLength[kCascades - 1])));
   const double w0 = std::sqrt(kGravity * 2 * kPi / kCascadeLength[0]);
   const double wp = wp_, ws = std::sqrt(kGravity * 2 * kPi / kSwellLength);
-  const double mss = Integral([&](double w) { const double k = w * w / kGravity; return k * k * (seaAlpha_ * Jonswap(w, wp) + swellAlpha_ * SwellShape(w, ws)); }, w0,
-                              std::max(wCut, w0 * 1.01));
+  const double slopesFor[4] = {seaAlpha_, swellAlpha_, wp, std::max(wCut, w0 * 1.01)};
+  if (!std::equal(slopesFor, slopesFor + 4, slopesFor_)) {
+    slopes_ = Integral([&](double w) { const double k = w * w / kGravity; return k * k * (seaAlpha_ * Jonswap(w, wp) + swellAlpha_ * SwellShape(w, ws)); }, w0,
+                       slopesFor[3]);
+    std::copy(slopesFor, slopesFor + 4, slopesFor_);
+  }
+  const double mss = slopes_;
   // ([stormfoam] a storm's: more crests break, 0.45 deviations nearer the mean, and lay their foam faster)
   foamThreshold_ = static_cast<float>(1 - Choppiness(r) * std::sqrt(mss) * std::max(FoamDeviations(r) - 0.45f * storm, 0.5f));
   const float foamMake[4] = {foamThreshold_, 4.0f * (1 + storm), level_, heightUnit};

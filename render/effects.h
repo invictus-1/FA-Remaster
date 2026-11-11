@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
@@ -47,6 +48,24 @@ class Effects {
 
   // Events in the order the simulation made them.
   void Queue(std::vector<FrameEffectEvent>&& events);
+  // [heldworld] The same while the world is not shown (WorldPicture::SetWorldShown off: the interface's jump back in a
+  // replay holds its last picture while the game played again runs ahead behind it, and the game's ren_Oblivion blacks the
+  // world out under a cinematic). No frame is prepared then, so nothing can take effect; but the simulation says each thing
+  // once, and what lasts must not be lost with what is of the moment (review of 2026-11-09, effects 3: after a jump back
+  // every structure built on the way stood without its pad, units without their running emitters and their beams, and an
+  // effect ended during a hold stayed for good). Kept, in the order they came, and queued before anything else the moment
+  // the world is shown again (the next Queue or Update):
+  //   a Create of what hangs on something, lies for good or for a time, or is still playing: emitters on an entity or at a
+  //     place, trails, beams, marks on the ground (a mark for a time until that has run out, an emitter with an end until
+  //     it would have nothing left to show: an explosion under way when the world is shown again is there, one long over
+  //     is not);
+  //   the last Call of each kind on such a one, or on an effect alive from before;
+  //   a Destroy of an effect alive from before. One made and destroyed within the hold goes with all that was said of it.
+  // Let go of, as before: flashes of light and the prints under feet and treads (a print is laid where its bone is at the
+  // moment, which no later frame has). `tick`: the moment the picture is asked for, the game's clock in beats, where the
+  // host gives one (a host that holds the picture may ask for moment 0: then all but the newest two beats' events count as
+  // past). Events of beats not yet reached are kept untouched, and queued after the others when the world is shown.
+  void QueueHeld(std::vector<FrameEffectEvent>&& events, double tick);
   // Lets every event up to `tick` take effect, moves what hangs on something to where that is in
   // `frame`, and lists this frame's beams. Call before Particles::Update and Ribbons::Update, whose
   // clock must be tick / 10 seconds.
@@ -83,6 +102,12 @@ class Effects {
   // [scars] Whether an entity is a prop (a tree, a rock, a wreck: the world's scenery, standing or about to go): a flash
   // made on one is no explosion (Explosion). None: not known.
   std::function<bool(uint32_t)> isProp;
+  // [fogbeam] Does the army the picture is for see that place now (the world's sight; true where there is no fog of war)?
+  // Asked each frame for a beam or a trail that hangs on a thing in none of the frame's lists (Update), which no list can
+  // answer for. None: such a one stays as it was made (by the place's answer then, the event's `seen`), as an emitter on
+  // such a thing always does.
+  std::function<bool(Vec3)> seenAt;
+  int unlistedHidden = 0;  // [fogbeam] (this frame: effects on a thing in no list not shown because the army does not see the place)
   // [whitecaps] Where a unit is drawn, when the picture moves it from the game's place (a ship riding the lifted waves:
   // ocean.h, World::RideWaves): given the unit (its blueprint's name, the frame's unit, its model) and the game's place and
   // turn, those it is drawn at (true), so that what hangs on its bones (its bow spray, its wake's emitters) follows the hull
@@ -142,6 +167,7 @@ class Effects {
     std::string faction;       // beams and trails: whose blueprint they play (FactionOf)
     bool buildBeam = false;    // (buildfx) a build beam (BuildEffects::IsBuildBeam)
     bool unlistedUnseen = false;  // [fogbeam] made on an entity in no list where the army did not see (hidden while so)
+    bool unlisted = false;        // [fogbeam] made on an entity in no list, and it has been in none since (Update asks seenAt)
     bool original = false;     // (buildfx) made in the original effects' look whatever the world's (the stand's right side)
     float beamLength = -1e30f, beamThickness = -1e30f;  // (unitsfx) what SetBeamParam set (below -1e29: not set; exhausts.h)
     // [devicelost] (Keep) the event that made it and the calls that changed it since, the last of each kind (the events
@@ -186,6 +212,17 @@ class Effects {
   Lights* lights_;
   ModelCache* models_;
   std::deque<FrameEffectEvent> pending_;
+  // [heldworld] (QueueHeld) what is kept while the world is not shown, by the order it came; and each effect's events
+  // among them, by the effect's number (the Create that made it, where it was made in the hold, and the calls on it)
+  std::map<uint64_t, FrameEffectEvent> held_;
+  std::unordered_map<uint32_t, std::vector<uint64_t>> heldOf_;
+  std::deque<FrameEffectEvent> heldLater_;  // (those of beats the hold has not reached yet, as they came)
+  uint64_t heldNext_ = 0;
+  size_t heldSwept_ = 0;  // (how many were kept after the last sweep)
+  double heldNow_ = 0;    // (the moment the hold has reached, in beats)
+  void Hold(FrameEffectEvent&& event);  // (one event whose beat has come)
+  void SweepHeld();       // (those that have run out let go of)
+  void ReleaseHeld();     // (the world is shown again: all of them into pending_)
   std::unordered_map<uint32_t, Effect> effects_;
   // the decals a script laid for good, by the effect's number: taken away when it destroys them
   std::unordered_map<uint32_t, uint32_t> decalOf_;

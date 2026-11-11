@@ -666,6 +666,10 @@ class Ocean {
   float foamArea_[4] = {0, 0, 0, 0};
   float sim_[16] = {};  // (the compute passes' spectrum numbers: Spectrum)
   double seaAlpha_ = 0, swellAlpha_ = 0, wp_ = 1;
+  // (the spectrum's three sums, 800 steps each, kept with the numbers they were worked out from: those stand still but
+  // while the sea grows or calms and when the foam's cells change size; -1: not worked out yet)
+  double seaSum_ = 0, seaSumFor_ = -1, swellSum_ = -1;
+  double slopes_ = 0, slopesFor_[4] = {-1, -1, -1, -1};
   float foamThreshold_ = 0.5f;
   Constants constants_ = {};
   // [lift] the grid
