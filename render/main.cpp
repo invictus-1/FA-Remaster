@@ -690,7 +690,17 @@
 //           end, hills, mountains, islands, farLand, snowline, softness, reach)
 // --surround  (surround) with the world beyond the map's edge, on a map that brings a sculpted surround (x_surround.json
 //           beside its x.scmap): that land drawn past the map's edges, not the map laid out again mirrored
-//           (World::mapSurround, surround.h; modern look)
+//           (World::mapSurround, surround.h; modern look). Where the surround brings its ground's masks, its forest and
+//           its scenery (the detail look), its ground is drawn in the map's own ground layers and its scenery stands on it;
+//           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
+//           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
+//           map's edge (World::surroundScenery); --surround-scenery-pixels <n>: how many times the smallest size on
+//           screen of the map's own props a piece of that scenery must have to be drawn (World::surroundSceneryPixels);
+//           --surround-scenery-lod <n>: its levels of detail chosen as if it stood n times as far (World::surroundSceneryLod);
+//           --surround-scenery-reach <from>,<to>: from how far from the eye it is thinned to how far none of it is drawn
+//           (World::surroundSceneryFrom; 0,0: all of it at any distance);
+//           --surround-forest-floor <layer>: the layer of the map's ground laid under its forest, for a surround whose
+//           json names none (World::surroundForestFloor)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -1122,6 +1132,12 @@ struct Options {
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   bool surround = false;  // --surround
+  bool surroundBlockOut = false;        // --surround-blockout (the detail look)
+  bool surroundScenery = true;          // --no-surround-scenery
+  float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
+  float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
+  float surroundSceneryReach[2] = {-1, -1};  // --surround-scenery-reach (-1: World's own)
+  int surroundForestFloor = -1;         // --surround-forest-floor
   bool beyondLand = false;              // --beyond-land (beyondland)
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
@@ -1407,6 +1423,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fog-even") o->fogEven = true;  // [mistpatch]
     else if (a == "--beyond-land") o->beyondLand = true;
     else if (a == "--surround") o->surround = true;  // (beyondland)
+    else if (a == "--surround-blockout") o->surroundBlockOut = true;  // (surround: the detail look's switches)
+    else if (a == "--no-surround-scenery") o->surroundScenery = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -1843,6 +1861,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     }
     else if (a == "--soften") o->soften = static_cast<float>(atof(v));
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
+    else if (a == "--surround-scenery-pixels") o->surroundSceneryPixels = static_cast<float>(atof(v));  // (surround)
+    else if (a == "--surround-forest-floor") o->surroundForestFloor = atoi(v);                           // (surround)
+    else if (a == "--surround-scenery-lod") o->surroundSceneryLod = static_cast<float>(atof(v));         // (surround)
+    else if (a == "--surround-scenery-reach") {  // (surround) <from>,<to>
+      if (sscanf(v, "%f,%f", &o->surroundSceneryReach[0], &o->surroundSceneryReach[1]) != 2) return false;
+    }
     else if (a == "--snow-depth") o->plantsSnowDepth = static_cast<float>(atof(v));  // [undersnow]
     else if (a == "--built") o->built = static_cast<float>(atof(v));
     else if (a == "--warp-in") o->warpIn = static_cast<float>(atof(v));  // [warpin]
@@ -2606,6 +2630,15 @@ int main(int argc, char** argv) {
   world.beyondHaze = opt.beyondHaze;
   world.beyondLand = opt.beyondLand;
   world.mapSurround = opt.surround;  // (beyondland)
+  world.surroundBlockOut = opt.surroundBlockOut;  // (surround: the detail look's switches)
+  world.surroundScenery = opt.surroundScenery;
+  if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
+  world.surroundForestFloor = opt.surroundForestFloor;
+  if (opt.surroundSceneryLod > 0) world.surroundSceneryLod = opt.surroundSceneryLod;
+  if (opt.surroundSceneryReach[0] >= 0) {
+    world.surroundSceneryFrom = opt.surroundSceneryReach[0];
+    world.surroundSceneryTo = opt.surroundSceneryReach[1];
+  }
   if (!opt.beyondLandLook.empty()) {
     std::string why;
     if (!world.distantLand.Set(opt.beyondLandLook, &why)) {
@@ -4911,6 +4944,9 @@ int main(int argc, char** argv) {
       printf("render: %d frames in %.2f s (%.2f ms each)", frameCount, seconds, 1000.0 * seconds / timed);
       if (haveMap) printf("; ground: %d patches, %d triangles, %d changes by the game", terrain->drawnPatches, terrain->drawnTriangles, world.groundChanges);
       printf("; models: %d drawn, %d triangles, %d more in shadow maps", meshes.drawnInstances, meshes.drawnTriangles, meshes.shadowTriangles);
+      if (world.surround.On())  // (surround)
+        printf("; surround: %d triangles of ground (%s), %d pieces of its %zu of scenery in the squares in view", world.surround.Triangles(),
+               world.surround.Detailed() ? "in the map's layers" : "block-out", world.surroundPropsListed, world.SurroundProps());
       if (opt.levelBand >= 0) printf("; %d changes of level", meshes.levelChanges);  // (level band)
       if (iconsOn) printf("; %d icons", icons.drawn);
       if (particles.liveParticles || particles.liveEmitters)

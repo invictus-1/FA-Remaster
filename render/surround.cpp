@@ -24,10 +24,36 @@ cbuffer Surround : register(b1) {
   float4 surLevels;   // x the world units of a height's 1; y the water's level; z the highest ground; w from where the ground counts as high
   float4 surLook;     // x the shadows' softness; y 1 = the map's colours were gathered (palette); z over how far outside the
                       // edge the map's own colours go over into these (0: not at all)
+#ifdef SURROUND_DETAIL
+  float4 surPictures; // x the masks' samples per world unit, y 1 / its samples across; z, w the forest's (z 0: none)
+  float4 surKinds;    // which of the map's layers the masks' red, green, blue and alpha are the shares of
+  float4 surMore;     // x the layer of what the four leave of 1; y the layer laid under the forest (-1: none); z how far from
+                      // the eye the layers' normals are read; w 1 = the look with eight strata (the map's second mask counts)
+  float4 surMap;      // x, y 1 / the map's size; z, w the map's size
+  float4 surCanopy;   // rgb the far forest's canopy (as stored); w how much of it is drawn
+  float4 surTrees;    // x, y from how far past the edge to how far the scenery's single trees thin out to none (y 0: none
+                      // stand); z the map's specular (as the ground's roughness counts it)
+  float4 surSight;    // x, y from how far from the eye to how far the scenery's trees are left out (y 0: none are)
+  float4 albedoTile[10];  // as the ground's (terrain.cpp): x a layer's repeats per world unit; y 1 = it has its third map
+  float4 normalTile[9];   // x its normal's repeats per world unit; y 1 = +y is up in its texture
+  float4 upperOf[9];      // the map's upper layer where each layer shows, on the whole (rgb as stored, a its share)
+#endif
 };
 Texture2D<float> surHeights : register(t0);  // its heights, the north row first, with smaller levels
+#ifdef SURROUND_DETAIL
+// (the detail look: the map's layers where the ground's own shader has them, Terrain::BindLayers; t26 and up are the
+// lighting's)
+Texture2D surMasks : register(t1);           // which layer lies where: four layers' shares (surKinds), the rest a fifth's
+Texture2D maskLow : register(t2);            // the map's own masks (read on past its edge, mirrored)
+Texture2D maskHigh : register(t3);
+Texture2D<float> surForest : register(t4);   // 1 closed forest
+Texture2D albedoMaps[10] : register(t6);
+Texture2D normalMaps[9] : register(t16);
+Texture2DArray materialMaps : register(t25);  // per layer: r creases' shading, g roughness, b height
+#else
 Texture2D palette : register(t1);            // 4 x 1: the map's ground low by the water, level, high, steep (as stored)
 Texture2D mapColours : register(t2);         // Terrain::GroundColours: over the map at half its size, as stored
+#endif
 
 struct VOut {
   float4 position : SV_Position;
@@ -64,6 +90,211 @@ VOut VS(float3 position : POSITION) {
   return o;
 }
 
+#ifdef SURROUND_DETAIL
+// A layer's normal map as read (terrain.cpp, LayerNormal): a two-channel one gets z from x and y; `up`: +y toward the top
+// of its texture, turned to the stock layers' way.
+float4 LayerNormal(float4 raw, float up) {
+  float4 n = raw * 2 - 1;
+  if (raw.b < 0.002) n.z = sqrt(saturate(1 - dot(n.xy, n.xy)));
+  if (up > 0.5) n.y = -n.y;
+  return n;
+}
+
+// The detail look: the map's own layers, laid by the surround's masks as the ground's shader lays the map's (terrain.cpp,
+// Ground: the same pictures at the same repeats, so that a layer's picture runs on over the edge), the map's own masks
+// by the edge.
+float4 PS(VOut i) : SV_Target {
+  float2 xz = i.world.xz;
+  // its slope: from the heights about the pixel, as far apart as the pixel is wide (not finer than the samples)
+  float2 across = fwidth(xz);
+  float pixel = max(across.x, across.y);
+  float wide = clamp(pixel, 1 / surGrid.z, 64 / surGrid.z);
+  float level = log2(wide * surGrid.z);
+  float3 base = normalize(float3(SurHeight(xz - float2(wide, 0), level) - SurHeight(xz + float2(wide, 0), level), 2 * wide,
+                                 SurHeight(xz - float2(0, wide), level) - SurHeight(xz + float2(0, wide), level)));
+  float outside = OutsideMap(i.world);
+  // (1 at the map's edge: the map's own ground; how far out it goes over into the surround's is uneven along the edge,
+  // four tenths of the way to all of it, so that the hand-over is no band parallel to the edge)
+  float own = surLook.z > 0 ? 1 - smoothstep(0, surLook.z * (0.4 + 0.6 * CloudNoise(float3(xz * 0.045, 9.1))), outside) : 0;
+  // (the layers read with the place's own steps, as the ground's: a layer is skipped where it is not there at all)
+  float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
+  float away = distance(i.world, cameraPosition);
+  float fine = max(1 - smoothstep(0.6, 1.0, away / surMore.z), own);  // (the layers' normals: near the eye, and at the edge)
+  float2 place = xz - surGrid.xy;
+  float4 m = surMasks.Sample(samplerLinearClamp, (place * surPictures.x + 0.5) * surPictures.y);
+  // (the forest's picture read a little off its place, by a slow noise: a wood's side that is a straight line in the
+  // picture wanders by some eight world units)
+  float forest = 0;
+  if (surPictures.z > 0) {
+    float2 off = (float2(CloudNoise(float3(xz * 0.035, 1.3)), CloudNoise(float3(xz * 0.035, 5.7))) - 0.5) * 16;
+    forest = surForest.Sample(samplerLinearClamp, ((place + off) * surPictures.z + 0.5) * surPictures.w);
+  }
+
+  // each layer's share here: the masks' four and what they leave; under the forest its floor, over the layers below it
+  float share[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  share[(int)surMore.x] = saturate(1 - (m.r + m.g + m.b + m.a));
+  share[(int)surKinds.x] += m.r;
+  share[(int)surKinds.y] += m.g;
+  share[(int)surKinds.z] += m.b;
+  share[(int)surKinds.w] += m.a;
+  int floorLayer = (int)surMore.y;
+  if (floorLayer > 0) {
+    float f = smoothstep(0.2, 0.7, forest) * 0.92, under = 0;
+    for (int k = 0; k < 9; ++k)
+      if (k < floorLayer) {
+        under += share[k];
+        share[k] *= 1 - f;
+      }
+    share[floorLayer] += f * under;
+  }
+  // by the map's edge: the map's own shares there (its masks read on past the edge, mirrored; each stratum laid over
+  // what is under it), going over into the surround's
+  float4 rawLow = 0, rawHigh = 0;
+  [branch] if (own > 0) {
+    float2 uv = MirrorUv(xz * surMap.xy);
+    rawLow = maskLow.SampleGrad(samplerLinearClamp, uv, stepX * surMap.xy, stepY * surMap.xy);
+    rawHigh = maskHigh.SampleGrad(samplerLinearClamp, uv, stepX * surMap.xy, stepY * surMap.xy) * surMore.w;
+    float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
+    float laid[9] = {1, low.x, low.y, low.z, low.w, high.x, high.y, high.z, high.w};
+    float left = 1;
+    for (int k = 8; k >= 0; --k) {
+      float s = laid[k] * left;
+      left -= s;
+      share[k] = lerp(share[k], s, own);
+    }
+  }
+  // the shares as the ground's shader has them: how much of what lies under it each stratum covers (`c`), and the value
+  // its normal is laid by (`raw`: the mask as stored, half and more where the stratum shows at all)
+  float c[9], raw[9];
+  float above = 0, most = 0;
+  for (int j = 8; j >= 1; --j) {
+    c[j] = saturate(share[j] / max(1 - above, 1e-4));
+    above += share[j];
+    raw[j] = c[j] > 0.002 ? 0.5 + 0.5 * c[j] : 0;
+    most = max(most, c[j]);
+  }
+  c[0] = raw[0] = 1;
+  [branch] if (own > 0) {
+    float stored[9] = {1, rawLow.x, rawLow.y, rawLow.z, rawLow.w, rawHigh.x, rawHigh.y, rawHigh.z, rawHigh.w};
+    for (int j = 1; j < 9; ++j) raw[j] = lerp(raw[j], stored[j], own);
+  }
+  bool bare = most < 0.995;  // (the lower layer shows at all: not where a stratum covers everything)
+
+  // a layer with its third map does not fade evenly into what lies under it: its high places come through first, and
+  // it brings its own roughness and crease shading (`matter`: creases, roughness, how much of the pixel is such a layer's)
+  #define MATERIAL(n) materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb
+  float3 matter = 0;
+  [branch] if (bare && albedoTile[0].y > 0.5) {
+    float3 mm = MATERIAL(0);
+    matter = float3(mm.r, mm.g, 1);
+  }
+  #define RICH(n) \
+    [branch] if (albedoTile[n].y > 0.5 && raw[n] > 0.002) { \
+      float3 mm = MATERIAL(n); \
+      c[n] = saturate((mm.b + c[n] * 1.35 - 1) / 0.35); \
+      raw[n] = saturate((mm.b + raw[n] * 1.35 - 1) / 0.35); \
+      matter = lerp(matter, float3(mm.r, mm.g, 1), c[n]); \
+    } else { \
+      matter = lerp(matter, 0, c[n]); \
+    }
+  RICH(1) RICH(2) RICH(3) RICH(4) RICH(5) RICH(6) RICH(7) RICH(8)
+  #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
+  #define OVER(value, read, part) [branch] if ((part) > 0) value = lerp(value, read, part)
+  float4 albedo = 0;
+  [branch] if (bare) albedo = ALBEDO(0);
+  OVER(albedo, ALBEDO(1), c[1]);
+  OVER(albedo, ALBEDO(2), c[2]);
+  OVER(albedo, ALBEDO(3), c[3]);
+  OVER(albedo, ALBEDO(4), c[4]);
+  OVER(albedo, ALBEDO(5), c[5]);
+  OVER(albedo, ALBEDO(6), c[6]);
+  OVER(albedo, ALBEDO(7), c[7]);
+  OVER(albedo, ALBEDO(8), c[8]);
+  // the upper layer: the map's one picture does not reach here; its mean where each of these layers shows on the map,
+  // and by the edge the picture itself (mirrored)
+  float4 upper = upperOf[0];
+  for (int u = 1; u < 9; ++u) upper = lerp(upper, upperOf[u], c[u]);
+  [branch] if (own > 0) {
+    float2 inMap = MirrorUv(xz * surMap.xy) * surMap.zw;
+    upper = lerp(upper, albedoMaps[9].SampleGrad(samplerAniso, inMap * albedoTile[9].x, stepX * albedoTile[9].x, stepY * albedoTile[9].x), own);
+  }
+  albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
+
+  // the layers' normals, near the eye: laid by the masks as stored, then tilted from "straight up" to the ground's slope
+  float3 N = base;
+  [branch] if (fine > 0) {
+    #define NORMAL(n) LayerNormal(normalMaps[n].SampleGrad(samplerAniso, xz * normalTile[n].x, stepX * normalTile[n].x, stepY * normalTile[n].x), normalTile[n].y)
+    float4 n = float4(0, 0, 1, 0);
+    [branch] if (bare) n = NORMAL(0);
+    OVER(n, NORMAL(1), raw[1]);
+    OVER(n, NORMAL(2), raw[2]);
+    OVER(n, NORMAL(3), raw[3]);
+    OVER(n, NORMAL(4), raw[4]);
+    OVER(n, NORMAL(5), raw[5]);
+    OVER(n, NORMAL(6), raw[6]);
+    OVER(n, NORMAL(7), raw[7]);
+    OVER(n, NORMAL(8), raw[8]);
+    n.xyz = normalize(n.xyz);
+    float3 detail = float3(n.x, sqrt(saturate(1 - dot(n.xy, n.xy))), n.y);
+    float3 h = normalize(base + float3(0, 1, 0));
+    float3 axisX = float3(1 - 2 * h.x * h.x, 2 * h.x * h.y, -2 * h.x * h.z);
+    float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
+    N = normalize(lerp(base, float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ)), fine));
+  }
+  // a rough, non-metal surface, as the map's ground; a slope a little darker in its creases (as the block-out's), not
+  // at the edge (the map's ground has none of that)
+  float gloss = lerp(1 - albedo.a, albedo.a, surMore.w);
+  float roughness = 1 - 0.5 * gloss * saturate(surTrees.z * 2);
+  roughness = lerp(roughness, matter.y, matter.z);
+  float creases = lerp(1, matter.x, matter.z) * lerp(0.75 + 0.25 * saturate(base.y), 1, own);
+  float lit = i.lit;
+  // the beach the waves have just wetted, as the map's shores have it (terrain.cpp): darker and shinier in a band over
+  // the water's level, its edge uneven, and on under the water as the bed's soak
+  [branch] if (shore.x > 0.5) {
+    float uneven = (CloudNoise(float3(xz * 0.7, 2.5)) - 0.5) * shore.z * 0.8;
+    float over = i.world.y - shore.y;
+    float wet = saturate(1 - (over + uneven) / shore.z) * saturate(over * 20 + 1);
+    float wetGloss = wet;
+    if (shore.x > 1.5) {
+      wet = saturate(1 - (over + uneven) / shore.z) * (1 - smoothstep(0, 0.8, -over));
+      wetGloss = wet * saturate(over * 20 + 1);
+    }
+    albedo.rgb *= lerp(1, 0.6, wet);
+    roughness = lerp(roughness, 0.22, wetGloss * 0.85);
+  }
+  // the forest: where the scenery's single trees stand, their shade on the ground under them; where none stand, the
+  // forest as one canopy, a dark green cover with the crowns' grain (some five world units a crown, each crown's sunny
+  // side lighter, larger patches lighter and darker), the grain let go of as a crown gets smaller than a pixel
+  [branch] if (forest > 0.004) {
+    // (the single trees: thinning out with the way from the map's edge, and left out far from the eye)
+    float single = surTrees.y > 0 ? 1 - smoothstep(surTrees.x, surTrees.y, outside) : 0;
+    if (surSight.y > 0) single *= 1 - smoothstep(surSight.x, surSight.y, away);
+    float keep = saturate(1.7 - pixel * 0.5);
+    float2 p = xz * 0.21;
+    float crown = CloudNoise(float3(p, 3.3));
+    float sunny = saturate(0.5 + (crown - CloudNoise(float3(p + sunDirection.xz * 0.35, 3.3))) * 2.4);
+    float patches = CloudNoise(float3(xz * 0.043, 7.9));
+    crown = lerp(0.5, crown, keep);
+    sunny = lerp(0.5, sunny, keep);
+    float cover = smoothstep(0.15, 0.75, forest + (crown - 0.5) * 0.5 * keep) * surCanopy.w;
+    float canopy = cover * (1 - single * single);
+    // (the crowns: the noise's high places, with the forest's floor showing between them as it does between the map's own
+    // trees from above; half and half once a crown is smaller than a pixel)
+    float crowns = canopy * lerp(0.5, smoothstep(0.36, 0.62, crown), keep);
+    float3 leaf = surCanopy.rgb * (1 + 0.5 * (patches - 0.5));
+    albedo.rgb = lerp(albedo.rgb, leaf, crowns * 0.9);
+    roughness = lerp(roughness, 0.9, crowns);
+    creases = lerp(creases, 0.8, crowns);
+    N = normalize(lerp(N, base, crowns));
+    lit *= lerp(1, 0.5 + 0.8 * sunny, crowns);
+    // (between the crowns, and under the scenery's single trees: their shade on the floor, in patches)
+    lit *= 1 - 0.42 * cover * (1 - crowns) * (0.6 + 0.8 * crown);
+    creases *= 1 - 0.15 * cover * (1 - crowns);
+  }
+  float3 color = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, 0, N, i.world, lit);
+  return float4(BeyondMap(color, i.world), 1);
+}
+#else
 float4 PS(VOut i) : SV_Target {
   // its slope: from the heights about the pixel, as far apart as the pixel is wide (not finer than the samples)
   float2 across = fwidth(i.world.xz);
@@ -92,11 +323,38 @@ float4 PS(VOut i) : SV_Target {
   float3 lit = ModernLight(ToLinear(c), 0, 0.92, 0.75 + 0.25 * saturate(N.y), 0, N, i.world, i.lit);
   return float4(BeyondMap(lit, i.world), 1);
 }
+#endif
 )hlsl";
 
 struct SurroundConstants {
   float grid[4], levels[4], look[4];
+  // (the detail look's, after the block-out's)
+  float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4];
+  float albedoTile[10][4], normalTile[9][4], upperOf[9][4];
 };
+
+// A square picture's smaller levels after it (`all`: the picture itself, `channels` bytes a pixel), each the mean of
+// four of the one before; how many levels it has then.
+int WithLevels(std::vector<uint8_t>* all, int size, int channels) {
+  std::vector<uint8_t> last(*all);
+  int levels = 1;
+  while (size > 24 && levels < 8) {
+    const int half = size / 2;
+    std::vector<uint8_t> next(static_cast<size_t>(half) * static_cast<size_t>(half) * static_cast<size_t>(channels));
+    for (int j = 0; j < half; ++j)
+      for (int i = 0; i < half; ++i) {
+        const uint8_t* r0 = last.data() + (static_cast<size_t>(2 * j) * static_cast<size_t>(size) + static_cast<size_t>(2 * i)) * static_cast<size_t>(channels);
+        const uint8_t* r1 = r0 + static_cast<size_t>(size) * static_cast<size_t>(channels);
+        uint8_t* to = next.data() + (static_cast<size_t>(j) * static_cast<size_t>(half) + static_cast<size_t>(i)) * static_cast<size_t>(channels);
+        for (int k = 0; k < channels; ++k) to[k] = static_cast<uint8_t>((static_cast<uint32_t>(r0[k]) + r0[channels + k] + r1[k] + r1[channels + k] + 2) / 4);
+      }
+    all->insert(all->end(), next.begin(), next.end());
+    last.swap(next);
+    size = half;
+    ++levels;
+  }
+  return levels;
+}
 
 // The points along one axis of a part: from `a` to `b` (samples), `stride` apart, the last at `b`.
 std::vector<int> Stops(int a, int b, int stride) {
@@ -129,6 +387,18 @@ void Surround::Forget() {
     if (texture_) device_->Destroy(texture_);
   }
   vertices_ = indices_ = {};
+  if (device_) {  // (the detail look's)
+    if (masksTexture_) device_->Destroy(masksTexture_);
+    if (forestTexture_) device_->Destroy(forestTexture_);
+  }
+  masksTexture_ = forestTexture_ = {};
+  masks_.clear();
+  forest_.clear();
+  masksSamples_ = forestSamples_ = 0;
+  floorGiven_ = -1;
+  decor_.clear();
+  LetGoAsCame();
+  upperAsked_ = detailNow_ = false;
   texture_ = palette_ = ground_ = {};
   heights_.clear();
   for (std::vector<float>& e : edges_) e.clear();
@@ -197,6 +467,7 @@ bool Surround::Open(const MapData& map, const std::string& json, const ReadFn& r
   for (int i = mx0; i <= mx1; ++i) compare(i, mz0), compare(i, mz1);
   for (int j = mz0 + 1; j < mz1; ++j) compare(mx0, j), compare(mx1, j);
 
+  if (!root["decor"].StringOr("").empty()) asCame_ = raw;  // (the detail look: the scenery's footing, JoinMoved)
   // joined to the map: the map's own heights inside its square, and over the first `seam` world units outside the edge
   // from the map's edge height over into its own
   float highest = 0, mapHighest = 0;
@@ -243,6 +514,57 @@ bool Surround::Open(const MapData& map, const std::string& json, const ReadFn& r
   const JsonValue& level = root["water"]["level"];
   sea_ = level.kind == JsonValue::Number ? static_cast<float>(level.number) : map.water.present ? map.water.elevation : -1e9f;
   mapSea_ = map.water.present ? map.water.elevation : sea_;
+  {  // the detail look's files, where the json names them: a file that cannot be used is said and left out (its ground
+     // then the block-out, its forest none), the surround itself stays
+    const JsonValue& masks = root["masks"];
+    if (const std::string file = masks["file"].StringOr(""); !file.empty()) {
+      static const char* const kNames[5] = {"r", "g", "b", "a", "rest"};
+      int kinds[5];
+      bool ok = true;
+      for (int k = 0; k < 5; ++k) {
+        kinds[k] = static_cast<int>(masks[kNames[k]].NumberOr(-1));
+        ok = ok && kinds[k] >= 0 && kinds[k] <= 8;
+      }
+      std::string bad;
+      int w = 0, h = 0;
+      std::vector<uint8_t> pixels;
+      const std::optional<std::string> bytes = ok ? read(file) : std::nullopt;
+      if (!ok) bad = "its r, g, b, a and rest must each name one of the map's layers 0 to 8";
+      else if (!bytes) bad = "no such file";
+      else if (ReadPng8(*bytes, 4, &w, &h, &pixels, &bad) && (w != h || w < 2)) bad = "not square";
+      if (bad.empty()) {
+        masks_ = std::move(pixels);
+        masksSamples_ = w;
+        std::copy(kinds, kinds + 5, kinds_);
+      } else {
+        fprintf(stderr, "render: the surround's masks %s: %s (its ground is drawn as the block-out)\n", file.c_str(), bad.c_str());
+      }
+    }
+    if (const std::string file = root["forest"].StringOr(""); !file.empty()) {
+      std::string bad;
+      int w = 0, h = 0;
+      std::vector<uint8_t> pixels;
+      const std::optional<std::string> bytes = read(file);
+      if (!bytes) bad = "no such file";
+      else if (ReadPng8(*bytes, 1, &w, &h, &pixels, &bad) && (w != h || w < 2)) bad = "not square";
+      if (bad.empty()) {
+        forest_ = std::move(pixels);
+        forestSamples_ = w;
+      } else {
+        fprintf(stderr, "render: the surround's forest %s: %s (no forest is drawn)\n", file.c_str(), bad.c_str());
+      }
+    }
+    // (the layer under the forest: beside the forest's name, or among the masks' numbers)
+    const int floor = static_cast<int>(root["forest_floor"].NumberOr(masks["forest_floor"].NumberOr(-1)));
+    floorGiven_ = floor >= 1 && floor <= 8 ? floor : -1;
+    canopyColour_[0] = 0.165f, canopyColour_[1] = 0.155f, canopyColour_[2] = 0.095f;
+    if (const JsonValue& colour = root["forest_colour"]; colour.items.size() == 3)
+      for (int k = 0; k < 3; ++k) canopyColour_[k] = std::clamp(static_cast<float>(colour.items[static_cast<size_t>(k)].NumberOr(0.08)), 0.0f, 1.0f);
+    decor_ = root["decor"].StringOr("");
+    if (!masks_.empty())
+      printf("render: the map's surround: its ground's masks %d x %d (the map's layers %d, %d, %d, %d, the rest %d)%s%s\n", masksSamples_, masksSamples_,
+             kinds_[0], kinds_[1], kinds_[2], kinds_[3], kinds_[4], forest_.empty() ? "" : ", its forest", decor_.empty() ? "" : ", its scenery");
+  }
   printf("render: the map's surround: %d x %d heights %.4g world units apart, %.0f past the map's edges; along the edge %d of %d are more "
          "than 1 from the map's own (the most %.2f), joined over %.0f world units (read in %.0f ms)\n",
          samples, samples, step, reach_, off, along, apart, join,
@@ -261,6 +583,20 @@ float Surround::HeightAt(float x, float z) const {
   const float a = static_cast<float>(r0[0]) + (static_cast<float>(r0[1]) - static_cast<float>(r0[0])) * tx;
   const float b = static_cast<float>(r1[0]) + (static_cast<float>(r1[1]) - static_cast<float>(r1[0])) * tx;
   return (a + (b - a) * tz) * unit_;
+}
+
+float Surround::JoinMoved(float x, float z) const {
+  if (asCame_.size() != heights_.size() || heights_.empty()) return 0;
+  const float fx = std::clamp((x - origin_[0]) / step_, 0.0f, static_cast<float>(samples_ - 1));
+  const float fz = std::clamp((z - origin_[1]) / step_, 0.0f, static_cast<float>(samples_ - 1));
+  const int i = std::min(static_cast<int>(fx), samples_ - 2), j = std::min(static_cast<int>(fz), samples_ - 2);
+  const float tx = fx - static_cast<float>(i), tz = fz - static_cast<float>(j);
+  auto moved = [&](int a, int b) {
+    const size_t at = static_cast<size_t>(b) * static_cast<size_t>(samples_) + static_cast<size_t>(a);
+    return (static_cast<float>(heights_[at]) - static_cast<float>(asCame_[at])) * unit_;
+  };
+  const float a = moved(i, j) + (moved(i + 1, j) - moved(i, j)) * tx, b = moved(i, j + 1) + (moved(i + 1, j + 1) - moved(i, j + 1)) * tx;
+  return a + (b - a) * tz;
 }
 
 void Surround::Prepare(gfx::Device* device, bool on, Terrain& terrain, BeyondLand& colours) {
@@ -290,8 +626,39 @@ void Surround::Prepare(gfx::Device* device, bool on, Terrain& terrain, BeyondLan
     Make();
     made_ = true;
   }
-  palette_ = colours.Palette(device, terrain);
-  ground_ = terrain.GroundColours();
+  // (the detail look) with the map's ground's masks, unless the block-out is asked for: its pipeline made the first time
+  // (where it cannot be, the block-out is drawn), the map's upper layer by its layers asked once
+  terrain_ = &terrain;
+  detailNow_ = false;
+  if (!masks_.empty() && !blockOut && masksTexture_) {
+    if (!detailTried_) {
+      detailTried_ = true;
+      const std::string source = std::string("#define SURROUND_DETAIL 1\n") + kViewShaderBlock + kLightingShaderBlock + kShader;
+      gfx::PipelineDesc pd;
+      pd.name = "the map's surround, in the map's layers";
+      pd.vertexSource = pd.pixelSource = source;
+      pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+      pd.stride = sizeof(float) * 3;
+      pd.cull = gfx::Cull::None;
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      std::string error;
+      detail_ = device_->CreatePipeline(pd, &error);
+      if (!detail_) fprintf(stderr, "render: the map's surround cannot be drawn in the map's layers (the block-out is drawn): %s\n", error.c_str());
+    }
+    if (detail_ && !upperAsked_) {
+      upperAsked_ = true;
+      const auto started = std::chrono::steady_clock::now();
+      const bool have = terrain.UpperByLayer(upperOf_);
+      printf("render: the map's surround: the map's upper layer by its layers %s (%.0f ms)\n", have ? "read" : "not there",
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+    }
+    detailNow_ = static_cast<bool>(detail_);
+  }
+  if (!detailNow_) {
+    palette_ = colours.Palette(device, terrain);
+    ground_ = terrain.GroundColours();
+  }
   now_ = !parts_.empty() && vertices_ && indices_ && texture_;
 }
 
@@ -328,6 +695,27 @@ void Surround::Make() {
     td.dataSize = all.size() * sizeof(uint16_t);
     texture_ = device_->CreateTexture(td);
     mips_ = levels;
+  }
+  // (the detail look) the masks and the forest as textures, with smaller levels
+  if (!masks_.empty()) {
+    std::vector<uint8_t> all(masks_);
+    gfx::TextureDesc td;
+    td.width = td.height = masksSamples_;
+    td.mips = WithLevels(&all, masksSamples_, 4);
+    td.format = gfx::Format::RGBA8;
+    td.data = all.data();
+    td.dataSize = all.size();
+    masksTexture_ = device_->CreateTexture(td);
+  }
+  if (!forest_.empty()) {
+    std::vector<uint8_t> all(forest_);
+    gfx::TextureDesc td;
+    td.width = td.height = forestSamples_;
+    td.mips = WithLevels(&all, forestSamples_, 1);
+    td.format = gfx::Format::R8;
+    td.data = all.data();
+    td.dataSize = all.size();
+    forestTexture_ = device_->CreateTexture(td);
   }
 
   const float W = mapSize_[0], H = mapSize_[1];
@@ -457,12 +845,53 @@ void Surround::Draw(const View& view) {
   c.look[0] = std::max(softness, 1e-3f);
   c.look[1] = palette_ ? 1.0f : 0.0f;
   c.look[2] = ground_ ? std::max(ownColours, 0.0f) : 0.0f;
-  device_->SetPipeline(pipeline_);
-  device_->SetConstants(0, &view.constants, sizeof view.constants);
-  device_->SetConstants(1, &c, sizeof c);
-  device_->SetTexture(0, texture_);
-  device_->SetTexture(1, palette_ ? palette_ : texture_);
-  device_->SetTexture(2, ground_ ? ground_ : texture_);
+  // (the detail look) the map's layers bound where the ground's shader has them, and what it says of each; else the
+  // block-out, as before
+  Terrain::LayerTiles tiles;
+  bool detailed = detailNow_ && terrain_;
+  if (detailed) {
+    device_->SetPipeline(detail_);
+    detailed = terrain_->BindLayers(&tiles);
+  }
+  if (detailed) {
+    const float side = static_cast<float>(samples_ - 1) * step_;  // (the square all its pictures lie over)
+    c.look[2] = std::max(ownColours, 0.0f);
+    c.pictures[0] = static_cast<float>(masksSamples_ - 1) / side;
+    c.pictures[1] = 1 / static_cast<float>(masksSamples_);
+    c.pictures[2] = forestTexture_ ? static_cast<float>(forestSamples_ - 1) / side : 0.0f;
+    c.pictures[3] = forestTexture_ ? 1 / static_cast<float>(forestSamples_) : 0.0f;
+    for (int k = 0; k < 4; ++k) c.kinds[k] = static_cast<float>(kinds_[k]);
+    c.more[0] = static_cast<float>(kinds_[4]);
+    c.more[1] = static_cast<float>(forestTexture_ ? (floorGiven_ >= 0 ? floorGiven_ : forestFloor >= 1 && forestFloor <= 8 ? forestFloor : -1) : -1);
+    c.more[2] = std::max(fineReach, 1.0f);
+    c.more[3] = tiles.xp;
+    c.map[0] = 1 / mapSize_[0];
+    c.map[1] = 1 / mapSize_[1];
+    c.map[2] = mapSize_[0];
+    c.map[3] = mapSize_[1];
+    std::copy(canopyColour_, canopyColour_ + 3, c.canopy);
+    c.canopy[3] = std::clamp(canopy, 0.0f, 1.0f);
+    c.trees[0] = treesFrom;
+    c.trees[1] = treesTo > treesFrom ? treesTo : 0.0f;
+    c.trees[2] = tiles.specular;
+    c.sight[0] = sightFrom;
+    c.sight[1] = c.trees[1] > 0 && sightTo > sightFrom ? sightTo : 0.0f;
+    std::memcpy(c.albedoTile, tiles.albedoTile, sizeof c.albedoTile);
+    std::memcpy(c.normalTile, tiles.normalTile, sizeof c.normalTile);
+    std::memcpy(c.upperOf, upperOf_, sizeof c.upperOf);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, &c, sizeof c);
+    device_->SetTexture(0, texture_);
+    device_->SetTexture(1, masksTexture_);
+    device_->SetTexture(4, forestTexture_ ? forestTexture_ : texture_);
+  } else {
+    device_->SetPipeline(pipeline_);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    device_->SetConstants(1, &c, 12 * sizeof(float));
+    device_->SetTexture(0, texture_);
+    device_->SetTexture(1, palette_ ? palette_ : texture_);
+    device_->SetTexture(2, ground_ ? ground_ : texture_);
+  }
   device_->SetVertexBuffer(vertices_);
   device_->SetIndexBuffer(indices_);
   // the parts in view, those that follow one another in the list in one draw

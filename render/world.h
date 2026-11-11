@@ -438,6 +438,35 @@ class World {
   // x.scmap; surround.h): that land is drawn past the map's edges, not the map laid out again mirrored. Read the first
   // time it is wanted. Modern look; off by default (the first surround is a block-out).
   bool mapSurround = false;
+  // (surround) The detail look (surround.h; the visuals session's detail pass of 2026-11-10), where the map's surround
+  // brings its ground's masks, its forest and its scenery; all of it only with mapSurround:
+  //   surroundBlockOut: its ground as the first look had it (the map's colours by height and slope), although it brings
+  //     masks (viewer --surround-blockout);
+  //   surroundScenery: the scenery its json names (its "decor": plants, saplings, rocks and tree groups in the map's own
+  //     decor format, scmap.h LoadDecor) stands on it, drawn by the models and shaders the map's own props are drawn by
+  //     (each by the season's blueprint, with their levels of detail, the wind, the snow and the light as the map's).
+  //     A picture only, and kept apart from the map's props: nothing of the game finds them (no fire, no felling, no
+  //     clearing under structures, no scars), they are in no shadow map and not in the ray tracing scene
+  //     (MeshRenderer::ListGroupApart). Read the first time it is wanted. False (viewer --no-surround-scenery): bare ground,
+  //     its forest drawn as one canopy up to the map's edge;
+  //   surroundSceneryPixels: how many times the smallest size on screen of the map's own props (MeshRenderer::minPixels)
+  //     a piece of that scenery must have to be drawn at all: it stands where no one plays, past ground that dims with
+  //     the distance (viewer --surround-scenery-pixels);
+  //   surroundForestFloor: the layer of the map's ground laid under the surround's forest where its json does not name
+  //     one ("forest_floor"); -1: none (viewer --surround-forest-floor).
+  //   surroundSceneryFrom, surroundSceneryTo: from how far from the eye that scenery is thinned (a third of each square's
+  //     pieces left out, then two thirds half-way) to how far none of it is drawn (a square by its nearest point): from
+  //     the game's farthest zoom the surround's forest is the ground's canopy alone, and the ground goes over to the
+  //     canopy where the trees are left out (viewer --surround-scenery-reach <from>,<to>).
+  bool surroundBlockOut = false;
+  bool surroundScenery = true;
+  float surroundSceneryPixels = 2.0f;
+  // (and its levels of detail chosen as if it stood this many times as far: viewer --surround-scenery-lod)
+  float surroundSceneryLod = 1.5f;
+  float surroundSceneryFrom = 500, surroundSceneryTo = 1100;
+  int surroundForestFloor = -1;
+  int surroundPropsListed = 0;  // (of the frame last begun: pieces of the surround's scenery in the squares in view)
+  size_t SurroundProps() const { return surroundProps_.size(); }
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
   float depositIconFrom = 1.0f;
   int lampShadowsDrawn = 0;
@@ -1525,6 +1554,24 @@ class World {
   BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
   Surround surround;       // (surround) the map's own sculpted land past its edges (mapSurround)
   bool surroundTried_ = false;  // (looked for, for the map open)
+  // (surround) its scenery (surroundScenery): each piece's model and place, by squares of kSurroundCell world units (only
+  // those with any; each its box and its group of still scenery with the model renderer, made the first time it is in
+  // view), read the first time it is wanted (ReadSurroundScenery); from how far past the map's edge to how far its trees
+  // thin out to none (for the ground's forest: Surround::treesFrom)
+  struct SurroundCell {
+    Vec3 lo, hi;
+    // (indices into surroundProps_: in three lots, the first drawn out to surroundSceneryTo, the second to half-way,
+    // the third to surroundSceneryFrom; each lot's group with the model renderer)
+    std::vector<uint32_t> props[3];
+    uint32_t group[3] = {0xffffffffu, 0xffffffffu, 0xffffffffu};
+  };
+  static constexpr float kSurroundCell = 64;
+  std::vector<PlacedProp> surroundProps_;
+  std::vector<SurroundCell> surroundCells_;
+  bool surroundSceneryTried_ = false;
+  float surroundTrees_[2] = {0, 0};
+  void ReadSurroundScenery();
+  void ForgetSurroundScenery();
 
   // [seasons] The season the map is drawn in (seasons.h; Chris, 2026-10-18: a player's option): taken in when a map is
   // opened (Open: its ground's materials, its ground cover and its props, where the map's remap.json lists them), so a

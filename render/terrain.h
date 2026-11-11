@@ -260,6 +260,25 @@ class Terrain {
   // asked for once a map is loaded (it dispatches: between passes). Its alpha: how grassy the ground is there (by how
   // green each layer's average is; the ground cover reads it).
   gfx::Texture GroundColours();
+  // (surround) The layers' own pictures for what draws ground as the map's beside it (the map's surround, surround.h):
+  // bound where the ground's own shader has them (t2, t3 the two masks; t6 to t15 the ten albedos; t16 to t24 the nine
+  // normals; t25 the layers' third maps, where the map has them), and what the ground's constants say of each layer
+  // (`albedoTile` x: its repeats a world unit, y: 1 = it has its third map; `normalTile` x: its repeats a world unit, y:
+  // 1 = +y is up in its texture), `xp` 1 for the look with eight strata, the map's specular colour. False before a map
+  // is loaded.
+  struct LayerTiles {
+    float albedoTile[10][4] = {};
+    float normalTile[9][4] = {};
+    float xp = 0, specular = 0;
+  };
+  bool BindLayers(LayerTiles* tiles) const;
+  // (surround) The upper layer (the tenth: one picture over the whole map, laid over all the others by its alpha) where
+  // each of the nine layers under it shows, on the whole: `out[n]` its mean colour (as stored) and its mean alpha over
+  // the map, weighted by how much of layer n shows at each place (the masks' shares, laid as the shader lays them, squared); a
+  // layer that shows nowhere gets the picture's mean. For ground of those layers past the map's edge, where that
+  // picture does not reach. False (and all of `out` 0) where the map has no upper layer, or it or the masks cannot be
+  // read on the processor.
+  bool UpperByLayer(float out[9][4]) const;
   // The ground's heights as the shader reads them (one per grid point), and the world units of their largest value.
   gfx::Texture HeightTexture() const { return heightTexture_; }
   // The visuals track's plants for this map's ground (remap.json: the map's entry names its "cover", the card atlas's

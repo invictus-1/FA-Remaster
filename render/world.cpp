@@ -219,6 +219,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     distantLand.Forget(map, mapPath);  // (beyondland: read from this map as opened; the land far off made when it is wanted)
     surround.Forget();                 // (surround: looked for when it is first wanted)
     surroundTried_ = false;
+    ForgetSurroundScenery();
     step("ground");
     if (!water.Load(&map, &why)) {
       *error = "water: " + why;
@@ -1631,7 +1632,16 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
         }
       }
     }
+    surround.blockOut = surroundBlockOut;        // (the detail look's switches)
+    surround.forestFloor = surroundForestFloor;
     const bool sculpted = mapSurround && surround.Usable();
+    // (its scenery read the first time it is wanted; where its single trees stand, for the ground's forest)
+    if (sculpted && surroundScenery && !surroundSceneryTried_) ReadSurroundScenery();
+    const bool sceneryNow = sculpted && surroundScenery && !surroundCells_.empty();
+    surround.treesFrom = sceneryNow ? surroundTrees_[0] : 0.0f;
+    surround.treesTo = sceneryNow ? surroundTrees_[1] : 0.0f;
+    surround.sightFrom = surroundSceneryFrom;
+    surround.sightTo = surroundSceneryTo;
     // (sky) with the land far off on, farther: BeyondLand::reach; (surround) as far as the map's surround goes
     terrain.beyondReach = sculpted ? surround.Reach()
                                    : (beyondLand ? std::clamp(distantLand.reach, 0.6f, 1.0f) : 0.6f) * static_cast<float>(std::min(map.width, map.height));
@@ -2243,6 +2253,28 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
           }
       }
   }
+  // (surround) the map's sculpted surround has its own scenery (surroundScenery): the squares of it in view, each as a
+  // group listed apart (the scene's passes only; no shadow map, not the card's, not in the ray tracing scene)
+  surroundPropsListed = 0;
+  meshes.apartPixels = surroundSceneryPixels;
+  meshes.apartLod = surroundSceneryLod;
+  if (terrain.beyondReach > 0 && !terrain.beyondCopies && surroundScenery && !sidePicture)
+    for (SurroundCell& cell : surroundCells_) {
+      if (!view.BoxVisible(cell.lo, cell.hi)) continue;
+      // (thinned with the distance from the eye, by its nearest point: its three lots out to the far end, half-way, the near end)
+      const Vec3 nearest{std::clamp(view.eye.x, cell.lo.x, cell.hi.x), std::clamp(view.eye.y, cell.lo.y, cell.hi.y), std::clamp(view.eye.z, cell.lo.z, cell.hi.z)};
+      const float away = Length(nearest - view.eye);
+      const float reach[3] = {surroundSceneryTo, 0.5f * (surroundSceneryFrom + surroundSceneryTo), surroundSceneryFrom};
+      for (int k = 0; k < 3; ++k) {
+        if (cell.props[k].empty() || (surroundSceneryTo > surroundSceneryFrom && away > reach[k])) continue;
+        if (cell.group[k] == 0xffffffffu) {
+          cell.group[k] = meshes.AddGroup();
+          for (uint32_t i : cell.props[k]) meshes.AddToGroup(cell.group[k], surroundProps_[i].model, surroundProps_[i].world);
+        }
+        meshes.ListGroupApart(cell.group[k]);
+        surroundPropsListed += static_cast<int>(cell.props[k].size());
+      }
+    }
   CpuTimes::Part("frame, ghosts, placed, lines");
   meshes.addingScenery = false;
   // (the original's frame round the map, also with a world that goes on beyond it: Chris, 2026-10-14,
@@ -2355,6 +2387,103 @@ void World::ListProp(PlacedProp* prop, uint32_t key, bool made) {
   float scale = 0;
   for (int k = 0; k < 3; ++k) scale = std::max(scale, Length(Vec3{prop->world.m[0][k], prop->world.m[1][k], prop->world.m[2][k]}));
   propReach_ = std::max(propReach_, std::max(Length(m->boundsMin), Length(m->boundsMax)) * scale);
+}
+
+// (surround) The scenery of the map's sculpted surround (World::surroundScenery): the file its json names, in the map's
+// own decor format, read and placed the first time it is wanted. Each piece by the blueprint the season draws it in, as
+// the map's props; on the surround's ground as it is drawn (the file has the heights of the surround as it came: within
+// the strip joined to the map's edge the ground was moved, Surround::JoinMoved); nothing inside the map (a piece the
+// file has there is left out: the map's own props stand there). Listed by squares, each with its box.
+void World::ReadSurroundScenery() {
+  surroundSceneryTried_ = true;
+  const std::string& path = terrain.mapPath;
+  if (surround.Decor().empty() || path.find('/') == std::string::npos) return;
+  const auto started = std::chrono::steady_clock::now();
+  const std::string name = path.substr(0, path.find_last_of('/') + 1) + surround.Decor();
+  std::vector<MapProp> list;
+  std::string why;
+  const auto file = vfs_->ReadFile(name);
+  if (!file || !LoadDecor(*file, &list, &why)) {
+    fprintf(stderr, "render: the surround's scenery %s: %s (none is drawn)\n", name.c_str(), file ? why.c_str() : "no such file");
+    surround.LetGoAsCame();
+    return;
+  }
+  const SeasonLook& seasonal = terrain.SeasonOf();
+  {  // (their models' files read on the worker threads first, all together)
+    std::vector<std::string> kinds;
+    std::unordered_set<std::string> seen;
+    for (const MapProp& p : list)
+      if (seen.insert(p.blueprint).second) kinds.push_back(seasonal.Prop(p.blueprint));
+    models.PrefetchBlueprints(kinds);
+  }
+  const float w = static_cast<float>(map.width), h = static_cast<float>(map.height);
+  std::unordered_map<std::string, const Model*> kindModels;
+  std::unordered_map<uint64_t, uint32_t> cellOf;  // (a square's number among surroundCells_, by its column and row)
+  int inside = 0, unread = 0, trees = 0;
+  float farthestTree = 0;
+  for (const MapProp& p : list) {
+    if (p.position.x >= 0 && p.position.x <= w && p.position.z >= 0 && p.position.z <= h) {
+      ++inside;
+      continue;
+    }
+    auto known = kindModels.find(p.blueprint);
+    const Model* model = known != kindModels.end() ? known->second : kindModels.emplace(p.blueprint, models.Blueprint(seasonal.Prop(p.blueprint))).first->second;
+    if (!model->ok) {
+      ++unread;
+      continue;
+    }
+    const Vec3 s = p.scale * model->scale;
+    const float y = p.position.y + surround.JoinMoved(p.position.x, p.position.z);
+    PlacedProp placed{model, Mat4{{{p.axisX.x * s.x, p.axisY.x * s.y, p.axisZ.x * s.z, p.position.x},
+                                   {p.axisX.y * s.x, p.axisY.y * s.y, p.axisZ.y * s.z, y},
+                                   {p.axisX.z * s.x, p.axisY.z * s.y, p.axisZ.z * s.z, p.position.z},
+                                   {0, 0, 0, 1}}}};
+    const int cx = static_cast<int>(std::floor(p.position.x / kSurroundCell)), cz = static_cast<int>(std::floor(p.position.z / kSurroundCell));
+    const uint64_t key = static_cast<uint64_t>(static_cast<uint32_t>(cx)) << 32 | static_cast<uint32_t>(cz);
+    auto found = cellOf.find(key);
+    if (found == cellOf.end()) {
+      found = cellOf.emplace(key, static_cast<uint32_t>(surroundCells_.size())).first;
+      surroundCells_.push_back({{1e30f, 1e30f, 1e30f}, {-1e30f, -1e30f, -1e30f}, {}, {0xffffffffu, 0xffffffffu, 0xffffffffu}});
+    }
+    SurroundCell& cell = surroundCells_[found->second];
+    Vec3 centre;
+    float radius;
+    Sphere(model, placed.world, &centre, &radius);
+    cell.lo = {std::min(cell.lo.x, centre.x - radius), std::min(cell.lo.y, centre.y - radius), std::min(cell.lo.z, centre.z - radius)};
+    cell.hi = {std::max(cell.hi.x, centre.x + radius), std::max(cell.hi.y, centre.y + radius), std::max(cell.hi.z, centre.z + radius)};
+    // (which lot: by its number, scattered, the same every time)
+    cell.props[(static_cast<uint32_t>(surroundProps_.size()) * 2654435761u >> 13) % 3].push_back(static_cast<uint32_t>(surroundProps_.size()));
+    surroundProps_.push_back(placed);
+    // (a tree, as the map's are told: it sways and stands a world unit high or more)
+    const float tall = (model->boundsMax.y - model->boundsMin.y) * Length(Vec3{placed.world.m[0][1], placed.world.m[1][1], placed.world.m[2][1]});
+    if (!model->lods.empty() && model->lods[0].sway > 0 && tall >= 1.0f) {
+      ++trees;
+      const float dx = std::max({-p.position.x, p.position.x - w, 0.0f}), dz = std::max({-p.position.z, p.position.z - h, 0.0f});
+      farthestTree = std::max(farthestTree, std::sqrt(dx * dx + dz * dz));
+    }
+  }
+  surround.LetGoAsCame();
+  textures.DropFetched();
+  // (where the trees thin out: the visuals session's tool sets them thick over the first 36 hundredths of the way to where
+  // the last stands, 150 of 420 world units, and fewer and fewer from there)
+  surroundTrees_[0] = 0.36f * farthestTree;
+  surroundTrees_[1] = farthestTree;
+  printf("render: the surround's scenery: %zu pieces of %zu kinds in %zu squares from %s, %d of them trees out to %.0f world units past the edge"
+         "%s (read and placed in %.0f ms)\n",
+         surroundProps_.size(), kindModels.size(), surroundCells_.size(), name.c_str(), trees, farthestTree,
+         inside || unread ? (", " + std::to_string(inside) + " inside the map and " + std::to_string(unread) + " whose model cannot be read left out").c_str() : "",
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+}
+
+// (surround) The map before is gone: its surround's scenery with it (their groups emptied; looked for again when wanted).
+void World::ForgetSurroundScenery() {
+  for (SurroundCell& cell : surroundCells_)
+    for (uint32_t group : cell.group)
+      if (group != 0xffffffffu) meshes.ClearGroup(group);
+  surroundCells_.clear();
+  surroundProps_.clear();
+  surroundSceneryTried_ = false;
+  surroundTrees_[0] = surroundTrees_[1] = 0;
 }
 
 void World::UnlistProp(PlacedProp* prop, uint32_t key, bool made) {

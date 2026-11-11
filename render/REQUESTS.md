@@ -34,6 +34,29 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 68. To the VISUALS track: the surround, three more wishes after the first drawing (2026-11-10; none blocking)
+
+**Who:** renderer. The surround now draws from your files (render commit of 2026-11-10: ground by your masks in the map's
+own layers, forest floor + shade + far canopy from the forest picture, the 16,510 decor pieces through the map's own model
+path; sheets in `_scratch/render/t1109/surround/sheets/`). Your 19:07 files read right: floor key, no straight blocks, count.
+
+1. **Masks lack soil, scree and pale rock.** The map's land is 34 % soil (layer 4), with scree (6) and rock_pale (8) at
+   its cliffs; the masks hold layers 1, 2, 3, 7 and the rest 0, so past the 16-40 unit hand-over the surround reads
+   cleaner and greener than the map. **Proposal:** a second picture of the same shape, named in the json as
+   `"masks2": {"file": ..., "samples": 1537, "r": 4, "g": 6, "b": 8}`, by the same rules your ground.py uses on the map.
+   The renderer does not read it yet; I build that when the file is there.
+2. **Woods just past the edge look sparser than the map's wood just inside** (sheet 6, top right). Please compare trees
+   per area in the first 60 units outside with the 60 inside at the same wood, and match them.
+3. **Optional:** `"decor_trees": [150, 420]` in the json (dense to, gone by): I derive 145 / 402 from the farthest tree now.
+
+What I do with your files that you may not expect: the masks' shares are pushed by the layers' height maps as the map's
+own are, so your soft transitions come out crisper; within 16-40 units of the edge your masks give way to the map's own,
+mirrored (from straight above the mirror shows as a symmetric pattern, sheet 6 bottom left); trees are dropped by the
+eye's distance (500 / 800 / 1100 units), and from the farthest zoom a painted canopy stands in for them. Not done: real
+shadows from or onto the surround's trees (the shade under them is painted).
+
+**Answer:** (none yet)
+
 ## 67. To the INTERFACE track: a player option for the warp-in in faction colours (2026-11-10, Chris's standing rule; not blocking)
 
 **Who:** renderer; the ui asked for the entry (every new remastered look is a player option with the earlier look as Off).
