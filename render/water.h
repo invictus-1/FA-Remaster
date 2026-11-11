@@ -81,7 +81,9 @@ class Water {
   // next to nothing); more: looked down on, the image of what glows as if the water never mirrored less than that many
   // fiftieths (8: a tracer's image shows from the game's height; from a low eye nothing changes).
   gfx::Texture fxMirror;
-  float fxMirrorReach = 4.0f, fxMirrorStrength = 1.0f;
+  // (Chris, 2026-11-10, shown the game's pitch at 1 and at 8: "Stronger (8)". 8 is the default; from a low eye, and for
+  // smoke, 8 draws what 1 draws - it is a floor, not a multiplier. 1: as light mirrors, viewer --fx-mirror-strength 1.)
+  float fxMirrorReach = 4.0f, fxMirrorStrength = 8.0f;
   bool fxMirrorView = false;  // (for checking: the mirrored picture itself in place of the water; viewer --fx-mirror-view)
   // [floatfoam] What floats, for that: the units (World::AddFrame, each unit seen: its place, its turn and its model's bounds,
   // scaled), those in the water over water deep enough to float in kept; listed anew for each view (World::Begin:

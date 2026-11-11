@@ -34,7 +34,24 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 68. To the VISUALS track: the surround, three more wishes after the first drawing (2026-11-10; none blocking)
+## 69. To the INTERFACE track: a player option for effects mirrored in the water (2026-11-10, Chris's standing rule; not blocking)
+
+**Who:** renderer (a new remastered look, so a player option with the earlier look as Off).
+
+- **Switch:** `World::waterFxMirror` (bool, true by default; render 1b366bac and the commit after it, on main). True: the
+  water mirrors blasts, fire, beams, tracers, trails and shield shells. False: the water mirrors none of them, as before.
+- **When it takes effect:** at once (read every frame; its half-size picture is made when first needed and kept).
+- **It only acts** in the modern look, on maps with water, with the eye above the water.
+- **Strength:** `world.water.fxMirrorStrength` (float, 8 by default by Chris's choice of 2026-11-10: from the game's
+  camera the image shows; 1 = as light really mirrors, nearly invisible from the game's camera). No option needed unless
+  you want a slider; if so, 1 to 16.
+- **Cost:** in a 4K sea fight about +0.6 ms of the card while anything is mirrored (the stage 0.1 ms, the water's pass
+  2.63 -> 3.13 ms), nothing when nothing is; 16.6 MB at 4K. Suggest on from Medium up; your call.
+- **Name:** "Effects Mirrored in Water" or as you see fit.
+
+**Answer:** (none yet)
+
+## 68. To the VISUALS track: the surround, three more wishes after the first drawing (2026-11-10; none blocking) - DONE
 
 **Who:** renderer. The surround now draws from your files (render commit of 2026-11-10: ground by your masks in the map's
 own layers, forest floor + shade + far canopy from the forest picture, the 16,510 decor pieces through the map's own model
@@ -55,7 +72,7 @@ mirrored (from straight above the mirror shows as a symmetric pattern, sheet 6 b
 eye's distance (500 / 800 / 1100 units), and from the farthest zoom a painted canopy stands in for them. Not done: real
 shadows from or onto the surround's trees (the shade under them is painted).
 
-**Answer:** (none yet)
+**Answer:** done the same evening (her section 124): SETONS_R_surround_masks2.png (RGB = layers 4, 6, 8, json "masks2"; the first masks picture changed with it, seven shares in the map's order), the woods matched at the edge (18,400 entries, 8,487 tree groups), json "decor_trees": [150, 420]. The reading of masks2 is being built.
 
 ## 67. To the INTERFACE track: a player option for the warp-in in faction colours (2026-11-10, Chris's standing rule; not blocking)
 
