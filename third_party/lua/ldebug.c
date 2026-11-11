@@ -571,6 +571,28 @@ void luaG_errormsg (lua_State *L) {
      (after the unwind the frames' saved pcs point into dead C frames). */
   if (L->errfunc == 0 && lua_gpg_resume_error_hook && luaD_gpg_outermost(L))
     lua_gpg_resume_error_hook(L, LUA_ERRRUN);
+  /* GPG (luaG_errormsg 0x9131b0): every error passes the GLOBAL _TRACEBACK when it is a function: the key
+     "_TRACEBACK" (luaS_newlstr 0x9248e0, 0x9131bc..0x9131c4) pushed, luaV_gettable 0x9293e0 of the globals
+     (L+0x30), and for a function the message moves up, the function goes under it and luaD_call 0x914430(.., 1)
+     leaves its result as the error (0x91320f..0x913238); else the key is popped. Then the throw (0x913246..). No
+     test of the error handler (L->errfunc) there, so an error caught by a script's pcall carries "\nstack
+     traceback:..." (ldblib's errorfb, the debug library's _TRACEBACK). Seen: range scene aeocmd, the 29
+     `err CreateEnhancement` lines (ual0301_script.lua's WaitTicks under the range's pcall): the original's message
+     is followed by the traceback, ours was the bare message. (Only without a handler here: the host's own
+     protected calls pass ScriptTraceback as their handler, which adds the same traceback already; the thread's
+     error log took its traceback in the hook above.) */
+  if (L->errfunc == 0) {
+    const TObject *tb;
+    setsvalue2s(L->top, luaS_newliteral(L, "_TRACEBACK"));
+    incr_top(L);
+    tb = luaV_gettable(L, gt(L), L->top - 1, 0);
+    if (ttisfunction(tb)) {
+      setobjs2s(L->top - 1, L->top - 2);  /* the message over the key */
+      setobj2s(L->top - 2, tb);  /* the function under it */
+      luaD_call(L, L->top - 2, 1);
+    }
+    else L->top--;
+  }
   if (L->errfunc != 0) {  /* is there an error handling function? */
     StkId errfunc = restorestack(L, L->errfunc);
     if (!ttisfunction(errfunc)) luaD_throw(L, LUA_ERRERR);
