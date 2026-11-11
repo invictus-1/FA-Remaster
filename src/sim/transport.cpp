@@ -1287,6 +1287,21 @@ void TransportOnKillEnd(Sim& sim, lua_State* L, Unit* u) {
   if (u->transport) TransportDetachAll(sim, *u->transport, true);
 }
 
+// Unit::OnDestroy 0x6a88d0, a unit that was NOT killed (unit+0xa1 clear, 0x6a8916), after SetDead and the flag
+// (0x6a8a26 / 0x6a8a31): a unit carried by another (GetTransportedBy, unit+0x4c0) that is not dead (vt+0x28) is let
+// go by its carrier, TransportDetachUnit(u) (vt+0x34, 0x6a8a2b..0x6a8a76): the footprint test under an Air carrier,
+// Unit::DetachFrom, the pickup list, the script's OnTransportDetach; then the link is cleared (0x6a8a78..). (A killed
+// unit lost the link in Unit::Kill and gets none of this.) Seen (scene d3_7 against the original): two tanks
+// destroyed in flight: each transport's OnTransportDetach comes in that beat's destroy pass (FAF's script gives the
+// transport its speed back there); ours made no callback and the transports stayed slow.
+void TransportOnDestroyCarried(Sim& sim, Unit* u) {
+  if (!u->transportedBy) return;
+  Entity* e = sim.FindEntity(u->transportedBy);
+  Unit* C = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  if (C && !C->dead && C->transport) TransportDetach(sim, *C->transport, u);
+  u->transportedBy = 0;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Command tasks
 
@@ -1410,6 +1425,7 @@ void LoadDoTask(Sim& sim, Unit* T, TransportTaskData& d) {
 
 int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
   TransportObj& O = *T->transport;
+  if (t.waitUntil > sim.tick()) return kTaskRunning;  // (a staging platform's 10-beat waits, states 3 and 4)
   // 0x625979: a teleporter without a destination (no beacon, or a dead one) gives up, every run
   if (O.isTeleporter && NoTeleportDest(GetTeleportDest(sim, O))) {
     Logf(LogLevel::Info, "No teleport destination set for this teleporter. Cancelling teleportation task.");
@@ -1479,6 +1495,16 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         t.state = 3;
         return kTaskRunning;
       case 3:
+        // 0x625cc1..0x625cf6: a staging platform (task+0x80) has no 300-beat limit: while a unit is still on its
+        // way (TransportGetPickupUnitCount vt+0x1c) it looks again in 10 beats, then state 4 (return 1)
+        if (O.isAirStaging) {
+          if (PickupUnitCount(sim, O) != 0) {
+            t.waitUntil = sim.tick() + 9;
+            return kTaskRunning;
+          }
+          t.state = 4;
+          return kTaskRunning;
+        }
         ++d.counter;
         if (PickupUnitCount(sim, O) != 0 && d.counter <= 300) return kTaskRunning;
         // 0x625d34..0x625d7f: the waiting units join the cargo (AddAll); a teleporter with cargo left goes round
@@ -1494,6 +1520,26 @@ int TickLoad(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         }
         d.success = d.counter <= 300;
         return d.success ? kTaskDone : kTaskFailed;
+      case 4: {
+        // 0x625da9..0x625e5d (staging only): while the platform holds loaded units (TransportGetLoadedUnits(out, 1)
+        // vt+0xc: attached, not UPGRADE, not Refueling) it stays as it is, TransportLoading with its order current,
+        // and looks again in 10 beats. Once they are gone the units that had found no bone (the waiting list,
+        // vt+0x8c) become the cargo: any -> state 0 again (return 1); none -> success, over.
+        // (GetLoadedUnits' flag 1 leaves out stored units; LoadedUnits does not tell them apart: a staging platform
+        // that is no CARRIER and has storage slots is not known to me.)
+        if (!LoadedUnits(sim, T).empty()) {
+          t.waitUntil = sim.tick() + 9;
+          return kTaskRunning;
+        }
+        d.cargo = O.waiting;
+        std::sort(d.cargo.begin(), d.cargo.end(), [&sim](uint32_t a, uint32_t b) { return IdOfRef(sim, a) < IdOfRef(sim, b); });
+        if (!d.cargo.empty()) {
+          t.state = 0;
+          return kTaskRunning;
+        }
+        d.success = true;
+        return kTaskDone;
+      }
       default:
         return kTaskRunning;
     }
@@ -1694,10 +1740,44 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
 std::shared_ptr<UnitCommand> NewCommand(Sim& sim, CommandType type);
 void Append(Unit* u, const std::shared_ptr<UnitCommand>& c);
 
+// Entity::GetAttachedEntities 0x5bdc10 (entity+0x17c) not empty: anything hung on T, a unit (whatever attached it)
+// or a plain entity (a shield bubble hangs on its owner: FAF shield.lua, AttachBoneTo(-1, Owner, -1)).
+bool AnyEntityAttached(Sim& sim, const Unit* T) {
+  const uint32_t ref = EntityRef(T);
+  for (Unit* o : sim.units())
+    if (!o->destroyQueued && o->parentId == ref) return true;
+  for (uint32_t r : sim.attachedEntities)
+    if (const Entity* e = sim.FindEntity(r))
+      if (!e->destroyQueued && e->attachParent == ref) return true;
+  return false;
+}
+
 int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
   TransportObj& O = *T->transport;
 
-  if (!TransportHasCargo(T)) return kTaskDone;
+  // The landing move (state 2's NewMoveTask 0x6190a0) sleeps the thread until the navigator's event: while it runs
+  // nothing of this task is called, the two tests below included. Seen (scene d3_7 against the original): two
+  // transports whose cargo is destroyed on the way (245) fly on in Moving + TransportUnloading to their drop points
+  // and end the unload there; ours asked the tests every beat and stopped both in the air at 246.
+  if (d.moving) {
+    if (T->motion.hasGoal) return kTaskRunning;
+    d.moving = false;
+    SetState(T, US("Moving"), false);  // its dtor clears it
+    EndMoveTaskReservation(T);          // ... and frees its landing spot (0x618700)
+    // ... and, whatever ended the move (the navigator's Succeeded, or the Aborted of FAF's AirTransportUnit script,
+    // which calls navigator:AbortMove() when the transport stops near its drop point), calls the navigator's
+    // AbortMove itself: the dtor 0x618700 takes its "abort" byte +0x90 afresh from the queue's +0x1c (0x6187f1..
+    // 0x61884e: 0 when no new order is clearing the queue, and the table 0x618998 says abort for 0) and calls vt+0x10
+    // (0x618877..0x618884). The motion's target is then the point one second ahead of where the unit is NOW. State 3
+    // sets the target again for an air transport (its own position), so this shows only when the run below ends the
+    // task. Seen (d3_7): the plain transport, nothing attached when it gets to its drop point, drifts on from there
+    // as the original's does; ours kept the stop point of the script's abort a beat earlier.
+    if (CanFly(T)) AirAbort(sim, T);
+  }
+  // 0x6263b7..0x6263d7: a run ends the task when the transport ENTITY's attached list (unit+8 vt+0x58 =
+  // GetAttachedEntities 0x5bdc10) is empty: any attached entity keeps it going, cargo or not (order audit D3.7;
+  // before: TransportHasCargo).
+  if (!AnyEntityAttached(sim, T)) return kTaskDone;
   if (d.specific && d.which.empty()) return kTaskDone;
   for (int guard = 0; guard < 4; ++guard) {
     switch (t.state) {
@@ -1741,11 +1821,32 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
             if (CanFly(u)) AirSetLandHeight(u, std::numeric_limits<float>::infinity());
             if (!mv) {
               mv = NewCommand(sim, CommandType::Move);
-              mv->pos = {cx + fp.sizeX * 0.5f, d.goal.y, cz + fp.sizeZ * 0.5f};
+              // 0x626904..0x626922: COORDS_ToWorldPos 0x50b0f0 of the goal cell with T's footprint: the height of
+              // the ground there, or of the water above it unless the footprint's caps have bit 2
+              mv->pos = {cx + fp.sizeX * 0.5f, 0.0f, cz + fp.sizeZ * 0.5f};
+              const TerrainMap* m = sim.map();
+              if (m) {
+                mv->pos.y = m->TerrainHeight(mv->pos.x, mv->pos.z);
+                if (!(fp.caps & 2) && m->hasWater && m->waterElevation > mv->pos.y) mv->pos.y = m->waterElevation;
+              }
               mv->hasPos = true;
+              // 0x6269a3..0x6269e6: the issue data's formation index (+0x38) is 0, its orientation (+0x3c..+0x48)
+              // the zeroed static 0x10c7a58.. and its scale (+0x4c) 1.0 (0xdfec20), as CarrierLaunch's Guard: two
+              // or more launched aircraft make a formation at the goal when the first of them dispatches the Move
+              // (GenerateFormation 0x6e88d0). Seen (scene d3_2 against the original): two bombers launched at 291
+              // fly to their formation cells at the formation's speed; ours sent both to the one point.
+              mv->formIndex = 0;
+              mv->formQw = mv->formQx = mv->formQy = mv->formQz = 0;
+              mv->formScale = 1.0f;
             }
             ForgetUnitCommands(u);
             Append(u, mv);
+            // The launched unit's dispatcher asks only for state Attached (IAiCommandDispatchImpl::TaskTick
+            // 0x598f89), and the Move's clear has set its thread's counter to 0 (OnEvent 0x599030). The unload ran
+            // in the platform's own dispatch (no move child, so its thread was not re-linked behind its cargo's):
+            // a launched unit whose thread comes after the platform's dispatches the Move in this same pass. Seen
+            // (scene d3_2): the original's bombers are Moving at the end of the detach beat.
+            u->detachedAt = 0xffffffffu;
           }
           return kTaskDone;
         }
@@ -2277,7 +2378,11 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
   }
   TransportObj& O = *P->transport;
   if (P->layer == "Seabed" || P->layer == "Sub") {
-    if (u->parentId) TransportDetach(sim, O, u);
+    // 0x622096..0x6220da: the unit in state Attached (14, IsUnitState at 0x62209e) and P with a transport ->
+    // TransportDetachUnit(u) (vt+0x34). (READ, order audit D2.4; before: any unit with a parent, whatever its
+    // state. A unit Attached with no parent left is not let go here: what TransportDetachUnit 0x5e7170 does with
+    // one, after its two log lines 0x5e71b9..0x5e7202, was not read.)
+    if (State(u, US("Attached")) && u->parentId) TransportDetach(sim, O, u);
     return kTaskDone;
   }
   if (d.isCarrier) return TickRefuelCarrier(sim, u, t, d, P);
@@ -2299,7 +2404,9 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
       case 1: {  // land on the bone at its height
         Vec3 bone = GetAttachBonePosition(O, u);
         Vec3 facing = AttachFacing(O, u);
-        if (!std::isfinite(bone.x) || !std::isfinite(bone.y) || !std::isfinite(bone.z)) return kTaskDone;
+        // 0x5657f0 (IsValid_Vector3f): no component is NaN (isnan 0xa83f03 three times); an infinity passes (READ,
+        // order audit D2.5; before: std::isfinite)
+        if (std::isnan(bone.x) || std::isnan(bone.y) || std::isnan(bone.z)) return kTaskDone;
         AirSetGoal(sim, u, bone, sim.tick(), 1, false);
         d.childMove = true;  // the move task sets Moving
         SetState(u, US("Moving"), true);
@@ -3021,6 +3128,108 @@ void EndCallTeleport(Sim& sim, Unit* u, TransportTaskData& d) {
   }
 }
 
+// --- the aircraft a staging platform was sent for (CUnitCallAirStagingPlatform; gap G4 of the order audit) -------
+// IssueCallAirStagingPlatformTask 0x601ce0, ctor 0x6018e0, dtor 0x601950, TaskTick 0x601e00 (jump table 0x60234c),
+// read whole. The platform's side is CUnitLoadUnits with the staging flag (TickLoad states 3 and 4). The task has
+// +0x30 the platform P (a weak link) and +0x38 success; it listens to nothing (the ctor links P only): its two
+// moves are move children (NewMoveTask 0x6190a0), state 4's goal goes to the navigator directly.
+
+enum { kCallStaging = 12 };
+
+int TickCallStaging(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
+  if (RunChild(sim, u, t, d)) return kTaskRunning;  // a move child (states 1 and 2): this task runs when it ends
+  if (t.waitUntil > sim.tick()) return kTaskRunning;
+  auto end = [&] { return d.success ? kTaskDone : kTaskFailed; };  // (the original answers -1; the dtor tells them apart)
+  // Every run (0x601e2d..0x601ead): over when the unit is dead, P gone or dead, P on the Seabed layer (+0x120 == 2;
+  // Sub does not end it) or, past state 0, P no longer TransportLoading (its load task is gone)
+  Unit* P = UnitRef(sim, d.transport);
+  if (u->dead || !P || P->dead || P->layer == "Seabed") return end();
+  if (t.state != 0 && !State(P, US("TransportLoading"))) return end();
+  if (!P->transport) return end();  // (not in the original: it reads P+0x55c with no test; the issue asked the category)
+  TransportObj& O = *P->transport;
+  switch (t.state) {
+    case 0:  // 0x601ec6: P loading and on the same command as this unit (0x6edbf0 twice), else again in 10 beats
+      if (State(P, US("TransportLoading")) && Current(P) == Current(u)) {
+        t.state = 1;
+        t.waitUntil = sim.tick() + 2;  // return 3
+        return kTaskRunning;
+      }
+      t.waitUntil = sim.tick() + 9;  // return 10
+      return kTaskRunning;
+    case 1:  // 0x601f35
+      if (InPickup(O, u)) {  // TransportIsUnitAssignedForPickup (vt+0x3c): the platform's DoTask gave it a bone
+        SetState(u, US("ForceSpeedThrough"), false);         // 0x60203c
+        if (IsReadyForUnit(O, u)) t.state = 2;               // vt+0x48, 0x60206f
+        return kTaskRunning;                                 // return 1
+      }
+      if (InCat(sim, P, "CARRIER")) return end();            // 0x601f5c..0x601fac
+      // 0x601fb2..0x602019: no bone yet: ForceSpeedThrough on, a move child to the cell of P's position (this
+      // unit's footprint, 0x579300) on layer Air (0x10); the answer 10 is nobody's wait, the child sleeps the thread
+      SetState(u, US("ForceSpeedThrough"), true);
+      AirSetGoal(sim, u, P->position, sim.tick(), 0x10);
+      d.childMove = true;  // the move task sets Moving
+      SetState(u, US("Moving"), true);
+      AirSpeedThroughEvent(sim, u);
+      return kTaskRunning;
+    case 2: {  // 0x602094: land on the bone at its height (as CUnitRefuel's state 1)
+      Vec3 bone = GetAttachBonePosition(O, u);  // vt+0x54
+      Vec3 facing = AttachFacing(O, u);         // vt+0x5c
+      if (std::isnan(bone.x) || std::isnan(bone.y) || std::isnan(bone.z)) return end();  // 0x5657f0: no NaN
+      // the move ctor's landing-spot search is skipped: the unit is TransportLoading and LandingOnPlatform
+      // (air_nav.md 3.2 step 4)
+      AirSetGoal(sim, u, bone, sim.tick(), 1, false);
+      d.childMove = true;  // the move task sets Moving
+      SetState(u, US("Moving"), true);
+      AirSpeedThroughEvent(sim, u);
+      t.state = 3;
+      AirSetLandHeight(u, bone.y);  // motion+0x64, 0x60212e..0x60213d
+      AirSetFacing(u, facing);      // 0x602152
+      return kTaskRunning;          // return 1
+    }
+    case 3:  // 0x60216f: the move is over: attach (vt+0x30), whatever the facing; the landing height stays the bone's
+      if (TransportAttach(sim, O, u)) d.success = true;
+      t.state = 4;
+      SetState(u, US("LandingOnPlatform"), false);
+      return kTaskRunning;  // return 1
+    default: {  // 4, 0x6021ca: while another aircraft of this unit's command still lands, hold by P; else over
+      // GetNextCommand 0x6edc20 (a second entry in the queue), then GetCurrentCommand 0x6edbf0 and its unit set
+      if (u->commands.size() < 2 || !u->commands[1] || !u->commands.front()) return end();
+      std::vector<Unit*> group(u->commands.front()->units.begin(), u->commands.front()->units.end());
+      std::sort(group.begin(), group.end(), [](Unit* a, Unit* b) { return a->id < b->id; });
+      for (Unit* X : group)
+        if (X && IsAirUnit(sim, X) && !InCat(sim, X, "AIRSTAGINGPLATFORM") && State(X, US("LandingOnPlatform"))) {
+          // 0x6022ae..0x60232c: on THIS unit (task+0x1c): ForceSpeedThrough, navigator SetSpeedThroughGoal(1)
+          // (vt+0x18) and SetGoal (vt+0x08) to the cell of P's position; again in 10 beats
+          RefuelForceSpeedThrough(u);
+          AirSetGoal(sim, u, P->position, sim.tick(), 0);
+          t.waitUntil = sim.tick() + 9;
+          return kTaskRunning;
+        }
+      return end();
+    }
+  }
+}
+
+// dtor 0x601950: ForceSpeedThrough (32), LandingOnPlatform (35), TransportLoading (8) and WaitingForTransport (7)
+// off; without success the landing height goes back to +inf (0x10b0e24) and a live P with a transport takes the unit
+// off its pickup list (RemovePickupUnit(u, 1), vt+0x14). No speed-through event, no navigator call. (The result word
+// 1 / 2 is read for no command of this type.)
+void EndCallStaging(Sim& sim, Unit* u, TransportTaskData& d) {
+  if (d.childMove) {  // the move child's dtor first (CTask::TaskInterruptSubtasks; as CUnitCallTeleport's walk)
+    d.childMove = false;
+    SetState(u, US("Moving"), false);
+    if (u->motion.hasGoal && !u->clearKeepsMove) MotionStop(u);
+  }
+  SetState(u, US("ForceSpeedThrough"), false);
+  SetState(u, US("LandingOnPlatform"), false);
+  SetState(u, US("TransportLoading"), false);
+  SetState(u, US("WaitingForTransport"), false);
+  if (d.success) return;
+  AirSetLandHeight(u, std::numeric_limits<float>::infinity());
+  Unit* P = UnitRef(sim, d.transport);
+  if (P && !P->dead && P->transport) RemovePickupUnit(sim, *P->transport, u, true);
+}
+
 int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
   if (!t.tdata) return kTaskFailed;
   TransportTaskData& d = *t.tdata;
@@ -3036,6 +3245,7 @@ int TickTask(Sim& sim, Unit* u, BuildTask& t, const BuildTask* owner) {
     case kCarrierLaunch: return u->transport ? TickCarrierLaunch(sim, u, t, d) : kTaskFailed;
     case kPod: return TickPod(sim, u, t, d);
     case kCallTeleport: return TickCallTeleport(sim, u, t, d);
+    case kCallStaging: return TickCallStaging(sim, u, t, d);
     default: return kTaskFailed;
   }
 }
@@ -3174,9 +3384,14 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
         Callback(sim, u, "OnAssignedFocusEntity");
         t->order = "CarrierLand";
       } else if (InCat(sim, X, "AIRSTAGINGPLATFORM")) {
-        // 0x60a07a: IssueCallAirStagingPlatformTask 0x601ce0 -> CUnitCallAirStagingPlatform (air_staging.md 2): not
-        // built (nor the platform's side, below)
-        return nullptr;
+        // 0x60a07a: IssueCallAirStagingPlatformTask 0x601ce0: none for a dead X (vt+0x28, 0x601d0d); the ctor
+        // 0x6018e0 sets TransportLoading (8) and LandingOnPlatform (35) on the unit, no callback
+        if (X->dead) return nullptr;
+        d->kind = kCallStaging;
+        d->transport = EntityRef(X);
+        SetState(u, US("TransportLoading"), true);
+        SetState(u, US("LandingOnPlatform"), true);
+        t->order = "CallAirStagingPlatform";
       } else if (InCat(sim, X, "TELEPORTATION")) {  // 0x60a0d4: IssueCallTeleportTask 0x6012b0
         if (X->dead) return nullptr;
         d->kind = kCallTeleport;
@@ -3203,9 +3418,7 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
       if (InCat(sim, u, "CARRIER")) {
         d = NewRetrieve(sim, u, {EntityRef(target)});
         t->order = "CarrierRetrieve";
-      } else if (u->transport->isAirStaging) {
-        return nullptr;  // (CUnitLoadUnits with the staging flag: its states 3 and 4 are not built)
-      } else {
+      } else {  // (a staging platform too: the task's staging flag +0x80, TickLoad states 3 and 4)
         d->kind = kLoad;
         d->cargo.push_back(EntityRef(target));
         SetState(u, US("TransportLoading"), true);  // the ctor 0x624b70
@@ -3228,8 +3441,10 @@ BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c) {
     SetState(u, US("TransportUnloading"), true);
     t->order = "CarrierLaunch";
   } else if (c.type == CommandType::TransportUnloadUnits || c.type == CommandType::TransportUnloadSpecificUnits) {
-    if (!u->transport || !TransportHasCargo(u)) return nullptr;
-    if (u->transport->isAirStaging && LoadedUnits(sim, u).empty()) return nullptr;  // only refuelling aircraft
+    // 0x60a22d..0x60a25c: for every kind of transport, TransportGetLoadedUnits(out, 0) (vt+0xc: attached units, not
+    // UPGRADE, not Refueling) empty -> no task (order audit D3.7; before, a transport that is no staging platform
+    // was asked TransportHasCargo: full attaches only, UPGRADE and Refueling counted)
+    if (!u->transport || LoadedUnits(sim, u).empty()) return nullptr;
     d->kind = kUnload;
     for (Unit* o : c.units)
       if (o != u && Alive(o) && o->transportedBy) {
@@ -3338,6 +3553,7 @@ void EndTransportTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
     case kCarrierLaunch: EndChild(sim, u, d); SetState(u, US("TransportUnloading"), false); break;
     case kPod: EndPod(sim, u, t, d); break;
     case kCallTeleport: EndCallTeleport(sim, u, d); break;
+    case kCallStaging: EndCallStaging(sim, u, d); break;
     default: break;
   }
 }
@@ -3532,13 +3748,14 @@ bool LoadCaseAccepts(Sim& sim, lua_State* L, Unit* u, Unit* T) {
 }
 
 // IssueTransportLoad(units, transport) 0x6f7250
-// ValidateIssue 0x6ef9e0 for a TransportLoadUnits(T) on u, and the "same command already last" and
-// queue-length tests of the issue path.
+// ValidateIssue 0x6ef9e0 for a TransportLoadUnits(T) on u, and the queue-length test of the issue path.
+// (No "same order again" test here: ProcessUnitCommand's (0x6efdd0..0x6efe3e) asks for the issue's clear flag first
+// (0x6efdd7: arg 3 zero -> not the same), and the Lua call issues with clear 0 (0x6f7433 push 0, before 0x6f12c0); the
+// stream's orders have the whole test (commands.cpp sameOrderAgain). Seen (scene d3_2 against the original): two
+// IssueTransportLoad calls in one beat, each with one bomber and the same staging platform, leave the platform with
+// TWO commands; ours refused the second as "already last" and it held one.)
 bool ValidLoadIssue(Sim& sim, lua_State* L, Unit* u, Unit* T) {
   if (u->dead || !LoadCaseAccepts(sim, L, u, T)) return false;
-  if (!u->commands.empty() && u->commands.back()->type == CommandType::TransportLoadUnits &&
-      u->commands.back()->targetId == (T ? EntityRef(T) : 0u))
-    return false;  // the same command is already last
   if (u->commands.size() >= 501) return false;
   return true;
 }
@@ -3782,9 +3999,11 @@ bool TransportTaskAsleepOnMove(const BuildTask* t) {
 // 0x11e (hovering, on 10-beat waits): the original runs 0x11e first, bone 1 is still 0x8b's, and 0x11e gets bone 5
 // (its goal cell (786, 260)); ours had re-linked 0x11e at each hover arrival, ran it after 0x8b's take-off freed
 // bone 1 and sent it to bone 1 (785, 260).
+// (CUnitCallAirStagingPlatform the same: its ctor 0x6018e0 registers none, state 4 sets the goal itself, 0x60232c.)
 bool RefuelGoalWakesNobody(const Unit* u) {
   const BuildTask* t = u->task;
-  return t && t->tdata && t->tdata->kind == kRefuel && !TransportTaskAsleepOnMove(t);
+  return t && t->tdata && (t->tdata->kind == kRefuel || t->tdata->kind == kCallStaging) &&
+         !TransportTaskAsleepOnMove(t);
 }
 
 // TransportReverseLoadUnits at issue time (read 2026-10-17). UNIT_IssueCommand 0x6f12c0 calls 0x6ef660(data, its copy
