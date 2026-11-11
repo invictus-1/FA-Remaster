@@ -478,7 +478,7 @@ ForkThread(function()
         end
     else
         local asked, why = moho64ui_RecoverDevice("nonsense")
-        check("an unknown mode is refused", tostring(asked) .. " " .. tostring(why), 'false the mode is "check", "lose" or "fail"')
+        check("an unknown mode is refused", tostring(asked) .. " " .. tostring(why), 'false the mode is "check", "lose", "fail" or "nomap"')
     end
     LOG("TEST done: " .. failed .. " failed")
 end)
