@@ -19,6 +19,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
+#include "user/notices.h"
 #include "user/user_state.h"
 
 namespace moho::ui {
@@ -538,6 +539,7 @@ std::string CheckPrefsFile(const std::string& file) {
                     ShownPath(kept) + ".";
   }
   if (!g_prefsNotice.empty()) Logf(LogLevel::Warning, "moho64ui: %s", g_prefsNotice.c_str());
+  AddMenuNotice(g_prefsNotice);  // (the main menu says it in its line: notices.h)
   return g_prefsNotice;
 }
 

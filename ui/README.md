@@ -64,6 +64,15 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--maps <folder>] [--remasters <folder>] [--own <folder>]
          [-- <the game's own arguments>]
 ```
+- The log and the menu's notice line (ours; Chris's pick of 2026-11-09). A run with a window always writes a log:
+  the one `--log` names, else `logs/moho64ui_<date>_<time>.log` beside the preferences (the engine's
+  `LogOpenDefault`: its first line the build, the newest ten kept, each with its crash dump). A fault leaves a small
+  memory dump beside the log and, with a window, one message naming both files (`CrashSetReport`). When something
+  failed or fell back (a game that did not load, a game or replay that could not be started over, the preferences
+  restored from their backup, no sound device, the world's picture not opened), the main menu says so in a box in
+  its top left corner with the log's name, until it is clicked or the menu is left (`user/notices.h`,
+  `data/hook/lua/ui/menus/main.lua`; `moho64ui_Notices()`, `moho64ui_NoticesSeen()`; `tests/notices.lua`). The
+  build's commit is the engine's build stamp too (`build_ui.py`: `-DMOHO64_BUILD_STAMP`).
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
   keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
   `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own
