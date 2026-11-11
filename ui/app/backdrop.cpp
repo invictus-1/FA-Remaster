@@ -35,7 +35,10 @@ void Backdrop::Begin(bool vulkan, int textureDetail, bool direct) {
   textureDetail_ = textureDetail;
   direct_ = direct;
   begun_ = true;
-  if (!direct) thread_ = std::thread([this] { Run(); });
+  if (!direct) {
+    SetPictureState(PictureState::Opening);  // (before the thread is there: an ask of its device waits for the picture)
+    thread_ = std::thread([this] { Run(); });
+  }
 }
 
 Backdrop::~Backdrop() { Stop(); }
@@ -218,7 +221,110 @@ bool Backdrop::WaitUntilReady(double seconds) {
   return false;
 }
 
+// --- the graphics device lost, and made again (backdrop.h) ---
+
+void Backdrop::SetPictureState(PictureState state) {
+  {
+    std::lock_guard<std::mutex> lock(deviceMutex_);
+    pictureState_ = state;
+  }
+  deviceCv_.notify_all();
+}
+
+std::string Backdrop::DeviceLostReason() {
+  std::lock_guard<std::mutex> lock(deviceMutex_);
+  return deviceReason_;
+}
+
+uint64_t Backdrop::Pictures() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return readyCount_;
+}
+
+bool Backdrop::OwnPicture() {
+  std::lock_guard<std::mutex> lock(deviceMutex_);
+  return pictureState_ == PictureState::Opening || pictureState_ == PictureState::Up;
+}
+
+// The interface's thread: an ask handed to the picture's thread and waited for. A picture still being opened is waited
+// for first (its Open ends by itself); false when there is no picture of its own, or its thread ended meanwhile.
+bool Backdrop::AskDevice(DeviceAsk ask, Recovered* result) {
+  std::unique_lock<std::mutex> lock(deviceMutex_);
+  deviceCv_.wait(lock, [this] { return pictureState_ != PictureState::Opening; });
+  if (pictureState_ != PictureState::Up) return false;
+  deviceAsk_ = ask, deviceAnswered_ = false;
+  deviceCv_.wait(lock, [this] { return deviceAnswered_ || pictureState_ != PictureState::Up; });
+  if (!deviceAnswered_) {  // (the thread ended with the ask unserved)
+    deviceAsk_ = DeviceAsk::None;
+    return false;
+  }
+  if (result) *result = deviceResult_;
+  return deviceAnswer_;
+}
+
+bool Backdrop::LetGoOfLostDevice() { return AskDevice(DeviceAsk::LetGo, nullptr); }
+bool Backdrop::LoseDeviceForTest() { return AskDevice(DeviceAsk::Lose, nullptr); }
+Backdrop::Recovered Backdrop::RecoverDevice() {
+  Recovered r;
+  AskDevice(DeviceAsk::Recover, &r);
+  return r;
+}
+
+#ifdef MOHO64UI_WORLD_PICTURE
+// The picture's thread, between two frames: an ask of the interface's thread done and answered. True while the
+// picture has no device to draw with (lost, or let go of and not made again yet): the thread then draws nothing.
+bool Backdrop::ServeDevice(render::WorldPicture& picture) {
+  DeviceAsk ask;
+  {
+    std::lock_guard<std::mutex> lock(deviceMutex_);
+    ask = deviceAsk_;
+  }
+  if (ask == DeviceAsk::None) return deviceLetGo_ || deviceLost_;
+  bool answer = true;
+  Recovered r;
+  if (ask == DeviceAsk::LetGo) {
+    answer = picture.LetGoOfLostDevice();
+    deviceLetGo_ = answer;
+  } else if (ask == DeviceAsk::Lose) {
+    answer = picture.LoseDeviceForTest();  // (its next frame notices)
+  } else {
+    r.own = true;
+    r.ok = picture.RecoverDevice(&r.error);
+    r.lost = !r.ok && picture.DeviceLost();
+    const render::WorldPicture::RecoverNumbers n = picture.LastRecoverNumbers();
+    r.seconds = n.seconds, r.deviceSeconds = n.deviceSeconds, r.mapSeconds = n.mapSeconds, r.deviceTries = n.deviceTries;
+    answer = r.ok;
+    if (r.ok) {
+      // (the host's part, as after the map was first opened: the evening is this program's switch on the world, and
+      // the world is another object now; nothing else of this picture is set on its world)
+      Dress(picture);
+      if (const render::World* world = picture.world()) r.timeOfDay = world->timeOfDay, r.cloudCover = world->cloudCover;
+      deviceLetGo_ = false;
+      deviceLost_ = false;
+      std::lock_guard<std::mutex> lock(deviceMutex_);
+      deviceReason_.clear();
+    } else if (!r.lost) {
+      // (a device, but the map could not be opened again: this picture shows nothing more and its thread ends; the
+      // program closes, GameSession::ServeDevice)
+      running_ = false;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(deviceMutex_);
+    deviceAsk_ = DeviceAsk::None;
+    deviceAnswer_ = answer, deviceResult_ = r, deviceAnswered_ = true;
+  }
+  deviceCv_.notify_all();
+  return deviceLetGo_ || deviceLost_;
+}
+#endif
+
 void Backdrop::Run() {
+  // (however this thread ends, an ask of its picture's device no longer waits for it)
+  struct Ended {
+    Backdrop* self;
+    ~Ended() { self->SetPictureState(PictureState::Ended); }
+  } ended{this};
 #ifdef MOHO64UI_WORLD_PICTURE
   using Clock = std::chrono::steady_clock;
   while (running_ && !begun_) std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -226,6 +332,7 @@ void Backdrop::Run() {
   render::WorldPicture picture;
   picture.SetVulkan(vulkan_);
   picture.SetTextureDetail(textureDetail_);
+  if (!shaderCache_.empty()) picture.SetShaderCache(shaderCache_);  // (checks: --shader-cache)
   std::string error;
   auto t0 = Clock::now();
   if (!picture.Open(vfs_, map_, &error)) {
@@ -234,6 +341,7 @@ void Backdrop::Run() {
     return;
   }
   Dress(picture);
+  SetPictureState(PictureState::Up);
   Logf(LogLevel::Info, "moho64ui: the menu's background: %s, ready after %.1f s", map_.c_str(),
        std::chrono::duration<double>(Clock::now() - t0).count());
   // (For pictures of it: MOHO64UI_BACKDROP_AT=<seconds> starts that far along the camera's way.)
@@ -243,6 +351,12 @@ void Backdrop::Run() {
   auto shownSince = start; // when the pictures began (again): they come in from black
   std::vector<uint32_t> work;  // the next picture, made outside the lock, then swapped with ready_
   while (running_) {
+    // (the graphics device lost: what the interface's thread asks of this picture, done here between two frames; no
+    // frame is drawn while the picture has no device. The renderer's request 71 B.)
+    if (ServeDevice(picture)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
     auto frameStart = Clock::now();
     int w = 0, h = 0;
     {
@@ -273,6 +387,16 @@ void Backdrop::Run() {
     double t = hold_ ? 0.0 : std::chrono::duration<double>(frameStart - start).count();
     const render::Camera camera = WayAt(picture, t + along);
     const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, t * 10.0);
+    // (one call a frame: the frame just drawn found the graphics device gone. What Draw gave is its last picture
+    // again, not a new one; the interface's thread sees DeviceLost and has every picture of the program made anew.)
+    if (picture.DeviceLost()) {
+      {
+        std::lock_guard<std::mutex> lock(deviceMutex_);
+        deviceReason_ = picture.DeviceLostReason();
+      }
+      deviceLost_ = true;
+      continue;
+    }
     if (pixels.size() == static_cast<size_t>(w) * static_cast<size_t>(h)) {
       // Darker than the world is, so the menu's own signs stand out; the picture comes in over
       // its first second and a half.

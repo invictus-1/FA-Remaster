@@ -388,6 +388,7 @@ int l_RestartSession(lua_State*) {
 }  // namespace
 
 bool ExitRequested() { return g_exitRequested; }
+void RequestExit() { g_exitRequested = true; }
 void RequestSessionRestart() { g_sessionRequest = 2; }
 void RequestSessionWatch() { g_sessionRequest = 3; }
 int TakeSessionRequest() {
@@ -449,6 +450,30 @@ void RegisterBasicBindings(lua_State* L) {
     const auto& info = UserState::From(S)->config().menuFlightInfo;
     if (!info) return 0;
     info(S);
+    return 1;
+  });
+  // moho64ui_RecoverDevice([mode]) -> true, or false and the reason (the host's own function for tests; ours, the
+  // original has none): the program's recovery of a lost graphics device (app/game_session.h, ServeDevice; the
+  // renderer's request 71 B) run at the next frame boundary. `mode` "check" (or none): though the device is not lost;
+  // "lose": the program's own device really lost first (only in a run with --shader-cache), the next frame drawn
+  // notices and the boundary after it recovers; "fail": a recovery that finds no device played through, at whose
+  // end the program closes. What happened: moho64ui_DeviceState().recoveries and .last.
+  lua_register(L, "moho64ui_RecoverDevice", [](lua_State* S) -> int {
+    const auto& recover = UserState::From(S)->config().recoverDevice;
+    if (!recover) return 0;
+    std::string why;
+    const bool asked = recover(luaL_optstring(S, 1, "check"), &why);
+    lua_pushboolean(S, asked);
+    if (asked) return 1;
+    lua_pushstring(S, why.c_str());
+    return 2;
+  });
+  // moho64ui_DeviceState() -> how the pictures and their device stand (GameSession::PushDeviceState names the
+  // fields); nil without a host that has them.
+  lua_register(L, "moho64ui_DeviceState", [](lua_State* S) -> int {
+    const auto& state = UserState::From(S)->config().deviceState;
+    if (!state) return 0;
+    state(S);
     return 1;
   });
   // GetAntiAliasingOptions(): the anti-aliasing sample counts the graphics card offers (the game's

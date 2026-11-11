@@ -245,6 +245,15 @@ struct GameSession::Picture : WorldSource {
   // moment of its own is set (SetPhotoMoment).
   bool photoOn = false, photoEasing = false, momentSet = false;
   PhotoLens photoLens;
+  // A photo begun (StartPhoto) and not handed over yet; and one such dropped because the graphics device was lost
+  // while it was being made (GameSession::RecoverPictures: the renderer drops it and TakeDonePhoto gives none, its
+  // progress back at 0, which the photo mode would wait on for ever): it is then said to be done with nothing to
+  // hand over, the renderer's own sign of a photo that could not be made (PhotoProgress, TakeDonePhoto below).
+  bool photoAsked = false, photoDropped = false;
+  // The deposits' icons as the scene last had them (SetScene gives them to the world with every scene): for a world
+  // made anew after the graphics device was lost, whose first frames may be drawn before the next scene (a frame drawn
+  // while a beat runs on its thread has no scene of its own: the world view's EnsurePicture). GameSession::RedressGameWorld.
+  bool depositIconsNow = true;
   static render::Camera ToRender(const WorldCamera& c) {
     render::Camera cam;
     cam.target = {c.target[0], c.target[1], c.target[2]};
@@ -385,10 +394,19 @@ struct GameSession::Picture : WorldSource {
     if (!photoOn || !cineGround || width <= 0 || height <= 0) return false;
     render::Camera view = cine.View(cineGround);
     view.lodScale = shownNow.lodScale;  // (the cinematic camera's views start at 1: the game camera's LOD scale)
-    return picture.StartPhoto(view, width, height, FrameMoment(), 0);  // (0: the renderer's supersampling)
+    if (!picture.StartPhoto(view, width, height, FrameMoment(), 0)) return false;  // (0: the renderer's supersampling)
+    photoAsked = true, photoDropped = false;
+    return true;
   }
-  float PhotoProgress() const override { return picture.PhotoProgress(); }
-  bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) override { return picture.TakeDonePhoto(pixels, width, height); }
+  float PhotoProgress() const override { return photoDropped ? 1.0f : picture.PhotoProgress(); }
+  bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) override {
+    if (photoDropped) {  // (lost with the graphics device: done, and nothing to hand over)
+      photoDropped = photoAsked = false;
+      return false;
+    }
+    if (picture.PhotoProgress() >= 1) photoAsked = false;  // (done either way: handed over now, or it could not be made)
+    return picture.TakeDonePhoto(pixels, width, height);
+  }
   CineState Cine() const override {
     CineState s;
     s.on = cine.On(), s.easingBack = cine.EasingBack();
@@ -632,6 +650,7 @@ struct GameSession::Picture : WorldSource {
       if (render::World* w = picture.world()) w->cameraCut = true;
     // The icons on the resource deposits from far up (the renderer's World::depositIcons, its "resource icons"): the
     // main view's EnableResourceRendering (off, for one, while an operation's cinematic plays: FAF's gamemain.NISMode).
+    depositIconsNow = scene.resourceIcons;
     if (render::World* w = picture.world()) w->depositIcons = scene.resourceIcons;
     if (render::World* w = picture.world()) w->steadyFrames = GameSession::FramesByCount();  // (a stepped run: game_session.h)
     // The player's own looks (the Options menu's Remastered tab), when they change.
@@ -3076,6 +3095,7 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   auto made = std::make_unique<WindowPicture>();
   made->vulkan = vulkan, made->samples = samples;
   made->picture.SetVulkan(vulkan);                                  // (the player's Graphics API)
+  if (!shaderCache.empty()) made->picture.SetShaderCache(shaderCache);  // (checks: --shader-cache)
   made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Remastered tab's Low Latency, before Open)
   UseGameWindow(made->picture, window);
   if (window2_) UseSecondOn(made->picture, window2_, window2W_, window2H_);  // ([head2] made with the device)
@@ -3753,9 +3773,395 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (!capture2To_.empty() && wp.layer2W > 0 &&
       capture2Rgba_.size() == static_cast<size_t>(wp.layer2W) * static_cast<size_t>(wp.layer2H) * 4)
     SaveWindowCapture(capture2Rgba_, wp.layer2W, wp.layer2H, capture2To_), capture2To_.clear();
+  // The frame is shown (each of the three DrawToWindow above): did it find the graphics device gone? Then every
+  // picture is made anew here, between two frames (the renderer's request 71 B). One call while it is not.
+  ServeDevice();
 #else
   (void)target;
   (void)changed;
+#endif
+}
+
+// --- The graphics device lost, and every picture made anew (game_session.h, ServeDevice; the renderer's request 71 B) ---
+// The pictures this program has, and the thread that draws each:
+//   the window's (WindowPicture::picture): this thread, PresentToWindow. It shows the menus' map, the main menu's
+//     flight, every game's world, the second window and the extra views (they are views of this one picture), and the
+//     photo mode's photos;
+//   a game's own (Picture::own): this thread, the world view's Draw; only where the window's picture is not (a run
+//     without a window, --gdi, or the window's picture would not open);
+//   the menu background's own (Backdrop::Run): the background's thread; only the read-back way (without the window's
+//     picture).
+// As the program is today at most one of them lives at a time (the background is stopped before a game's picture
+// opens, and with the window's picture there are no others); all three are handled together all the same, as the
+// request asks: every one lets go before any makes its device anew.
+
+void GameSession::ServeDevice() {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (deviceClosing_) return;
+  // (one call on the picture this thread draws, and the background's flag, which its own thread sets)
+  render::WorldPicture* drawn = windowPicture_ ? &windowPicture_->picture : picture_ && picture_->own ? picture_->own.get() : nullptr;
+  bool lost = (drawn && drawn->DeviceLost()) || (menuBackdrop && menuBackdrop->DeviceLost());
+  if (!lost && windowPicture_ && picture_ && picture_->own) lost = picture_->own->DeviceLost();  // (both at once: not today)
+  if (!lost && deviceAsk_ == DeviceAsk::None) return;
+  if (!lost && deviceAsk_ == DeviceAsk::Lose) {
+    // (the check's real loss: this program's own device removed, as the renderer's --lose-device-at does it; the next
+    // frame a picture draws notices, and the frame boundary after that recovers by the way below)
+    deviceAsk_ = DeviceAsk::None;
+    const bool done = drawn ? drawn->LoseDeviceForTest() : menuBackdrop && menuBackdrop->LoseDeviceForTest();
+    deviceLoseDone_ = done;
+    Logf(done ? LogLevel::Info : LogLevel::Warning, "moho64ui: the graphics device: lost on purpose (moho64ui_RecoverDevice \"lose\"): %s",
+         done ? "done, the next frame drawn notices" : "this device cannot");
+    if (!done) {
+      deviceLast_ = DeviceResult{};
+      deviceLast_.mode = "lose", deviceLast_.error = "the device could not be lost on purpose";
+    }
+    return;
+  }
+  RecoverPictures();
+#endif
+}
+
+#ifdef MOHO64UI_WORLD_PICTURE
+void GameSession::RecoverPictures() {
+  using Clock = std::chrono::steady_clock;
+  const auto t0 = Clock::now();
+  auto since = [](Clock::time_point from) { return std::chrono::duration<double>(Clock::now() - from).count(); };
+  render::WorldPicture* windows = windowPicture_ ? &windowPicture_->picture : nullptr;
+  render::WorldPicture* own = picture_ && picture_->own ? picture_->own.get() : nullptr;
+  DeviceResult result;
+  // (checks, "fail": no device is asked for at all, and each round counts as one that found none)
+  const bool pretendNone = deviceAsk_ == DeviceAsk::Fail;
+  result.mode = deviceLoseDone_ ? "lose" : pretendNone ? "fail" : deviceAsk_ == DeviceAsk::Check ? "check" : "";
+  deviceAsk_ = DeviceAsk::None, deviceLoseDone_ = false;
+  // The reason, logged once: the next frames find no picture lost (or the program is closing).
+  if (windows && windows->DeviceLost()) result.wasLost = true, result.reason = windows->DeviceLostReason();
+  else if (own && own->DeviceLost()) result.wasLost = true, result.reason = own->DeviceLostReason();
+  else if (menuBackdrop && menuBackdrop->DeviceLost()) result.wasLost = true, result.reason = menuBackdrop->DeviceLostReason();
+  if (result.wasLost)
+    Logf(LogLevel::Warning, "moho64ui: the renderer says: %s. Every picture is made anew on a new device; the game itself goes on", result.reason.c_str());
+  else if (pretendNone)
+    Logf(LogLevel::Info, "moho64ui: the graphics device: a recovery that finds no device is played through (moho64ui_RecoverDevice \"fail\", a check)");
+  else
+    Logf(LogLevel::Info, "moho64ui: the graphics device is made anew though it is not lost (moho64ui_RecoverDevice, a check)");
+  // The seconds without a drawn frame: the window's title says why (set before the calls, put back after them).
+  if (windowTitle) windowTitle("FA Remastered: the graphics device was lost, restoring the picture");
+  // (a photo being made is dropped by the renderer: the photo mode hears that it could not be made, Picture::PhotoProgress)
+  if (picture_ && picture_->photoAsked) picture_->photoDropped = true;
+
+  // 1. Every picture lets go of the old device, each on the thread that draws it: none can make a new device while
+  // another still holds the lost one (RecoverDevice then fails at once: "still held by this program").
+  struct Mine {
+    const char* name;
+    render::WorldPicture* picture;
+    bool done = false;
+  };
+  std::vector<Mine> mine;
+  if (windows) mine.push_back({"the window's picture", windows});
+  if (own) mine.push_back({"the game's own picture", own});
+  for (Mine& m : mine) m.picture->LetGoOfLostDevice();
+  bool behindOwed = menuBackdrop && menuBackdrop->LetGoOfLostDevice();  // (on its thread, waited for)
+  const double letGoSeconds = since(t0);
+
+  // 2. Each made anew. No device yet (DeviceLost stays true): the round ends there and is tried again after a pause,
+  // kDeviceTries times in all (INFERRED numbers, game_session.h). A device but no map again: the program closes.
+  bool stillLost = false, mapGone = false;
+  bool loadBegunAgain = false;
+  for (int attempt = 1; attempt <= kDeviceTries; ++attempt) {
+    result.tries = attempt;
+    stillLost = false;
+    if (pretendNone) stillLost = true, result.error = "none was asked for: a check of the program's close";
+    for (Mine& m : mine) {
+      if (m.done || stillLost || mapGone) continue;
+      std::string error;
+      const bool ok = m.picture->RecoverDevice(&error);
+      const render::WorldPicture::RecoverNumbers n = m.picture->LastRecoverNumbers();
+      if (!ok && m.picture->DeviceLost()) {  // (no device could be made: what it kept of the game is held for the next try)
+        stillLost = true, result.error = error;
+        continue;
+      }
+      DeviceResult::One one;
+      one.name = m.name, one.ok = ok;
+      one.seconds = n.seconds, one.deviceSeconds = n.deviceSeconds, one.mapSeconds = n.mapSeconds, one.deviceTries = n.deviceTries;
+      one.props = n.props, one.effects = n.effects, one.looks = n.looks, one.world = n.world, one.loadBegunAgain = n.loadBegunAgain;
+      result.pictures.push_back(one);
+      if (!ok) {  // (DeviceLost false and no world: the map could not be opened again)
+        mapGone = true, result.error = error;
+        continue;
+      }
+      m.done = true;
+      if (m.picture == windows) loadBegunAgain = n.loadBegunAgain;
+      Logf(LogLevel::Info,
+           "moho64ui: the graphics device: %s made anew in %.2f s (the device %.2f s, %d %s; the map %.2f s%s; carried over: %d props' states, "
+           "%d effects' events, %d blueprints' looks%s)",
+           m.name, n.seconds, n.deviceSeconds, n.deviceTries, n.deviceTries == 1 ? "try" : "tries", n.mapSeconds, n.world ? "" : ", none was shown",
+           n.props, n.effects, n.looks, n.loadBegunAgain ? "; the map opening behind begun again" : "");
+    }
+    if (behindOwed && !stillLost && !mapGone) {
+      const Backdrop::Recovered r = menuBackdrop->RecoverDevice();  // (on its thread, waited for; the evening laid on there)
+      if (!r.own) {
+        behindOwed = false;  // (its thread ended meanwhile: no picture of its own any more)
+      } else if (!r.ok && r.lost) {
+        stillLost = true, result.error = r.error;
+      } else {
+        DeviceResult::One one;
+        one.name = "the menu background's own picture", one.ok = r.ok, one.world = true;
+        one.seconds = r.seconds, one.deviceSeconds = r.deviceSeconds, one.mapSeconds = r.mapSeconds, one.deviceTries = r.deviceTries;
+        result.pictures.push_back(one);
+        result.backdropHour = r.timeOfDay, result.backdropClouds = r.cloudCover;
+        if (r.ok) {
+          behindOwed = false;
+          Logf(LogLevel::Info, "moho64ui: the graphics device: the menu background's own picture made anew in %.2f s (the device %.2f s, %d %s; the map %.2f s)",
+               r.seconds, r.deviceSeconds, r.deviceTries, r.deviceTries == 1 ? "try" : "tries", r.mapSeconds);
+        } else {
+          mapGone = true, result.error = r.error;
+        }
+      }
+    }
+    if (!stillLost || mapGone) break;
+    if (attempt < kDeviceTries) {
+      Logf(LogLevel::Warning, "moho64ui: the graphics device: none could be made yet (%s): try %d of %d in %.0f s", result.error.c_str(), attempt + 1,
+           kDeviceTries, kDevicePauseMs / 1000.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(kDevicePauseMs));
+    }
+  }
+  result.seconds = since(t0);
+  if (windowTitle) windowTitle("");
+
+  if (stillLost || mapGone) {
+    // No picture any more: the program closes in order (the game's record and the preferences are written as at any
+    // end), with one sentence for the player.
+    deviceClosing_ = true;
+    deviceLast_ = result;
+    const std::string sentence =
+        mapGone ? "FA Remastered has to close: the graphics device was lost and made again, but the map could not be opened again (" + result.error + ")."
+                : "FA Remastered has to close: the graphics device was lost and could not be made again (" + result.error + ").";
+    if (closeProgram) closeProgram(sentence);
+    else Logf(LogLevel::Error, "moho64ui: %s", sentence.c_str());
+    return;
+  }
+
+  // 3. This program's part afterwards, as after SwapMap: what it sets on the world itself, and what it hands the card.
+  if (picture_) RedressGameWorld(*picture_);
+  if (windowPicture_) RedressWindowPicture(*windowPicture_, loadBegunAgain);  // (after the game's: its last step may begin a map)
+  result.ok = true;
+  ++deviceRecoveries_;
+  deviceLast_ = result;
+  Logf(LogLevel::Info,
+       "moho64ui: the graphics device: %zu picture(s) back %.2f s after the frame that %s (let go of in %.2f s, %d %s); the world's switches are set "
+       "again, and what the card is handed (the interface's layer, a picture over the window) goes to it whole with the next frame",
+       result.pictures.size(), result.seconds, result.wasLost ? "found it lost" : "was asked", letGoSeconds, result.tries,
+       result.tries == 1 ? "round" : "rounds");
+}
+
+// The window's picture after its device was made anew: what this program hands the card (the interface's layers, the
+// picture over the window) given again, the second window looked at, a map that was opening behind, and the switches
+// set on a menu's world. (A game's world: RedressGameWorld.)
+void GameSession::RedressWindowPicture(WindowPicture& wp, bool loadBegunAgain) {
+  using Kind = WindowPicture::Kind;
+  using Over = WindowPicture::Over;
+  render::WorldPicture& p = wp.picture;
+  // The interface's layers, the first window's and the second's: all of each with the next frame (GiveLayer,
+  // GiveSecondLayer take a size of 0 as "none given yet").
+  wp.layerW = wp.layerH = 0;
+  wp.layer2W = wp.layer2H = 0;
+  // The card's picture over the window (SetBackdrop) went with the device. The flight coming in over its kept first
+  // frame keeps that frame (GiveBackdrop would take a fade begun now for one from black); every other is given again
+  // by the next frame, as one not given yet (GiveBackdrop; a jump back's held picture: PresentToWindow).
+  if (wp.over == Over::Fade && wp.fadeKept && kept_ && !kept_->pixels.empty()) {
+    p.SetBackdrop(kept_->pixels.data(), kept_->pw, kept_->ph, kept_->pw,
+                  kept_->isStock ? render::WorldPicture::BackdropFit::Cover : render::WorldPicture::BackdropFit::Stretch, true);
+  } else {
+    p.SetBackdrop(nullptr, 0, 0, 0, render::WorldPicture::BackdropFit::Stretch, true);
+    if (card_) card_->fresh = !card_->pixels.empty();
+    wp.over = Over::None;
+  }
+  // [head2] The second window is the picture's own and made again with the device; should it not be, head 1 falls back
+  // to the plain copy by itself (run_window.cpp asks SecondWindowOn each frame).
+  if (window2_ && !p.SecondWindowOn())
+    Logf(LogLevel::Warning, "moho64ui: the graphics device: the renderer's second window did not open again (%s): head 1's interface is shown by the plain copy",
+         p.SecondWindowError().c_str());
+  // The menus' world: the evening (Backdrop::Dress, as at its swap), and under the main menu's flight the map's edge
+  // and the thinner air (StartFlightOnPicture). The flight's looks on the world itself are its map's `before`, which
+  // the renderer has run again; its picture's settings (the hour, the bundles, no bars) are the picture's own: kept.
+  if (render::World* w = wp.shows == Kind::Menu ? p.world() : nullptr) {
+    Backdrop::Dress(p);
+    if (flightShows_ && wp.shownMap == MenuFlight::kMap) {
+      SkyOnWorld(*w, "beyond", -1, "");
+      FlightHaze(w, wp.shownSky.taken, wp.shownSky.cinematicHaze);
+    }
+  }
+  // A map that was opening behind is begun again by the renderer (the same path, `before`, load camera and day; a
+  // session handed to it is not handed again, the request's point 5). Should it not have been, it is begun here.
+  // (LAST: BeginWindowMap may make the window's picture anew, and `wp` is then gone.)
+  if (wp.pending != Kind::None && !loadBegunAgain) {
+    const bool game = wp.pending == Kind::Game;
+    const std::string map = wp.pendingMap;
+    Logf(LogLevel::Warning, "moho64ui: the graphics device: the map opening behind (%s) was not begun again by the renderer: begun here", map.c_str());
+    wp.pending = Kind::None;
+    BeginWindowMap(game, map);
+  }
+}
+
+// A game's world after its picture's device was made anew (the window's picture or one of its own): the switches this
+// program sets on the world itself. GameStarted and Beat are NOT called again, nor is anything of the picture's own
+// set (the day and the weather, the focus army, the bundles, the selection, ranges and order lines: kept by the renderer).
+void GameSession::RedressGameWorld(Picture& pic) {
+  render::World* w = pic.picture.world();
+  if (!w) return;
+  // (the game's sky and the map's edge, as DressGamePicture's: a map opened behind had them in its `before` too, which
+  // the renderer has run again, but a picture of its own and the menu flight's world taken over have them from here)
+  SkyOnWorld(*w, skyNow_.edge, skyNow_.startHour, skyNow_.weather);
+  // (the player's looks as the picture last had them, the Photographic Look's grade with them: SetScene gives the
+  // grade only when it changes, and it has not. The rest it gives again with every scene, as the deposits' icons, but
+  // a frame drawn while a beat runs has no scene: all of it here, so that the first frame shown is right.)
+  if (pic.lookApplied) WorldLooks(*w, pic.lookNow, true);
+  w->depositIcons = pic.depositIconsNow;
+  w->steadyFrames = GameSession::FramesByCount();
+}
+#endif
+
+bool GameSession::AskDeviceRecovery(const std::string& mode, std::string* why) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  if (deviceClosing_) return *why = "the program is closing after a recovery that failed", false;
+  if (mode != "check" && mode != "lose" && mode != "fail") return *why = "the mode is \"check\", \"lose\" or \"fail\"", false;
+  if (!windowPicture_ && !(picture_ && picture_->own) && !(menuBackdrop && menuBackdrop->OwnPicture()))
+    return *why = "no picture of the world is open", false;
+  // (the renderer's first loss test wrote a short pipelines file over the player's: a loss on purpose only where the
+  // run keeps its shaders and pipelines in a folder of its own)
+  if (mode == "lose" && shaderCache.empty())
+    return *why = "losing the device on purpose needs --shader-cache <a folder of the test's own> (the player's kept pipelines are not risked)", false;
+  deviceAsk_ = mode == "lose" ? DeviceAsk::Lose : mode == "fail" ? DeviceAsk::Fail : DeviceAsk::Check;
+  return true;
+#else
+  (void)mode;
+  return *why = "this build has no renderer", false;
+#endif
+}
+
+void GameSession::PushDeviceState(lua_State* L) {
+  auto num = [L](const char* k, double v) {
+    lua_pushstring(L, k);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  };
+  auto boolean = [L](const char* k, bool v) {
+    lua_pushstring(L, k);
+    lua_pushboolean(L, v);
+    lua_rawset(L, -3);
+  };
+  auto str = [L](const char* k, const std::string& v) {
+    lua_pushstring(L, k);
+    lua_pushstring(L, v.c_str());
+    lua_rawset(L, -3);
+  };
+  lua_newtable(L);
+  num("recoveries", deviceRecoveries_);
+  boolean("pending", deviceAsk_ != DeviceAsk::None || deviceLoseDone_);
+  boolean("closing", deviceClosing_);
+  str("shaderCache", shaderCache);
+#ifdef MOHO64UI_WORLD_PICTURE
+  render::WorldPicture* shown = picture_ ? &picture_->picture : windowPicture_ ? &windowPicture_->picture : nullptr;
+  boolean("lost", (windowPicture_ && windowPicture_->picture.DeviceLost()) || (picture_ && picture_->picture.DeviceLost()) ||
+                      (menuBackdrop && menuBackdrop->DeviceLost()));
+  lua_pushstring(L, "pictures");  // (which pictures the program has now)
+  lua_newtable(L);
+  boolean("window", windowPicture_ != nullptr);
+  boolean("game", picture_ != nullptr);
+  boolean("gameOwn", picture_ && picture_->own);
+  boolean("backdrop", menuBackdrop && menuBackdrop->OwnPicture());
+  lua_rawset(L, -3);
+  lua_pushstring(L, "last");  // (what the last recovery did)
+  lua_newtable(L);
+  {
+    const DeviceResult& r = deviceLast_;
+    boolean("ok", r.ok);
+    boolean("wasLost", r.wasLost);
+    str("mode", r.mode);
+    str("reason", r.reason);
+    str("error", r.error);
+    num("seconds", r.seconds);
+    num("tries", r.tries);
+    lua_pushstring(L, "pictures");
+    lua_newtable(L);
+    for (size_t i = 0; i < r.pictures.size(); ++i) {
+      const DeviceResult::One& o = r.pictures[i];
+      lua_newtable(L);
+      str("name", o.name);
+      boolean("ok", o.ok);
+      num("seconds", o.seconds);
+      num("deviceSeconds", o.deviceSeconds);
+      num("mapSeconds", o.mapSeconds);
+      num("deviceTries", o.deviceTries);
+      num("props", o.props);
+      num("effects", o.effects);
+      num("looks", o.looks);
+      boolean("world", o.world);
+      boolean("loadBegunAgain", o.loadBegunAgain);
+      lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    lua_rawset(L, -3);
+  }
+  lua_rawset(L, -3);
+  // The switches this program sets on the world itself, as the world shown has them now (a game's, else the window's):
+  // against moho64ui_Looks() and the game's sky, they say whether a new world was given them again.
+  if (const render::World* w = shown ? shown->world() : nullptr) {
+    lua_pushstring(L, "world");
+    lua_newtable(L);
+    boolean("originalLook", w->look == render::Look::Original);
+    boolean("tracers", w->ribbons.tracers);
+    boolean("richGround", w->terrain.richGround);
+    boolean("snowTracks", w->tracks.on);
+    boolean("bloom", w->bloom);
+    boolean("waterRipples", w->waterRipples);
+    boolean("battleEffects", w->blastWaves && w->litSmoke && w->hotMetal && w->remasteredBuild);
+    boolean("energyShields", w->energyShields);
+    boolean("lampsTeamColour", w->lampsTeamColour);
+    boolean("stormCells", w->stormCells);
+    boolean("starryNight", w->starryNight);
+    boolean("remasteredGate", w->remasteredGate);
+    boolean("waterFxMirror", w->waterFxMirror);
+    boolean("photoLook", w->photoLook.on);
+    num("shadowSize", w->shadowSize);
+    num("meshDetail", w->meshes.detail);
+    num("iconScale", w->icons.playerScale);
+    num("bloomIntensity", w->bloomIntensity);
+    num("sharpen", w->post.sharpen);
+    num("hazeMist", w->hazeMist);
+    num("hullGlow", w->hullGlow);
+    num("decalFadeFraction", w->decalFadeFraction);
+    boolean("worldBeyond", w->worldBeyond);  // (the game's sky and the map's edge: SkyOnWorld)
+    boolean("frame", w->frame);
+    boolean("mapSurround", w->mapSurround);
+    num("cloudCover", w->cloudCover);
+    num("rain", w->rain);
+    num("fog", w->fog);
+    num("timeOfDay", w->timeOfDay);
+    num("cinematicHaze", w->cinematicHaze);
+    boolean("steadyFrames", w->steadyFrames);
+    boolean("depositIcons", w->depositIcons);
+    lua_rawset(L, -3);
+  }
+  if (shown) {  // (the last frame's own numbers: a picture that draws again has them again)
+    const render::WorldPicture::Stats& s = shown->LastStats();
+    lua_pushstring(L, "stats");
+    lua_newtable(L);
+    num("drawCalls", s.drawCalls);
+    num("models", s.models);
+    num("triangles", static_cast<double>(s.triangles));
+    num("width", s.width);
+    num("height", s.height);
+    lua_rawset(L, -3);
+  }
+  if (menuBackdrop) {
+    lua_pushstring(L, "backdrop");
+    lua_newtable(L);
+    num("pictures", static_cast<double>(menuBackdrop->Pictures()));
+    num("timeOfDay", deviceLast_.backdropHour);  // (its own new world's after the last recovery, as dressed; -1: none yet)
+    num("cloudCover", deviceLast_.backdropClouds);
+    lua_rawset(L, -3);
+  }
+#else
+  boolean("lost", false);
 #endif
 }
 
@@ -3897,6 +4303,7 @@ void GameSession::OpenPicture() {
     render::gSceneSamples = Looks().SceneSamples();
   }
   pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
+  if (!shaderCache.empty()) pic->picture.SetShaderCache(shaderCache);  // (checks: --shader-cache)
   pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
   pic->picture.SetLowLatency(Pacing().lowLatency);  // (the Remastered tab's Low Latency)
   pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Remastered tab's Season)

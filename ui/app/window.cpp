@@ -439,6 +439,16 @@ void Window::Show() {
   if (hwnd_) ShowWindow(static_cast<HWND>(hwnd_), noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
 }
 
+// (On the window's own thread the system draws the new title at once, inside this call: it shows also while that
+// thread then stays in one long call, which is what it is for. A full screen has no title bar: the taskbar's and the
+// window list's text only.)
+void Window::SetTitle(const std::string& title) {
+  if (!hwnd_) return;
+  wchar_t wtitle[256];
+  if (!MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, wtitle, 256)) return;
+  SetWindowTextW(static_cast<HWND>(hwnd_), wtitle);
+}
+
 bool Window::Pump() {
   MSG msg;
   while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -476,6 +486,7 @@ namespace moho::ui {
 Window::~Window() {}
 bool Window::Create(int, int, const char*, Callbacks, bool, bool, const Screen*) { return false; }
 void Window::Show() {}
+void Window::SetTitle(const std::string&) {}
 bool Window::ScreenSize(int*, int*) { return false; }
 std::vector<Window::Screen> Window::Screens() { return {}; }
 int Window::RefreshRate() { return 60; }

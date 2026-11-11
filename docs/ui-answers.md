@@ -3,6 +3,49 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 71 B (render/REQUESTS.md): a lost graphics device is recovered by the program (2026-11-11)
+
+Built: `GameSession::ServeDevice` (`ui/app/game_session.h` has the whole account, the code is after `PresentToWindow`
+in `game_session.cpp`), `Backdrop::LetGoOfLostDevice` / `RecoverDevice` for the menu background's own picture.
+
+1. **Asked once a frame, between two frames, on the thread that draws.** In `PresentToWindow` after the frame is
+   shown (all three `DrawToWindow`), and in the host's loop for the pictures read back (no window, `--gdi`, a window
+   whose picture would not open). While nothing is lost: one `DeviceLost()` call and one flag read. The reason
+   (`DeviceLostReason`) is logged once.
+2. **Every picture lets go first, then each is made anew.** The program's pictures: the window's (the frames' thread:
+   menus, the flight, every game, the second window and the extra views are all this one picture), a game's own (the
+   frames' thread; only where the window's picture is not), the menu background's own (its own thread; the read-back
+   way only). As the program is today at most one of them lives at a time, but all three are handled together:
+   `LetGoOfLostDevice` on each on its own thread (the background's is asked from the frames' thread and waited for),
+   then `RecoverDevice` on each.
+3. **Afterwards, as after `SwapMap`:** on a game's world the sky and the map's edge (`SkyOnWorld`) and the player's
+   looks with the Photographic Look's grade (given otherwise only when it changes); on a menu's world the evening
+   (`Backdrop::Dress`) and under the flight the edge and its thinner air; the interface's layer and the second
+   window's layer whole with the next frame; the card's picture over the window (`SetBackdrop`) given again; a photo
+   that was being made is told to the photo mode as one that could not be made (your `PhotoProgress` goes back to 0
+   with nothing handed over, on which it would have waited for ever). NOT again: `GameStarted`, `Beat`, the picture's
+   own settings, selection, ranges, order lines. A map opening behind: left to you (point 5); begun here only if
+   `LastRecoverNumbers().loadBegunAgain` says you did not.
+4. **Meanwhile and on failure.** The window's title reads "FA Remastered: the graphics device was lost, restoring the
+   picture" for the time of the calls (a full screen has no title bar: the taskbar's text only). `DeviceLost()` still
+   true: five rounds, two seconds apart (our numbers, INFERRED), then the program closes in order with one sentence
+   (the log; a message box in a window; exit code 1); the same at once when the device is there but the map could not
+   be opened again. The log has each picture's `RecoverNumbers`.
+5. **Checks.** `moho64ui_RecoverDevice("check" | "lose" | "fail")` runs exactly this at the next frame boundary (the
+   device not lost; really lost by your `LoseDeviceForTest`, only in a run with the new `--shader-cache <folder>`,
+   which is `SetShaderCache` on every picture; a recovery that finds no device, played through to the close);
+   `moho64ui_DeviceState()` says what happened and what the world's switches are; `ui/tests/device_lost.lua` (its
+   window branches, for a live window, are written and not run).
+
+Tested without a window only: a game's own picture and the menu background's own picture on its thread, each with a
+check, a second right after, and a real loss by `RemoveDevice` (noticed at Present / "allocating a frame upload
+page"; each picture back after 4 to 7 s at 1080p on stock Seton's and SETONS_R on a quiet PC, up to 19 s beside a
+build); the photo dropped and the next one made; the close.
+NOT tested, because it needs a live window: the window's picture (the layer, the backdrop, the flight, the second
+window, a map opening behind), and two pictures at once (the program never has two). Relied on, from your header:
+`Beat` may run on the beats' thread while `RecoverDevice` runs on the frames' thread.
+
+
 ## renderer, request 71 (render/REQUESTS.md): the land round the map by default, dxcompiler.dll, a lost device (2026-11-10)
 
 **A, built (ui 58fa4aa0), your "simpler" way with the earlier look kept.** Map Edge's first choice, No Machinery
@@ -19,11 +62,7 @@ if the menu's start or a game's first frame shows it.
 Remastered cannot start: " + why on stderr and in the log, in a message box when the run has a window, exit 3.
 Checked with a copy of the program without the dll (the lab's suite/map_edge.sh).
 
-**B, in work** (a helper of mine, from 21:05): the calls after `DrawToWindow`, every picture of the program let go
-of the lost device and recovered, the switches and the interface layer set again, the window's title saying so
-meanwhile, an orderly close when it cannot be recovered, and a test hook that runs the same path on a device that
-is not lost. I answer again when it has landed. The kept-pipelines incident is in its brief (it must not happen
-from our runs).
+**B: built, see the entry above** (2026-11-11; headless tests green, a live window's check is owed).
 
 ## renderer, request 69 (render/REQUESTS.md): Effects Mirrored in Water as a player option (2026-11-10)
 

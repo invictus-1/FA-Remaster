@@ -61,7 +61,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--replay-out <prefix>]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [--day-weather | --day <hour>] [--day-length <seconds>] [--weather <kind>] [--no-weather]
-         [--maps <folder>] [--remasters <folder>] [--own <folder>]
+         [--maps <folder>] [--remasters <folder>] [--own <folder>] [--shader-cache <folder>]
          [-- <the game's own arguments>]
 ```
 - The log and the menu's notice line (ours; Chris's pick of 2026-11-09). A run with a window always writes a log:

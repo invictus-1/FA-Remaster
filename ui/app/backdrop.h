@@ -19,6 +19,7 @@
 //   up) none is made.
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -94,8 +95,57 @@ class Backdrop : public BackdropSource {
   // screenshot); false after `seconds` without that.
   bool WaitUntilReady(double seconds);
 
+  // --- the graphics device lost, and made again (the renderer's request 71 B; render/world_picture.h [devicelost]) ---
+  // The read-back way's own picture is made and drawn on this background's thread, so its part of a recovery is done
+  // there, asked for from the interface's thread and waited for (GameSession::ServeDevice, which does the same with
+  // the program's other pictures: none can make a new device while another still holds the lost one, so every
+  // picture lets go first and only then each makes its own anew). The direct way has no picture here (the window's
+  // own shows the map): these then answer false, and nothing is done.
+  // Its picture noticed that the device is gone (after a frame it drew: it draws no more until it is made anew).
+  bool DeviceLost() const { return deviceLost_.load(std::memory_order_relaxed); }
+  std::string DeviceLostReason();
+  // The first half (WorldPicture::LetGoOfLostDevice) on its thread; a picture still opening is waited for first.
+  // False: it has no picture of its own (not begun, the direct way, ended).
+  bool LetGoOfLostDevice();
+  // The second half (WorldPicture::RecoverDevice) there, and the evening laid on the new world (Dress).
+  struct Recovered {
+    bool own = false;   // it has a picture of its own (false: nothing was to be done)
+    bool ok = false;    // made anew
+    bool lost = false;  // not ok: no device could be made (ask again later); else its map could not be opened again
+    std::string error;
+    double seconds = 0, deviceSeconds = 0, mapSeconds = 0;  // (WorldPicture::LastRecoverNumbers)
+    int deviceTries = 0;
+    float timeOfDay = -1, cloudCover = -1;  // (tests: the new world's, as Dress left them)
+  };
+  Recovered RecoverDevice();
+  // (checks: moho64ui_RecoverDevice("lose")) WorldPicture::LoseDeviceForTest on its picture, on its thread.
+  bool LoseDeviceForTest();
+  // (checks, before Begin: --shader-cache) Where its own picture's device keeps its compiled shaders and pipelines
+  // (WorldPicture::SetShaderCache); empty: the player's own folder, as ever.
+  void SetShaderCache(const std::string& folder) { shaderCache_ = folder; }
+  // (tests) How many pictures its thread has finished so far.
+  uint64_t Pictures();
+  // It has a picture of its own, there or being opened (the read-back way, begun and not ended).
+  bool OwnPicture();
+
  private:
   void Run();
+  // (the device's asks: Run's thread serves them between its frames; true while its picture has no device to draw with)
+  enum class DeviceAsk { None, LetGo, Recover, Lose };
+  enum class PictureState { None, Opening, Up, Ended };  // (its own picture: none asked for, being opened, there, gone)
+  bool ServeDevice(render::WorldPicture& picture);
+  bool AskDevice(DeviceAsk ask, Recovered* result);
+  void SetPictureState(PictureState state);
+  std::mutex deviceMutex_;  // (the asks and their answers, the picture's state, the reason)
+  std::condition_variable deviceCv_;
+  PictureState pictureState_ = PictureState::None;
+  DeviceAsk deviceAsk_ = DeviceAsk::None;
+  bool deviceAnswered_ = false, deviceAnswer_ = false;
+  Recovered deviceResult_;
+  std::string deviceReason_;
+  std::atomic<bool> deviceLost_{false};
+  bool deviceLetGo_ = false;  // (the thread's: its picture has let go of its device and waits for RecoverDevice)
+  std::string shaderCache_;
   const Vfs* vfs_;
   std::string map_;
   Mode mode_ = Mode::Dusk;

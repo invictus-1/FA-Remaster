@@ -123,6 +123,10 @@ class UserState {
     // The main menu's flight as it stands, pushed as a table (moho64ui_MenuFlight, for tests: app/menu_flight.h
     // PushInfo); unset: moho64ui_MenuFlight returns nil.
     std::function<void(lua_State* L)> menuFlightInfo;
+    // The graphics device's recovery, for tests (app/game_session.h: GameSession::AskDeviceRecovery and
+    // PushDeviceState behind moho64ui_RecoverDevice and moho64ui_DeviceState); unset: both return nil.
+    std::function<bool(const std::string& mode, std::string* why)> recoverDevice;
+    std::function<void(lua_State* L)> deviceState;
     // The scripts' clock (CurrentTime, GetSystemTimeSeconds) runs on while a frame's scripts run, as the
     // original's GetSystemTimer does (FA exe 0x955730, which both read): on in a live window; off in a test
     // run, whose clock goes in fixed frame steps.
@@ -414,6 +418,8 @@ void RegisterBasicBindings(lua_State* L);
 // A script has asked for the program to end (ExitApplication): the host's loops stop after the
 // frame. One flag for the whole program, whichever state asked.
 bool ExitRequested();
+// The host itself asks for the same end (ours: the graphics device lost for good, GameSession::ServeDevice).
+void RequestExit();
 // A script has asked to leave the running game (ExitGame: back to the front end) or to start it
 // over (RestartSession): 1 or 2, once, then 0 again. The host acts on it between two frames.
 int TakeSessionRequest();

@@ -45,6 +45,10 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
   bool Create(int width, int height, const char* title, Callbacks callbacks, bool fullScreen = false, bool show = true,
               const Screen* on = nullptr);
   void Show();
+  // The text in the window's title bar (and in the taskbar and the system's list of windows), changed while it is
+  // open: the host says there what it is doing while it cannot draw (GameSession::ServeDevice: the picture being made
+  // anew after the graphics device was lost, the renderer's request 71 B). Ours.
+  void SetTitle(const std::string& title);
   // The main screen's size in pixels; false when there is no window system.
   static bool ScreenSize(int* width, int* height);
   // Change the mode while open: `full` fills a screen without a frame: `on`, or without it the
@@ -181,6 +185,11 @@ struct WindowHooks {
   std::function<bool()> secondDrawn;
   std::function<bool(const std::string& path)> secondCapture;
   std::function<void()> secondClosing;
+  // Hears, once the window is open (whichever way it is shown), a function that sets the window's title, an empty
+  // text for the window's own title again; and an empty function before the window goes. For what the host must say
+  // while no frame can be drawn (GameSession::windowTitle: the graphics device lost and the picture being made anew,
+  // the renderer's request 71 B). Unset: nobody asks.
+  std::function<void(std::function<void(const std::string& title)> setTitle)> title;
 };
 int RunWindow(const std::function<UserState&()>& current, int width, int height, int maxFrames,
               const std::function<void(double seconds, SoftwareTarget& target)>& eachFrame, bool fullScreen = false,
