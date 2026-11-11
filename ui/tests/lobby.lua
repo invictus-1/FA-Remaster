@@ -64,7 +64,8 @@ check("and the map's own light is the first choice", options.RemasterDayStart.va
 check("a day takes twenty minutes unless chosen", options.RemasterDayLength.values[options.RemasterDayLength.default], '20')
 check("the map's edge has no machinery unless chosen (Chris's choice)", options.RemasterMapEdge.values[options.RemasterMapEdge.default].key, 'beyond')
 check("and the original's frame is the other choice", options.RemasterMapEdge.values[2].key, 'frame')
-check("and the map's own sculpted land the third (the renderer's request 62)", options.RemasterMapEdge.values[3].key, 'surround')
+check("and the mirrored map, the earlier look, the third (the sculpted land is the first's since 2026-11-10)", options.RemasterMapEdge.values[3].key, 'mirror')
+check("the first says so", string.find(options.RemasterMapEdge.values[1].help, "sculpted land", 1, true) ~= nil, true)
 
 -- The program's own looks: options of each player in the Options menu's Remastered tab (after Video; Chris,
 -- 2026-11-08), applied at the start (optionslogic.Apply) and when changed. One map of both tabs (the game's

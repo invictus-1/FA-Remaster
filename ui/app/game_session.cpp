@@ -157,13 +157,15 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
 // (weather that changes by itself is the renderer's, by the game's seed and clock: WorldPicture::SetDayAndWeather).
 void SkyOnWorld(render::World& w, const std::string& edge, float startHour, const std::string& kind) {
   // The map's edge, one of the three looks (the renderer's answer to ui request 20: all three
-  // switches set, as their defaults are neither look; its request 62: "surround" is the land
-  // beyond with the map's own sculpted land there, where the map brings one).
+  // switches set, as their defaults are neither look; its requests 62 and 71 A: the land beyond is
+  // the map's own sculpted land where the map brings one, Chris's default of 2026-11-10, and
+  // "mirror" the map laid out again mirrored on every map, the look before that. "surround", the
+  // name the sculpted land had as a choice of its own for a day, is read as "beyond").
   const bool frame = edge == "frame";
   w.worldBeyond = !frame;
   w.frame = frame;
   w.beyondHaze = false;
-  w.mapSurround = edge == "surround";
+  w.mapSurround = !frame && edge != "mirror";
   if (startHour < 0) return;
   struct Kind {
     const char* name;
@@ -1972,7 +1974,8 @@ void GameSession::ReadLookOptions(lua_State* L, int options) {
   else if (!length.empty() && std::atof(length.c_str()) > 0) skyNow_.dayLengthSeconds = static_cast<float>(std::atof(length.c_str()) * 60.0);  // minutes
   if (!weather.empty()) skyNow_.weather = weather;
   const std::string edge = option("RemasterMapEdge");
-  if (edge == "frame" || edge == "beyond" || edge == "surround") skyNow_.edge = edge;
+  if (edge == "frame" || edge == "beyond" || edge == "mirror") skyNow_.edge = edge;
+  else if (edge == "surround") skyNow_.edge = "beyond";  // (the choice of 2026-11-09, the default since the 10th)
 }
 
 namespace {
@@ -3754,8 +3757,8 @@ void GameSession::DressGamePicture(Picture& pic) {
   if (render::World* w = pic.picture.world()) SkyOnWorld(*w, skyNow_.edge, skyNow_.startHour, skyNow_.weather);
   Logf(LogLevel::Info, "moho64ui: session: the map's edge: %s",
        skyNow_.edge == "frame" ? "the original's frame of machinery"
-       : skyNow_.edge == "surround" ? "no machinery, the map's own sculpted land beyond (where it has one)"
-                                    : "no machinery, the land beyond");
+       : skyNow_.edge == "mirror" ? "no machinery, the map laid out again mirrored beyond"
+                                  : "no machinery, the map's own sculpted land beyond (where it has one)");
   if (skyNow_.startHour >= 0) {
     pic.picture.SetDayAndWeather(skyNow_.startHour, skyNow_.dayLengthSeconds, WeatherByItself(skyNow_.weather));
     Logf(LogLevel::Info, "moho64ui: session: the day starts at %.2f h, a day takes %.0f game seconds, weather \"%s\"",

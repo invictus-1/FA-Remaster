@@ -348,12 +348,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   tests). Tests: `ui/tests/dualhead.lua`, `ui/tests/screens.lua` (the lists, no window;
   `MOHO64UI_SCREENS=2560x1440@240,1920x1080@60` makes up screens) and `ui/tests/screens_window.lua`
   (a live window moved from screen to screen, then started on the one kept).
-  Map Edge (`RemasterMapEdge`): "No Machinery" (the land and sea go on past the map's edge,
-  greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14) or
-  "Machinery" (the original's frame of machinery round the map), or "Sculpted Land" (as No
-  Machinery, with the land sculpted for the map past its edges on maps that bring one, today
-  Seton's Clutch Remastered; `World::mapSurround`). `--map-edge frame|beyond|surround` is the
-  same for a game given with `--session`.
+  Map Edge (`RemasterMapEdge`): "No Machinery" (`beyond`: the land goes on past the map's edge,
+  greyed out where units cannot go, no haze; the default, Chris's choice of 2026-10-14; since
+  2026-11-10 it is the land sculpted for the map on maps that bring one, today Seton's Clutch
+  Remastered, `World::mapSurround`, and the map laid out again mirrored on the others),
+  "Machinery" (`frame`: the original's frame of machinery round the map) or "Mirrored Map"
+  (`mirror`: the map laid out again mirrored on every map, the look before 2026-11-10).
+  `--map-edge frame|beyond|mirror` is the same for a game given with `--session`.
 - `--day-weather`, `--day <hour>`, `--day-length <seconds>` (0: the hour stands), `--weather
   <kind>` (changing, cold, dry, none, clear, cloudy, overcast, rain, storm, fog, snow),
   `--no-weather`: the same for a game whose configuration does not say (a recorded one given with

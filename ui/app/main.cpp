@@ -45,6 +45,7 @@
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/remasters.h"
 #include "render/view.h"
+#include "render/world_picture.h"
 #endif
 #include "script/mount.h"
 #include "script/script_state.h"
@@ -120,7 +121,8 @@ bool menuFlightHeadless = false;
 // rain, storm, fog, snow) / --no-weather: the day and the weather in the picture of a game whose
 // configuration does not say (a game from the lobby says: its options RemasterDayStart,
 // RemasterDayLength, RemasterWeather). Without them such a game has the map's own fixed light.
-// --map-edge frame|beyond|surround: likewise the map's edge (RemasterMapEdge); without it, "beyond".
+// --map-edge frame|beyond|mirror: likewise the map's edge (RemasterMapEdge); without it, "beyond" (the map's own
+// sculpted land past its edges where it brings one; "mirror": the map laid out again mirrored, the earlier look).
 ui::GameSession::Sky sky;
 // --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
 // (maps in the making). --remasters <folder> (may be given more than once): the remastered units' own files, one
@@ -332,6 +334,23 @@ int main(int argc, char** argv) {
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
                  "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
     return 2;
+  }
+  // The shader compiler must be beside the program (dxcompiler.dll; the renderer's request 71 C, its answer to ui
+  // request 51: without it Direct3D's old compiler was used and the first map frame never came). Asked before any
+  // picture or window is made: the player is told in one sentence that names the full path, and nothing starts.
+  if (std::string why; !render::WorldPicture::ShaderCompilerReady(&why)) {
+    const std::string line = "FA Remastered cannot start: " + why;
+    std::fprintf(stderr, "moho64ui: %s\n", line.c_str());
+    LogSetEcho(false);
+    Logf(LogLevel::Error, "moho64ui: %s", line.c_str());
+#ifdef _WIN32
+    if (windowed) {  // (a headless run has nobody to read a dialog: the line above and the log are its answer)
+      std::wstring wide(line.size() + 1, L'\0');
+      MultiByteToWideChar(CP_UTF8, 0, line.c_str(), -1, wide.data(), static_cast<int>(wide.size()));
+      MessageBoxW(nullptr, wide.c_str(), L"FA Remastered", MB_OK | MB_ICONERROR);
+    }
+#endif
+    return 3;
   }
   if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
   AnswerSystemFolders(o);

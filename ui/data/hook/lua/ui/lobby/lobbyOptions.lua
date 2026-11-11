@@ -58,12 +58,15 @@ table.insert(globalOpts, 4, {
     help = "What lies round the map, where no unit can go",
     key = 'RemasterMapEdge',
     values = {
-        { text = "No Machinery", help = "The land and sea go on past the map's edge, greyed out where units cannot go", key = 'beyond' },
+        -- (Chris, 2026-11-10: "On by default", the renderer's request 71 A: the land sculpted for the map past its edges
+        -- (its request 62) is what No Machinery shows on a map that brings one; a map without one is laid out again
+        -- mirrored, as before. The key stays 'beyond', so what a profile, a preset or a replay kept as 'beyond' shows
+        -- it too; the choice 'surround' of 2026-11-09 is gone: a profile that kept it is given this default by the
+        -- lobby (its key is no longer one of the values), and the program reads it as 'beyond'.)
+        { text = "No Machinery", help = "The land goes on past the map's edge: the map's own sculpted land on maps that bring it (Seton's Clutch Remastered), other maps laid out again mirrored; greyed out where units cannot go", key = 'beyond' },
         { text = "Machinery", help = "The frame of machinery round the map, as in the original game", key = 'frame' },
-        -- (the renderer's request 62, Chris 2026-11-09: land sculpted for the map past its edges, in place of the map
-        -- laid out again mirrored; a map without one is drawn as No Machinery. Not the default: the first one, Seton's
-        -- Clutch Remastered's, is plain ground until the visuals track's detail pass)
-        { text = "Sculpted Land", help = "The map's own land past its edge, on maps that bring it (Seton's Clutch Remastered); other maps as No Machinery", key = 'surround' },
+        -- (the earlier look of No Machinery, kept as a choice: the map laid out again mirrored on every map)
+        { text = "Mirrored Map", help = "The map laid out again mirrored past its edge on every map, the earlier look of No Machinery", key = 'mirror' },
     },
 })
 
