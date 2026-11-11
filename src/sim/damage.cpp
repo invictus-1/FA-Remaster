@@ -763,7 +763,14 @@ void BeamTick(Sim& sim, CollisionBeam* b) {
   lua_State* L = sim.L();
   if (b->destroyQueued || !b->HasLuaObject()) return;
   UnitWeapon* w = b->weapon;
-  if (!w || !w->HasLuaObject() || !w->unit || w->unit->destroyQueued) return;
+  // 0x6735c6..0x6735ee: the beam's turn ends only when its weapon (the weak pointer +0x28c) or the entity it rides
+  // (+0x18c) is gone, i.e. deleted with the unit at the end of the beat its Destroy() was called in (ours: the
+  // weapon's script object, unbound when the destroy queue is drained); there is no test of the unit's Destroy() flag.
+  // So in that beat the beam still makes its check. Seen (weapons range, scene uefair, R0 move 4071 and R1 move
+  // 6296): the range destroys the Novax satellite xea0002 and its target at the end of a case, in the script
+  // threads' stage; the original's beam damages the target once more in that beat (90, after the case's last
+  // line), ours had stopped at the Destroy().
+  if (!w || !w->HasLuaObject() || !w->unit) return;
   Quat q;
   const Vec3 muzzle = BeamMuzzle(sim, b, &q);
   sim.HoldShape(b);

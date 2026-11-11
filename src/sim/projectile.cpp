@@ -1193,9 +1193,18 @@ int Self(lua_State* L) {
   return 1;
 }
 
+// cfunc_ProjectileGetLauncherL 0x6a1430: the weak pointer projectile+0x278; nil only when it is empty (0x6a14b8..
+// 0x6a14c5), else the entity's script object (entity+0x20, 0x6a14cd): no test of whether Destroy() was called on it.
+// The pointer empties when the launcher's object is deleted, at the end of the beat (EntityDb::Purge), which is when
+// ours unbinds the script object (Sim::ProcessDestroyQueue). So a shell made in the beat its launcher was destroyed,
+// after the Destroy(), still has its launcher for the rest of that beat. Seen (weapons range, scene uefair, R0 rout,
+// 3296): the range destroys the strategic bomber uea0304 and its targets at the end of a case; the bomber's weapon
+// thread runs later in the same beat and drops its second bomb. FAF's CalculateBallisticAcceleration begins with
+// projectile:GetLauncher() and returns the default 4.9 without one: the original's bomb lands on its target after 24
+// beats (the computed fall, 200 h / t^2 = 6.27), ours fell with 4.9 for 28 beats and 4.1 further on.
 int l_GetLauncher(lua_State* L) {
   Projectile* p = P(L);
-  if (p->launcher && !p->launcher->destroyQueued && p->launcher->HasLuaObject()) PushObject(L, p->launcher);
+  if (p->launcher && p->launcher->HasLuaObject()) PushObject(L, p->launcher);
   else lua_pushnil(L);
   return 1;
 }
