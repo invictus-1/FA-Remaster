@@ -25,6 +25,34 @@
 // the ground is (wet, puddles and snow where the map's own lie), shadowed by its own hills and the map's (each point
 // looks toward the sun over the heights), then dimmed and lost with the distance as all that lies beyond the edge
 // (lighting.h, BeyondMap).
+//
+// The detail look (2026-11-10; the visuals session's detail pass, visuals/renderer_reply_lod.md section 120): the json
+// may name three more files beside the heights, and with them the surround is the map's own ground and scenery:
+//     "masks": { "file": "x_surround_masks.png",    8-bit RGBA PNG over the heights' square, the north row first:
+//                "samples": 1537,                   which of the map's ground layers lies where. Red, green, blue
+//                "r": 1, "g": 2, "b": 3, "a": 7,    and alpha are the shares of the layers of these numbers (the
+//                "rest": 0 },                       map's own: 0 its lower layer, 1 to 8 its strata), what the four
+//                                                   leave of 255 the share of layer "rest"
+//     "forest": "x_surround_forest.png",            8-bit grey PNG over the same square: 255 closed forest
+//     "forest_floor": 5,                            (may be left out; here or among the masks' numbers) the layer laid
+//                                                   under the forest by that picture
+//     "forest_colour": [0.165, 0.155, 0.095],         (may be left out) the far forest's crowns, as stored colours
+//     "decor": "x_surround_decor.bin"               the scenery standing on it (scmap.h, LoadDecor: the map's own
+//                                                   decor format); drawn by the world (World::surroundScenery)
+//   Its GROUND is then drawn in the map's own layers (the ground's own albedos, normals and third maps at the map's
+//   repeats: Terrain::BindLayers), laid by the masks in the layers' order and as the ground's shader lays them (a
+//   layer with a third map comes through by its height first, and brings its roughness and crease shading); the upper
+//   layer, which lies over the map only, as its mean where each layer shows on the map (Terrain::UpperByLayer). Within
+//   `ownColours` world units of the edge the map's own masks and upper layer (read on past the edge, mirrored) go over
+//   into the surround's, share by share, so that at the edge the two grounds are the same ground. Cheap far off: a
+//   layer that has no share at a pixel is not read, and the layers' normals only within `fineReach` of the eye. No
+//   relief, no deep tracks, no mud mask, no wet twins and no snow materials: lit, wet, snowed and dimmed with the
+//   distance as the block-out is (ModernLight, BeyondMap), with the wet band along the water as the map's shores have.
+//   Its FOREST: the layer "forest_floor" under it; where single trees stand (the scenery) their shade on the ground;
+//   and where none stand (farther out than the scenery goes, or with the scenery off) the forest as one canopy: dark
+//   green crowns some five world units across with the floor in their shade between them (as the map's own woods look
+//   from above), each crown's sunny side lighter, the grain let go of as a crown gets smaller than a pixel.
+//   Without "masks" in the json, or with `blockOut` set: the block-out, as before.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -47,6 +75,21 @@ class Surround {
   float seam = 16;         // over how many world units outside the edge its heights are taken toward the map's edge
   float ownColours = 40;   // over how many world units outside the edge the map's own colours go over into its own
   float softness = 0.06f;  // how soft its shadows are (the slope over which a shadow's edge fades)
+  // (the detail look) The first look kept: its ground in the map's colours by height and slope although the map brings
+  // its ground's masks (viewer --surround-blockout).
+  bool blockOut = false;
+  float fineReach = 600;   // how far from the eye the layers' own normals are read (they fade out over its last 40 percent)
+  // The layer laid under the forest where the json does not say ("forest_floor"); -1: none (viewer
+  // --surround-forest-floor).
+  int forestFloor = -1;
+  // The far forest's canopy: how much of it is drawn (0: none, the ground's layers alone), and from how far past the
+  // map's edge to how far the single trees of the scenery thin out to none (the world sets them: where they stand the
+  // ground has their shade, not the canopy; 0, 0: no scenery is drawn, the canopy everywhere the forest is).
+  float canopy = 1;
+  float treesFrom = 0, treesTo = 0;
+  // From how far from the eye to how far the scenery's trees are left out (the world sets them as it lists the scenery:
+  // World::surroundSceneryFrom): there too the forest is the canopy.
+  float sightFrom = 0, sightTo = 0;
 
   // A file beside the map's, by its name; none when there is none.
   using ReadFn = std::function<std::optional<std::string>(const std::string& name)>;
@@ -58,6 +101,19 @@ class Surround {
   bool Have() const { return !heights_.empty(); }
   // It can be drawn (false once its pipeline could not be made: the map laid out again takes its place).
   bool Usable() const { return !heights_.empty() && !failed_; }
+  // (the detail look) Whether the map brings its ground's masks (and they could be read), and its scenery's file beside
+  // the map's (empty: none).
+  bool HasMasks() const { return !masks_.empty(); }
+  const std::string& Decor() const { return decor_; }
+  // How far the ground at a place was moved by joining it to the map's edge (world units, + up; 0 farther out than
+  // `seam`): the scenery's file has its heights from the surround as it came, and stands on the ground as drawn by
+  // this much more. Kept only where the json names scenery, until LetGoAsCame (the world, once it has placed it).
+  float JoinMoved(float x, float z) const;
+  void LetGoAsCame() {
+    asCame_.clear();
+    asCame_.shrink_to_fit();
+  }
+  bool Detailed() const { return detailNow_; }  // (the last Prepare: drawn in the map's own layers)
   // How far past the map's edges it reaches at least (world units).
   float Reach() const { return reach_; }
   // Its ground's height at a place (world units), as it is drawn.
@@ -88,6 +144,22 @@ class Surround {
   gfx::Pipeline pipeline_;
   gfx::Buffer vertices_, indices_;
   gfx::Texture texture_, palette_, ground_;
+  // (the detail look) its pipeline (made the first time it is wanted); the masks and the forest as read (Open) and as
+  // textures with smaller levels (Make); which layers the masks' four shares and what they leave are of; the layer
+  // under the forest and the canopy's colour as the json gives them; the map's upper layer where each layer shows
+  // (Terrain::UpperByLayer, asked once); the ground whose layers are bound (Prepare's)
+  gfx::Pipeline detail_;
+  bool detailTried_ = false, detailNow_ = false, upperAsked_ = false;
+  std::vector<uint8_t> masks_, forest_;
+  int masksSamples_ = 0, forestSamples_ = 0;
+  gfx::Texture masksTexture_, forestTexture_;
+  int kinds_[5] = {1, 2, 3, 7, 0};
+  int floorGiven_ = -1;
+  float canopyColour_[3] = {0.165f, 0.155f, 0.095f};  // (measured against SETONS_R's own woods from the farthest zoom)
+  float upperOf_[9][4] = {};
+  std::string decor_;
+  std::vector<uint16_t> asCame_;  // (its heights before the join, for JoinMoved; empty: let go of, or no scenery)
+  Terrain* terrain_ = nullptr;
   std::vector<uint16_t> heights_;  // samples_ * samples_, the north row first; joined to the map's edge
   std::vector<float> edges_[4];    // the map's own heights along its edges, a grid point each: north, south, west, east
   std::vector<Part> parts_;

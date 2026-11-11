@@ -97,6 +97,14 @@ class MeshRenderer {
   void ClearGroup(uint32_t group);
   void AddToGroup(uint32_t group, const Model* model, const Mat4& world);
   void ListGroup(uint32_t group) { groupsListed_.push_back(group); }
+  // (surround) A group listed apart: scenery that is only a picture past the map's edges (the trees and rocks of the
+  // map's surround, World::surroundScenery). Drawn into the scene's passes by the processor's own tests, as any group;
+  // but in no shadow map, not given to the card, and not among what ForEachAdded goes through (the ray tracing scene,
+  // the ground cover's discs): nothing of the game stands near it. `apartPixels`: how many times the smallest size
+  // on screen (minPixels) such scenery must have to be drawn at all (1: as the map's own).
+  // `apartLod`: its level of detail is chosen as if it stood that many times as far (1: as the map's own).
+  void ListGroupApart(uint32_t group) { groupsApart_.push_back(group); }
+  float apartPixels = 1, apartLod = 1;
   // [gpuscenery] Where the world lists a group among the others, always in the same order (World: its square's number):
   // the card draws a level's props of all groups in that order, as the processor's list has them (cardScenery).
   void SetGroupOrder(uint32_t group, uint32_t order) {
@@ -386,8 +394,9 @@ class MeshRenderer {
   };
   std::vector<Group> groups_;
   std::vector<uint32_t> groupsListed_;
+  std::vector<uint32_t> groupsApart_;  // (surround: ListGroupApart)
   void Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
-                float smallest, float wish, std::vector<Item>* out) const;
+                float smallest, float wish, std::vector<Item>* out, float coarser = 1) const;
   // A pass's models are tested in pieces of up to kPieceModels, spread over the processor's cores;
   // each piece's items are put together in the pieces' order afterwards (the same order as one loop).
   static constexpr size_t kPieceModels = 1024;
@@ -395,6 +404,8 @@ class MeshRenderer {
     const Cull* culls;
     Entry* entries;
     size_t count;
+    float smallest;  // (surround: the smallest size on screen its models are drawn at)
+    float coarser;   // (surround: their level chosen as if they stood this many times as far)
   };
   std::vector<Piece> pieces_;
   std::vector<std::vector<Item>> pieceItems_;

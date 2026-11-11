@@ -1779,6 +1779,7 @@ void MeshRenderer::Begin() {
   entries_.clear();
   culls_.clear();
   groupsListed_.clear();
+  groupsApart_.clear();  // (surround)
   rowsOut_ = nullptr;
   shellHits_.clear();
   wears_.clear();
@@ -2196,8 +2197,8 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
   const uint8_t needed = glass ? kHasGlass : kHasSolid;  // (a model with no level of this pass's kind is passed over at once)
   // (the scenery's groups first, then the frame's own list: in pieces, each tested on its own)
   pieces_.clear();
-  auto cut = [&](const Cull* culls, Entry* entries, size_t count) {
-    for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at)});
+  auto cut = [&](const Cull* culls, Entry* entries, size_t count, float least, float coarser = 1) {
+    for (size_t at = 0; at < count; at += kPieceModels) pieces_.push_back({culls + at, entries + at, std::min(kPieceModels, count - at), least, coarser});
   };
   // [gpuscenery] a pass the card picked for: of the groups only what the card does not take is tested here
   const int cardPass = cardNow_ && !glass && part != 2 ? CardPassOf(view) : -1;
@@ -2214,15 +2215,22 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       const float radius = Length(group.hi - group.lo) * 0.5f;
       if (shadowPass && view.CoveredByNearer(centre, radius)) continue;
       if (view.reach > 0 && Length(centre - view.reachFrom) - radius > view.reach) continue;
-      cut(groupCulls.data(), groupEntries.data(), groupCulls.size());
+      cut(groupCulls.data(), groupEntries.data(), groupCulls.size(), smallest);
     }
-  cut(culls_.data(), entries_.data(), culls_.size());
+  // (surround) the groups listed apart: the scene's passes only, by the processor's tests (the card has none of them)
+  if (part != 2 && !shadowPass)
+    for (uint32_t g : groupsApart_) {
+      Group& group = groups_[g];
+      if (group.culls.empty() || !view.BoxVisible(group.lo, group.hi)) continue;
+      cut(group.culls.data(), group.entries.data(), group.culls.size(), smallest * std::max(apartPixels, 0.0f), std::max(apartLod, 0.1f));
+    }
+  cut(culls_.data(), entries_.data(), culls_.size(), smallest);
   if (pieceItems_.size() < pieces_.size()) pieceItems_.resize(pieces_.size());
   Jobs::Shared().Run(static_cast<int>(pieces_.size()), [&](int k) {
     const Piece& p = pieces_[static_cast<size_t>(k)];
     std::vector<Item>& out = pieceItems_[static_cast<size_t>(k)];
     out.clear();
-    for (size_t i = 0; i < p.count; ++i) Consider(p.culls[i], p.entries[i], view, shadowPass, glass, part, needed, focal, smallest, wish, &out);
+    for (size_t i = 0; i < p.count; ++i) Consider(p.culls[i], p.entries[i], view, shadowPass, glass, part, needed, focal, p.smallest, wish, &out, p.coarser);
   });
   if (cardPass >= 0) {  // [gpuscenery] the card's lists first (so that, sorted, each level's list comes before the frame's own)
     const std::vector<CardScenery::Draw>& draws = card_->Draws(cardPass);
@@ -2264,7 +2272,7 @@ constexpr float kPrepassPixels = 32;
 
 // Whether a pass draws that model, and at which level: onto items_ if it does.
 void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shadowPass, bool glass, int part, uint8_t needed, float focal,
-                            float smallest, float wish, std::vector<Item>* out) const {
+                            float smallest, float wish, std::vector<Item>* out, float coarser) const {
   {
     if (!(c.flags & needed)) return;
     if (part != 0 && ((c.flags & kScenery) != 0) != (part == 1)) return;
@@ -2276,7 +2284,7 @@ void MeshRenderer::Consider(const Cull& c, Entry& e, const View& view, bool shad
     const float pixels = 2 * c.sizeRadius * focal / std::max(Length(c.centre - view.eye), 0.01f);  // its diameter on screen
     if (pixels < smallest) return;
     // [lodscale] the level is chosen as if it stood view.lodScale times as far (the camera's LOD scale; 1: its size)
-    const float sized = pixels / view.lodScale;
+    const float sized = pixels / (view.lodScale * coarser);  // ((surround) `coarser`: scenery listed apart, MeshRenderer::apartLod)
     const float wanted = wish * sized * sized;
     // the level whose triangle count is nearest to that wish (nearest by ratio: a step down is taken
     // at the geometric mean of two neighbours, so chains with big gaps - a tree and its flat card -
