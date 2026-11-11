@@ -123,6 +123,23 @@ int Lights::PlaceShadows(const Camera& camera, const View& view) {
 void Lights::Begin(double now) {
   now_ = now;
   lights_.clear();
+  hulls_.clear();  // [hullshade]
+}
+
+bool Lights::LargeReach(float* x0, float* z0, float* x1, float* z1) const {  // [hullshade]
+  *x0 = *z0 = 1e30f;
+  *x1 = *z1 = -1e30f;
+  auto take = [&](Vec3 at, float radius) {
+    *x0 = std::min(*x0, at.x - radius);
+    *z0 = std::min(*z0, at.z - radius);
+    *x1 = std::max(*x1, at.x + radius);
+    *z1 = std::max(*z1, at.z + radius);
+  };
+  for (const Light& l : lights_)
+    if (l.cosEdge < -1.5f && l.radius >= shadeFrom) take(l.position, l.radius);
+  for (const FlashLight& f : flashes_)
+    if (f.size * reach >= shadeFrom && now_ >= f.born && now_ - f.born < static_cast<double>(f.seconds)) take(f.position, f.size * reach);
+  return *x1 >= *x0;
 }
 
 // (a light with a place, reach or colour that is not a number is none: one such light, kept by the bounce light's and
@@ -221,7 +238,7 @@ void Lights::GroundChanged(float x0, float z0, float x1, float z1) {  // [lights
 // readings of the map whatever the reach, and a narrow shadow widens and softens a little with every ring, as a
 // shadow far behind what casts it does. The ground within shadeBall of the reach round the light (shadeBallMost at
 // most) is not read. (The ground at its nearest point, not between four: the readings lie a point or more apart anyway.)
-void Lights::ShadeTable(Vec3 at, float radius, int n, float* lines) {
+void Lights::ShadeTable(Vec3 at, float radius, int n, float* lines, const float* raised) {
   const int half = n / 2;
   constexpr float kNone = -1e4f;  // (no ground in the way: a slope, and a height, no place lies under)
   const MapData& map = *ground;
@@ -236,7 +253,12 @@ void Lights::ShadeTable(Vec3 at, float radius, int n, float* lines) {
   const float unit = map.heightScale;
   auto groundAt = [&](float x, float z) {
     const int ix = std::clamp(static_cast<int>(x + 0.5f), 0, wide), iz = std::clamp(static_cast<int>(z + 0.5f), 0, deep);
-    return static_cast<float>(heights[static_cast<size_t>(iz) * static_cast<size_t>(across) + static_cast<size_t>(ix)]) * unit;
+    float h = static_cast<float>(heights[static_cast<size_t>(iz) * static_cast<size_t>(across) + static_cast<size_t>(ix)]) * unit;
+    if (raised) {  // [hullshade] (what stands in the table's square the place lies in)
+      const int gi = static_cast<int>(std::floor((x - at.x) / cell)) + half, gj = static_cast<int>(std::floor((z - at.z) / cell)) + half;
+      if (gi >= 0 && gi < n && gj >= 0 && gj < n) h = std::max(h, raised[gj * n + gi]);
+    }
+    return h;
   };
   for (int ring = 0; ring < half; ++ring) {
     const int a = half - 1 - ring, b = half + ring;  // (the ring's squares: those on the border of a..b each way)
@@ -499,6 +521,7 @@ void Lights::Build(View* view) {
     float throws;
     int cells;
     size_t table;  // (in shades_)
+    bool hull = false;  // [hullshade] (its second table goes into the buffer too)
   };
   std::vector<Shaded> shadedNow;
   if (shade && ground && !ground->heights.empty()) {
@@ -534,7 +557,7 @@ void Lights::Build(View* view) {
       // that none pops between shadowed and not as the lights' colours change their order from frame to frame)
       if (cut > 0) strength *= std::clamp(throws(n) / cut - 1, 0.0f, 1.0f);
       if (!(strength > 0)) continue;
-      shadedNow.push_back({n, strength, throws(n), ShadeCells(l.radius), 0});
+      shadedNow.push_back({n, strength, throws(n), ShadeCells(l.radius), 0, false});
     }
     // (more rows than kShadeRowsMost: the lights that throw least take coarser tables, until they fit)
     size_t need = 0;
@@ -577,6 +600,7 @@ void Lights::Build(View* view) {
         s.position = l.position;
         s.radius = l.radius;
         s.cells = now.cells;
+        s.hullKey = 0;  // [hullshade] (its second table was another light's)
         s.lines.resize(ShadeRows(now.cells) * 4);
         // (its first row: where its middle lies, its squares' width and their number each way; light_shade.h reads by it)
         s.lines[0] = l.position.x;
@@ -600,6 +624,126 @@ void Lights::Build(View* view) {
     shaded = static_cast<int>(shadedNow.size());
     shadedMost = std::max(shadedMost, shaded);
     shadeLeftOutMost = std::max(shadeLeftOutMost, shadeLeftOut);
+    // [hullshade] the second tables (lights.h): for each light with a table, the boxes that count for it (in its reach,
+    // wide enough for its squares, the light not in them nor riding on them), laid over the table's squares; made anew
+    // only when the boxes are others than the kept table's (their places to an eighth of a square)
+    hullTables = 0;
+    if (hulls && !hulls_.empty() && !shadedNow.empty()) {
+      size_t rows = 0;
+      for (const Shaded& s : shadedNow) rows += ShadeRows(s.cells);
+      // (the boxes by squares of kHullCell world units over the ground they stand on; a light then goes through the
+      // squares its reach and the largest box's half touch)
+      constexpr float kHullCell = 16;
+      float gx0 = 1e30f, gz0 = 1e30f, gx1 = -1e30f, gz1 = -1e30f, widest = 0;
+      for (const Hull& b : hulls_) {
+        gx0 = std::min(gx0, b.x), gz0 = std::min(gz0, b.z), gx1 = std::max(gx1, b.x), gz1 = std::max(gz1, b.z);
+        widest = std::max(widest, b.halfLength + b.halfWidth);
+      }
+      const int gcols = std::clamp(static_cast<int>((gx1 - gx0) / kHullCell) + 1, 1, 512), grows = std::clamp(static_cast<int>((gz1 - gz0) / kHullCell) + 1, 1, 512);
+      auto squareOf = [&](const Hull& b) {
+        const int cx = std::clamp(static_cast<int>((b.x - gx0) / kHullCell), 0, gcols - 1), cz = std::clamp(static_cast<int>((b.z - gz0) / kHullCell), 0, grows - 1);
+        return static_cast<size_t>(cz) * static_cast<size_t>(gcols) + static_cast<size_t>(cx);
+      };
+      hullFirst_.assign(static_cast<size_t>(gcols) * static_cast<size_t>(grows) + 1, 0);
+      for (const Hull& b : hulls_) ++hullFirst_[squareOf(b) + 1];
+      for (size_t k = 1; k < hullFirst_.size(); ++k) hullFirst_[k] += hullFirst_[k - 1];
+      hullItems_.resize(hulls_.size());
+      {
+        std::vector<uint32_t> at(hullFirst_.begin(), hullFirst_.end() - 1);
+        for (uint32_t k = 0; k < hulls_.size(); ++k) hullItems_[at[squareOf(hulls_[k])]++] = k;
+      }
+      auto near = [&](Vec3 at, float radius, const std::function<void(const Hull&)>& f) {
+        const float r = radius + widest;
+        const int cx0 = std::clamp(static_cast<int>(std::floor((at.x - r - gx0) / kHullCell)), 0, gcols - 1);
+        const int cx1 = std::clamp(static_cast<int>(std::floor((at.x + r - gx0) / kHullCell)), 0, gcols - 1);
+        const int cz0 = std::clamp(static_cast<int>(std::floor((at.z - r - gz0) / kHullCell)), 0, grows - 1);
+        const int cz1 = std::clamp(static_cast<int>(std::floor((at.z + r - gz0) / kHullCell)), 0, grows - 1);
+        if (at.x + r < gx0 || at.z + r < gz0 || at.x - r > gx1 + kHullCell || at.z - r > gz1 + kHullCell) return;
+        for (int cz = cz0; cz <= cz1; ++cz)
+          for (int cx = cx0; cx <= cx1; ++cx) {
+            const size_t sq = static_cast<size_t>(cz) * static_cast<size_t>(gcols) + static_cast<size_t>(cx);
+            for (uint32_t k = hullFirst_[sq]; k < hullFirst_[sq + 1]; ++k) f(hulls_[hullItems_[k]]);
+          }
+      };
+      for (Shaded& now : shadedNow) {
+        Shade& s = shades_[now.table];
+        const Light& l = lights_[now.light];
+        const int n = now.cells, half = n / 2;
+        const float cell = 2 * s.radius / static_cast<float>(n);
+        const float low = std::max(s.position.y, ground->Height(s.position.x, s.position.z));
+        uint64_t key = 0;
+        bool any = false;
+        auto counts = [&](const Hull& b) {
+          if (std::min(b.halfLength, b.halfWidth) < hullLeast * cell) return false;
+          const float dx = b.x - s.position.x, dz = b.z - s.position.z, r = b.halfLength + b.halfWidth;
+          if (std::fabs(dx) - r > s.radius || std::fabs(dz) - r > s.radius) return false;
+          // (the light, or the model it rides on, in the box: a fire on a building, a unit's own glow)
+          auto inside = [&](float px, float pz) {
+            const float ex = px - b.x, ez = pz - b.z;
+            return std::fabs(ex * b.forwardX + ez * b.forwardZ) < b.halfLength + 0.5f && std::fabs(ez * b.forwardX - ex * b.forwardZ) < b.halfWidth + 0.5f;
+          };
+          if (inside(s.position.x, s.position.z) && b.top > low - 1) return false;
+          if (l.hasOrigin && inside(l.origin.x, l.origin.z)) return false;
+          return true;
+        };
+        near(s.position, s.radius, [&](const Hull& b) {
+          if (!counts(b)) return;
+          any = true;
+          // (the boxes' sum, each by its place to an eighth of a square, its turn, size and top: whatever their order)
+          const float q = 8 / cell;
+          const int64_t v[7] = {std::llround(b.x * q), std::llround(b.z * q), std::llround(b.forwardX * 64), std::llround(b.forwardZ * 64),
+                                std::llround(b.halfLength * q), std::llround(b.halfWidth * q), std::llround(b.top * 8)};
+          uint64_t h = 1469598103934665603ull;
+          for (int64_t part : v) h = (h ^ static_cast<uint64_t>(part)) * 1099511628211ull;
+          key += h | 1;
+        });
+        if (!any) {
+          s.hullKey = 0;
+          continue;
+        }
+        if (rows + ShadeRows(n) > static_cast<size_t>(kShadeRowsMost)) continue;  // (no room in the buffer: the first table alone)
+        if (key == 0) key = 1;
+        if (s.hullKey != key || s.hullLines.size() != ShadeRows(n) * 4) {
+          shadeRaised_.assign(static_cast<size_t>(n) * static_cast<size_t>(n), -1e30f);
+          near(s.position, s.radius, [&](const Hull& b) {
+            if (!counts(b)) return;
+            const float r = b.halfLength + b.halfWidth;
+            const int i0 = std::clamp(static_cast<int>(std::floor((b.x - r - s.position.x) / cell)) + half, 0, n - 1);
+            const int i1 = std::clamp(static_cast<int>(std::floor((b.x + r - s.position.x) / cell)) + half, 0, n - 1);
+            const int j0 = std::clamp(static_cast<int>(std::floor((b.z - r - s.position.z) / cell)) + half, 0, n - 1);
+            const int j1 = std::clamp(static_cast<int>(std::floor((b.z + r - s.position.z) / cell)) + half, 0, n - 1);
+            for (int j = j0; j <= j1; ++j)
+              for (int i = i0; i <= i1; ++i) {
+                // (the square's middle in the box's own ways; how much of the square the box covers, each way)
+                const float px = s.position.x + (static_cast<float>(i - half) + 0.5f) * cell, pz = s.position.z + (static_cast<float>(j - half) + 0.5f) * cell;
+                const float ex = px - b.x, ez = pz - b.z;
+                const float along = std::fabs(ex * b.forwardX + ez * b.forwardZ), sideways = std::fabs(ez * b.forwardX - ex * b.forwardZ);
+                const float covered = std::clamp((b.halfLength + 0.5f * cell - along) / cell, 0.0f, 1.0f) *
+                                      std::clamp((b.halfWidth + 0.5f * cell - sideways) / cell, 0.0f, 1.0f);
+                if (covered <= 0) continue;
+                const float under = ground->Height(px, pz);
+                if (b.top <= under) continue;
+                float& to = shadeRaised_[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)];
+                to = std::max(to, under + (b.top - under) * covered);
+              }
+          });
+          s.hullLines.resize(ShadeRows(n) * 4);
+          std::memcpy(s.hullLines.data(), s.lines.data(), 4 * sizeof(float));  // (its first row: as the first table's)
+          const auto began = std::chrono::steady_clock::now();
+          ShadeTable(s.position, s.radius, n, s.hullLines.data() + 4, shadeRaised_.data());
+          shadeMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+          s.hullKey = key;
+          ++hullMadeAll;
+          if (debug)
+            fprintf(stderr, "render: [hullshade] build %llu: a second table of %d squares each way for the light at %.1f, %.1f, %.1f, reach %.1f\n",
+                    static_cast<unsigned long long>(shadeBuild_), n, s.position.x, s.position.y, s.position.z, s.radius);
+        }
+        now.hull = true;
+        rows += ShadeRows(n);
+        ++hullTables;
+      }
+      hullTablesMost = std::max(hullTablesMost, hullTables);
+    }
   }
   // the buffer, in rows of four numbers: one row per square (where its list begins, how long it
   // is), then the lists (four light numbers a row), then four rows per light, then four rows per
@@ -608,7 +752,7 @@ void Lights::Build(View* view) {
   const size_t firstList = cells, firstLight = cells + listRows, firstMatrix = firstLight + lights_.size() * 4;
   const size_t firstTable = firstMatrix + static_cast<size_t>(shadowCount_) * 4;
   size_t tableRows = 0;
-  for (const Shaded& s : shadedNow) tableRows += ShadeRows(s.cells);
+  for (const Shaded& s : shadedNow) tableRows += ShadeRows(s.cells) * (s.hull ? 2 : 1);  // ([hullshade] and the second tables)
   rows_.assign((firstTable + tableRows) * 4, 0.0f);
   for (size_t i = 0; i < cells; ++i) {
     rows_[i * 4] = static_cast<float>(firstList * 4 + cellFirst_[i]);  // counted in numbers, not rows
@@ -628,7 +772,8 @@ void Lights::Build(View* view) {
     p[8] = lights_[n].direction.x;
     p[9] = lights_[n].direction.y;
     p[10] = lights_[n].direction.z;
-    p[11] = lights_[n].cosEdge;
+    // ([hullshade] a light to all sides: -2 less the most its own ball is for the rays; -2 itself: no most, as before)
+    p[11] = lights_[n].cosEdge < -1.5f && hulls && shade ? -2 - std::max(rayBallMost, 0.0f) : lights_[n].cosEdge;
     p[12] = static_cast<float>(lights_[n].shadow);
     // (without a shadow map: -2 and where the model it rides on stands, for the rays, lighting.h's RayLightSeen)
     if (lights_[n].shadow < 0 && lights_[n].hasOrigin) {
@@ -649,6 +794,11 @@ void Lights::Build(View* view) {
     p[8] = static_cast<float>(tableAt);
     p[9] = s.strength;
     tableAt += ShadeRows(s.cells);
+    if (s.hull) {  // [hullshade] (its second table: the ground with what stands on it)
+      std::memcpy(&rows_[tableAt * 4], shades_[s.table].hullLines.data(), ShadeRows(s.cells) * 4 * sizeof(float));
+      p[10] = static_cast<float>(tableAt);
+      tableAt += ShadeRows(s.cells);
+    }
   }
   shadowCount_ = 0;  // (placed anew every frame, or not at all)
   device_->UpdateBuffer(buffer_, rows_.data(), static_cast<uint32_t>(rows_.size() * sizeof(float)));

@@ -14,17 +14,23 @@
 // away of the ground; measured against the map's heights marched exactly, less lets flat ground shadow itself), and
 // the step from none to all is never thinner than about as much: ground that merely rolls is not shadowed by its own
 // bumps, and a shadow's edge is soft however near the ridge.
-float LightShade(float4 beam, float3 p) {
-  [branch] if (beam.x < 0.5) return 1;
-  float4 head = lightData[uint(beam.x)];
+// (`row`: where the table begins, `strength`: how strongly it counts)
+float LightShadeAt(float row, float strength, float3 p) {
+  [branch] if (row < 0.5) return 1;
+  float4 head = lightData[uint(row)];
   float cell = head.z;
   float2 g = clamp((p.xz - head.xy) / cell + (0.5 * head.w - 0.5), 0.0, head.w - 1.001);
   float2 f = floor(g), t = g - f;
-  uint n = uint(head.w), i = uint(f.y) * n + uint(f.x), at = uint(beam.x) + 1;
+  uint n = uint(head.w), i = uint(f.y) * n + uint(f.x), at = uint(row) + 1;
   float4 r0 = lightData[at + (i >> 1)], r1 = lightData[at + ((i + 1) >> 1)], r2 = lightData[at + ((i + n) >> 1)], r3 = lightData[at + ((i + n + 1) >> 1)];
   bool odd = (i & 1) != 0;
   float2 lines = lerp(lerp(odd ? r0.zw : r0.xy, odd ? r1.xy : r1.zw, t.x), lerp(odd ? r2.zw : r2.xy, odd ? r3.xy : r3.zw, t.x), t.y);
   float seen = saturate((p.y + 0.35 + 0.3 * cell - lines.x) / max(lines.y - lines.x, 0.5 + 0.3 * cell));
-  return 1 - beam.y * (1 - seen * seen * (3 - 2 * seen));
+  return 1 - strength * (1 - seen * seen * (3 - 2 * seen));
 }
+float LightShade(float4 beam, float3 p) { return LightShadeAt(beam.x, beam.y, p); }
+// [hullshade] The same through the light's second table where it has one (`beam`'s z: the ground with what stands on
+// it, units' and buildings' boxes, lights.h), for everything no ray looks for what stands there: the air, smoke, dust,
+// spray, rain, what the rays meet, and the lit surfaces while the small lights' shadows by rays are off.
+float LightShadeHulls(float4 beam, float3 p) { return LightShadeAt(beam.z > 0.5 ? beam.z : beam.x, beam.y, p); }
 )hlsl"

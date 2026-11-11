@@ -598,6 +598,8 @@
 // --gate-look <0|1>  [glitches] the quantum gate's field remastered (1, World::remasteredGate) or the original's texture (0)
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-steady-lamps  [nightlight] lamps switched on and off at once, as before (World::steadyLamps: they fade; to compare)
+// --no-hull-shade  [hullshade] units and buildings do not shadow the larger small lights in the air (nor, without ray
+//           tracing, on the ground), as before (World::hullShade: their boxes do)
 // --no-light-shade  [lightshade] the larger small lights (flashes, big glows) shine through the map's hills, as before
 //           (World::lightShade: the ground shadows them); --light-at x,z,height,reach[,r,g,b[,vx,vz]]: a steady light to
 //           all sides there, `height` over the ground, moving vx, vz world units a second (to see and to measure the
@@ -953,6 +955,7 @@ struct Options {
   bool lampShadows = true;              // --no-lamp-shadows
   bool steadyLamps = true;              // --no-steady-lamps ([nightlight])
   bool lightShade = true;               // --no-light-shade ([lightshade])
+  bool hullShade = true;                // --no-hull-shade ([hullshade])
   std::vector<std::array<float, 9>> lightsAt;  // --light-at x,z,height,reach[,r,g,b[,vx,vz]] ([lightshade])
   float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
@@ -1372,6 +1375,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
     else if (a == "--no-light-shade") o->lightShade = false;    // [lightshade]
+    else if (a == "--no-hull-shade") o->hullShade = false;      // [hullshade]
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
@@ -2533,6 +2537,7 @@ int main(int argc, char** argv) {
   world.lampShadows = opt.lampShadows;
   world.steadyLamps = opt.steadyLamps;  // [nightlight]
   world.lightShade = opt.lightShade;    // [lightshade]
+  world.hullShade = opt.hullShade;      // [hullshade]
   world.volumetricFog = opt.air;
   world.softShadows = opt.softShadows;
   world.shadowMask = opt.shadowMask > 0;  // [shadowmask]
@@ -5344,6 +5349,8 @@ int main(int argc, char** argv) {
       if (opt.debug && lights.shade)  // [lightshade]
         printf("; ground tables: %d lights now, at most %d in a frame, %d made in all in %.2f ms, at most %d left without", lights.shaded, lights.shadedMost,
                lights.shadeMadeAll, lights.shadeMs, lights.shadeLeftOutMost);
+      if (opt.debug && lights.shade && lights.hulls)  // [hullshade]
+        printf("; second tables (what stands): %d lights now, at most %d in a frame, %d made in all", lights.hullTables, lights.hullTablesMost, lights.hullMadeAll);
       if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (world.textures.madeAhead || world.models.madeAhead || world.models.madeAlike)  // [spikes]

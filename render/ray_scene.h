@@ -190,7 +190,7 @@ float3 RaySmallLights(float3 p, float3 n, uint most) {
           fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside + fade * tint.w * saturate(1 - far2 * 25);
           nl = saturate(dot(n, l) + 0.6 * inside);
         } else if (nl > 0) {
-          fade *= LightShade(beam, p);  // [lightshade]
+          fade *= LightShadeHulls(beam, p);  // [lightshade], [hullshade]
         }
         small += tint.rgb * (nl * fade);
       }
