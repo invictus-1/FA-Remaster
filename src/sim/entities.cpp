@@ -1519,7 +1519,7 @@ void Sim::InitializeArmor(lua_State* L, Unit* u) {
       Logf(LogLevel::Warning, "can't load the armordefinition module -- no armor for you.");
     } else {
       lua_pushstring(L, "armordefinition");
-      lua_gettable(L, -2);
+      GetTableProtected(L, -2);
       if (!lua_istable(L, -1)) {
         Logf(LogLevel::Warning, "The armor module didn't define any armors.  Hmm Odd?");
       } else {
@@ -1606,7 +1606,7 @@ void Sim::PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* def
   lua_settop(L, top);
   if (!module.empty() && PushImport(L, module)) {
     lua_pushstring(L, cls.c_str());
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     lua_remove(L, -2);
     if (lua_istable(L, -1)) return;
     lua_pop(L, 1);
@@ -1615,7 +1615,7 @@ void Sim::PushScriptClass(lua_State* L, const BlueprintInfo& bp, const char* def
   }
   if (PushImport(L, defModule)) {
     lua_pushstring(L, defClass);
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     lua_remove(L, -2);
     return;
   }
@@ -1635,7 +1635,7 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
   PushObject(L, obj);
   int self = lua_gettop(L);
   lua_pushstring(L, method);
-  lua_gettable(L, self);
+  GetTableProtected(L, self);
   if (!lua_isfunction(L, -1)) {
     lua_settop(L, base);
     return true;
@@ -1965,7 +1965,7 @@ Unit* Sim::CreateUnit(lua_State* L, const BlueprintInfo& bp, Army* army, Vec3 po
              label.c_str());
         if (PushImport(L, "/lua/sim/Weapon.lua")) {
           lua_pushstring(L, "Weapon");
-          lua_gettable(L, -2);
+          GetTableProtected(L, -2);
           lua_remove(L, -2);
         } else {
           lua_pushnil(L);

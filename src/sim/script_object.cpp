@@ -190,7 +190,12 @@ void SetGlobal(lua_State* L, const char* name, lua_CFunction f) {
 
 void ReportStubCalls() {
   std::lock_guard<std::mutex> g(StubMutex());
-  for (auto& [name, n] : StubCounts()) Logf(LogLevel::Debug, "moho64: stub calls %6d %s", n, name.c_str());
+  for (auto& [name, n] : StubCounts()) {
+    Logf(LogLevel::Debug, "moho64: stub calls %6d %s", n, name.c_str());
+    // (a tripwire, core/log.h: one warning a name, whatever the count, so the gate's lists show a stub that a
+    // change or a new replay reaches for the first time; the count stays in the line above)
+    LogTripwire("moho64 tripwire: the engine function " + name + " is a stub: a script called it and nothing was done");
+  }
 }
 
 }  // namespace moho

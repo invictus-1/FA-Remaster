@@ -2013,7 +2013,7 @@ BuildTask* StartScriptTask(Sim& sim, Unit* u, const UnitCommand& c) {
       return false;
     }
     lua_pushstring(L, cls.c_str());
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     lua_remove(L, -2);
     if (!lua_istable(L, -1)) {
       lua_settop(L, top);
@@ -2057,7 +2057,7 @@ int TickScriptTask(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     PushObject(L, &t);
     int obj = lua_gettop(L);
     lua_pushstring(L, "TaskTick");
-    lua_gettable(L, obj);
+    GetTableProtected(L, obj);
     if (!lua_isfunction(L, -1)) {
       lua_settop(L, top);
       return kTaskDone;

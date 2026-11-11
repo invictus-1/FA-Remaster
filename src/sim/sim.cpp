@@ -305,7 +305,7 @@ int l_SetArmyColorIndex(lua_State* L) {
   bool isString = false;
   if (sim.PushImport(L, "/lua/gameColors.lua")) {
     lua_pushstring(L, "GameColors");
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     if (lua_istable(L, -1)) {
       lua_pushstring(L, "PlayerColors");
       lua_gettable(L, -2);
@@ -1741,7 +1741,7 @@ bool Sim::CreateArmies(const ReplayHeader& replay) {
       return false;
     }
     lua_pushstring(L, "AIBrain");
-    lua_gettable(L, -2);
+    GetTableProtected(L, -2);
     int cls = lua_gettop(L);
     GenerateArmyStart(a.get());  // the army ctor's two draws (0x6fe842), before its OnCreateArmyBrain
     auto* brain = new AiBrain;

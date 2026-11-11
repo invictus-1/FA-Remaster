@@ -112,7 +112,7 @@ std::string ScriptName(lua_State* L, int index, const std::vector<Unit*>& units)
   std::string out;
   if (int m = PushModule(L)) {
     lua_pushstring(L, kTypeTables[FormationType(units)]);
-    lua_gettable(L, m);
+    GetTableProtected(L, m);
     if (lua_istable(L, -1)) {
       int t = lua_gettop(L);
       int n = luaL_getn(L, t);  // LuaObject::GetN 0x907e50 (luaL_getn), not GetCount
@@ -139,7 +139,7 @@ bool RunScript(lua_State* L, const std::string& name, const std::vector<Unit*>& 
   int m = PushModule(L);
   if (!m) return false;
   lua_pushstring(L, name.c_str());
-  lua_gettable(L, m);
+  GetTableProtected(L, m);
   if (!lua_isfunction(L, -1)) {
     Logf(LogLevel::Warning, "Could not find lua create formation function %s.", name.c_str());
     lua_settop(L, top);
@@ -955,7 +955,7 @@ int FormationScriptIndex(lua_State* L, const std::string& name, const std::vecto
   int idx = -1;
   if (int m = PushModule(L)) {
     lua_pushstring(L, kTypeTables[FormationType(units)]);
-    lua_gettable(L, m);
+    GetTableProtected(L, m);
     if (lua_istable(L, -1)) {
       int t = lua_gettop(L);
       int n = ObjectCount(L, t);  // FORMATION_GetScriptIndex 0x575db0: GetCount 0x575f09, read once; no string skipped

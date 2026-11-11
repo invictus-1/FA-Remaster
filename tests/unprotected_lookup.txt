@@ -1,0 +1,15 @@
+# A script table read of the engine's, made outside any protected call, must not end the program when a metamethod
+# raises (review of 2026-11-09, R3; script/script_state.h GetTableProtected, lua_gpg_pgettable). Sim::CallMethod looks
+# a unit's method up before its lua_pcall; here a unit gets an __index that raises for OnMotionHorzEventChange, the
+# method the motion code calls from the beat (no script, so no pcall, around it) when the unit starts to move.
+# An --orders file for moho64, with any two-army session file, e.g.
+#   moho64 --init offline\bin\init_lab.lua --session fa-remaster\tests\reclaim_two_games_a.lua --seed 1 --ticks 60
+#          --orders fa-remaster\tests\unprotected_lookup.txt --log out.log
+# The log must hold the lookup's error as a script warning, and the run must reach its end (exit code 0):
+#   warning: Error running lua script: ...unprotected_lookup: a raising __index (OnMotionHorzEventChange) (in a table read of the engine's; the value counts as nil)
+#   info: unprotected_lookup: tick 50, the game goes on, the unit moved N
+# Before 2026-11-10 the run ended at the unit's first step with exit code 1 and
+#   error: unprotected script error (the program ends): ...unprotected_lookup: a raising __index (OnMotionHorzEventChange)
+5 lua local x, z = ArmyBrains[1]:GetArmyStartPos() local u = CreateUnitHPR('uel0201', 'ARMY_1', x + 8, 0, z + 8, 0, 0, 0) ScenarioInfo.LookupTest = {unit = u, x = x + 8, z = z + 8}
+10 lua local t = ScenarioInfo.LookupTest local cls = getmetatable(t.unit) setmetatable(t.unit, {__index = function(_, k) if k == 'OnMotionHorzEventChange' then error('unprotected_lookup: a raising __index (' .. k .. ')') end return cls[k] end}) IssueMove({t.unit}, {t.x + 30, 0, t.z})
+50 lua local t = ScenarioInfo.LookupTest local p = t.unit:GetPosition() LOG(string.format('unprotected_lookup: tick %d, the game goes on, the unit moved %.1f', GetGameTick(), VDist2(p[1], p[3], t.x, t.z)))

@@ -646,7 +646,7 @@ void CommandStream::Apply(Sim& sim, int type, const std::string& payload) {
         break;
       }
       lua_pushstring(L, "DoCallback");
-      lua_gettable(L, -2);
+      GetTableProtected(L, -2);
       lua_remove(L, -2);
       lua_pushstring(L, name.c_str());
       if (!PushSerializedLua(L, data)) lua_pushnil(L);

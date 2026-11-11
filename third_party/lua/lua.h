@@ -171,6 +171,9 @@ LUA_API void  lua_gettable (lua_State *L, int idx);
 LUA_API void  lua_rawget (lua_State *L, int idx);
 LUA_API void  lua_rawgeti (lua_State *L, int idx, int n);
 LUA_API void  lua_gpg_rawgetstr (lua_State *L, int idx, const char *k);  /* moho64: makes and collects nothing */
+/* moho64: lua_gettable in a protected call of its own, for host code outside any lua_pcall (lapi.c). 0: the key
+** is replaced by the value, as lua_gettable leaves it; else the error's code, the key replaced by its message. */
+LUA_API int   lua_gpg_pgettable (lua_State *L, int idx);
 /* moho64: 1 when the running C function's Lua caller drops its results (a call made as a statement; lapi.c) */
 LUA_API int   lua_gpg_resultsdropped (lua_State *L);
 /* moho64: the collector's check that lua_pushstring makes (luaC_checkGC), alone: for a binding that no longer pushes
