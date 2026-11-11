@@ -68,6 +68,26 @@ ForkThread(function()
     end
     if data.visit == 1 then
         check("the host's flight is there", moho64ui_MenuFlight ~= nil and moho64ui_MenuFlight() ~= nil, true)
+        -- The flight's cost on the card (app/flight_cost.h, the review's row D): the mean over the 10th to the 15th
+        -- second in which the flight was DRAWN, whatever the clock did meanwhile. costOf plays the host's own rule
+        -- over a list of frames {dt, the card's ms, drawn}. (dt 1/64: the sums are exact)
+        do
+            local function frames(list)  -- {n, dt, ms, drawn}, ...
+                local t = {}
+                for _, part in list do
+                    for i = 1, part[1] do table.insert(t, {part[2], part[3], part[4]}) end
+                end
+                return t
+            end
+            local function says(mean, n, shown) return string.format("%s %s %.2f", mean and string.format("%.1f", mean) or "nil", tostring(n), shown) end
+            local cost = flight().costOf
+            check("the flight's cost: the mean of the drawn seconds 10 to 15",
+                says(cost(frames({{640, 1 / 64, 4}, {320, 1 / 64, 20}, {64, 1 / 64, 4}}))), "20.0 320 15.00")
+            check("frames that did not draw it do not use the ten seconds up (a screen over the menu)",
+                says(cost(frames({{576, 1 / 64, 4}, {640, 1 / 64, 99, false}, {64, 1 / 64, 4}, {320, 1 / 64, 16}, {10, 1 / 64, 4}}))), "16.0 320 15.00")
+            check("no verdict before fifteen seconds were drawn", says(cost(frames({{800, 1 / 64, 4}}))), "nil nil 12.50")
+            check("a hitch counts a quarter of a second at most", says(cost(frames({{40, 5, 4}, {20, 0.25, 8}, {4, 0.25, 30}}))), "8.0 20 15.00")
+        end
         check("its map is SETONS_R", flight().map, "/maps/SETONS_R/SETONS_R.scmap")
         check("no background without a window: its mode none", flight().mode, "none")
         check("its simulation loads, then runs", waitFor(3000, function() return flight().state == "running" end), true)

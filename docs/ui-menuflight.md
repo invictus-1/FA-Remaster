@@ -558,7 +558,11 @@ a loop of 4 minutes with the nuke near its end, the two options on the Interface
   the flight begins again from its first beat once the game's session is gone.
 - **Fallback** (this run only, the option kept, one log line `the menu's background: flight -> dusk (<why>)`): no
   SETONS_R, its session or simulation fails, its map fails to open, or its frames cost the card over 12 ms on average
-  from 10 to 15 s after it first showed (`MOHO64UI_MENUFLIGHT_GPU_MS`).
+  over the 10th to the 15th second in which the flight was DRAWN (`MOHO64UI_MENUFLIGHT_GPU_MS`; `FlightCost` in
+  `ui/app/menu_flight.h`). Seconds drawn, not seconds by the clock: until 2026-11-11 a screen over the menu or a
+  covered window in the clock's seconds 10 to 15 left no frame to count and the check never came (the review's row
+  D). A frame counts a quarter second at most, so a hitch is no time shown. `moho64ui_MenuFlight().costOf(frames)`
+  plays the same rule over a list of frames for `ui/tests/menu_flight.lua`.
 - **Still**: Dusk's first view taken once with `TakePhoto` (window size, 8 settling frames), shown over the window where
   the movie shows, the world no longer drawn. Nothing is shipped.
 - **Cost**: the menu is held to 60 frames a second while the flight shows (`WindowHooks::framePeriod`); a log line
