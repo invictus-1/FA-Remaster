@@ -1576,6 +1576,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   if (heightsRestored_) {  // [restart] (RestartGame: the ground's heights as the map was opened, drawn so; within a frame)
     heightsRestored_ = false;
     terrain.HeightsChanged(0, 0, map.width, map.height);
+    lights.GroundChanged(0, 0, static_cast<float>(map.width), static_cast<float>(map.height));  // [lightshade]
   }
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
   // screen - icons, bars, the points the interface asks about - at the screen's own)
@@ -2769,7 +2770,11 @@ void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
     if (!joined) dirty.push_back({x0, z0, x1, z1});
     ++groundChanges;
   }
-  for (const Rect& d : dirty) terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
+  for (const Rect& d : dirty) {
+    terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
+    // [lightshade] (the ground tables kept of lights that reach there are of the ground as it was)
+    lights.GroundChanged(static_cast<float>(d.x0), static_cast<float>(d.z0), static_cast<float>(d.x1), static_cast<float>(d.z1));
+  }
 }
 
 void World::AddCombat(FrameCombat&& combat) {
@@ -4528,6 +4533,8 @@ void World::Render() {
   }
   if (buildNow_) build.AddLights(&lights, lights.night);  // (buildfx: the build beams' lights, the sparks thrown)
   if (exhaustsNow_) exhausts.AddLights(&lights, lights.night);  // (unitsfx: a light per drive)
+  lights.shade = lightShade && look == Look::Modern;  // [lightshade] (the larger lights behind the map's ridges)
+  lights.ground = haveMap_ ? &map : nullptr;
   lights.Build(&view);  // (after everything has said what lights there are; before any pass reads the view)
   // blasts (blasts.h): the waves and the dust under way near what the camera sees; the debris's chunks moved on and listed
   blastsNow_ = grassBlasts_ = false;

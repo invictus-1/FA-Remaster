@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "gfx.h"
+#include "light_shade.h"  // [lightshade]
 #include "view.h"
 
 namespace render {
@@ -57,6 +58,7 @@ Texture2D rayGroundColours : register(t39);
 #ifndef SMALL_LIGHTS_DECLARED
 #define SMALL_LIGHTS_DECLARED 1
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
+)hlsl" RENDER_LIGHT_SHADE_BLOCK R"hlsl(
 #endif
 float3 RayLinear(float3 c) { return pow(max(c, 0), 2.2); }  // (lighting.h's ToLinear)
 float4 RayInstance(uint i) { return rayInstances.Load(int3(i % 1024, i / 1024, 0)); }
@@ -161,7 +163,8 @@ void RaySurfaceAt(RayHit hit, float3 p, float3 d, float2 map, out float3 albedo,
 float3 RaySunLight() { return RayLinear(sunColor) * (lightMultiplier * modern.x); }
 // The small lights (lights.h) on what a ray met, as lighting.h's SmallLights lights a surface without its highlights:
 // those of the square of ground it is over (the first `most` of them), a lamp's beam by its cone (not by the lamp's
-// shadow map). Times the albedo.
+// shadow map), a larger light to all sides through the ground's shadow ([lightshade], lights.h; no ray of its own for
+// what stands on the ground). Times the albedo.
 float3 RaySmallLights(float3 p, float3 n, uint most) {
   float3 small = 0;
   [branch] if (lightGrid.w > 0.5) {
@@ -186,6 +189,8 @@ float3 RaySmallLights(float3 p, float3 n, uint most) {
           float inside = 1 - smoothstep(0.7, 1.0, off);
           fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside + fade * tint.w * saturate(1 - far2 * 25);
           nl = saturate(dot(n, l) + 0.6 * inside);
+        } else if (nl > 0) {
+          fade *= LightShade(beam, p);  // [lightshade]
         }
         small += tint.rgb * (nl * fade);
       }
