@@ -192,7 +192,7 @@ local looks = {
     {
         title = "Frame Rate",
         key = 'remaster_frame_rate',
-        tip = "How often a new picture is drawn. Vertical Sync: in step with the screen's refresh, no tearing. Uncapped: as fast as the PC can. 60, 120, 144: at most that many frames a second.",
+        tip = "How often a new picture is drawn. Vertical Sync: in step with the screen's refresh, no tearing. Uncapped: as fast as the PC can. A number: at most that many frames a second.",
         type = 'toggle',
         default = 'vsync',
         set = Look("remaster_frame_rate"),
@@ -200,9 +200,13 @@ local looks = {
             states = {
                 { text = "Vertical Sync", key = 'vsync' },
                 { text = "Uncapped", key = 'uncapped' },
+                -- (2026-11-11, the review's 4.2 item 11: 90 for a quiet PC, 165 and 240 for the screens above 144 Hz)
                 { text = "60", key = 60 },
+                { text = "90", key = 90 },
                 { text = "120", key = 120 },
                 { text = "144", key = 144 },
+                { text = "165", key = 165 },
+                { text = "240", key = 240 },
             },
         },
     },
@@ -919,15 +923,16 @@ end
 
 -- The Remastered tab (Chris, 2026-11-08: the Video tab "getting kinda big ... keep the same theme/look"; the layout:
 -- docs/ui-options-layout.md, its recommendation (a)): the looks above in sections under the game's own header rows (FAF's
--- Gameplay and Interface tabs have them), from the screen down to the picture's finish. The first section's six are
--- the ones no preset level touches; every key a level sets is below the preset on this same tab, as the dialog needs
+-- Gameplay and Interface tabs have them). The Preset comes first (2026-11-11, the review's 4.2 item 11: the one
+-- control that sets all the rest stood ten rows down), then from the screen down to the picture's finish. Display &
+-- Performance's six are the ones no preset level touches; every key a level sets is on this same tab, as the dialog needs
 -- (optionslogic.SetValue changes only an option whose control is on the page shown). The prefs keep the options as one
 -- flat table, not per tab (optionslogic.GetCurrent), so a player's values stay as they were. A look named in no
 -- section goes under a last header "More" (none today: ui/tests/lobby.lua keeps it so).
 local remasterSections = {
+    { "Preset", { 'remaster_preset', 'remaster_look' } },
     { "Display & Performance", { 'remaster_frame_rate', 'remaster_low_latency', 'remaster_graphics_api', 'remaster_upscale',
                                  'remaster_temporal_upscale', 'remaster_frame_generation' } },
-    { "Preset", { 'remaster_preset', 'remaster_look' } },
     { "Sky & Light", { 'remaster_atmosphere', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky',
                        'remaster_haze_mist', 'remaster_soft_shadows', 'remaster_ray_tracing' } },
     { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
