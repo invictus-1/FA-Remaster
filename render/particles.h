@@ -111,6 +111,8 @@ struct EmitterBlueprint {
       size, startSize, endSize, initialRotation, rotationRate, frameRate, textureSelection, rampSelection, resistanceCurve;
 };
 
+class FxMirror;  // [fxmirror] fx_mirror.h
+
 class Particles {
  public:
   Particles(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
@@ -198,6 +200,18 @@ class Particles {
   // smoke.h), with the map's view.
   void Gather();
   void DrawSmokeShadow(const View& sunView);
+  // [fxmirror] The particles as the water mirrors them (World::waterFxMirror; fx_mirror.h): before Draw, into the
+  // mirrored picture's pass (FxMirror::Begin), with the view it gave. All but what bends or darkens what is behind it
+  // and what lies flat; smoke lit as Draw lights it (the lights and shadow maps bound as for Draw). It gathers the
+  // particles as the smoke's shadow pass does (Draw then finds them gathered). MirrorReady: its pipelines made now
+  // (false: they cannot be).
+  void DrawMirror(const View& mirrored, const FxMirror& mirror);
+  bool MirrorReady();
+  // (how many particles live now: gathers them if that is not done yet this frame, as DrawMirror would)
+  int Gathered() {
+    if (!gathered_) Gather();
+    return liveParticles;
+  }
   // What is hot (lit smoke's fires, heat shimmer): the emitters running now whose particles add light in the colour
   // of something hot and that last (a fire on a damaged unit, an engine's exhaust: not an explosion's burst,
   // which throws a flash), the `most` nearest to `near`. `rampGlow` gives a ramp texture's colour (the world
@@ -310,6 +324,10 @@ class Particles {
   gfx::Pipeline shadowPipeline_, heatPipeline_;
   bool litTried_ = false, litMade_ = false, heatTried_ = false;
   bool LitReady();
+  // [fxmirror] the mirrored variants (alpha, adding, premultiplied; lit smoke's alpha, premultiplied), made the first time
+  gfx::Pipeline mirrorPipelines_[3], mirrorLit_[2];
+  bool mirrorTried_ = false, mirrorMade_ = false;
+  const FxMirror* mirror_ = nullptr;  // (during DrawMirror)
   bool HeatReady();
   static bool Smoky(const EmitterBlueprint& bp, bool darkening);
   bool gathered_ = false;  // Gather has run since the last Update

@@ -26,6 +26,8 @@ class Vfs;
 
 namespace render {
 
+class FxMirror;  // [fxmirror] fx_mirror.h
+
 class Ribbons {
  public:
   Ribbons(gfx::Device* device, const moho::Vfs* vfs, TextureCache* textures) : device_(device), vfs_(vfs), textures_(textures) {}
@@ -69,6 +71,12 @@ class Ribbons {
   // Draws this frame's beams and all trails into the current pass, which must be the scene's, and
   // forgets the beams.
   void Draw(const View& view);
+  // [fxmirror] The same as the water mirrors them (World::waterFxMirror; fx_mirror.h): before Draw (it forgets nothing),
+  // into the mirrored picture's pass (FxMirror::Begin), with the view it gave. All but what darkens what is behind it.
+  // MirrorReady: its pipelines made now (false: they cannot be).
+  void DrawMirror(const View& mirrored, const FxMirror& mirror);
+  bool MirrorReady();
+  bool Any() const { return !beams_.empty() || !trails_.empty(); }  // (anything for Draw this frame)
 
   float glow = 2.5f;  // as Particles::glow: the modern look's brightness of what adds its light
   // Tracers (modern look): a shell's trail that the game's files give as a plain white line (a trail
@@ -132,6 +140,11 @@ class Ribbons {
   TextureCache* textures_;
   gfx::Pipeline pipelines_[4], trailPipelines_[4];
   gfx::Buffer buffer_;
+  // [fxmirror] the mirrored variants (alpha, adding, premultiplied) and their vertices, made the first time
+  gfx::Pipeline mirrorPipelines_[3];
+  gfx::Buffer mirrorBuffer_;
+  bool mirrorTried_ = false, mirrorMade_ = false;
+  void Lay(const View& view);  // (the bands of Draw, laid for that view's eye)
   std::unordered_map<std::string, std::unique_ptr<Kind>> kinds_;
   std::unordered_map<std::string, bool> factionFiles_;  // "<path>|remastered|<faction>" -> has the faction its own file
   // [zoomhitch] Blueprint's answers by the path as asked and the faction, for each look (the game's files, the remastered):

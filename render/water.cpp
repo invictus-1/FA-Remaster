@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "fx_mirror.h"
 #include "json.h"
 #include "lighting.h"
 #include "ocean.h"
@@ -129,6 +130,9 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
   float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround); y [bigtest] 1 the bed soaked (Water::shoreSoak)
+  float4 fxMirror;        // [fxmirror] the effects' mirror image (fx_mirror.h): x 1 = its picture is bound; y how far off what it
+                          // shows is taken to be (world units: the waves' tilt moves it by that); z its strength looked down on;
+                          // w 1 = a view for checking: the picture itself in place of the water (Water::fxMirrorView)
 #if RIPPLES || SURF
   float4 rippleArea;      // the ripples' field (ripples.h): x, y its first cell's corner (world x, z); z 1 / its side; w a cell's size
   float4 rippleLook;      // x how much its slopes tilt the surface; y the slope from which its crests foam; z how much of its height the waterline takes
@@ -145,6 +149,7 @@ Texture2D waterMap : register(t0);
 Texture2D waves[4] : register(t1);
 TextureCube sky : register(t5);
 Texture2D behind : register(t6);
+Texture2D fxMirrorPicture : register(t21);  // [fxmirror] the effects drawn mirrored about the water's level (kFxMirrorSlot)
 #if RIPPLES
 Texture2D rippleSurface : register(t8);  // the field's height, and its slope along x and along z
 #endif
@@ -1101,6 +1106,40 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       }
     }
   }
+  // [fxmirror] the effects' mirror image (World::waterFxMirror; fx_mirror.h): what is drawn after the water (fire, flashes,
+  // smoke, beams, tracers, blasts, shields), drawn mirrored about the water's level into a picture of its own before it.
+  // Flat water shows that picture at the pixel's own place. A wave shows it from where the ray mirrored off its tilt has
+  // got to, a set way out, against the ray off flat water: read at four tilts along the wave's own (two fifths of it to
+  // eight fifths), which draws a light out into a streak along the tilt as a wavy surface does (from a low eye mostly up
+  // and down the picture: a tilt toward the eye moves the image far more than one across). Laid over what the march and
+  // the rays found (fire adds, smoke covers by its alpha), and so under the Fresnel term and the foam with them.
+  [branch] if (fxMirror.x > 0.5) {
+#if OCEAN
+    float3 fxN = normalize(lerp(N, float3(0, 1, 0), 0.25));  // (calmer than drawn, as the march above goes off; less so: a soft image may break up)
+#else
+    float3 fxN = N;
+#endif
+    float4 fx = 0;
+    for (int tap = 0; tap < 4; ++tap) {
+      float3 r = reflect(toPixel, normalize(lerp(float3(0, 1, 0), fxN, 0.4 + 0.4 * tap)));
+      r.y = max(r.y, 0.02);
+      float3 q = i.world + normalize(r) * fxMirror.y;
+      float4 c = mul(viewProj, float4(q.x, 2 * i.world.y - q.y, q.z, 1));  // (its mirror image: where the picture has it)
+      float2 at = c.w > 1e-4 ? float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5) : i.position.xy * viewport.zw;
+      fx += fxMirrorPicture.SampleLevel(samplerLinearClamp, at, 0);
+    }
+    fx *= 0.25;
+    // (Water::fxMirrorStrength, 1: as light mirrors. More: looked down on, where water mirrors only a fiftieth of what is
+    // over it and a tracer's image is lost in the water's own light, the image of what glows is that many times as
+    // strong, as if the water never mirrored less than that many fiftieths. Toward a low eye, where it mirrors more
+    // than that anyway, nothing changes; nor for what covers, smoke, by its alpha.)
+    {
+      float flatFresnel = 0.02 + 0.98 * pow(1 - saturate(-toPixel.y), 5);
+      fx.rgb *= lerp(max(1, 0.02 * fxMirror.z / flatFresnel), 1, saturate(fx.a));
+    }
+    if (fxMirror.w > 0.5) return float4(fxMirrorPicture.SampleLevel(samplerLinearClamp, i.position.xy * viewport.zw, 0).rgb, 1);
+    mirror = mirror * (1 - saturate(fx.a)) + fx.rgb;
+  }
   float facing = saturate(dot(-toPixel, N));
   float fresnel = 0.02 + 0.98 * pow(1 - facing, 5);
 #if OCEAN
@@ -1164,6 +1203,7 @@ struct WaterConstants {
   float movement[4][4];
   float cameraRight[4], cameraUp[4], cameraBack[4];  // (the modern water's)
   float groundInfo[4];                                // [floatfoam] (the modern water's: x the ground's height unit, 0 none)
+  float fxMirror[4];                                  // [fxmirror] (the modern water's: x 1 = the mirrored effects' picture is bound)
   float rippleArea[4], rippleLook[4];                // (the modern water's with ripples: given only to it)
   float surfArea[4], surfLook[4], surfLook2[4], surfLook3[4];  // [surf] (the modern water's with the surf: given only to it)
 };
@@ -1362,6 +1402,12 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
     std::memcpy(c.cameraRight, axes, sizeof axes);
     if (ground_) c.groundInfo[0] = groundUnit_;  // [floatfoam]
     c.groundInfo[1] = shoreSoak ? 1.0f : 0.0f;    // [bigtest]
+    if (fxMirror) {  // [fxmirror]
+      c.fxMirror[0] = 1;
+      c.fxMirror[1] = fxMirrorReach;
+      c.fxMirror[2] = fxMirrorStrength;
+      c.fxMirror[3] = fxMirrorView ? 1.0f : 0.0f;
+    }
   }
   // with ripples on the water this frame (ripples.h): the modern water that reads their field
   if (modern && ripples.Active()) PrepareRipples();
@@ -1433,6 +1479,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   if (modern) {
     device_->SetTexture(6, behind);
     device_->SetTexture(7, sceneDepth);
+    device_->SetTexture(kFxMirrorSlot, fxMirror ? fxMirror : textures_->Black());  // [fxmirror]
     if (ground_) device_->SetTexture(kWaterGroundSlot, ground_);  // [floatfoam]
   }
   if (surfing) device_->SetTexture(kSurfFieldSlot, surf.Field());
@@ -1450,6 +1497,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
   if (surfing) device_->SetTexture(kSurfFieldSlot, {});
   if (oceanic) ocean.Unbind();  // [ocean] (its field too)
   if (modern && ground_) device_->SetTexture(kWaterGroundSlot, {});  // [floatfoam]
+  if (modern) device_->SetTexture(kFxMirrorSlot, {});                // [fxmirror] (drawn into again next frame: not left bound)
 }
 
 }  // namespace render

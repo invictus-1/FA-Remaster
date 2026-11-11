@@ -459,6 +459,17 @@
 //           camera looks (radius 0.5, strength 1), to see and time them; --ripple-speed s: how fast the rings run
 //           (world units a second, 1.6); --ripple-half-life s: after how long they are half as high (0.8);
 //           --ripple-view n: the field's heights in place of the water (red up, blue down, full at 1 / n units)
+// --no-fx-mirror  [fxmirror] the water mirrors none of what is drawn after it (fire, flashes, smoke, beams, tracers, blasts,
+//           shields), as before 2026-11-10 (World::waterFxMirror off; fx_mirror.h: on by default they are drawn mirrored
+//           about the water's level into a picture the water lays into its mirror). --fx-mirror-reach n: how far off (world
+//           units, 4) what it shows is taken to be, for how far the waves' tilt moves and smears it; --fx-mirror-strength
+//           n: looked down on, the image of what glows as if the water never mirrored less than n fiftieths (1: as light
+//           mirrors, next to nothing from the game's height; Water::fxMirrorStrength); --fx-mirror-view: the mirrored picture itself in place of the water (to check it);
+//           --fx-mirror-blink: every moment drawn three times: once to settle (a flash's light comes a frame after
+//           its sparks), then with it, then without (with --frames, --fixed-step and --shots 1: pictures 3k + 2 with it,
+//           3k + 3 the same moment without; the moments a 30th of a second apart: before and after from one run, for
+//           stills and a film at 30 a second); --fx-mirror-blink-strength n: a fourth picture of each moment with it at
+//           that strength (4k + 2 with it, 4k + 3 without, 4k + 4 at that strength)
 // --wakes-remade  [wakes] the ships' wakes remade (wakes.h, World::wakesRemade; modern look): arms that are lines of foam,
 //           streaks that keep their place on the water at the screen's resolution, a wake that runs out softly, for a ship
 //           of any size and speed (without it the wake as before)
@@ -931,6 +942,11 @@ struct Options {
   bool waterDetail = false;             // --water-detail
   bool winterWater = false;             // --winter-water
   bool waterRipples = false;            // --water-ripples
+  bool fxMirror = true;                 // [fxmirror] --no-fx-mirror
+  bool fxMirrorView = false;            // --fx-mirror-view
+  bool fxMirrorBlink = false;           // --fx-mirror-blink
+  float fxMirrorBlinkStrength = 0;      // --fx-mirror-blink-strength
+  float fxMirrorReach = 0, fxMirrorStrength = -1;  // --fx-mirror-reach, --fx-mirror-strength (0, -1: the water's own)
   bool wakesRemade = false;             // --wakes-remade [wakes]
   bool fixedStep = false;               // --fixed-step [wakes]
   bool shellBlend = true;               // --shells-as-before (shell curve)
@@ -1317,6 +1333,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--water-detail") o->waterDetail = true;
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
+    else if (a == "--no-fx-mirror") o->fxMirror = false;  // [fxmirror]
+    else if (a == "--fx-mirror-view") o->fxMirrorView = true;
+    else if (a == "--fx-mirror-blink") o->fxMirrorBlink = true;
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--shells-as-before") o->shellBlend = false;  // (shell curve)
@@ -1557,6 +1576,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->waterRipples = true;
     }
     else if (a == "--ripple-speed") o->rippleSpeed = static_cast<float>(atof(v));
+    else if (a == "--fx-mirror-reach") o->fxMirrorReach = std::clamp(static_cast<float>(atof(v)), 0.1f, 100.0f);  // [fxmirror]
+    else if (a == "--fx-mirror-strength") o->fxMirrorStrength = std::clamp(static_cast<float>(atof(v)), 1.0f, 50.0f);
+    else if (a == "--fx-mirror-blink-strength") {
+      o->fxMirrorBlinkStrength = std::clamp(static_cast<float>(atof(v)), 1.0f, 50.0f);
+      o->fxMirrorBlink = true;
+    }
     else if (a == "--ripple-half-life") o->rippleHalfLife = static_cast<float>(atof(v));
     else if (a == "--ripple-view") o->rippleView = static_cast<float>(atof(v));
     else if (a == "--surf-rough") o->surfRough = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
@@ -2356,6 +2381,10 @@ int main(int argc, char** argv) {
   world.waterDetail = opt.waterDetail;
   world.winterWater = opt.winterWater;
   world.waterRipples = opt.waterRipples;
+  world.waterFxMirror = opt.fxMirror;  // [fxmirror]
+  world.water.fxMirrorView = opt.fxMirrorView;
+  if (opt.fxMirrorReach > 0) world.water.fxMirrorReach = opt.fxMirrorReach;
+  if (opt.fxMirrorStrength >= 0) world.water.fxMirrorStrength = opt.fxMirrorStrength;
   world.wakesRemade = opt.wakesRemade;  // [wakes]
   if (opt.rippleSpeed > 0) world.water.ripples.speed = opt.rippleSpeed;
   if (opt.rippleHalfLife > 0) world.water.ripples.halfLife = opt.rippleHalfLife;
@@ -3588,6 +3617,11 @@ int main(int argc, char** argv) {
     last = now;
     if (photoLeft > 0) dt = 0;  // (a photo's frames: the moment held)
     if (opt.fixedStep && automatic) dt = 1.0f / 60.0f;  // [wakes] (--fixed-step: the game's clock by the frames, not the wall's)
+    // [fxmirror] (--fx-mirror-blink: a moment's second picture is the same moment; a 30th of a second from pair to pair)
+    const int blinkPictures = opt.fxMirrorBlinkStrength > 0 ? 4 : 3;  // (the first of each: the moment settling)
+    // (a moment's later pictures: nothing new taken from the game either, below)
+    const bool blinkHeld = opt.fxMirrorBlink && opt.fixedStep && automatic && frameCount % blinkPictures != 0;
+    if (opt.fxMirrorBlink && opt.fixedStep && automatic) dt = blinkHeld ? 0.0f : 1.0f / 30.0f;
 
     bool quit = false;
     if (automatic) events.clear();
@@ -3713,7 +3747,9 @@ int main(int argc, char** argv) {
     if (photoLeft == 0 && (window->Width() != device->Width() || window->Height() != device->Height())) device->Resize(window->Width(), window->Height());
 
     // an automatic run counts time in frames, so that its pictures can be compared
-    const float time = photoLeft > 0 ? photoTime : automatic ? static_cast<float>(frameCount) / 60.0f : std::chrono::duration<float>(now - start).count();
+    const float time = photoLeft > 0 ? photoTime
+                       : automatic ? static_cast<float>(opt.fxMirrorBlink && opt.fixedStep ? frameCount / blinkPictures * 2 : frameCount) / 60.0f  // ([fxmirror] pairs)
+                                   : std::chrono::duration<float>(now - start).count();
 
     // the game: how far the simulation is, and the frame to show
     if (haveLive) {
@@ -4590,18 +4626,20 @@ int main(int argc, char** argv) {
       world.AddFrame(drive, armyColors);
     }
     if (haveLive && playing) {  // what the scripts did with effects in the beats since the last frame
-      live.TakeEffectEvents(&effectEvents);
-      {  // how the scenery changed
+      // ([fxmirror] --fx-mirror-blink: not for a moment's second picture, which would have a flash more than its first)
+      if (blinkHeld) effectEvents.clear();
+      else live.TakeEffectEvents(&effectEvents);
+      if (!blinkHeld) {  // how the scenery changed
         std::vector<FramePropEvent> changed;
         live.TakePropEvents(&changed);
         if (!changed.empty()) world.AddPropEvents(changed);
       }
-      {  // how the simulation changed the ground (laid flat under a structure)
+      if (!blinkHeld) {  // how the simulation changed the ground (laid flat under a structure)
         std::vector<FrameGroundChange> ground;
         live.TakeGroundChanges(&ground);
         if (!ground.empty() && opt.groundChanges) world.ChangeGround(ground);
       }
-      {  // hits, impacts and health changes, for the looks that answer them
+      if (!blinkHeld) {  // hits, impacts and health changes, for the looks that answer them
         FrameCombat combat;
         live.TakeCombat(&combat);
         world.AddCombat(std::move(combat));
@@ -4615,6 +4653,11 @@ int main(int argc, char** argv) {
       CpuTimes::Part(nullptr);
     }
     effects.shotLight = opt.shotLight >= 0 ? opt.shotLight : ((frameCount / 30) % 2 ? 0.0f : -opt.shotLight);
+    if (opt.fxMirrorBlink) {  // [fxmirror] --fx-mirror-blink
+      world.waterFxMirror = opt.fxMirror && frameCount % blinkPictures != 2;
+      static const float usual = world.water.fxMirrorStrength;
+      world.water.fxMirrorStrength = frameCount % blinkPictures == 3 ? opt.fxMirrorBlinkStrength : usual;
+    }
     if (playing) world.AddFrame(frame, armyColors);
     if (dustTest)  // --movement-dust-test: its units on their loops
       world.AddFrame(dustTest->Update(havePlay ? playTick * 0.1 : static_cast<double>(time), [&](float x, float z) { return haveMap ? map.Height(x, z) : 0.0f; },
