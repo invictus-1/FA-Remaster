@@ -868,7 +868,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   window plays through Windows' sound session (WASAPI, shared mode: the system asks for sound
   every hundredth of a second and about two such pieces are under way at most); `--no-sound`
   leaves the device closed, and runs without a window mix only when a test asks
-  (`ui/tests/sound.lua`). Checked without ears: the mixer's output equals the game's sound data
+  (`ui/tests/sound.lua`). The session follows Windows' default output (ours): when its device is
+  taken away (a headset pulled) or another becomes the default, the default output is opened anew;
+  while there is none it is tried again every second, and the mixer runs on by the clock, as it
+  does in a live window with `--no-sound` or with no device to be had, so sounds end when they
+  would and scripts that wait for them go on (`ui/tests/sound_device.lua`: the loss is made up by
+  the host, `SetDeviceTestLoss`; a real headset pulled and a changed default are NOT tested; the
+  old wave output and SDL's device do not come back by this). Checked without ears: the mixer's output equals the game's sound data
   resampled, to one step of 32,767; and with `MOHO64UI_SOUND_CAPTURE=<file>` set, what the
   system's output plays is recorded beside the run, to be searched for holes and jumps (the
   first device, the old wave output with small buffers, had 187 holes of silence in 7.5 s,
@@ -991,7 +997,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   first picture (false for a missing or broken file, or with /nomovie); Play runs it by real time
   (the interface's frame steps), Stop pauses where it is (OnStopped on the next step) and Play runs on
   from there; at the end OnFinished, or a silent restart when it loops; Play without a movie calls
-  OnFinished on the next step. Drawn stretched over the control while it plays, in its alpha (a stopped
+  OnFinished on the next step. The frame steps are switched off before OnFinished / OnStopped run
+  (0x79f1e7, 0x79f226, 0x79f281), so a handler that plays the movie again keeps them (a film looped
+  or chained by its own handler). Drawn stretched over the control while it plays, in its alpha (a stopped
   one keeps its paused picture, a finished one is not drawn). GetNumFrames from the Sofdec header
   (its first private-stream-2 packet: the frames at +0xae). The game's movies carry no sound: the
   scripts play cues beside them (/lua/maui/movie.lua: PlaySound / PlayVoice, prepared, then started
@@ -1047,7 +1055,18 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   rectangle as its clip, so nothing tests the quad for being empty, and the interface's pass draws
   without culling): FAF's score graph lays the shares' bands behind its lines out so. The host's
   test function `moho64ui_PixelAt(x, y)` draws the head and gives a pixel's colour
-  (`ui/tests/controls.lua`).
+  (`ui/tests/controls.lua`). `ShareTextures` (FA exe 0x77fcf0) takes the other bitmap's textures and
+  with them BitmapWidth and BitmapHeight (the first texture's size; a solid colour's is 2 x 2), not
+  its frame pattern: a bitmap that had none draws nothing until a script gives it one, as the
+  original's (`ui/tests/bitmap.lua`).
+- A control destroyed earlier in the frame is still there until the frame's end, and scripts may go
+  on using it as in the original (FA exe 0x786ef0, 0x7867b0, 0x786ad0, 0x79cc10; nothing there tests
+  "dead" but drawing and the frame steps): destroyed again (`OnDestroy` again), made a parent (the
+  late child is deleted with it at the frame's end, with no `OnDestroy`, as the original's
+  destructor 0x786d00 does), moved by `SetParent` (a destroyed control moved under another parent
+  leaves the dead list and stays; one moved under a destroyed parent goes with it), given the
+  keyboard focus or the input capture (nobody has them once it is deleted: the original's weak
+  pointers). No pointer to a deleted control is left behind (`ui/tests/dead_controls.lua`).
 - Hit testing by a picture's transparency and the render passes, as the original's (FA exe, read
   2026-10-19; `ui/tests/hittest_passes.lua`, the front end and a game). A bitmap with
   `UseAlphaHitTest(true)` is hit only where its texture's pixel at the mouse (in the control's own

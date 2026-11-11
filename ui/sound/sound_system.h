@@ -115,6 +115,15 @@ class SoundSystem {
   // Open the sound device and play; without it the sounds are mixed only when Mix is asked
   // (tests). False when there is no device.
   bool OpenDevice();
+  // (ours) With no device open: the mixer run by the clock, its sound dropped (sound/device.h OpenSilentDevice). For
+  // a live window that plays nothing aloud (no device to be had, --no-sound): its sounds still end when they would,
+  // so the categories' limits do not fill up and scripts that wait for a sound's end go on (the review of
+  // 2026-11-09, toolkit H2). A run without a window has neither: its tests move the sound on themselves.
+  void RunWithoutDevice();
+  // For tests: whether a device (or the clock in its place) runs, what it says of itself, and the end of it.
+  bool HasDevice() const { return device_ != nullptr; }
+  std::string DeviceState() const;
+  void CloseDevice();
   Mixer& mixer() { return mixer_; }
 
   // For tests and the log: how many cues were played, and the last one's wave ("Interface#11").

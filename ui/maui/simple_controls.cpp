@@ -205,17 +205,20 @@ class Movie : public Control {
     const std::string menu = "/main_menu.sfd";
     return name.size() >= menu.size() && name.compare(name.size() - menu.size(), menu.size(), menu) == 0;
   }
+  // (In all three ends the frame steps are switched off BEFORE the script hears of it, as the original's: +0xeb
+  // cleared at 0x79f1e7, 0x79f226 and 0x79f281, RunScript after each. A handler that plays the movie again, Play
+  // 0x79fa40 setting +0xeb, so keeps its frame steps: a film looped or chained by its own OnFinished / OnStopped.)
   void FrameUpdate(lua_State* L, float seconds) override {
     if (!playing) {
-      RunScript(L, "OnFinished");
       needsFrameUpdate = false;
+      RunScript(L, "OnFinished");
       return;
     }
     Control::FrameUpdate(L, seconds);  // (the script's OnFrame)
     if (dead()) return;
     if (stopped) {
-      RunScript(L, "OnStopped");
       needsFrameUpdate = false;
+      RunScript(L, "OnStopped");
       return;
     }
     if (decoder.IsOpen() && decoder.Ended()) {

@@ -857,4 +857,12 @@ bool SoundSystem::OpenDevice() {
   return device_ != nullptr;
 }
 
+void SoundSystem::RunWithoutDevice() {
+  if (!device_) device_ = OpenSilentDevice(&mixer_);
+}
+
+std::string SoundSystem::DeviceState() const { return device_ ? device_->State() : std::string(); }
+
+void SoundSystem::CloseDevice() { device_.reset(); }
+
 }  // namespace moho::ui::sound

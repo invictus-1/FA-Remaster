@@ -59,6 +59,11 @@ class Control : public ScriptObject {
 
   // Destroy (0x786ef0): leave the parent, join the root frame's list of dead controls (they are
   // deleted at the end of the frame), run self:OnDestroy(), then destroy the children, newest first.
+  // Until that frame's end the control is still there, and the original tests "dead" (+0xec) only where it
+  // draws (0x786fad) and gives frame steps (0x7965fb): a dead control can be destroyed again (OnDestroy runs
+  // again: no test at 0x786ef0, and the script's Destroy 0x787ad0 reaches every control not yet deleted), be made
+  // a parent (the constructor 0x7867b0 links the child into its list), be moved (SetParent) and take the keyboard
+  // focus or the input capture. None of that leaves a pointer to it behind: see Frame::PurgeDeleted.
   virtual void Destroy(lua_State* L);
   void ClearChildren(lua_State* L);
   // SetHidden (0x787170): self:OnHide(hidden) runs first, every time. If it returns true nothing
@@ -72,6 +77,12 @@ class Control : public ScriptObject {
   // HitTest (0x787270): Left <= x < Right and Top <= y < Bottom (a bitmap may ask its picture too).
   // The render passes play no part in it (GetTopmostControl 0x7872e0 compares Depth alone).
   virtual bool HitTest(float x, float y) const;
+  // SetParent (0x786ad0): nothing when it is the parent already; else the control leaves the list it is in and joins
+  // the new parent's children. That list is its parent's children or, for a destroyed control, the frame's dead
+  // list (the one list link, +0x34, serves both): a destroyed control moved under another parent is so taken off
+  // the dead list and not deleted at the frame's end; it stays dead (not drawn, no frame steps) among its new
+  // parent's children until that parent's children are destroyed. Moved under a destroyed parent it is deleted
+  // with that parent (Frame::PurgeDeleted).
   void SetParent(Control* parent);
   void SetAlpha(float alpha, bool children);
   // The alpha a control's picture is drawn with: the high byte of its colour (+0xf4), which SetAlpha sets beside the
@@ -139,6 +150,7 @@ class Control : public ScriptObject {
   bool hidden_ = false;
   bool hitTestDisabled_ = false;
   bool dead_ = false;
+  bool onDeadList_ = false;  // in its root frame's deadList_ (the original's list link +0x34 in the frame's +0x124)
 };
 
 // A group: a control with nothing of its own (moho.group_methods).
@@ -169,7 +181,16 @@ class Frame : public Control {
   // updates gets self:OnFrame(seconds), hidden or not, in depth-first order; then the controls
   // destroyed since the last frame are deleted.
   void Update(lua_State* L, float seconds);
-  void PurgeDeleted();
+  // PurgeDeleted (0x796510): every control on the dead list is deleted. As the original's destructor (0x786d00,
+  // which deletes each child still in its list, 0x786d50..0x786d79), a control takes with it the children that
+  // joined it after its Destroy (made with it as their parent, or moved under it by SetParent) and theirs, with no
+  // OnDestroy for any of them; their script tables read as destroyed from then on. `ui` forgets each deleted
+  // control (focus, capture, hover, dragger): the original holds those as weak pointers (the focus 0x10bd5ac in
+  // MAUI_SetKeyboardFocus 0x79cc10, the capture stack 0x10bdbac of 8-byte links, 0x7a4540), which a deleted control
+  // empties, so a control that took the focus or the capture after its Destroy has it until the frame's end, and
+  // then nobody has (INFERRED: its entry gone from the capture stack at once; the original drops the emptied entries
+  // when the stack is next asked for its top, 0x7a4720).
+  void PurgeDeleted(UiManager* ui);
   // The largest Depth of the controls in the frame (GetTopmostDepth).
   float TopmostDepth() const;
 
@@ -178,6 +199,7 @@ class Frame : public Control {
 
  private:
   friend class Control;
+  static void DeleteWithChildren(Control* c, UiManager* ui);
   std::vector<Control*> deadList_;
 };
 
@@ -312,7 +334,8 @@ void LogDrawProfile();
 // 0.5 ms), described (its class and what it shows), and its time.
 const std::string& SlowestControlDrawn(double* ms);
 
-// The parent argument of an Internal* creation function (stack index 2): must be a living control.
+// The parent argument of an Internal* creation function (stack index 2): a control not yet deleted (one destroyed
+// earlier in the frame will do, as in the original: Control::Destroy).
 Control* CheckParent(lua_State* L);
 // A picture a control would stretch over `dst` (its texels `src`, whole ones) at `alpha`, handed to the graphics card
 // instead (UserState::Config::cardBackdrop, maui/world_source.h) when `dst` is the whole of `target` and nothing of the

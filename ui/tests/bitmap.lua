@@ -44,6 +44,52 @@ check("Play on one texture does nothing", one:NeedsFrameUpdate(), false)
 one:Stop()
 check("nor Stop", stoppedOne, 0)
 
+-- ShareTextures (FA exe 0x782d60, 0x77fcf0; the review's toolkit M5): the other bitmap's textures, and BitmapWidth
+-- and BitmapHeight with them (the first texture's size), the bitmap given back. The frame pattern is not shared and
+-- not changed: a bitmap that had none draws nothing until a script gives it one, as the original's.
+local function place(bitmap, l, t)
+    bitmap.Left:Set(l) bitmap.Top:Set(t) bitmap.Width:Set(100) bitmap.Height:Set(40)
+    return bitmap
+end
+-- (the bitmaps above get a place too: moho64ui_PixelAt draws the whole head, and a bitmap with no layout cannot be)
+place(b, 100, 100)
+place(one, 100, 200)
+local tw, th = GetTextureDimensions(folder .. "large_btn_up.dds")
+local share = place(Bitmap(GetFrame(0)), 1000, 600)
+check("a new bitmap has no size", share.BitmapWidth() .. " x " .. share.BitmapHeight(), "0 x 0")
+check("ShareTextures gives the bitmap back", share:ShareTextures(one) == share, true)
+check("and takes the size with the textures", share.BitmapWidth() .. " x " .. share.BitmapHeight(), tw .. " x " .. th)
+check("which is a size", tw > 0 and th > 0, true)
+check("the pattern is not shared: it had none, it has none", share:GetNumFrames(), 0)
+check("so nothing is drawn yet", moho64ui_PixelAt(1050, 620), "00000000")
+share:SetForwardPattern()
+check("a forward pattern over the shared texture", share:GetNumFrames(), 1)
+check("and the shared texture is drawn", moho64ui_PixelAt(1050, 620) ~= "00000000", true)
+-- (FAF's use, AutolobbyMapPreview.lua: a bitmap made with a solid colour takes another's texture)
+local icon = place(Bitmap(GetFrame(0)), 1200, 600)
+icon:SetSolidColor("ff20c040")
+check("a solid colour draws", moho64ui_PixelAt(1250, 620), "ff20c040")
+icon:ShareTextures(one)
+check("sharing into a bitmap of a solid colour: its one-place pattern stays", icon:GetNumFrames(), 1)
+check("the shared texture's size", icon.BitmapWidth() .. " x " .. icon.BitmapHeight(), tw .. " x " .. th)
+check("and the texture is drawn, not the colour", moho64ui_PixelAt(1250, 620), moho64ui_PixelAt(1050, 620))
+icon:ShareTextures(b)
+check("an animation's four textures shared: the pattern still one place", icon:GetNumFrames(), 1)
+icon:SetForwardPattern()
+check("until a pattern is asked for: four", icon:GetNumFrames(), 4)
+local colour = place(Bitmap(GetFrame(0)), 100, 300)
+colour:SetSolidColor("ffc02040")
+local tint = place(Bitmap(GetFrame(0)), 1400, 600)
+tint:ShareTextures(colour)
+check("a solid colour shared: the colour texture's size, 2 x 2", tint.BitmapWidth() .. " x " .. tint.BitmapHeight(), "2 x 2")
+check("no pattern, nothing drawn, a colour neither", tint:GetNumFrames() .. " " .. moho64ui_PixelAt(1450, 620), "0 00000000")
+tint:SetForwardPattern()
+check("a forward pattern over the one colour texture", tint:GetNumFrames(), 1)
+check("and its colour drawn", moho64ui_PixelAt(1450, 620), "ffc02040")
+check("two arguments, no more", pcall(share.ShareTextures, share, one, one), false)
+check("the other must be a bitmap", pcall(share.ShareTextures, share, GetFrame(0)), false)
+for _, x in {share, icon, colour, tint} do x:Destroy() end
+
 local frames, finished, stopped = {}, 0, 0
 b.OnAnimationFrame = function(self, frame) table.insert(frames, tostring(frame)) end
 b.OnAnimationFinished = function(self) finished = finished + 1 end
