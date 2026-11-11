@@ -615,6 +615,7 @@ void MudLayer(float2 xz, float2 stepX, float2 stepY, float3 base, float m, inout
     albedo *= 1 - 0.45 * p;
     roughness = lerp(roughness, 0.05, p);
     creases = lerp(creases, 1, p);
+    groundStill = p;  // [puddlesun] (lighting.h: the sun's highlight on it as on a puddle)
   }
 }
 #endif
@@ -1083,6 +1084,7 @@ float4 Ground(VOut i) {
       float3 m = materialMaps.SampleGrad(samplerAniso, float3(LXZ * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb; \
       mask = saturate((m.b + mask * 1.35 - 1) / 0.35); \
       raw = saturate((m.b + raw * 1.35 - 1) / 0.35); \
+      if (groundLook.z > 0.5) raw = mask;  /* [layernormals] (below) */ \
       MORE_RICH(n, m, mask) \
       matter = lerp(matter, float3(m.r, m.g, 1), mask); \
     } else { \
@@ -1122,6 +1124,17 @@ float4 Ground(VOut i) {
   float4 upper = ALBEDO(9);
   albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
 
+  // [layernormals] The layers' small shapes. The original lays a layer's colour by its mask pushed (mask * 2 - 1: a half
+  // and less is none of it) and its normal by the mask's raw value, and so did RICH above for a remastered layer, pushing
+  // each by the layer's height. A map whose masks say "none of this layer" with a half (SETONS_R's: no value in them is
+  // under 128 of 255; the colour's formula wants no less) then has every layer that is NOT there at a raw half: pushed by
+  // its height, that laid the absent layer's normal map at full strength wherever its own height stands over two thirds,
+  // not at all under a third, over whatever does lie there. Grass and sand carried the stones of the rock, scree and
+  // gravel layers above them, and where those layers' heights dip between two stones, a thin line of the real ground's
+  // shapes was left between two patches leaning other ways: black hairline cracks and gashes on smooth grass and sand,
+  // sharp at any distance (the map scan of 2026-11-11: "pen strokes"). A remastered layer's shapes belong to its
+  // material, as its roughness and creases, which were laid by the colour's share all along: so are its normals now
+  // (groundLook.z; RICH sets raw to it). A layer without a third map keeps the original's raw value. 0: as before.
   float4 n = NORMAL(0);
   OVER(n, NORMAL(1), rawLow.x);
   OVER(n, NORMAL(2), rawLow.y);
@@ -1240,6 +1253,16 @@ float4 Ground(VOut i) {
     // [leftover] dry ground matt at grazing light (Terrain::mattGrazing; lighting.h): how low the sun stands over the
     // ground's own slope (its small shapes left out: a grain facing the sun still has it low over the ground round it)
     groundGraze = 1 - smoothstep(0.12, 0.9, dot(base, sunDirection));
+    // [matteye] and how low the eye stands over it. The highlight's formula is the same whichever of the two skims the
+    // ground, and so is what hides it: an eye low over a slope sees only the grains' and clods' tops, as a low light lights
+    // only those. With the light well up over a slope that falls away from the eye (its far side seen from a low camera,
+    // the light ahead) the fade above did nothing, and bare rock of roughness 0.45 gave back up to eight times its colour's
+    // light as a highlight: by day a pale sheen, under the moon, with little else lit, strips of silver on the hills
+    // (the map scan of 2026-11-11: "like snow or metal"). The same fade by the eye's height over the slope, the two
+    // together: what one leaves of the highlight the other takes its share of. From the game's own camera, 45 degrees
+    // and more over level ground, at most a seventh of the highlight goes. groundLook.y 0: by the light alone, as before.
+    [branch] if (groundLook.y > 0.5)
+      groundGraze = 1 - (1 - groundGraze) * smoothstep(0.12, 0.9, dot(base, normalize(cameraPosition - i.world)));
 #endif
     float3 lit = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, ToLinear(glowing) * 2.5, N, i.world, shadow);
     // the under-water tint is mixed the way the original mixes it (in screen colours, relative to
@@ -1450,6 +1473,7 @@ std::string GroundSource(bool parallax, bool more = false, bool wet = false, boo
          "#define SURFACE_PUDDLES 1.0\n#define SURFACE_TRACKS 1\n" +
          "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n" +
          "static float2 deepGloss = 0;\n" +  // [mud ruts] (the mud's roughness and share, MudInRuts)
+         "#define GROUND_STILL 1\nstatic float groundStill = 0;\n" +  // [puddlesun] (the mud's still water, MudLayer; lighting.h)
          "static float4 deepDent = 0;\n" +   // [dents] (the shell holes', DeepTracksOn)
          kViewShaderBlock + RayShaders() + kLightingShaderBlock + kShader;
 }
