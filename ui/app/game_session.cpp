@@ -3831,6 +3831,8 @@ void GameSession::RecoverPictures() {
   DeviceResult result;
   // (checks, "fail": no device is asked for at all, and each round counts as one that found none)
   const bool pretendNone = deviceAsk_ == DeviceAsk::Fail;
+  // (checks, "nomap": the menu background's own map is taken to be gone once its device is back)
+  const bool pretendNoMenuMap = deviceAsk_ == DeviceAsk::NoMap;
   result.mode = deviceLoseDone_ ? "lose" : pretendNone ? "fail" : deviceAsk_ == DeviceAsk::Check ? "check" : "";
   deviceAsk_ = DeviceAsk::None, deviceLoseDone_ = false;
   // The reason, logged once: the next frames find no picture lost (or the program is closing).
@@ -3864,7 +3866,8 @@ void GameSession::RecoverPictures() {
 
   // 2. Each made anew. No device yet (DeviceLost stays true): the round ends there and is tried again after a pause,
   // kDeviceTries times in all (INFERRED numbers, game_session.h). A device but no map again: the program closes.
-  bool stillLost = false, mapGone = false;
+  bool stillLost = false, mapGone = false, menuGone = false;
+  std::string menuError;
   bool loadBegunAgain = false;
   for (int attempt = 1; attempt <= kDeviceTries; ++attempt) {
     result.tries = attempt;
@@ -3885,6 +3888,11 @@ void GameSession::RecoverPictures() {
       one.props = n.props, one.effects = n.effects, one.looks = n.looks, one.world = n.world, one.loadBegunAgain = n.loadBegunAgain;
       result.pictures.push_back(one);
       if (!ok) {  // (DeviceLost false and no world: the map could not be opened again)
+        // (the menus' map on the window's picture: the menu goes on without it, below; a game's map: the program closes)
+        if (m.picture == windows && windowPicture_->shows == WindowPicture::Kind::Menu) {
+          menuGone = true, menuError = error, m.done = true;
+          continue;
+        }
         mapGone = true, result.error = error;
         continue;
       }
@@ -3897,7 +3905,7 @@ void GameSession::RecoverPictures() {
            n.props, n.effects, n.looks, n.loadBegunAgain ? "; the map opening behind begun again" : "");
     }
     if (behindOwed && !stillLost && !mapGone) {
-      const Backdrop::Recovered r = menuBackdrop->RecoverDevice();  // (on its thread, waited for; the evening laid on there)
+      const Backdrop::Recovered r = menuBackdrop->RecoverDevice(pretendNoMenuMap);  // (on its thread, waited for; the evening laid on there)
       if (!r.own) {
         behindOwed = false;  // (its thread ended meanwhile: no picture of its own any more)
       } else if (!r.ok && r.lost) {
@@ -3912,8 +3920,9 @@ void GameSession::RecoverPictures() {
           behindOwed = false;
           Logf(LogLevel::Info, "moho64ui: the graphics device: the menu background's own picture made anew in %.2f s (the device %.2f s, %d %s; the map %.2f s)",
                r.seconds, r.deviceSeconds, r.deviceTries, r.deviceTries == 1 ? "try" : "tries", r.mapSeconds);
-        } else {
-          mapGone = true, result.error = r.error;
+        } else {  // (its map could not be opened again: its thread has ended; the menu goes on without it, below)
+          behindOwed = false;
+          menuGone = true, menuError = r.error;
         }
       }
     }
@@ -3938,6 +3947,19 @@ void GameSession::RecoverPictures() {
     if (closeProgram) closeProgram(sentence);
     else Logf(LogLevel::Error, "moho64ui: %s", sentence.c_str());
     return;
+  }
+
+  // The MENU's map could not be opened again (Chris, 2026-11-11: the menu goes on without its background rather than
+  // the program closing; a game's map gone closes it, above: a game has no picture left). The menu says so in its
+  // notice line. The window's picture then shows no world, as when a menu's map would not open in the first place
+  // (MenuMapGone); the background's own picture has ended its thread (Backdrop::ServeDevice).
+  if (menuGone) {
+    result.menuWithoutMap = true, result.error = menuError;
+    Logf(LogLevel::Warning, "moho64ui: the graphics device: the menu's background could not be opened again (%s): the menu goes on without it",
+         menuError.c_str());
+    AddMenuNotice("The menu's background could not be restored after the graphics device was lost (" + menuError + ").");
+    if (windowPicture_ && windowPicture_->shows == WindowPicture::Kind::Menu && !windowPicture_->picture.world())
+      MenuMapGone(*windowPicture_, menuError);
   }
 
   // 3. This program's part afterwards, as after SwapMap: what it sets on the world itself, and what it hands the card.
@@ -4020,17 +4042,36 @@ void GameSession::RedressGameWorld(Picture& pic) {
 }
 #endif
 
+// The menus' map on the window's picture is gone (a recovery of the device could not open it again): the picture shows
+// no world, and the menu goes on as when its map would not open at the start (ServeWindowMap's failure): the flight
+// has failed (the background falls back to the still map, FollowMenuMode), any other menu map is not tried again.
+// NOT RUN: no check can make a map fail to open again on the window's picture (INFERRED from that failure's code).
+void GameSession::MenuMapGone(WindowPicture& wp, const std::string& error) {
+  using Kind = WindowPicture::Kind;
+  const std::string map = wp.shownMap;
+  wp.shows = Kind::None;
+  wp.shownMap.clear();
+  if (menuFlight && map == MenuFlight::kMap) {
+    menuFlight->Fail("its map could not be opened again after the graphics device was lost (" + error + ")");
+    flightGiven_ = flightShows_ = flightCovering_ = false;
+    failedMenuMap_.clear();
+  } else {
+    failedMenuMap_ = map;
+  }
+}
+
 bool GameSession::AskDeviceRecovery(const std::string& mode, std::string* why) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (deviceClosing_) return *why = "the program is closing after a recovery that failed", false;
-  if (mode != "check" && mode != "lose" && mode != "fail") return *why = "the mode is \"check\", \"lose\" or \"fail\"", false;
+  if (mode != "check" && mode != "lose" && mode != "fail" && mode != "nomap")
+    return *why = "the mode is \"check\", \"lose\", \"fail\" or \"nomap\"", false;
   if (!windowPicture_ && !(picture_ && picture_->own) && !(menuBackdrop && menuBackdrop->OwnPicture()))
     return *why = "no picture of the world is open", false;
   // (the renderer's first loss test wrote a short pipelines file over the player's: a loss on purpose only where the
   // run keeps its shaders and pipelines in a folder of its own)
   if (mode == "lose" && shaderCache.empty())
     return *why = "losing the device on purpose needs --shader-cache <a folder of the test's own> (the player's kept pipelines are not risked)", false;
-  deviceAsk_ = mode == "lose" ? DeviceAsk::Lose : mode == "fail" ? DeviceAsk::Fail : DeviceAsk::Check;
+  deviceAsk_ = mode == "lose" ? DeviceAsk::Lose : mode == "fail" ? DeviceAsk::Fail : mode == "nomap" ? DeviceAsk::NoMap : DeviceAsk::Check;
   return true;
 #else
   (void)mode;
@@ -4076,6 +4117,7 @@ void GameSession::PushDeviceState(lua_State* L) {
     const DeviceResult& r = deviceLast_;
     boolean("ok", r.ok);
     boolean("wasLost", r.wasLost);
+    boolean("menuWithoutMap", r.menuWithoutMap);
     str("mode", r.mode);
     str("reason", r.reason);
     str("error", r.error);

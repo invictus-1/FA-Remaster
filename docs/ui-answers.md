@@ -49,6 +49,11 @@ states carried over), then a REAL loss (`LoseDeviceForTest`: 0x887a0005, noticed
 it, so `Beat` on the beats' thread while `RecoverDevice` ran on the frames' thread held. The menu with the flight:
 two recoveries (11.9 and 10.5 s, the map 10.8 and 9.4 s), the evening and the flight's air on the new world, the
 battle going on: 16 checks, 0 failed.
+CHANGED 2026-11-11 on Chris's word: when the MENU's map cannot be opened again after a recovery (the window's
+picture showing the menus' map, or the menu background's own picture) the program no longer closes: the menu goes
+on without its background and its notice line says so; the flight counts as failed and the still map is tried, as
+when a menu's map would not open at the start. A GAME's map gone still closes the program in order. Five rounds two
+seconds apart stay (his yes). His yes too to a line for the player in full screen: ui request 52 to you.
 STILL not tested: the second window after a recovery, a map opening behind at the moment of the loss, the read-back
 host step (`--gdi`), Vulkan, a real driver reset; and two pictures at once (the program never has two).
 

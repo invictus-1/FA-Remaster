@@ -393,6 +393,8 @@ class GameSession {
   // lets go as in any recovery, RecoverDevice is not called but counted as "no device" kDeviceTries times with the
   // pauses between, and the program closes in order (`closeProgram`), its pictures still without a device. False with
   // the reason: no picture to recover, or the mode not allowed.
+  // "nomap" (the front end's background picture): a recovery whose map is taken to be gone afterwards: the menu goes
+  // on without its background and says so in its notice line (Chris, 2026-11-11); the program does not close.
   bool AskDeviceRecovery(const std::string& mode, std::string* why);
   // moho64ui_DeviceState(): a table of how the pictures and their device stand: recoveries (done so far), pending (one
   // asked and not done), lost, closing, shaderCache, pictures = {window, game, gameOwn, backdrop}, last = what the last
@@ -741,7 +743,7 @@ class GameSession {
   void DressGamePicture(Picture& pic);
   // The graphics device lost (ServeDevice): the recovery itself; what this program sets again afterwards on the
   // window's picture and on a game's world; what the last one did, for the log and the tests.
-  enum class DeviceAsk { None, Check, Lose, Fail };
+  enum class DeviceAsk { None, Check, Lose, Fail, NoMap };
   DeviceAsk deviceAsk_ = DeviceAsk::None;  // (moho64ui_RecoverDevice: at the next frame boundary)
   bool deviceLoseDone_ = false;            // ("lose": the device is lost on purpose, the frame that notices awaited)
   int deviceRecoveries_ = 0;
@@ -760,9 +762,11 @@ class GameSession {
     int tries = 0;
     std::vector<One> pictures;
     float backdropHour = -1, backdropClouds = -1;  // (the menu background's own new world, as dressed)
+    bool menuWithoutMap = false;  // (the menus' map could not be opened again: the menu goes on without it)
   };
   DeviceResult deviceLast_;
   void RecoverPictures();
+  void MenuMapGone(WindowPicture& wp, const std::string& error);
   void RedressWindowPicture(WindowPicture& wp, bool loadBegunAgain);
   void RedressGameWorld(Picture& pic);
   std::string failedMenuMap_;  // (a background's map that would not open: not tried again)

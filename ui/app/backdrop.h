@@ -117,7 +117,8 @@ class Backdrop : public BackdropSource {
     int deviceTries = 0;
     float timeOfDay = -1, cloudCover = -1;  // (tests: the new world's, as Dress left them)
   };
-  Recovered RecoverDevice();
+  // (`takeMapAsGone`, checks: the device is made anew, then its map is taken to be one that could not be opened)
+  Recovered RecoverDevice(bool takeMapAsGone = false);
   // (checks: moho64ui_RecoverDevice("lose")) WorldPicture::LoseDeviceForTest on its picture, on its thread.
   bool LoseDeviceForTest();
   // (checks, before Begin: --shader-cache) Where its own picture's device keeps its compiled shaders and pipelines
@@ -131,7 +132,7 @@ class Backdrop : public BackdropSource {
  private:
   void Run();
   // (the device's asks: Run's thread serves them between its frames; true while its picture has no device to draw with)
-  enum class DeviceAsk { None, LetGo, Recover, Lose };
+  enum class DeviceAsk { None, LetGo, Recover, RecoverNoMap, Lose };
   enum class PictureState { None, Opening, Up, Ended };  // (its own picture: none asked for, being opened, there, gone)
   bool ServeDevice(render::WorldPicture& picture);
   bool AskDevice(DeviceAsk ask, Recovered* result);

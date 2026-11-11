@@ -10,7 +10,7 @@ local RemasterMenuBitmap = import("/lua/maui/bitmap.lua").Bitmap
 local RemasterMenuUIUtil = import("/lua/ui/uiutil.lua")
 
 -- What is shown, for the tests: box (the control, false when none), texts (its lines as shown, wrapped).
-RemasterMenuNotice = { box = false, texts = {} }
+RemasterMenuNotice = { box = false, texts = {}, count = 0 }
 
 local remasterNoticeWidth = 620  -- (pixels at scale 1: the logo begins right of it at 1920 wide)
 
@@ -34,6 +34,7 @@ function RemasterShowNotices(parent)
         end
     end
     local count = table.getn(notices)
+    RemasterMenuNotice.count = count  -- (how many sentences the box was made from: the menu's watcher shows more)
     for i = 1, math.min(count, 3) do add(notices[i], 'FFE8C048') end
     if count > 3 then add("And " .. (count - 3) .. " more: see the log.", 'FFE8C048') end
     add(notices.log and "Details are in the log (click here to hide this):" or "(click here to hide this)", 'FFA0A8B0')
@@ -84,5 +85,21 @@ function CreateUI(...)
     -- (another main menu script may name its group otherwise: the box is then the head's own child)
     local shown, why = pcall(RemasterShowNotices, group or GetFrame(0))
     if not shown then WARN("FA Remastered: the menu's notice line: " .. tostring(why)) end
+    -- (a notice that comes while the menu is up, as when the graphics device was lost and the background could not
+    -- be restored, is shown within two seconds too, with those already there)
+    if group then
+        ForkThread(function()
+            while not IsDestroyed(group) do
+                WaitSeconds(2)
+                if IsDestroyed(group) then break end
+                local now = rawget(_G, 'moho64ui_Notices') and moho64ui_Notices()
+                local count = now and table.getn(now) or 0
+                local box = RemasterMenuNotice.box
+                if count > 0 and (not box or IsDestroyed(box) or count ~= RemasterMenuNotice.count) then
+                    pcall(RemasterShowNotices, group)
+                end
+            end
+        end)
+    end
     return result
 end

@@ -14,6 +14,8 @@
 -- menu's world and the flight (moho64ui_MenuFlight's world* fields). The window branches were run once in a live
 -- window (2026-11-11: `lose` 49 ok, `front` 16 ok); `frontlose`, `fail` and `frontfail` in a window: not run.
 -- The case after "--" (/devicecase):
+--   frontnomap          the front end: the device made anew, its background's map taken to be gone: the menu goes on
+--                       without its background and says so in its notice line; the program does not close.
 --   game (the default)  a running game, the game's own picture:
 --     moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --quiet --session <session_ai_cheats.lua>
 --              --seed 7 --day 14 --day-length 0 --weather overcast --shader-cache <folder>
@@ -91,7 +93,7 @@ end
 
 if not inGame then
     -- The front end: the menu's background's own picture, drawn on its own thread, and the flight's battle beside it.
-    if case ~= "front" and case ~= "frontlose" and case ~= "frontfail" then return end
+    if case ~= "front" and case ~= "frontlose" and case ~= "frontfail" and case ~= "frontnomap" then return end
     ForkThread(function()
         WaitSeconds(2)
         local W, H = GetFrame(0).Width(), GetFrame(0).Height()
@@ -147,6 +149,28 @@ if not inGame then
         local flight = moho64ui_MenuFlight()
         LOG("TEST note: the menu's flight: " .. (flight and (tostring(flight.state) .. " at tick " .. tostring(flight.tick)) or "none"))
         local tick0 = flight and flight.tick or 0
+        if case == "frontnomap" then
+            -- the device back, but the menu background's map taken to be gone (Chris, 2026-11-11: the menu goes on
+            -- without its background rather than the program closing, and says so)
+            check("a recovery whose map is taken to be gone is asked for", moho64ui_RecoverDevice("nomap"), true)
+            check("it is done", waitFor(900, function() return (state().recoveries or 0) >= 1 or state().closing end), true)
+            local last = state().last or {}
+            LOG("TEST note: the recovery: " .. describeLast(last))
+            check("the menu goes on without its background: not closing, nothing lost or pending",
+                tostring(last.menuWithoutMap) .. " " .. tostring(state().closing) .. " " .. tostring(state().lost) .. " " .. tostring(state().pending), "true false false false")
+            check("the background has no picture of its own any more", state().pictures.backdrop, false)
+            local said = false
+            for _, text in (moho64ui_Notices() or {}) do
+                if string.find(text, "The menu's background could not be restored", 1, true) then said = true end
+            end
+            check("the menu's notice line says so", said, true)
+            WaitSeconds(2)
+            local asked, why = moho64ui_RecoverDevice()
+            check("the program runs on; another recovery finds no picture to recover", tostring(asked) .. " " .. tostring(why), "false no picture of the world is open")
+            LOG("TEST done: " .. failed .. " failed")
+            return
+        end
+
         if case == "frontfail" then
             -- no device to be had: the program closes at this frame's end (the runner reads the log for it)
             check("the recovery that fails is asked for", moho64ui_RecoverDevice("fail"), true)
@@ -454,7 +478,7 @@ ForkThread(function()
         end
     else
         local asked, why = moho64ui_RecoverDevice("nonsense")
-        check("an unknown mode is refused", tostring(asked) .. " " .. tostring(why), 'false the mode is "check", "lose" or "fail"')
+        check("an unknown mode is refused", tostring(asked) .. " " .. tostring(why), 'false the mode is "check", "lose", "fail" or "nomap"')
     end
     LOG("TEST done: " .. failed .. " failed")
 end)
