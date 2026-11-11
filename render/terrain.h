@@ -278,7 +278,9 @@ class Terrain {
   // layer that shows nowhere gets the picture's mean. For ground of those layers past the map's edge, where that
   // picture does not reach. False (and all of `out` 0) where the map has no upper layer, or it or the masks cannot be
   // read on the processor.
-  bool UpperByLayer(float out[9][4]) const;
+  // ([surahead] `upperFile`: the upper layer's file's bytes, where the caller has read them: then nothing but the open
+  // map is read here, and it may be called from another thread once the map is loaded)
+  bool UpperByLayer(float out[9][4], const std::string* upperFile = nullptr) const;
   // (surround) [snowsur] The lying snow as the ground's last scene drawing laid it (Draw, by its snow pipeline), for
   // what lays snow as the ground does beside it (the map's surround, surround.h): its constants as the ground's shader
   // has them (snowInfo, snowSlice, snowWind, snowTune), the snow's normals and thin cover bound at `normalsSlot` (the

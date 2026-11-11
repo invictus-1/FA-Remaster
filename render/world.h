@@ -466,10 +466,23 @@ class World {
   //     the game's farthest zoom the surround's forest is the ground's canopy alone, and the ground goes over to the
   //     canopy where the trees are left out (viewer --surround-scenery-reach <from>,<to>).
   bool surroundBlockOut = false;
+  // [edgehand] (surround.h) the earlier hand-over at the edge, the map's ground mirrored over 40 units (viewer
+  // --surround-edge-mirror), and over how many world units the map's masks go over into the surround's now (viewer
+  // --surround-hand-over)
+  bool surroundEdgeMirror = false;
+  float surroundHandOver = 6;
+  // [surahead] The surround's files read as the map opens, on a thread of their own beside the rest of the load (its
+  // json, its heights, masks and forest unpacked and joined to the map's edge: Surround::Open; and the map's upper
+  // layer by its layers: Terrain::UpperByLayer), not on the first frame that draws it: with the surround on by default
+  // every start on such a map paid some 0.3 s there. Taken in when a map is opened (with mapSurround as it is then).
+  // False (viewer --no-surround-ahead): read the first time it is wanted, as before.
+  bool surroundAhead = true;
   bool surroundScenery = true;
   float surroundSceneryPixels = 2.0f;
   // (and its levels of detail chosen as if it stood this many times as far: viewer --surround-scenery-lod)
-  float surroundSceneryLod = 1.5f;
+  // ([scenlod] 2 from 2026-11-11, 1.5 before: at the game's camera and low over an edge the picture is not visibly poorer,
+  // and at 3840x2160 the low north-edge view draws some 0.6 million triangles fewer of it)
+  float surroundSceneryLod = 2.0f;
   float surroundSceneryFrom = 500, surroundSceneryTo = 1100;
   int surroundForestFloor = -1;
   // [edgeband] (Chris, 2026-11-10, shown the game's picture over the edge with the surround on, the edge not to be
@@ -1590,6 +1603,16 @@ class World {
   BeyondLand distantLand;  // (beyondland) the land far off and the soft edge's look (beyondLand)
   Surround surround;       // (surround) the map's own sculpted land past its edges (mapSurround)
   bool surroundTried_ = false;  // (looked for, for the map open)
+  // [surahead] (surroundAhead) the surround read ahead: begun as the map opens, on a thread of its own, taken the first
+  // time the surround is wanted (waited for, where it is not done by then: TakeSurroundAhead). While it runs nothing
+  // else touches `surround`. `found`: the map has a surround's json (read or refused: Surround::Usable says which).
+  struct SurroundAhead {
+    bool found = false, upper = false;
+    float upperOf[9][4] = {};
+    double ms = 0;
+  };
+  std::future<SurroundAhead> surroundAhead_;
+  void TakeSurroundAhead();
   // (surround) its scenery (surroundScenery): each piece's model and place, by squares of kSurroundCell world units (only
   // those with any; each its box and its group of still scenery with the model renderer, made the first time it is in
   // view), read the first time it is wanted (ReadSurroundScenery); from how far past the map's edge to how far its trees

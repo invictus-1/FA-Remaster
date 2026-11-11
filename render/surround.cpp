@@ -34,7 +34,9 @@ cbuffer Surround : register(b1) {
   float4 surTrees;    // x, y from how far past the edge to how far the scenery's single trees thin out to none (y 0: none
                       // stand); z the map's specular (as the ground's roughness counts it)
   float4 surSight;    // x, y from how far from the eye to how far the scenery's trees are left out (y 0: none are)
-  float4 surPictures2; // x the second masks' samples per world unit, y 1 / its samples across (x 0: none)
+  float4 surPictures2; // x the second masks' samples per world unit, y 1 / its samples across (x 0: none); z [edgehand] 1 = the
+                      // map's own pictures are read on past the edge mirrored (the earlier hand-over), 0: held at the edge's;
+                      // w over how far outside the edge the map's upper layer goes over into the surround's
   float4 surKinds2;   // which of the map's layers the second masks' red, green, blue and alpha are the shares of (-1: none)
   float4 albedoTile[10];  // as the ground's (terrain.cpp): x a layer's repeats per world unit; y 1 = it has its third map
   float4 normalTile[9];   // x its normal's repeats per world unit; y 1 = +y is up in its texture
@@ -176,6 +178,20 @@ float4 PS(VOut i) : SV_Target {
   // (1 at the map's edge: the map's own ground; how far out it goes over into the surround's is uneven along the edge,
   // four tenths of the way to all of it, so that the hand-over is no band parallel to the edge)
   float own = surLook.z > 0 ? 1 - smoothstep(0, surLook.z * (0.4 + 0.6 * CloudNoise(float3(xz * 0.045, 9.1))), outside) : 0;
+  // [edgehand] (the same for what changes slowly from place to place, over a longer way: the upper layer's colour and the
+  // snow's shelter; and where the map's own pictures are read for a place past the edge: held at the edge's own values,
+  // or, the earlier hand-over, laid out again mirrored, which showed from above as a pattern doubled about the edge)
+  float ownWide = surLook.w > 0 ? 1 - smoothstep(0, surLook.w * (0.4 + 0.6 * CloudNoise(float3(xz * 0.045, 9.1))), outside) : 0;
+  float ownUpper = surPictures2.w > 0 ? 1 - smoothstep(0, surPictures2.w * (0.4 + 0.6 * CloudNoise(float3(xz * 0.045, 9.1))), outside) : 0;
+  float2 edgeUv = MirrorUv(xz * surMap.xy);
+  [branch] if (surPictures2.z < 0.5) {
+    // (held at the edge: the edge's nearest place, wandering along the edge with the way out, so that what the edge holds
+    // is not drawn straight out as a comb's teeth)
+    float2 held = clamp(xz, 0, surMap.zw);
+    float2 off = xz - held;
+    held += float2(-off.y, off.x) * ((CloudNoise(float3(xz * 0.13, 2.7)) - 0.5) * 1.8);
+    edgeUv = saturate(held * surMap.xy);
+  }
   // (the layers read with the place's own steps, as the ground's: a layer is skipped where it is not there at all)
   float2 stepX = ddx(xz) * exp2(temporal.x), stepY = ddy(xz) * exp2(temporal.x);
   float away = distance(i.world, cameraPosition);
@@ -221,7 +237,7 @@ float4 PS(VOut i) : SV_Target {
   // what is under it), going over into the surround's
   float4 rawLow = 0, rawHigh = 0;
   [branch] if (own > 0) {
-    float2 uv = MirrorUv(xz * surMap.xy);
+    float2 uv = edgeUv;
     rawLow = maskLow.SampleGrad(samplerLinearClamp, uv, stepX * surMap.xy, stepY * surMap.xy);
     rawHigh = maskHigh.SampleGrad(samplerLinearClamp, uv, stepX * surMap.xy, stepY * surMap.xy) * surMore.w;
     float4 low = saturate(rawLow * 2 - 1), high = saturate(rawHigh * 2 - 1);
@@ -298,9 +314,12 @@ float4 PS(VOut i) : SV_Target {
   // and by the edge the picture itself (mirrored)
   float4 upper = upperOf[0];
   for (int u = 1; u < 9; ++u) upper = lerp(upper, upperOf[u], c[u]);
-  [branch] if (own > 0) {
-    float2 inMap = MirrorUv(xz * surMap.xy) * surMap.zw;
-    upper = lerp(upper, albedoMaps[9].SampleGrad(samplerAniso, inMap * albedoTile[9].x, stepX * albedoTile[9].x, stepY * albedoTile[9].x), own);
+  [branch] if (ownUpper > 0) {
+    float2 inMap = edgeUv * surMap.zw;
+    // ([edgehand] held at the edge: read the softer the farther out, so that what it holds at the edge is not drawn out
+    // in streaks)
+    float soft = surPictures2.z > 0.5 ? 1 : 1 + 1.5 * outside;
+    upper = lerp(upper, albedoMaps[9].SampleGrad(samplerAniso, inMap * albedoTile[9].x, stepX * (albedoTile[9].x * soft), stepY * (albedoTile[9].x * soft)), ownUpper);
   }
   albedo.rgb = lerp(albedo.rgb, upper.rgb, upper.a);
 
@@ -391,9 +410,9 @@ float4 PS(VOut i) : SV_Target {
     // own shelter (read on past the edge, mirrored), with its drifts' slope, going over into that
     float4 around = float4(0, 1, 0.8 * woodCover, 0.5);
     float2 tilt = 0;
-    [branch] if (own > 0 && snowInfo.w > 0.5) {
-      float2 uv = MirrorUv(xz * surMap.xy);
-      float2 mirrored = 1 - 2 * abs(fmod(floor(xz * surMap.xy), 2));
+    [branch] if (ownWide > 0 && snowInfo.w > 0.5) {
+      float2 uv = edgeUv;
+      float2 mirrored = surPictures2.z > 0.5 ? 1 - 2 * abs(fmod(floor(xz * surMap.xy), 2)) : float2(1, 1);
       float4 here = snowShelter.SampleLevel(samplerLinearClamp, uv, 0);
       uint sw, sh, levels;
       snowShelter.GetDimensions(0, sw, sh, levels);
@@ -401,8 +420,8 @@ float4 PS(VOut i) : SV_Target {
       float dx = snowShelter.SampleLevel(samplerLinearClamp, uv + float2(e.x, 0), 0).a - here.a;
       float dz = snowShelter.SampleLevel(samplerLinearClamp, uv + float2(0, e.y), 0).a - here.a;
       float height = 2 * 0.6 * snowTune.z * saturate(weather.y * 2 - 0.3);
-      tilt = float2(dx, dz) * height / (e * surMap.zw) * mirrored * own;
-      around = lerp(around, here, own);
+      tilt = float2(dx, dz) * height / (e * surMap.zw) * mirrored * ownWide;
+      around = lerp(around, here, ownWide);
     }
     float sky = around.g, over = around.b, lay = around.a * 2 - 1;
     float slope = length(base.xz);
@@ -1118,7 +1137,11 @@ void Surround::Draw(const View& view) {
   }
   if (detailed) {
     const float side = static_cast<float>(samples_ - 1) * step_;  // (the square all its pictures lie over)
-    c.look[2] = std::max(ownColours, 0.0f);
+    // [edgehand] (the masks' hand-over and the slow things': both the earlier one's length when mirrored)
+    c.look[2] = std::max(edgeMirror ? ownColours : handOver, 0.0f);
+    c.look[3] = std::max(ownColours, 0.0f);
+    c.pictures2[2] = edgeMirror ? 1.0f : 0.0f;
+    c.pictures2[3] = std::max(edgeMirror ? ownColours : upperHold, 0.0f);
     c.pictures[0] = static_cast<float>(masksSamples_ - 1) / side;
     c.pictures[1] = 1 / static_cast<float>(masksSamples_);
     c.pictures[2] = forestTexture_ ? static_cast<float>(forestSamples_ - 1) / side : 0.0f;

@@ -110,6 +110,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
 }
 
 World::~World() {
+  if (surroundAhead_.valid()) surroundAhead_.wait();  // [surahead] (it reads the map and the surround: before they go)
   if (framegenAsked_) device_->SetFrameGeneration({});
 }
 
@@ -218,9 +219,31 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
     }
     if (options.lodPixels > 0) terrain.quadPixels = options.lodPixels;
     distantLand.Forget(map, mapPath);  // (beyondland: read from this map as opened; the land far off made when it is wanted)
+    if (surroundAhead_.valid()) surroundAhead_.get();  // [surahead] (the map before's, never taken: let go of first)
     surround.Forget();                 // (surround: looked for when it is first wanted)
     surroundTried_ = false;
     ForgetSurroundScenery();
+    // [surahead] the surround read ahead, on a thread of its own beside the rest of the load: the files' reading and
+    // unpacking, the join to the map's edge, and the map's upper layer by its layers. It reads the map as loaded and
+    // the ground's layers as Load left them, and writes the surround alone, which nothing else touches until it is taken.
+    if (surroundAhead && mapSurround && mapPath.size() > 6 && mapPath.compare(mapPath.size() - 6, 6, ".scmap") == 0)
+      surroundAhead_ = std::async(std::launch::async, [this, path = mapPath] {
+        const auto started = std::chrono::steady_clock::now();
+        SurroundAhead r;
+        const std::string name = path.substr(0, path.size() - 6) + "_surround.json";
+        if (auto json = vfs_->ReadFile(name)) {
+          r.found = true;
+          const std::string folder = path.substr(0, path.find_last_of('/') + 1);
+          std::string why;
+          if (!surround.Open(map, *json, [&](const std::string& file) { return vfs_->ReadFile(folder + file); }, &why)) {
+            fprintf(stderr, "render: %s: %s (beyond the edge the map laid out again is drawn)\n", name.c_str(), why.c_str());
+          } else if (surround.HasMasks() && !map.albedo[9].texture.empty()) {
+            if (const auto upper = vfs_->ReadFile(moho::Vfs::Normalize(map.albedo[9].texture))) r.upper = terrain.UpperByLayer(r.upperOf, &*upper);
+          }
+        }
+        r.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        return r;
+      });
     step("ground");
     if (!water.Load(&map, &why)) {
       *error = "water: " + why;
@@ -1725,6 +1748,10 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     c.softShadows[3] = 1.6f;
   }
   // the world beyond the map's edge: six tenths of the map's shorter side out, then lost in the distance
+  if (surroundAhead_.valid()) {  // [surahead] (read ahead as the map opened: taken before anything of the frame looks at it)
+    TakeSurroundAhead();
+    surroundTried_ = true;
+  }
   terrain.beyondReach = 0;
   terrain.beyondCopies = true;
   if (haveMap_ && worldBeyond && look == Look::Modern) {
@@ -1743,6 +1770,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
     }
     surround.blockOut = surroundBlockOut;        // (the detail look's switches)
+    surround.edgeMirror = surroundEdgeMirror;    // [edgehand]
+    surround.handOver = surroundHandOver;
     surround.forestFloor = surroundForestFloor;
     const bool sculpted = mapSurround && surround.Usable();
     // (its scenery read the first time it is wanted; where its single trees stand, for the ground's forest)
@@ -2589,6 +2618,18 @@ void World::ReadSurroundScenery() {
          surroundProps_.size(), kindModels.size(), surroundCells_.size(), name.c_str(), trees, farthestTree,
          inside || unread ? (", " + std::to_string(inside) + " inside the map and " + std::to_string(unread) + " whose model cannot be read left out").c_str() : "",
          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+}
+
+// [surahead] The surround read ahead is taken (waited for, where its thread is not done): from here the surround is the
+// frame's own again. Says how long the reading took beside the load and how long this waited.
+void World::TakeSurroundAhead() {
+  if (!surroundAhead_.valid()) return;
+  const auto started = std::chrono::steady_clock::now();
+  const SurroundAhead r = surroundAhead_.get();
+  if (!r.found) return;
+  if (r.upper) surround.SetUpper(r.upperOf);
+  printf("render: the map's surround: read ahead beside the load in %.0f ms (its upper layer %s); the first frame waited %.1f ms for it\n", r.ms,
+         r.upper ? "with it" : "not", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 }
 
 // (surround) The map before is gone: its surround's scenery with it (their groups emptied; looked for again when wanted).

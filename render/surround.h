@@ -49,9 +49,10 @@
 //   Its GROUND is then drawn in the map's own layers (the ground's own albedos, normals and third maps at the map's
 //   repeats: Terrain::BindLayers), laid by the masks in the layers' order and as the ground's shader lays them (a
 //   layer with a third map comes through by its height first, and brings its roughness and crease shading); the upper
-//   layer, which lies over the map only, as its mean where each layer shows on the map (Terrain::UpperByLayer). Within
-//   `ownColours` world units of the edge the map's own masks and upper layer (read on past the edge, mirrored) go over
-//   into the surround's, share by share, so that at the edge the two grounds are the same ground. Cheap far off: a
+//   layer, which lies over the map only, as its mean where each layer shows on the map (Terrain::UpperByLayer). At
+//   the edge the map's own masks (held at the edge's values) go over into the surround's within `handOver` world units,
+//   share by share, and its upper layer within `ownColours`, so that at the edge the two grounds are the same ground
+//   ([edgehand]; at first both were read on past the edge mirrored over `ownColours`: `edgeMirror`). Cheap far off: a
 //   layer that has no share at a pixel is not read, and the layers' normals only within `fineReach` of the eye. No
 //   relief, no deep tracks, no mud mask, no wet twins and no snow materials: lit, wet, snowed and dimmed with the
 //   distance as the block-out is (ModernLight, BeyondMap), with the wet band along the water as the map's shores have.
@@ -92,6 +93,17 @@ class Surround {
  public:
   float seam = 16;         // over how many world units outside the edge its heights are taken toward the map's edge
   float ownColours = 40;   // over how many world units outside the edge the map's own colours go over into its own
+  // [edgehand] (the detail look) How the map's own ground goes over into the surround's at the edge. The earlier way
+  // (`edgeMirror`; viewer --surround-edge-mirror): the map's masks and upper layer read on past the edge mirrored, over
+  // `ownColours` units; from straight above that showed as a pattern doubled about the edge (Chris's pictures of
+  // 2026-11-11: the rock ledges and paths twice, either side of the line). Now: the map's masks held at the edge's own
+  // values and handed over to the surround's within `handOver` world units (uneven along the edge, four tenths of it to
+  // all of it), since the visuals session's masks carry the map's own shares over the edge; the upper layer's colour
+  // held at the edge's values over `upperHold` units (read softer the farther out), the snow's shelter over
+  // `ownColours` as before; nothing mirrored. What is held is the edge's nearest place, wandering along the edge with
+  // the way out, so that nothing is drawn straight out of the edge.
+  bool edgeMirror = false;
+  float handOver = 6, upperHold = 20;  // (6: tried 4, 12 and 30; the longer ones draw the edge's ledges out in pale smears)
   float softness = 0.06f;  // how soft its shadows are (the slope over which a shadow's edge fades)
   // (the detail look) The first look kept: its ground in the map's colours by height and slope although the map brings
   // its ground's masks (viewer --surround-blockout).
@@ -140,6 +152,13 @@ class Surround {
     asCame_.shrink_to_fit();
   }
   bool Detailed() const { return detailNow_; }  // (the last Prepare: drawn in the map's own layers)
+  // [surahead] The map's upper layer where each of its layers shows (Terrain::UpperByLayer), where the world has worked
+  // it out ahead with the surround's reading (World::surroundAhead): then it is not asked for on the first frame drawn.
+  void SetUpper(const float upper[9][4]) {
+    for (int n = 0; n < 9; ++n)
+      for (int k = 0; k < 4; ++k) upperOf_[n][k] = upper[n][k];
+    upperAsked_ = true;
+  }
   // How far past the map's edges it reaches at least (world units).
   float Reach() const { return reach_; }
   // Its ground's height at a place (world units), as it is drawn.

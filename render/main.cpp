@@ -730,6 +730,11 @@
 //           2026-11-10: on by default; --surround is still taken and changes nothing). --no-surround: the map laid out
 //           again mirrored there, as on every map without a surround. Where the surround brings its ground's masks, its forest and
 //           its scenery (the detail look), its ground is drawn in the map's own ground layers and its scenery stands on it;
+//           --surround-edge-mirror: [edgehand] the map's own ground read on past the edge mirrored over 40 units, as at
+//           first (World::surroundEdgeMirror); --surround-hand-over <n>: over how many world units the map's masks go
+//           over into the surround's (World::surroundHandOver, 6);
+//           --no-surround-ahead: [surahead] its files read on the first frame that draws it, as at first, not beside the
+//           map's load on a thread of their own (World::surroundAhead);
 //           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
 //           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
 //           map's edge (World::surroundScenery); --surround-scenery-pixels <n>: how many times the smallest size on
@@ -1188,6 +1193,9 @@ struct Options {
   bool beyondHaze = true;               // --no-beyond-haze
   bool surround = true;   // --no-surround (Chris, 2026-11-10: on by default; --surround is taken and changes nothing)
   bool surroundBlockOut = false;        // --surround-blockout (the detail look)
+  bool surroundEdgeMirror = false;      // --surround-edge-mirror [edgehand]
+  bool surroundAhead = true;            // --no-surround-ahead [surahead]
+  float surroundHandOver = -1;          // --surround-hand-over [edgehand] (-1: the world's own)
   bool surroundScenery = true;          // --no-surround-scenery
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
   float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
@@ -1488,6 +1496,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround") o->surround = true;  // (beyondland; the default now)
     else if (a == "--no-surround") o->surround = false;
     else if (a == "--surround-blockout") o->surroundBlockOut = true;  // (surround: the detail look's switches)
+    else if (a == "--surround-edge-mirror") o->surroundEdgeMirror = true;  // [edgehand]
+    else if (a == "--no-surround-ahead") o->surroundAhead = false;         // [surahead]
     else if (a == "--no-surround-scenery") o->surroundScenery = false;
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
@@ -1956,6 +1966,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround-forest-floor") o->surroundForestFloor = atoi(v);                           // (surround)
     else if (a == "--surround-edge-band") o->surroundEdgeBand = static_cast<float>(atof(v));             // [edgeband]
     else if (a == "--surround-ice-from") o->surroundIceFrom = static_cast<float>(atof(v));               // [snowsur]
+    else if (a == "--surround-hand-over") o->surroundHandOver = static_cast<float>(atof(v));             // [edgehand]
     else if (a == "--surround-scenery-lod") o->surroundSceneryLod = static_cast<float>(atof(v));         // (surround)
     else if (a == "--surround-scenery-reach") {  // (surround) <from>,<to>
       if (sscanf(v, "%f,%f", &o->surroundSceneryReach[0], &o->surroundSceneryReach[1]) != 2) return false;
@@ -2454,6 +2465,8 @@ int main(int argc, char** argv) {
     wo.verbose = opt.debug;
     world.textures.detail = opt.textureDetail;
     world.bloom = opt.bloom;
+    world.mapSurround = opt.surround;  // [surahead] (before the map opens: its surround is read ahead beside the load)
+    world.surroundAhead = opt.surroundAhead;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;
@@ -2775,6 +2788,8 @@ int main(int argc, char** argv) {
   world.beyondLand = opt.beyondLand;
   world.mapSurround = opt.surround;  // (beyondland)
   world.surroundBlockOut = opt.surroundBlockOut;  // (surround: the detail look's switches)
+  world.surroundEdgeMirror = opt.surroundEdgeMirror;  // [edgehand]
+  if (opt.surroundHandOver >= 0) world.surroundHandOver = opt.surroundHandOver;
   world.surroundScenery = opt.surroundScenery;
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
