@@ -668,6 +668,9 @@ struct LookSettings {
   // warpInColours (World::warpInColours, the renderer's request 67): a commander's warp-in in its faction's colours;
   // off: the earlier warp-in. Console remaster_warpin_colours 0|1.
   bool warpInColours = true;
+  // waterFxMirror (World::waterFxMirror, the renderer's request 69): the water mirrors blasts, fire, beams, tracers,
+  // trails and shield shells; off: none of them, as before. Console remaster_water_mirror 0|1.
+  bool waterFxMirror = true;
   int shieldBend = 1;
   float unitGlow = 0.75f, sharpen = 0.5f;
   // Haze & Mist (ours; Chris on the menu flight's dusk, 2026-11-09: "mist/haze should be an option we can adjust like

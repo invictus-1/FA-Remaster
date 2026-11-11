@@ -109,6 +109,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.stormCells = looks.stormCells;                // (Storm Clouds: Cells / Plain, render 309e718, request 57)
   w.starryNight = looks.starryNight;              // (Night Sky: Starry / Plain, render acf9384, request 58)
   w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)
+  w.waterFxMirror = looks.waterFxMirror;              // (Effects Mirrored in Water, the renderer's request 69)
   // (Shield Bending: Off nothing bent; Subtle a little, units under the shield never; Full everything behind, as 10-28)
   w.energy.bend = looks.shieldBend <= 0 ? 0.0f : looks.shieldBend == 1 ? 0.35f : 1.0f;
   w.energy.steadyUnits = looks.shieldBend <= 1;

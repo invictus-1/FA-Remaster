@@ -1,6 +1,6 @@
 -- The Options dialog with our Remastered tab (Chris, 2026-11-08; docs/ui-options-layout.md): five tab buttons narrowed
 -- to fit the panel (ui/data/hook/lua/ui/dialogs/options.lua), the chosen one's lit picture as wide, each label inside
--- its button; the Remastered tab's 53 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
+-- its button; the Remastered tab's 54 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
 -- Soak too: a slider and a toggle) and showing Custom once one of them is changed by hand, "Go to Section" scrolling to
 -- a header, Video's "Show" button choosing the Remastered tab, a hover on one of our titles showing its tip; OK saving
 -- what the preset set. In the front end:
@@ -111,7 +111,7 @@ ForkThread(function()
     local row, grid = Row('remaster_goto_section')
     local lines = nil
     if grid then _, lines = grid:GetScrollValues('Vert') end
-    check("53 rows on the page", lines, 53)
+    check("54 rows on the page", lines, 54)
     check("Go to Section first, at the top", grid and TopRow(grid), 1)
     check("it shows the first section", Item('remaster_goto_section').control:GetItem(), 1)
 
@@ -172,7 +172,7 @@ ForkThread(function()
     Choose('remaster_goto_section', 8)
     local _, _, vmin, vmax = grid:GetScrollValues('Vert')
     local picture = Index(items, function(item) return item.type == 'header' and item.title == "Picture & Camera" end)
-    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 53 and picture > vmin and picture <= vmax, true)
+    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 54 and picture > vmin and picture <= vmax, true)
 
     -- Video: the game's own rows, then our header and the Show button, which chooses the Remastered tab
     Button(buttons, 'video'):OnClick()

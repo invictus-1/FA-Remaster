@@ -105,7 +105,7 @@ do
         "Display & Performance|Preset|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
     check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
     check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
-    check("53 rows: Go to Section, 8 headers, 44 options", table.getn(items), 53)
+    check("54 rows: Go to Section, 8 headers, 45 options", table.getn(items), 54)
     check("Haze & Mist is on the tab, set by no preset level (a taste setting)", tostring(remaster.remaster_haze_mist ~= nil) .. " " ..
         tostring(O.RemasterPresetValues(4).remaster_haze_mist) .. " " .. tostring(O.RemasterPresetValues(0).remaster_haze_mist), "true nil nil")
     local missing = {}
@@ -201,7 +201,7 @@ do  -- (Chris, 2026-11-06: it adds input delay; no preset level, Ultra included,
 end
 -- The renderer's looks from Chris's big test (2026-11-01): each on unless chosen, the earlier look kept as Off, in no
 -- preset level; at the start the program has their defaults (the test's preferences choose none of them)
-for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_warpin_colours', 'remaster_ghost_look', 'remaster_guide',
+for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_warpin_colours', 'remaster_water_mirror', 'remaster_ghost_look', 'remaster_guide',
                'remaster_cloak_look', 'remaster_stealth_veil', 'remaster_unit_detail', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky'} do
     check("the Remastered tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
 end
@@ -280,6 +280,15 @@ do
     check("Off chosen in the menu reaches the program", moho64ui_Looks().warpInColours, false)
     video.remaster_warpin_colours.set('remaster_warpin_colours', 1, false)
     check("and On again", moho64ui_Looks().warpInColours, true)
+    -- Effects Mirrored in Water (the renderer's request 69, 2026-11-10): on from Medium up by its cost, off below
+    check("Effects Mirrored in Water: off in Off and Low, on from Medium", O.RemasterPresetValues(0).remaster_water_mirror .. " " ..
+        O.RemasterPresetValues(1).remaster_water_mirror .. " " .. O.RemasterPresetValues(2).remaster_water_mirror .. " " ..
+        O.RemasterPresetValues(4).remaster_water_mirror, "0 0 1 1")
+    check("the program has it on at the start", moho64ui_Looks().waterFxMirror, true)
+    video.remaster_water_mirror.set('remaster_water_mirror', 0, false)
+    check("Off chosen in the menu reaches the program", moho64ui_Looks().waterFxMirror, false)
+    ConExecute("remaster_water_mirror 1")
+    check("and its console command sets it on again", moho64ui_Looks().waterFxMirror, true)
 end
 check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
     video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")

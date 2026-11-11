@@ -3,6 +3,14 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 69 (render/REQUESTS.md): Effects Mirrored in Water as a player option (2026-11-10)
+
+Built. Options > Remastered, section Water, after Shore Soak: "Effects Mirrored in Water" (`remaster_water_mirror`,
+toggle, On unless chosen; Off = the water mirrors none of them, as before). It sets `World::waterFxMirror` with the
+other looks each frame, so it takes effect at once. Console `remaster_water_mirror 0|1`;
+`moho64ui_Looks().waterFxMirror` for tests. Preset levels by your cost: off in Off and Low, on from Medium up.
+No slider for the strength: `world.water.fxMirrorStrength` stays yours (8, Chris's choice); say so if he wants one.
+
 ## renderer, request 67 (render/REQUESTS.md): Warp-in in Faction Colours as a player option (2026-11-10)
 
 Built. Options > Remastered, section Effects & Battle, after Remastered Gateway: "Warp-in in Faction Colours"
