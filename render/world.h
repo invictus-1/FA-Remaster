@@ -810,6 +810,21 @@ class World {
     if (look != Look::Modern || personalShieldsAtRest >= 2) return false;
     return personalShieldsAtRest <= 0 || UnitFaction(unit).empty();
   }
+  // [warpin] The commanders' warp-in in their faction's colours (Chris, 2026-11-09: "warp-in in faction colours"; the
+  // visuals track's section 119). The modern look with the remastered effects: (1) a commander warping in - the script
+  // has set its phase mesh on it (CommandUnit.lua WarpInEffectThread: Display.WarpInEffect.PhaseShieldMesh for six
+  // seconds) and no shield hangs on it - is drawn as energy of its faction's colour, by the visuals track's warp-in
+  // sheet of that faction (/remastered/effects/entities/PhaseShield/<faction>/warpin.dds: threads that climb, each on
+  // its own beat, drifting patches), fading into its own paint over the last second and a half; it was drawn as a
+  // personal shield at rest (the same mesh name: the shields' lattice, the UEF's only), and a mod's commander (its
+  // shield showing only its hits, personalShieldsAtRest) with nothing at all. (2) The light flashes the warp-in's
+  // script throws (UnitTeleport01_script.lua: CreateLightParticleIntel with 'ramp_blue_13') take the army's faction's
+  // ramp where the visuals track has made one (/remastered/textures/particles/warpin/<faction>_<ramp>.dds), the light
+  // and the glow on the ground both (Effects::warpInColours). False: both as before. The original look and the
+  // original effects never have either.
+  bool warpInColours = true;
+  // (how long the script keeps the phase mesh on: the warp-in's look is drawn no longer, whatever a script does)
+  static constexpr double kWarpInSeconds = 6.0;
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
   // before), or in its faction's own, the colour its lamps' file gives (UEF blue whatever its army's colour)
   bool lampsTeamColour = true;
@@ -1264,6 +1279,7 @@ class World {
     double clock = 0;
   };
   std::unordered_map<uint32_t, std::vector<ShieldHit>> shieldHits_;
+  std::unordered_map<uint32_t, double> warpSince_;  // [warpin] (each unit warping in: the clock when its phase mesh was first seen on it)
   std::vector<Vec4> shellHits_;  // (one unit's for its shell, made anew for each)
   const Model* PropModel(const std::string& blueprint, const std::string& mesh);
   void ApplyPropEvent(const FramePropEvent& event);

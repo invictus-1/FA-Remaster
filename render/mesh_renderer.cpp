@@ -127,7 +127,8 @@ cbuffer MeshKind : register(b3) {
                 // look's, from the visuals track's textures); y, z, w: a shield's tint (a nuke's shell: how
                 // often its texture repeats, how fast it slides, from what age it fades)
   float4 kind5; // x: 1 = the Cybran's highlight lookup is there; y: 1 = the Seraphim's mirror ramp is there;
-                // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns)
+                // w: 1 = the visuals track's lattice for this faction's personal shields is there (shieldPatterns),
+                // [warpin] + 2 = and its sheet for the faction's warp-in (warpPatterns)
   float4 kind6; // x: 1 = its texture's treads scroll (ModelLod::scrolling: the original's anim.w), 2 + d: and its albedo's
                 // alpha holds their height there, d world units deep (ModelLod::treadDepth); y: 1 = no glow in the
                 // frame's alpha (ModelLod::rgbOnly: the original writes its colour alone); z: what sways, a group of
@@ -156,6 +157,9 @@ Texture2D seraphimFalloff : register(t6);
 // personal shields' lattice (the visuals track's, tiling: R the lattice, G drifting patches, B a value per
 // cell), a layer per faction: 0 UEF, 1 Aeon, 2 Cybran, 3 Seraphim
 Texture2DArray shieldPatterns : register(t7);
+// [warpin] a commander's warp-in (the visuals track's sheets, her section 119: tiling both ways, uncoloured; R energy
+// threads that run along v, G soft drifting patches, B a value per thread), a layer per faction as above
+Texture2DArray warpPatterns : register(t16);
 // [stealthlook] the scene as it stood before the see-through pass (World: while a cloaked unit is drawn; else black): a cloaked
 // unit's body bends it
 Texture2D cloakBehind : register(t25);
@@ -607,8 +611,13 @@ float4 Shade(VOut i, bool front) {
   // (a hit on its shield this many seconds ago, below 1; i.tint: where it struck on the model at rest)
   // ([shieldhit] 5 and a little more in place of 3 and a little more: a shield that shows only its hits, World::
   // personalShieldsAtRest off - the unit is drawn so only for the second after a hit)
-  bool hitOnly = i.color.a > 4.5;
-  float hitAge = shielded && i.color.a > 3.0005 ? (i.color.a - (hitOnly ? 5.001 : 3.001)) / 0.9 : -1;
+  // ([warpin] 7 and 0.9 x how far its warp-in is, 0..1 of the six seconds the script keeps the phase mesh on it: a
+  // commander warping in, World::warpInColours - drawn by its faction's warp-in sheet where the visuals track has made
+  // one, kind5.w; without one as a shield at rest, as before)
+  bool warping = i.color.a > 6.5 && kind5.w > 1.5;
+  float warpAge = saturate((i.color.a - 7) / 0.9);
+  bool hitOnly = i.color.a > 4.5 && i.color.a < 6.5;
+  float hitAge = shielded && i.color.a > 3.0005 && i.color.a < 6.5 ? (i.color.a - (hitOnly ? 5.001 : 3.001)) / 0.9 : -1;
   i.color.a = min(i.color.a, 1);
   if (inspect.x > 8.5 && inspect.x < 9.5 && look > 0.5) {
     // a view for checking art: which level of detail each model is drawn at: white the finest,
@@ -1056,7 +1065,46 @@ float4 Shade(VOut i, bool front) {
       // lattice (below)
       float atRest = hitOnly ? 2 * (1 - hitAge) * (1 - hitAge) : 1;
       glow *= atRest;
-      [branch] if (kind5.w > 0.5) {
+      [branch] if (warping) {
+        // [warpin] (Chris, 2026-11-09: "warp-in in faction colours"; the visuals track's section 119, ask 2) a commander
+        // warping in is no shielded unit: its body is energy of its faction's colour that sets. Her sheet in place of the
+        // shields' lattice, painted on the model at rest along the three axes as the lattice is, the sheet two and a half
+        // world units across, its v up the upright faces so that the threads stand: they climb slowly (a third of a unit
+        // a second), each on its own beat (the sheet's blue: one value a thread), their cores near white; the soft
+        // patches drift the other way across them, slower, and where one passes the body shimmers. All over the body
+        // and not only along its outline (a shield lets the paint show; a warp-in is the light itself), a little stronger
+        // in the first second and gone over the last one and a half, where the script's switch back to the unit's own
+        // mesh was a cut.
+        float fade = saturate((1 - warpAge) * 4);  // (the last quarter of the six seconds: 1.5 s)
+        float fresh = 1 + 0.6 * saturate(1 - warpAge * 6);  // (the first second: it has just come through)
+        // (the four colours' light evened part of the way - the Aeon's green and the Seraphim's gold are 1.75 times the
+        // UEF's blue to the eye, the Cybran's red three quarters of it, and what is brighter is whiter in the picture:
+        // each toward a luminance of 0.45 by the power 0.6. The visuals track's question in her 119, ask 4)
+        float3 warpTint = tint * pow(0.45 / dot(tint, float3(0.2126, 0.7152, 0.0722)), 0.6);
+        float3 q = i.rest * (1.0 / 2.5);
+        float3 w = pow(abs(normalize(i.restNormal)), 4);
+        w /= w.x + w.y + w.z;
+        const float layer = faction;
+        float climb = time * (0.33 / 2.5);
+        float2 threadX = float2(q.z, -q.y + climb), threadZ = float2(q.x, -q.y + climb), threadY = float2(q.x, q.z + climb);
+        float3 pat = warpPatterns.Sample(samplerAniso, float3(threadX, layer)).rgb * w.x +
+                     warpPatterns.Sample(samplerAniso, float3(threadY, layer)).rgb * w.y +
+                     warpPatterns.Sample(samplerAniso, float3(threadZ, layer)).rgb * w.z;
+        float2 slide = float2(time * 0.031, -time * 0.047);
+        float patches = warpPatterns.Sample(samplerAniso, float3(q.zy * 0.5 + slide, layer)).g * w.x +
+                        warpPatterns.Sample(samplerAniso, float3(q.xz * 0.5 + slide, layer)).g * w.y +
+                        warpPatterns.Sample(samplerAniso, float3(q.xy * 0.5 + slide, layer)).g * w.z;
+        float beat = 0.65 + 0.35 * sin(time * 3.1 + pat.b * 6.283);
+        float shimmer = saturate(patches * 2 - 0.45);  // (the sheet's mean is 0.46: about half the body in a patch)
+        float threads = pat.r * beat * (0.55 + 0.9 * shimmer);
+        float3 hot = lerp(warpTint, float3(1, 1, 1), 0.45 * saturate(pat.r * pat.r * beat));  // (a thread's core: toward white)
+        glow = warpTint * ((0.05 + 0.9 * outline) * (0.8 + 0.2 * sin(time * 2.2)))  // (the outline: stronger than a shield's)
+             + warpTint * (0.10 + 0.22 * shimmer)                                     // (the body's own light, in patches)
+             + hot * (threads * (1.1 + 1.6 * outline));
+        glow *= fade * fresh;
+        // (and the body under it dark while it is light: the paint comes as the light goes)
+        base *= lerp(1, 0.15, fade);
+      } else [branch] if (fmod(kind5.w, 2) > 0.5) {
         // and its faction's lattice over it, as the bubble's (the visuals track's sheet): painted on the
         // model at rest and seen along the three axes, so it goes with the unit and its bones and shows
         // on every side; faint where the surface faces the eye (the paint must show), stronger toward
@@ -2389,6 +2437,30 @@ void MeshRenderer::DrawItems(const View& view, gfx::Texture environment, bool sh
       for (size_t f = 0; f < 4; ++f) shieldPatternOf_[f] = shieldPatterns_ && present[f];
     }
     if (shieldPatterns_) device_->SetTexture(7, shieldPatterns_);
+    // [warpin] (once: the visuals track's sheet for each faction's warp-in, her section 119 - beside the game's own
+    // /effects/entities/PhaseShield/PhaseShieldLookup.dds, a folder a faction. A set of its own: her sheets are 1024
+    // across and the lattice 512, and a set is read at its smallest's size)
+    if (!triedWarpPatterns_) {
+      triedWarpPatterns_ = true;
+      std::vector<std::string> paths;
+      for (const char* faction : {"uef", "aeon", "cybran", "seraphim"})
+        paths.push_back(std::string(kRemasteredEffects) + "/effects/entities/phaseshield/" + faction + "/warpin.dds");
+      std::vector<bool> present;
+      warpPatterns_ = textures_->Layers(paths, &present);
+      for (size_t f = 0; f < 4; ++f) warpPatternOf_[f] = warpPatterns_ && present[f];
+      if (!warpPatterns_) {  // (none made: two black layers, so that the shaders' slot never holds another kind of picture)
+        static const uint8_t kBlack[8] = {};
+        gfx::TextureDesc none;
+        none.width = none.height = 1;
+        none.layers = 2;
+        none.data = kBlack;
+        none.dataSize = sizeof kBlack;
+        warpPatterns_ = device_->CreateTexture(none);
+      } else
+        printf("render: warp-in sheets: uef %d, aeon %d, cybran %d, seraphim %d\n", static_cast<int>(warpPatternOf_[0]), static_cast<int>(warpPatternOf_[1]),
+               static_cast<int>(warpPatternOf_[2]), static_cast<int>(warpPatternOf_[3]));
+    }
+    if (warpPatterns_) device_->SetTexture(16, warpPatterns_);
     // [grime] the units' shared grime layers (unit_grime.h), made the first time a unit wears grime
     if (grimeWanted_ && !grimeLayers_) grimeLayers_ = MakeGrimeLayers(device_, textures_);
     if (grimeLayers_) device_->SetTexture(24, grimeLayers_);
@@ -2583,6 +2655,7 @@ void MeshRenderer::RecordRuns(R& to, const RunSetup& s, size_t from, size_t end,
     kind[18] += (lod->wearMasks ? 0.25f : 0.0f) + (lod->damageAlbedo ? 0.5f : 0.0f);  // [grime] (its wear art: unit_grime.h)
     kind[17] = haveSeraphimFalloff_ ? 1.0f : 0.0f;
     kind[19] = !shadowPass && lod->faction >= 0 && lod->faction < 4 && shieldPatternOf_[lod->faction] ? 1.0f : 0.0f;
+    if (!shadowPass && lod->faction >= 0 && lod->faction < 4 && warpPatternOf_[lod->faction]) kind[19] += 2;  // [warpin]
     kind[20] = lod->scrolling ? (lod->treadDepth > 0 ? 2 + lod->treadDepth : 1.0f) : 0.0f;  // [treads] (2 + their grooves' depth)
     kind[21] = lod->rgbOnly ? 1.0f : 0.0f;
     kind[22] = lod->sway > 0 ? lod->treeStep : 0.0f;  // [foliage] (a group's trees, each on its own beat)

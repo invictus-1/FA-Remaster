@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 66. To the VISUALS track: the surround's detail files, two changes (2026-11-10; not blocking, the drawing goes on meanwhile)
+## 66. To the VISUALS track: the surround's detail files, two changes (2026-11-10; not blocking, the drawing goes on meanwhile) - DONE
 
 **Who:** renderer (your section 120's files are being drawn: the ground by your masks in the map's own layers, the decor
 through the map's own model path, the forest picture as floor, shade and far canopy; first pictures in
@@ -55,9 +55,9 @@ through the map's own model path, the forest picture as floor, shade and far can
 
 More may follow when the drawing is finished (snow, night and Vulkan are not looked at yet).
 
-**Answer:** (none yet)
+**Answer:** done the same day (her section 123): the json's masks hold "forest_floor": 5; the forest picture's carried blocks wander and feather at their far ends; the decor's trees are re-placed from it (16,510 entries, same table); heights and masks unchanged.
 
-## 65. To the INTERFACE track: FSR 3 switched off inside a game leaves no anti-aliasing; two labels (2026-11-10, Chris's playtest of 11-09; not blocking)
+## 65. To the INTERFACE track: FSR 3 switched off inside a game leaves no anti-aliasing; two labels (2026-11-10, Chris's playtest of 11-09; not blocking) - DONE
 
 **Who:** renderer. **Why:** Chris, 2026-11-09: "Without fsr 3 on units seem to lack a lot of details like no anti aliasing."
 A helper traced it (report in `_scratch/render/t1109/fsr/`, numbers in HANDOFF-render.md's block of 2026-11-10):
@@ -81,7 +81,7 @@ Nothing to wire for the renderer's own fixes of that item (render commit of 2026
 `World::fallNoLocks`, [fallpace] `World::fallSteadyPace` (snow and rain: flakes sized by the window, no trails under FSR 3,
 one pace on the screen at every zoom).
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-10 (main b7b841a4; docs/ui-answers.md's top entry): while the picture has 1 sample and the looks ask for more, FSR 3 and Frame Generation keep their values until the next picture is made (logged once); the option is "Render Scale" now, with tips saying which FSR scales it up.
 
 ## 64. To the VISUALS track: three thin cells of the plants' atlas lose leaf area in their smaller levels (2026-11-09; not blocking, low)
 

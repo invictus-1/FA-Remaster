@@ -536,6 +536,7 @@ void World::RestartGame() {
   combat_ = FrameCombat{};
   hitsTaken = impactsTaken = hitsShown = impactsShown = propsChanged = propsGone = groundChanges = 0;
   shieldHits_.clear();
+  warpSince_.clear();  // [warpin]
   shellHits_.clear();
   impactBorn_.clear();
   impactBornNext_.clear();
@@ -1437,6 +1438,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   const float hazeAmount = look == Look::Modern ? std::clamp(hazeMist, 0.0f, 2.0f) : 1.0f;
   air.amount = sunlight.amount = distantLand.hazeAmount = hazeAmount;
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
+  effects.warpInColours = warpInColours && look == Look::Modern && effectsLook == EffectsLook::Remastered;  // [warpin]
   decals.battleScars = battleScars;
   decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]
   // hot metal (hot_metal.h): this frame's, the modern look's only; the marks laid from now on glow while fresh
@@ -3398,12 +3400,29 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // ([shieldhit] personalShieldsAtRest off, the modern look: every shield along its outline only while hit, and what
       // it shows fading with the hit - `built` 5 and a little more, MeshRenderer::Add)
       const bool onlyHits = ShieldOnlyHits(blueprint);
-      if (own && own->capsule) shielded = false;                                   // (the hull shows nothing of it)
+      // [warpin] a commander warping in (warpInColours): a shield's mesh on it and no shield hanging on it (a personal
+      // shield that is up has its entity, FrameUnit::hasShield; the UEF's and the Aeon's commanders' shield upgrades set
+      // the very mesh their warp-in does), for the six seconds from when the mesh was first seen on it. How far it is
+      // rides on what is built, 7 and nine tenths of its share (MeshRenderer::Add); it is no shield: it shows whatever
+      // the shields' rest setting says, on a mod's commander too, and nothing of a hit.
+      float warpAge = -1;
+      if (shielded && !u.hasShield && warpInColours && look == Look::Modern && effectsLook == EffectsLook::Remastered && !asRemembered) {
+        auto since = warpSince_.try_emplace(u.id, clock_).first;
+        if (clock_ < since->second) since->second = clock_;  // (the clock set back: a replay wound back)
+        const double age = clock_ - since->second;
+        if (age < kWarpInSeconds) warpAge = static_cast<float>(age / kWarpInSeconds);
+        else if (age < kWarpInSeconds + 1) shielded = false;  // (faded out; the script's switch back comes with its beat)
+      } else if (!shielded && !warpSince_.empty()) {
+        warpSince_.erase(u.id);
+      }
+      const bool warping = warpAge >= 0;
+      if (warping) {
+      } else if (own && own->capsule) shielded = false;                            // (the hull shows nothing of it)
       else if (own && own->hitOnly) shielded = latestAge >= 0 && latestAge < 1;  // (along its outline while hit)
       else if (shielded && onlyHits) shielded = latestAge >= 0 && latestAge < 1;
-      float built = shielded ? 3.0f : fractionComplete;
+      float built = warping ? 7.0f + 0.9f * warpAge : shielded ? 3.0f : fractionComplete;
       const Vec3* hitAt = nullptr;
-      if (shielded && latestAge >= 0 && latestAge < 1) {
+      if (shielded && !warping && latestAge >= 0 && latestAge < 1) {
         built = (onlyHits ? 5.001f : 3.001f) + 0.9f * static_cast<float>(latestAge);
         hitAt = &latest->at;
       }

@@ -734,6 +734,12 @@
 //           the whole shield lit for the second after one, fading, a ring running out from where it struck). By default
 //           the game's own units keep their rest light and mods' units show only hits; --shields-hit-only: no unit
 //           shows a personal shield at rest
+// --no-warpin-colours  [warpin] the commanders' warp-in as before (World::warpInColours off): drawn as a personal shield
+//           at rest, the script's light flashes in the game's blue for every faction. Without it, in the modern look
+//           with the remastered effects, a commander warping in is energy of its faction's colour by the visuals
+//           track's warp-in sheet, and the flashes take the faction's ramp
+// --warp-in <0..1>  [warpin] placed units are drawn as warping in, that far through the six seconds (0 just come
+//           through, 0.75 the fade into its paint begins, 1 gone); with --frames it runs on from there in real time
 // --built <0..1>  placed units are that far under construction (to look at the factions' build looks)
 // --snow-lying <0..1>  how much snow lies at the start (to look at how it builds up and melts)
 // --weather auto  the weather changes by itself, by --seed and the game's clock (or the viewer's, without a
@@ -1139,6 +1145,8 @@ struct Options {
   bool ranges = false;                  // --ranges
   bool shielded = false;                // --shielded
   int shieldsAtRest = 1;                // --shields-at-rest (2) / --shields-hit-only (0) [shieldhit]
+  bool warpInColours = true;            // --no-warpin-colours [warpin]
+  float warpIn = -1;                    // --warp-in [warpin]
   bool hideTurned = false;              // --hide-bone
   float snowLying = -1;                 // --snow-lying
   float built = 1;                      // --built
@@ -1409,6 +1417,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--shielded") o->shielded = true;
     else if (a == "--shields-at-rest") o->shieldsAtRest = 2;  // [shieldhit]
     else if (a == "--shields-hit-only") o->shieldsAtRest = 0;
+    else if (a == "--no-warpin-colours") o->warpInColours = false;  // [warpin]
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--hot-scorch") o->hotScorchOriginal = std::string(v) == "bright";  // [softscorch] soft | bright
@@ -1836,6 +1845,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
     else if (a == "--snow-depth") o->plantsSnowDepth = static_cast<float>(atof(v));  // [undersnow]
     else if (a == "--built") o->built = static_cast<float>(atof(v));
+    else if (a == "--warp-in") o->warpIn = static_cast<float>(atof(v));  // [warpin]
     else if (a == "--border") o->border.push_back(v);
     else if (a == "--climate") o->climate = v;
     else if (a == "--season") o->season = v;  // [seasons]
@@ -2455,6 +2465,7 @@ int main(int argc, char** argv) {
   if (opt.plantsRegrow > 0) world.plantLife.regrow = opt.plantsRegrow;      // [plants]
   world.energyShields = opt.energyShields;
   world.personalShieldsAtRest = opt.shieldsAtRest;  // [shieldhit]
+  world.warpInColours = opt.warpInColours;          // [warpin]
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
   if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
     world.hullGlow = world.hullReach = world.hullAir = 1;
@@ -4502,7 +4513,9 @@ int main(int argc, char** argv) {
       const bool posed = pose.nowCount > 0 || pose.nextCount > 0;
       // ((level band) with --level-band keyed, as the game's units are: the band holds them and their changes are counted)
       meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0],
-                 opt.shielded && !world.ShieldOnlyHits(u.id) ? 3.0f : opt.built,  // ([shieldhit] nothing at rest)
+                 opt.warpIn >= 0 && world.warpInColours && world.look == Look::Modern && world.effectsLook == World::EffectsLook::Remastered
+                     ? 7.0f + 0.9f * std::clamp(opt.warpIn + time / static_cast<float>(World::kWarpInSeconds), 0.0f, 1.0f)  // [warpin]
+                     : (opt.shielded || opt.warpIn >= 0) && !world.ShieldOnlyHits(u.id) ? 3.0f : opt.built,  // ([shieldhit] nothing at rest)
                  posed ? &pose : nullptr,
                  nullptr, nullptr, opt.levelBand >= 0 ? placedId : 0);
       meshes.Belt(belt);

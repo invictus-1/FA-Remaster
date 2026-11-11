@@ -96,6 +96,13 @@ class Effects {
   int notShown = 0;    // events for kinds of effect that are not drawn yet (decals of kinds other than albedo and normals, anything new)
   float cpuMs = 0;     // Update on the processor, averaged over the last frames
   bool verbose = false;  // says each kind of light flash and decal once, as it first appears
+  // [warpin] (World::warpInColours, the modern look with the remastered effects) the light flashes a warp-in's or a
+  // teleport's own effect throws (UnitTeleport01..03's scripts: CreateLightParticleIntel with a ramp's name, which no
+  // emitter's folder reaches) take the army's faction's ramp where the visuals track has made one beside her warp-in
+  // textures, /remastered/textures/particles/warpin/<faction>_<ramp>.dds (her section 119, ask 3: ramp_blue_13 for the
+  // Aeon, the Cybran and the Seraphim; the UEF keeps the game's blue). The light and the glow on the ground both.
+  bool warpInColours = false;
+  int warpInFlashes = 0;  // (how many took a faction's ramp: for the check)
 
  private:
   enum class Kind { Emitter, Trail, Beam, TextureBeam };

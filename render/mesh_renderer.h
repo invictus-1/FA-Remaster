@@ -54,6 +54,8 @@ class MeshRenderer {
   // ([shieldhit] 3.001 + 0.9 x the seconds since its shield's last hit, below one: that hit lit round `tint`, where it
   // struck on the model at rest; 5.001 + the same: a shield that shows only its hits - what it shows at rest is there
   // for the hit alone and fades with it, World::personalShieldsAtRest)
+  // ([warpin] 7 + 0.9 x how far its warp-in is, 0..1: a commander warping in, World::warpInColours - its faction's
+  // warp-in sheet over its body where the visuals track has made one, else as a shield at rest)
   // `treads`: its two treads' scroll (the amounts the original adds to the u of the texture's strips at
   // v above 0.95 and between 0.90 and 0.95); null: none. Not with `tint`.
   // `key`: what it is from frame to frame, for its motion (`motion`): an entity's own number, the same
@@ -363,6 +365,8 @@ class MeshRenderer {
   // the visuals track's lattice for personal shields, a layer per faction (where it has made one)
   gfx::Texture shieldPatterns_;
   bool shieldPatternOf_[4] = {}, triedShieldPatterns_ = false;
+  gfx::Texture warpPatterns_;  // [warpin] (the factions' warp-in sheets, as the lattice's set)
+  bool warpPatternOf_[4] = {}, triedWarpPatterns_ = false;
   gfx::Buffer boneBuffer_;
   bool countedScene_ = true;
   std::vector<Entry> entries_;
