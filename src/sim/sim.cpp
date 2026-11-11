@@ -1596,6 +1596,13 @@ bool Sim::Start(const SessionDescription& session) {
     orderVersion = want ? kSimOrderVersion : 0;
     Logf(LogLevel::Info, "moho64: the beat's order: %s", want ? "parallel (docs/parallel-mode.md)" : "the original's");
   }
+  // (what is deleted during the game: Sim::FreeDeadLevel)
+  if (FreeDeadLevel() == 0)
+    Logf(LogLevel::Info, "moho64: MOHO64_KEEP_DEAD: no dead object is deleted before the game ends");
+  else
+    Logf(LogLevel::Info, "moho64: dead shells and ended tasks are deleted during the game (level %d; MOHO64_KEEP_DEAD=1 "
+                         "keeps every object to the game's end)%s", FreeDeadLevel(),
+         deadtrap::On() ? "; MOHO64_DEAD_TRAP: a deleted object's pages are taken away" : "");
   // The game version's rules (replay.h; engine-ref/specs/faf3840.md): the header's, as the original's replay player
   // accepts only its own (VCR_SetupReplaySession 0x876665 compares the file's version with the exe's)
   {
@@ -2036,18 +2043,19 @@ void Sim::ProcessDestroyQueue() {
     }
     e->UnbindLua();
   }
-  // MOHO64_FREE_DEAD=1: the purged shells are deleted here, as EntityDb::Purge 0x684560 deletes every purged entity
-  // at this point. Without the switch every engine object stays allocated to the Sim's end, as it always has (the
-  // owner list is only ever added to), so a long game's memory grows with every shell fired (MOHO64_DEBUG_OWNED
+  // The purged shells are deleted here, as EntityDb::Purge 0x684560 deletes every purged entity at this point.
+  // MOHO64_KEEP_DEAD=1 keeps every engine object allocated to the Sim's end, as it was until 2026-11-11 (the
+  // owner list was only ever added to), so a long game's memory grew with every shell fired (MOHO64_DEBUG_OWNED
   // measures it). Shells are the first class: the most numerous of the dead objects in a battle, and by reading
   // nothing of the engine keeps a pointer to a purged one (it has left the shell list, the handle and id tables,
   // the grid and the intel; its Lua table has lost its object; a shell a shell threw keeps the first one's
   // launcher, not the shell). The proof is the trap, MOHO64_DEAD_TRAP=1 (sim/write_trap.h): with it a deleted
-  // shell's pages are gone, and any later read is an access violation. NOT YET THE DEFAULT (2026-11-10): the trap
-  // ran clean on one replay (Naval, 6059 shells deleted in the game), and a 60-minute AI game (four M28 on Seton's,
-  // parallel order, one thread) had the same fingerprints with the shells deleted as with them kept; the 16 replays
-  // of the gate, at one thread and at many, with and without the trap, are still to run.
+  // shell's pages are gone, and any later read is an access violation. THE DEFAULT since 2026-11-11, on these
+  // proofs: the 16 replays of the gate at one thread and at 16, with the trap and without, equal to the game with
+  // nothing deleted in every beat; a 60-minute AI game (four M28 on Seton's, parallel order, 16 threads) the same,
+  // with the trap; the full gate with the deleting on; the renderer's and the interface's own suites with the trap.
   // The owner list keeps the empty place (8 bytes), so its order and every other object's place stay as they were.
+  if (FreeDead() && !done.empty()) AnimatorsDropPurged(*this);  // (an animator on a purged shell lets go)
   if (FreeDead())
     for (Entity* e : done) {
       if (e->kind != Entity::Kind::Projectile) continue;
@@ -2060,9 +2068,15 @@ void Sim::ProcessDestroyQueue() {
   if (FreeDead()) SweepTasks();
 }
 
-bool Sim::FreeDead() {
-  static const bool on = getenv("MOHO64_FREE_DEAD") != nullptr;
-  return on;
+int Sim::FreeDeadLevel() {
+  static const int level = [] {
+    const char* keep = getenv("MOHO64_KEEP_DEAD");
+    if (keep && *keep && strcmp(keep, "0")) return 0;
+    const char* more = getenv("MOHO64_FREE_DEAD");
+    const int n = more ? atoi(more) : 0;
+    return n > 1 ? n : 1;
+  }();
+  return level;
 }
 
 void Sim::NoteOwned(ScriptObject* o) {
@@ -2072,7 +2086,7 @@ void Sim::NoteOwned(ScriptObject* o) {
   }
 }
 
-// The second class of dead objects that is deleted during the game (MOHO64_FREE_DEAD=1; shells are the first,
+// The second class of dead objects that is deleted during the game (FreeDead(); shells are the first,
 // above): tasks. The original deletes a task when it is popped off its unit's command thread; ours let go of it
 // in many places (the dispatcher, a guard's, a patrol's, a transport task's child, a build's reclaim) and kept the
 // object to the Sim's end: 214,331 dead tasks after an hour of a four-AI game (2026-11-10). Instead of a call at
