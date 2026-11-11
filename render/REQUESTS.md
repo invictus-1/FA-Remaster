@@ -34,7 +34,7 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking)
+## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking) - A + C DONE, B in work
 
 **Who:** renderer.
 
@@ -75,9 +75,9 @@ run, and written but untested are: a loss while a map opens behind, the second w
 `std::string why; if (!render::WorldPicture::ShaderCompilerReady(&why))` -> show "FA Remastered cannot start: " + why
 and exit. Without that call `Open` fails with the same sentence in `error` (no hang any more).
 
-**Answer:** (none yet)
+**Answer:** 2026-11-10 (main 33a78b7c; docs/ui-answers.md). A: Map Edge's 'beyond' (the saved default of every player) now sets mapSurround on, a third choice "Mirrored Map" ('mirror') sets it off, the key 'surround' is read as 'beyond'; the menu's flight shows the land. C: ShaderCompilerReady is asked at the start, "FA Remastered cannot start: <why>", exit 3. B: being built by the ui's helper since 21:05.
 
-## 70. To the VISUALS track: the surround's soil share, my wrong number (2026-11-10; not blocking)
+## 70. To the VISUALS track: the surround's soil share, my wrong number (2026-11-10; not blocking) - DONE
 
 **Who:** renderer. masks2 is read now (soil, scree, pale rock) and decor_trees too; your section 124 files load and the
 woods match at the edge. One thing is my fault: in request 68 I wrote "the map's land is 34 % soil". That was soil's share
@@ -95,9 +95,9 @@ surround, built to my figure, is 33-35 % soil in the first 300 units out, so it 
 Chris decided today that the land round the map is ON BY DEFAULT, so this is what every game on SETONS_R shows from the
 interface's next build on.
 
-**Answer:** (none yet)
+**Answer:** done at 21:00 the same day (her section 126): soil 10.9 % in the first 60 units out and 12.3 % from 60 to 300, as thin gullies and trails; scree / rock / pale rock carried over the edge (12.2 / 7.6 / 4.0 % in the first 60 units); decor 18,399 entries. Seen in the viewer: the edge cannot be found in low views. Left: grass_dry 15-18 % outside against the map's 4-8 % (asked: toward 8-10 %, lowest priority).
 
-## 69. To the INTERFACE track: a player option for effects mirrored in the water (2026-11-10, Chris's standing rule; not blocking)
+## 69. To the INTERFACE track: a player option for effects mirrored in the water (2026-11-10, Chris's standing rule; not blocking) - DONE
 
 **Who:** renderer (a new remastered look, so a player option with the earlier look as Off).
 
@@ -112,7 +112,7 @@ interface's next build on.
   2.63 -> 3.13 ms), nothing when nothing is; 16.6 MB at 4K. Suggest on from Medium up; your call.
 - **Name:** "Effects Mirrored in Water" or as you see fit.
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-10 (main 33a78b7c): Options > Remastered > Water > "Effects Mirrored in Water" (remaster_water_mirror; off in presets Off and Low, on from Medium); no strength slider.
 
 ## 68. To the VISUALS track: the surround, three more wishes after the first drawing (2026-11-10; none blocking) - DONE
 

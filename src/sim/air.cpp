@@ -2202,6 +2202,18 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
   a.destEntity = 0;  // (a destination is cleared by the next SetGoal)
   u->motion.hasGoal = true;
   u->motion.arrived = false;
+  // SetGoal 0x5a4c60 hands the motion its target at once (SetMotionTarget 0x5a4a90, called at 0x5a4d33, =
+  // CUnitMotion::SetTarget 0x6b85e0), and SetTarget takes MovingUp (11) and MovingDown (10) off a unit that can fly
+  // there and then (0x6b86db..0x6b8715: bp+0x368, then the two bits of unit+0x4a0); an Attached unit's SetGoal
+  // changes nothing (0x5a4c6e..0x5a4c74). Ours takes the goal up in the unit's motion step of the beat
+  // (TakePendingGoal), whose SetTarget clears them too, so only what runs in between saw them (the Lua threads).
+  // Seen (scenes g4b_stage / g4b_order against the original): a bomber coming down idle (MovingDown) gets the
+  // staging call's landing move in the command stage of 54 / 63: the original's line of that beat has no
+  // MovingDown, ours still had it.
+  if (b.canFly && !State(u, US("Attached"))) {
+    SetState(u, US("MovingUp"), false);
+    SetState(u, US("MovingDown"), false);
+  }
   (void)sim;
 }
 

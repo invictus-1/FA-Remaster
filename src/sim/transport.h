@@ -141,6 +141,7 @@ bool LandBallisticTick(Sim& sim, Unit* u);
 // parent/children callbacks, a dying transport's cargo).
 float TransportOnKillBegin(Sim& sim, lua_State* L, Unit* u, float ratio);
 void TransportOnKillEnd(Sim& sim, lua_State* L, Unit* u);
+void TransportOnDestroyCarried(Sim& sim, Unit* u);  // Unit::OnDestroy 0x6a8a2b: a carried unit destroyed, not killed
 // Unit::GetTransportFerryBeacon 0x6a8890: the ferry beacon of the unit's current command (nullptr: none)
 Unit* UnitFerryBeacon(Sim& sim, const Unit* u);
 

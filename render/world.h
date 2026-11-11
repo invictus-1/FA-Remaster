@@ -467,6 +467,13 @@ class World {
   float surroundSceneryLod = 1.5f;
   float surroundSceneryFrom = 500, surroundSceneryTo = 1100;
   int surroundForestFloor = -1;
+  // [edgeband] (Chris, 2026-11-10, shown the game's picture over the edge with the surround on, the edge not to be
+  // found: "Faint dimming".) The land past the edge is a quarter dimmer and a little greyer (lighting.h BeyondFar, as
+  // all that lies beyond the edge), but over the soft edge's 60 world units, which on ground this alike told nobody
+  // where units cannot go. With a sculpted surround the dimming comes in over this many world units instead (12: a
+  // soft step that reads from the game's height and is no line; it lies on the ground, so it does not shift with
+  // the zoom). 0: the soft edge's own band, as before (viewer --surround-edge-band 0).
+  float surroundEdgeBand = 12;
   int surroundPropsListed = 0;  // (of the frame last begun: pieces of the surround's scenery in the squares in view)
   size_t SurroundProps() const { return surroundProps_.size(); }
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame
@@ -623,6 +630,10 @@ class World {
   // [fallpace] The fall as fast on the screen at every zoom, and a flake's sway by its own box on the ladder (weather.h,
   // Precipitation::steadyPace). False: one speed in the world and the sway by the zoom, as before.
   bool fallSteadyPace = true;
+  // [fallhigh] (Chris, 2026-11-10) the falling rain and snow thin out to nothing as the camera rises past where their
+  // box can still fill the view (Precipitation::highFade, 560 to 1000 world units away); the snow lying and the
+  // clouds stay. False: from the farthest zoom the fall fills a square in the middle of the picture, as before.
+  bool fallFadeHigh = true;
   // [falltrail] With FSR 3, what falls marked in its transparency and composition mask too (Fsr3::Inputs::composition): no
   // lock on a flake, so no trail of its light where it was. False: the reactive mask alone, as before.
   bool fallNoLocks = true;

@@ -1924,6 +1924,7 @@ void Sim::ProcessDestroyQueue() {
         AdjacencyLost(*this, L, u);
         CallMethod(L, u, "SetDead", 0);
         u->dead = true;
+        TransportOnDestroyCarried(*this, u);  // 0x6a8a2b..0x6a8a76: its carrier lets it go (OnTransportDetach)
       }
     }
     CallMethod(L, e, "OnDestroy", 0);
