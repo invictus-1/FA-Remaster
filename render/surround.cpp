@@ -38,6 +38,8 @@ cbuffer Surround : register(b1) {
                       // map's own pictures are read on past the edge mirrored (the earlier hand-over), 0: held at the edge's;
                       // w over how far outside the edge the map's upper layer goes over into the surround's
   float4 surKinds2;   // which of the map's layers the second masks' red, green, blue and alpha are the shares of (-1: none)
+  float4 surGrain;    // [surgrain] x how much of the map's own small character the ground is given (0: none, as at first); y
+                      // its small relief's strength; z the layer that lies round the hard layers' feet (-1: none); w how much of it
   float4 albedoTile[10];  // as the ground's (terrain.cpp): x a layer's repeats per world unit; y 1 = it has its third map
   float4 normalTile[9];   // x its normal's repeats per world unit; y 1 = +y is up in its texture
   float4 upperOf[9];      // the map's upper layer where each layer shows, on the whole (rgb as stored, a its share)
@@ -197,7 +199,39 @@ float4 PS(VOut i) : SV_Target {
   float away = distance(i.world, cameraPosition);
   float fine = max(1 - smoothstep(0.6, 1.0, away / surMore.z), own);  // (the layers' normals: near the eye, and at the edge)
   float2 place = xz - surGrid.xy;
-  float4 m = surMasks.Sample(samplerLinearClamp, (place * surPictures.x + 0.5) * surPictures.y);
+  // [surgrain] The map's own ground has masks of four texels a world unit and a normal map as fine: from above its
+  // layers meet in ragged, grainy borders, soil lies round the feet of its rock, and its small relief shades it. The
+  // surround's masks are a sample every two units and its heights as coarse: read as they are its layers lay in large
+  // smooth-rimmed patches on unshaded ground, and the two characters met on the edge's line. So, where a pixel is small
+  // enough to show it (`grain`: the fine part while a pixel is under a world unit or so, `coarse`: the part some six
+  // units across while it is under about three; let go of beyond: the far look and its cost as they were): the masks
+  // are read a little off their place (by a noise some six units across and one of a unit and a half), the layers'
+  // shares are pushed up and down where they meet by a fine noise (`dither`), and a small relief is laid on the
+  // ground (`micro`, below). Not by the edge's own band (the map's masks there are the map's).
+  float grain = surGrain.x * saturate(1.6 - pixel * 1.1), coarse = surGrain.x * saturate(2.2 - pixel * 0.5);
+  float2 placeM = place;
+  float dither = 0.5, micro = 0, tone = 0, na = 0.5, nb = 0.5;
+  [branch] if (coarse > 0) {
+    float2 slow = float2(CloudNoise(float3(xz * 0.17, 11.3)), CloudNoise(float3(xz * 0.17, 17.9))) - 0.5;
+    placeM += slow * (3.0 * coarse);
+    tone = slow.x * coarse;
+    dither = 0.5 + 0.3 * slow.y * coarse;
+    [branch] if (grain > 0) {
+      float a = CloudNoise(float3(xz * 0.62, 23.1)), b = CloudNoise(float3(xz * 2.1, 29.7));
+      placeM += float2(a - 0.5, CloudNoise(float3(xz * 0.62, 41.3)) - 0.5) * grain;
+      dither += (0.55 * (a - 0.5) + 0.3 * (b - 0.5)) * grain;
+      micro = ((a - 0.5) * 0.26 + (b - 0.5) * 0.08) * grain;
+      na = a;
+      nb = b;
+    }
+  }
+  // (read with the place's own steps: the noise's would blur it; with the grain off as at first, to the pixel)
+  float4 m;
+  [branch] if (surGrain.x > 0)
+    m = surMasks.SampleGrad(samplerLinearClamp, (placeM * surPictures.x + 0.5) * surPictures.y, ddx(xz) * surPictures.x * surPictures.y,
+                            ddy(xz) * surPictures.x * surPictures.y);
+  else
+    m = surMasks.Sample(samplerLinearClamp, (place * surPictures.x + 0.5) * surPictures.y);
   // (the forest's picture read a little off its place, by a slow noise: a wood's side that is a straight line in the
   // picture wanders by some eight world units)
   float forest = 0;
@@ -211,7 +245,7 @@ float4 PS(VOut i) : SV_Target {
   float share[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
   float taken = m.r + m.g + m.b + m.a;
   [branch] if (surPictures2.x > 0) {
-    float4 m2 = surMasks2.SampleGrad(samplerLinearClamp, (place * surPictures2.x + 0.5) * surPictures2.y, ddx(xz) * surPictures2.x * surPictures2.y,
+    float4 m2 = surMasks2.SampleGrad(samplerLinearClamp, (placeM * surPictures2.x + 0.5) * surPictures2.y, ddx(xz) * surPictures2.x * surPictures2.y,
                                      ddy(xz) * surPictures2.x * surPictures2.y);
     if (surKinds2.x >= 0) { share[(int)surKinds2.x] += m2.r; taken += m2.r; }
     if (surKinds2.y >= 0) { share[(int)surKinds2.y] += m2.g; taken += m2.g; }
@@ -256,10 +290,33 @@ float4 PS(VOut i) : SV_Target {
   for (int j = 8; j >= 1; --j) {
     c[j] = saturate(share[j] / max(1 - above, 1e-4));
     above += share[j];
+    // ([surgrain] where two layers meet, the upper one's cover pushed up and down by the fine noise: a ragged border)
+    c[j] = saturate(c[j] + (dither - 0.5) * 2.4 * c[j] * (1 - c[j]) * (1 - own));
     raw[j] = c[j] > 0.002 ? 0.5 + 0.5 * c[j] : 0;
     most = max(most, c[j]);
   }
   c[0] = raw[0] = 1;
+  // ([surgrain] soil round the feet of the rock and scree, as the map's own ground has it: where a hard layer's cover
+  // begins, under where it will show. Not one even ring: where it begins wanders along the rim by the noise of a unit
+  // and a half (here wide, there none), and its cover is partial by the fine noise, so that the height blend below lays
+  // it as grainy soil among the grass; at first an even band, its outer side one contour of the masks: beaded)
+  int rimLayer = (int)surGrain.z;
+  if (rimLayer > 0 && grain > 0) {
+    float hard = 0;
+    for (int q = 1; q < 9; ++q)
+      if (q > rimLayer && albedoTile[q].w > 0.5) hard = max(hard, c[q]);
+    float wide = saturate(0.5 + 1.8 * (na - 0.5));
+    float from = 0.01 + 0.3 * wide;
+    float rim = smoothstep(from, from + 0.22, hard) * saturate(0.6 + 1.8 * (nb - 0.5) + 0.3 * (1 - wide)) * surGrain.w * grain * (1 - own);
+    c[rimLayer] = max(c[rimLayer], rim);
+    raw[rimLayer] = c[rimLayer] > 0.002 ? 0.5 + 0.5 * c[rimLayer] : 0;
+    most = max(most, c[rimLayer]);
+  }
+  // ([surgrain] how far the layers here stand over one another, for the small relief below: from the covers as they are
+  // here, smooth ramps, not after the height blend, whose steps a pixel wide sloped the relief per 2x2 quad: a dark,
+  // stair-stepped line round every patch)
+  float lift = albedoTile[0].z;
+  for (int v = 1; v < 9; ++v) lift = lerp(lift, albedoTile[v].z, c[v]);
   [branch] if (own > 0) {
     float stored[9] = {1, rawLow.x, rawLow.y, rawLow.z, rawLow.w, rawHigh.x, rawHigh.y, rawHigh.z, rawHigh.w};
     for (int j = 1; j < 9; ++j) raw[j] = lerp(raw[j], stored[j], own);
@@ -314,6 +371,9 @@ float4 PS(VOut i) : SV_Target {
   // and by the edge the picture itself (mirrored)
   float4 upper = upperOf[0];
   for (int u = 1; u < 9; ++u) upper = lerp(upper, upperOf[u], c[u]);
+  // ([surgrain] the map's upper layer is a painted picture: on one kind of ground it varies by about a tenth from place
+  // to place, in patches some six to thirty units across; its mean alone left the surround's ground one flat tone)
+  [branch] if (surGrain.x > 0) upper.rgb *= 1 + surGrain.x * (0.55 * (CloudNoise(float3(xz * 0.043, 31.1)) - 0.5) + 0.9 * tone);
   [branch] if (ownUpper > 0) {
     float2 inMap = edgeUv * surMap.zw;
     // ([edgehand] held at the edge: read the softer the farther out, so that what it holds at the edge is not drawn out
@@ -343,6 +403,17 @@ float4 PS(VOut i) : SV_Target {
     float3 axisX = float3(1 - 2 * h.x * h.x, 2 * h.x * h.y, -2 * h.x * h.z);
     float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
     N = normalize(lerp(base, float3(dot(detail, axisX), dot(detail, base), dot(detail, axisZ)), fine));
+  }
+  // [surgrain] the small relief: the fine noise's ups and downs and the layers' own standing over one another where they
+  // meet (rock and scree up, soil down: Terrain::LayerTiles), as one height whose slope tilts the normal (the slope from
+  // the height's change from pixel to pixel), so that the ground is shaded in small as the map's own is by its normal
+  // map, and a rock's rim reads as a ledge
+  float relief = micro + lift * grain * (1 - own);
+  float2 dh = float2(ddx(relief), ddy(relief)), px = ddx(xz), py = ddy(xz);
+  float det = px.x * py.y - px.y * py.x;
+  if (surGrain.x > 0 && abs(det) > 1e-10) {
+    float2 slope = clamp(float2(dh.x * py.y - dh.y * px.y, dh.y * px.x - dh.x * py.x) / det, -0.7, 0.7) * surGrain.y;
+    N = normalize(N - float3(slope.x, 0, slope.y));
   }
   // a rough, non-metal surface, as the map's ground; a slope a little darker in its creases (as the block-out's), not
   // at the edge (the map's ground has none of that)
@@ -524,7 +595,7 @@ float4 PS(VOut i) : SV_Target {
 struct SurroundConstants {
   float grid[4], levels[4], look[4];
   // (the detail look's, after the block-out's)
-  float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4], pictures2[4], kinds2[4];
+  float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4], pictures2[4], kinds2[4], grain[4];
   float albedoTile[10][4], normalTile[9][4], upperOf[9][4];
   float snowInfo[4], snowSlice[4][4], snowWind[4], snowTune[4];  // [snowsur] (the snow variant's, after the rest)
 };
@@ -1142,6 +1213,10 @@ void Surround::Draw(const View& view) {
     c.look[3] = std::max(ownColours, 0.0f);
     c.pictures2[2] = edgeMirror ? 1.0f : 0.0f;
     c.pictures2[3] = std::max(edgeMirror ? ownColours : upperHold, 0.0f);
+    c.grain[0] = std::clamp(grain, 0.0f, 1.0f);  // [surgrain]
+    c.grain[1] = std::max(grainRelief, 0.0f);
+    c.grain[2] = static_cast<float>(tiles.rimLayer);
+    c.grain[3] = std::clamp(grainRims, 0.0f, 1.0f);
     c.pictures[0] = static_cast<float>(masksSamples_ - 1) / side;
     c.pictures[1] = 1 / static_cast<float>(masksSamples_);
     c.pictures[2] = forestTexture_ ? static_cast<float>(forestSamples_ - 1) / side : 0.0f;
