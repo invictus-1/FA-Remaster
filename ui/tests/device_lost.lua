@@ -11,8 +11,8 @@
 -- Without a window (the pictures read back) the window's own picture, its second window and a map opening behind are
 -- NOT reached. In a LIVE WINDOW (add --window, for the window checks) the same cases run on the window's picture: the
 -- game case without the pixel samples (the interface's own drawing has no world in it there), the front cases on the
--- menu's world and the flight (moho64ui_MenuFlight's world* fields). Those window branches were written without a
--- window to try them in: UNTESTED.
+-- menu's world and the flight (moho64ui_MenuFlight's world* fields). The window branches were run once in a live
+-- window (2026-11-11: `lose` 49 ok, `front` 16 ok); `frontlose`, `fail` and `frontfail` in a window: not run.
 -- The case after "--" (/devicecase):
 --   game (the default)  a running game, the game's own picture:
 --     moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --quiet --session <session_ai_cheats.lua>

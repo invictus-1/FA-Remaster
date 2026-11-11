@@ -41,9 +41,16 @@ Tested without a window only: a game's own picture and the menu background's own
 check, a second right after, and a real loss by `RemoveDevice` (noticed at Present / "allocating a frame upload
 page"; each picture back after 4 to 7 s at 1080p on stock Seton's and SETONS_R on a quiet PC, up to 19 s beside a
 build); the photo dropped and the next one made; the close.
-NOT tested, because it needs a live window: the window's picture (the layer, the backdrop, the flight, the second
-window, a map opening behind), and two pictures at once (the program never has two). Relied on, from your header:
-`Beat` may run on the beats' thread while `RecoverDevice` runs on the frames' thread.
+IN A LIVE WINDOW (2026-11-11 06:53-07:06, 1920x1080, Chris's screen, the run's own shader folder): the window's
+picture came back each time with the interface over it and the game going on. A game: four recoveries of a device
+not lost (9.4, 5.9, 5.1 and 6.9 s from the frame that asked: the device 0.35 s, the map 4.5 to 5.9 s, 5470 props'
+states carried over), then a REAL loss (`LoseDeviceForTest`: 0x887a0005, noticed at Present) and its recovery:
+`device_lost.lua -- /devicecase lose`, 49 checks, 0 failed; tick 81 before the first recovery, 122 two seconds after
+it, so `Beat` on the beats' thread while `RecoverDevice` ran on the frames' thread held. The menu with the flight:
+two recoveries (11.9 and 10.5 s, the map 10.8 and 9.4 s), the evening and the flight's air on the new world, the
+battle going on: 16 checks, 0 failed.
+STILL not tested: the second window after a recovery, a map opening behind at the moment of the loss, the read-back
+host step (`--gdi`), Vulkan, a real driver reset; and two pictures at once (the program never has two).
 
 
 ## renderer, request 71 (render/REQUESTS.md): the land round the map by default, dxcompiler.dll, a lost device (2026-11-10)
