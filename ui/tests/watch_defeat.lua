@@ -64,6 +64,11 @@ ForkThread(function()
         end
         check("Watch after Defeat: the view goes free over the whole map by itself", tostring(watching and watching.state) .. " " .. tostring(GetFocusArmy()), "watching -1")
         check("which is observing", IsObserver(), true)
+        -- (FAF's tabs.lua clears its mode texts on a change of the focus army; ours keeps the defeat's Score button
+        -- through the change it made itself: two seconds, so that the sync telling of the change has come)
+        WaitSeconds(2)
+        local display = import("/lua/ui/game/tabs.lua").controls.modeDisplay
+        check("and the defeat's Score button is still up", display and not IsDestroyed(display) and true or false, true)
     end
 
     clickName(other)
