@@ -3,6 +3,7 @@
 #include "sim/commands.h"
 #include "sim/entity_grid.h"
 #include "sim/formation.h"
+#include "sim/intel.h"
 #include "sim/landnav.h"
 #include "sim/combat.h"
 
@@ -3308,10 +3309,19 @@ int l_GetUnitsAroundPoint(lua_State* L) {
   const int alliance = lua_gettop(L) == 5 ? EnumArgAt(L, 5, kEnumAlliance) : -1;
   Sim* sim = S(L);
   std::vector<Unit*> found;
+  // The binding 0x58e450 goes through func_GetUnitsAroundPoint 0x57b290 (0x58e68a) like the brain's native callers:
+  // of the entities around the point it drops the dead (+0x99, 0x57b37d) and those whose Destroy() was called
+  // (+0x1b9, 0x57b38a), then the alliance, and a unit of ANOTHER army counts only when the brain's army holds a blip
+  // of it (the recon DB's vt+0x4c, 0x57b3dc..0x57b3fc); the category comes last (0x57b408). Seen (weapons range,
+  // scene serland, cell 15, 4221): the Seraphim energy being xsl0402 asks for the LAND units around it in the beat
+  // the range made an enemy scout 12 away: the original's list is empty (no blip yet: it fires at a random spot,
+  // two draws), ours held the scout (one draw) and the random streams parted.
+  const int ownArmy = b->army ? b->army->index - 1 : -1;
   sim->ForUnitsInRect(p.x - r, p.z - r, p.x + r, p.z + r, [&](Unit* u) {
-    if (u->dead) return;
+    if (u->dead || u->destroyQueued) return;
     float dx = u->position.x - p.x, dz = u->position.z - p.z;
     if (dx * dx + dz * dz > r * r) return;
+    if (b->army && u->army != b->army && !ArmyHasBlip(u, ownArmy)) return;
     if (cat && !(u->blueprint && u->blueprint->entityIndex >= 0 && CategoryHas(cat, u->blueprint->entityIndex)))
       return;
     if (alliance >= 0 && b->army && u->army) {

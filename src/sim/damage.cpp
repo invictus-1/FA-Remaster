@@ -551,8 +551,14 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   Entity* best = nullptr;
   float bestD = std::numeric_limits<float>::infinity();
   Vec3 bestHit;
+  // (No test of the entity's Destroy() flag, entity+0x1b9: none in the grid's query 0x7229c0, its gather 0x722e30
+  // nor in the choice 0x6d6a00, and Entity::Destroy 0x679af0 only sets the flag and queues the entity: it stays in
+  // the grid until the queue is drained at the end of the beat. So a beam still meets, and its script still
+  // damages, what was destroyed earlier in the beat. Seen (weapons range, the last beat of every case, where the
+  // range destroys shooter and targets in the script threads' stage): the original's Monkeylord laser (scene
+  // cybland, url0402: 400), the Colossus' eye (aeoland, ual0401: 250) and the Seraphim destroyer's beam (sernav,
+  // xss0201: 45, 26) damage their target once more in that beat; ours' beams went through it.)
   auto consider = [&](Entity* e) {
-    if (e->destroyQueued) return;
     WorldShape ws;
     Vec3 hit;
     float d;
