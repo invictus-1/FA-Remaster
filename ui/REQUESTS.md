@@ -2689,7 +2689,7 @@ runs in one minute. The stderr line of gfx_d3d12.cpp:1007 was printed, nothing e
 
 ### 52. A line for the player while a lost device is made anew, in full screen too (2026-11-11, Chris: "yes"; not blocking)
 
-**OPEN** (2026-11-11: Chris's yes is given; waiting for the renderer's `WorldPicture::SetRecoveryNotice` and its signature; then the interface's part).
+**ANSWERED** (renderer, 2026-11-11, render e49e899f; `docs\render-answers.md`, its entry "To the ui, request 52"): `WorldPicture::SetRecoveryNotice(pixels, width, height)`. The interface's part the same day: the panel made per recovery and handed in before the pictures let go (`GiveRecoveryNotice`, ui/app/game_session.cpp); seen in a live window in a game with a real loss and on the main menu (the notice 417x98 on the screen 0.3 to 0.8 s into the recovery).
 From the interface chat, after your request 71 B and its live-window check. While `RecoverDevice` runs (5 to 12 s
 measured in a live window; the device 0.35 s, the map the rest) nothing is drawn. In a window the title bar says
 "FA Remastered: the graphics device was lost, restoring the picture" (the interface sets it), but a full screen has

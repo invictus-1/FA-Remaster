@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "app/flight_cost.h"
 #include "draw/draw.h"
 #include "maui/world_source.h"
 #include "script/lua.hpp"
@@ -710,13 +711,11 @@ class GameSession {
   bool flightShows_ = false;     // the world shown is the flight's, its session started (GameStarted)
   bool flightCovering_ = false;  // the loop's cover: black over a second, held until the battle starts over
   std::chrono::steady_clock::time_point flightFrameAt_{}, coverFrom_{}, flightShownAt_{};
-  double flightGpuMs_ = 0;  // (the card's time of the flight's frames, 10..15 s after it first showed: the fallback)
-  int flightGpuFrames_ = 0;
+  FlightCost flightCost_;  // (the card's time of the flight's frames, over drawn seconds 10 to 15: the fallback; menu_flight.h)
   // (the log's line every 10 s while it shows: the card's time and the frames' and beats' at their slowest)
   double flightLogGpu_ = 0, flightLogFrameMax_ = 0, flightLogBeatMax_ = 0;
   int flightLogFrames_ = 0;
   std::chrono::steady_clock::time_point flightLogFrom_{};
-  bool flightCostChecked_ = false;
   std::function<float(float, float)> flightGround_;  // (the picture's ground, CineGround, once the flight's map shows)
   std::vector<uint32_t> still_;  // (Still: the one picture, its size; taken once a size)
   int stillW_ = 0, stillH_ = 0;
@@ -755,11 +754,14 @@ class GameSession {
       double seconds = 0, deviceSeconds = 0, mapSeconds = 0;
       int deviceTries = 0, props = 0, effects = 0, looks = 0;
       bool world = false, loadBegunAgain = false;
+      double noticeSeconds = -1;  // (the renderer's LastRecoverNumbers: the player's notice on the screen, -1: not shown)
+      int noticeWidth = 0, noticeHeight = 0;
     };
     bool ok = false, wasLost = false;
     std::string mode, reason, error;
     double seconds = 0;
     int tries = 0;
+    int noticeWidth = 0, noticeHeight = 0;  // (the player's notice as handed to the window's picture, GiveRecoveryNotice)
     std::vector<One> pictures;
     float backdropHour = -1, backdropClouds = -1;  // (the menu background's own new world, as dressed)
     bool menuWithoutMap = false;  // (the menus' map could not be opened again: the menu goes on without it)

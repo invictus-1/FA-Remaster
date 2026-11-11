@@ -81,6 +81,22 @@ local function noFolder()
     LOG("TEST done: " .. failed .. " failed")
     return true
 end
+-- The player's line while the device is made anew (ui request 52; GameSession's GiveRecoveryNotice, the renderer's
+-- SetRecoveryNotice): made for the window's picture and handed in at every recovery; the renderer says when it was on
+-- the screen and at what size. Without a window's picture there is none.
+local function noticeChecks(prefix, last, window)
+    local p = (last.pictures or {})[1] or {}
+    if window then
+        check(prefix .. "the player's notice was made and handed in", (last.noticeWidth or 0) >= 300 and (last.noticeHeight or 0) >= 60, true)
+        check(prefix .. "the renderer had it on the screen, at its size",
+            tostring((p.noticeSeconds or -1) >= 0) .. " " .. tostring(p.noticeWidth == last.noticeWidth and p.noticeHeight == last.noticeHeight), "true true")
+        LOG(string.format("TEST note: %sthe notice %dx%d, on the screen %.2f s into the recovery (drawn %dx%d)", prefix, last.noticeWidth or -1,
+            last.noticeHeight or -1, p.noticeSeconds or -1, p.noticeWidth or -1, p.noticeHeight or -1))
+    else
+        check(prefix .. "no notice without a window's picture", tostring(last.noticeWidth) .. " " .. tostring(p.noticeSeconds), "0 -1")
+    end
+end
+
 local function describeLast(last)
     local parts = {}
     for _, p in last.pictures or {} do
@@ -132,6 +148,7 @@ if not inGame then
                 LOG("TEST note: window: recovery " .. round .. ": " .. describeLast(last))
                 check("window: ok, one picture: the window's", tostring(last.ok) .. " " .. table.getn(last.pictures or {}) .. " " ..
                     tostring((last.pictures or {})[1] and last.pictures[1].name), "true 1 the window's picture")
+                noticeChecks("window: ", last, true)
                 local m1 = menu()
                 check("window: the menu's world shows still, the flight as before", tostring(m1.worldShows) .. " " .. tostring(m1.flightShows), "menu " .. tostring(m0.flightShows))
                 check("window: the evening and the flight's air again (Backdrop::Dress, the flight's haze)", air(m1), air(m0))
@@ -365,6 +382,7 @@ ForkThread(function()
         tostring(last.ok) .. " " .. tostring(last.wasLost) .. " " .. tostring(last.mode) .. " " .. table.getn(last.pictures or {}) .. " " ..
         tostring((last.pictures or {})[1] and last.pictures[1].name), "true false check 1 " .. pictureName)
     check("its map was opened again, the game's looks carried over", (last.pictures or {})[1] and last.pictures[1].world and last.pictures[1].looks > 0, true)
+    noticeChecks("", last, windowed)
     check("no picture is lost afterwards, nothing pending, not closing",
         tostring(state().lost) .. " " .. tostring(state().pending) .. " " .. tostring(state().closing), "false false false")
     -- (no frame is drawn between the recovery and here unless the game's own scripts asked the picture for a place:

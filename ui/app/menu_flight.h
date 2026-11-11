@@ -24,6 +24,7 @@
 #include <thread>
 #include <vector>
 
+#include "app/flight_cost.h"
 #include "script/lua.hpp"
 
 namespace moho {

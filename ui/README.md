@@ -106,7 +106,21 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   once the simulation has taken the player's seat off his army (FAF's ToObserver), where observing is allowed (every
   single-player game), and a line says so; a click on an army's name in the score list still shows that army. Off:
   the original's way, nothing changes until the player clicks a name (`data/hook/lua/ui/game/gameresult.lua`;
-  `tests/watch_defeat.lua`, both ways).
+  `tests/watch_defeat.lua`, both ways). The defeat's Score button stays through that change (2026-11-11): FAF's
+  `tabs.lua` clears its mode texts whenever the focus army changes before the game is over, which took the button
+  away a moment after the defeat had put it up; the one change the hook makes itself is not passed on to that
+  handler (`tests/draw.lua` case together, `tests/watch_defeat.lua`).
+- A lost graphics device (a driver reset, the card taken away for a moment): every picture is made anew and the game
+  goes on (`GameSession::ServeDevice`, the renderer's request 71 B). While that takes its seconds the player reads a
+  small panel in the middle of a dark screen, "Restoring the picture ..." and under it "The graphics device was
+  lost. The game itself goes on." (2026-11-11, ui request 52 to the renderer, Chris's yes: the window's title said
+  it, and full screen has no title). The interface draws the panel as it draws its own notes, at the window's height
+  (`GiveRecoveryNotice` in `app/game_session.cpp`), and hands it to the renderer before the pictures let go
+  (`WorldPicture::SetRecoveryNotice`), which presents it as soon as the new device exists. `moho64ui_DeviceState()`
+  tells the tests its size and when it was on the screen; `MOHO64UI_NOTICE_CAPTURE=<file.png>` saves that frame
+  (`tests/device_lost.lua`; in a live window: the lab's `suite/live/live_run.sh`).
+- The start of a run names the test and trial switches set in its environment, one log line (`MOHO64UI_*`,
+  `MOHO64_*`; none set: no line), so that a log says what a run really had.
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
   keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
   `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own
