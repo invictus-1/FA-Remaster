@@ -11,6 +11,31 @@ local function Look(command)
     end
 end
 
+-- A slider that shows its effect while it is dragged (Chris's pick of 2026-11-09: "the picture follows while you
+-- drag; Cancel puts the old value back"): the game's dialog calls an option's `update` at every step of a drag and
+-- when the value is set (/lua/ui/dialogs/options.lua, OnScrub and OnValueSet), before OK. The look's console
+-- command goes out there, and the key is marked. When the dialog closes (our hook of it passes RemasterEndPreview
+-- as its exit's first step) every marked slider is given the profile's kept value: after OK that is the new one,
+-- after Cancel the one before. (The game's own `cancel` is called only for the tab shown, so it would miss a slider
+-- dragged on a tab the player then left.) The sliders' values are in hundredths, as their `set` sends them.
+RemasterPreviewed = {}
+local function Preview(command, default)
+    return function(control, value)
+        if type(value) ~= 'number' then return end
+        RemasterPreviewed[command] = default
+        ConExecute(command .. " " .. tostring(value / 100))
+    end
+end
+function RemasterEndPreview()
+    local kept = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}
+    for command, default in RemasterPreviewed do
+        local value = kept[command]
+        if type(value) ~= 'number' then value = default end
+        ConExecute(command .. " " .. tostring(value / 100))
+    end
+    RemasterPreviewed = {}
+end
+
 -- The Remastered Preset (Chris, 2026-10-17: "yes that works for me so lets add it"): the new looks below set
 -- together, as the game's own Fidelity Presets set its settings (optionslogic.SetValue while the dialog is
 -- open; each can still be changed after; Custom leaves them as they are). Off is the original game's look
@@ -747,6 +772,7 @@ local looks = {
         set = function(key, value, startup)
             ConExecute("remaster_unit_glow " .. tostring(value / 100))
         end,
+        update = Preview('remaster_unit_glow', 75),
         custom = {
             min = 0,
             max = 100,
@@ -764,6 +790,7 @@ local looks = {
         set = function(key, value, startup)
             ConExecute("remaster_haze_mist " .. tostring(value / 100))
         end,
+        update = Preview('remaster_haze_mist', 100),
         custom = {
             min = 0,
             max = 200,
@@ -780,6 +807,7 @@ local looks = {
         set = function(key, value, startup)
             ConExecute("remaster_sharpen " .. tostring(value / 100))
         end,
+        update = Preview('remaster_sharpen', 50),
         custom = {
             min = 0,
             max = 100,

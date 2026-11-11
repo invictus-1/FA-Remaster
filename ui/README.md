@@ -73,6 +73,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   its top left corner with the log's name, until it is clicked or the menu is left (`user/notices.h`,
   `data/hook/lua/ui/menus/main.lua`; `moho64ui_Notices()`, `moho64ui_NoticesSeen()`; `tests/notices.lua`). The
   build's commit is the engine's build stamp too (`build_ui.py`: `-DMOHO64_BUILD_STAMP`).
+- The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
+  Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
+  `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog
+  closes each is given the profile's kept value: the new one after OK, the one before after Cancel, also for a
+  slider on a tab the player has left (`data/hook/lua/options/options.lua` Preview / RemasterEndPreview, the
+  dialog's hook; `tests/options_preview.lua`).
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
   keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
   `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own

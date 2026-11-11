@@ -74,7 +74,13 @@ do
     end
 
     function CreateDialog(over, exitBehavior)
-        RemasterGameCreateDialog(over, exitBehavior)
+        -- (the sliders that showed their effect while dragged are given the kept values when the dialog closes, by
+        -- OK or by Cancel: options.lua's RemasterEndPreview, before the caller's own exit)
+        RemasterGameCreateDialog(over, function()
+            local ended, why = pcall(import('/lua/options/options.lua').RemasterEndPreview)
+            if not ended then WARN("FA Remastered: the Options' slider preview was not ended: " .. tostring(why)) end
+            if exitBehavior then exitBehavior() end
+        end)
         local LayoutHelpers = import('/lua/maui/layouthelpers.lua')
         local dialog = Upvalue(RemasterGameCreateDialog, 'dialog')
         local gameSetNewPage = SetNewPage  -- (the dialog's own, made anew by each CreateDialog)
