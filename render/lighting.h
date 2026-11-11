@@ -7,6 +7,7 @@
 // A shader computes its surface (colour, normal, material) and asks one of the two for the result,
 // by the `look` value of the View block.
 #pragma once
+#include "light_shade.h"  // [lightshade]
 
 namespace render {
 
@@ -54,6 +55,7 @@ TextureCube environmentSky : register(t29);
 #ifndef SMALL_LIGHTS_DECLARED  // (ray_scene.h's block declares it too, when it comes first)
 #define SMALL_LIGHTS_DECLARED 1
 StructuredBuffer<float4> lightData : register(t1, space1);  // the small lights and their grid (lights.h)
+)hlsl" RENDER_LIGHT_SHADE_BLOCK R"hlsl(
 #endif
 
 // Soft shadows (the view's softShadows): the sun is not a point, so a shadow's edge is the sharper the
@@ -273,7 +275,8 @@ float LampShadow(float3 world, float3 N, uint map) {
 // One light of a square at a place, as SmallLights' loop works it out: its place and radius, colour, fourth row
 // (lights.h: its shadow map's number, or -1; -2 and where the model it rides on stands), the way toward it, how
 // the place faces it, and its fade in two parts: what a shadow takes (all of a light to all sides; a beam within
-// its cone) and what none does (a beam's glow round its lamp). Both 0 where it does not reach.
+// its cone) and what none does (a beam's glow round its lamp). Both 0 where it does not reach. `ground`: with the
+// ground's shadow on a larger light ([lightshade], lights.h; not asked for where only its place is wanted).
 struct SmallLight {
   float4 where;
   float4 tint;
@@ -284,7 +287,7 @@ struct SmallLight {
   float glow;
   bool beam;
 };
-SmallLight SmallLightAt(uint light, float3 world, float3 N) {
+SmallLight SmallLightAt(uint light, float3 world, float3 N, bool ground) {
   SmallLight L;
   L.where = lightData[uint(lightGridSize.z) + light * 4];
   float3 toLight = L.where.xyz - world;
@@ -311,6 +314,11 @@ SmallLight SmallLightAt(uint light, float3 world, float3 N) {
     L.lit = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * inside;
     L.glow = fade * L.tint.w * saturate(1 - far2 * 25);
     L.nl = saturate(dot(N, L.l) + 0.6 * inside);
+  } else if (ground && L.nl > 0) {
+    // [lightshade] (a larger light behind a ridge: the ground's shadow by its table, before the rays; they then find
+    // what stands on the ground, and are spent on the lights that reach the place. Not read for a surface that faces
+    // away from the light: it takes none of it anyway)
+    L.lit *= LightShade(beam, world);
   }
   return L;
 }
@@ -420,7 +428,7 @@ float3 SmallLightsTraced(float3 world, float3 N, float3 V, float3 diffuseColor, 
   [branch] if (most <= 4 && !everyOne) {
     for (uint s = 0; s < n; ++s) {
       uint at = first + s;
-      float w = SmallLightShare(SmallLightAt(uint(lightData[at >> 2][at & 3]), world, N));
+      float w = SmallLightShare(SmallLightAt(uint(lightData[at >> 2][at & 3]), world, N, true));
       total += w;
       [branch] if (w > topW.w) {
         if (w > topW.x) {
@@ -459,7 +467,7 @@ float3 SmallLightsTraced(float3 world, float3 N, float3 V, float3 diffuseColor, 
   for (uint s = 0; s < n; ++s) {
     uint at = first + s;
     uint light = uint(lightData[at >> 2][at & 3]);
-    SmallLight L = SmallLightAt(light, world, N);
+    SmallLight L = SmallLightAt(light, world, N, true);
     if (L.lit + L.glow <= 0) continue;
     float3 h = normalize(V + L.l);
     float nh = saturate(dot(N, h));
@@ -513,7 +521,7 @@ float3 SmallLightsTraced(float3 world, float3 N, float3 V, float3 diffuseColor, 
   for (uint t = 0; t < taken; ++t) {
     uint light = t == 0 ? l0 : t == 1 ? l1 : t == 2 ? l2 : l3;
     float3 stands = t == 0 ? c0 : t == 1 ? c1 : t == 2 ? c2 : c3;
-    shadowed += stands * (1 - RayLightSeen(world, N, SmallLightAt(light, world, N)));
+    shadowed += stands * (1 - RayLightSeen(world, N, SmallLightAt(light, world, N, false)));
   }
   return small + max(shadowable - shadowed, 0);
 }
@@ -638,6 +646,8 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
           // (a lamp low on a unit shines along the ground, which by the angle alone would hardly be lit:
           // within the beam the ground takes light as if the air scattered some of it down)
           nl = saturate(dot(N, l) + 0.6 * inside);
+        } else if (nl > 0) {
+          fade *= LightShade(beam, world);  // [lightshade] (a larger light behind a ridge: the ground's shadow)
         }
         float3 h = normalize(V + l);
         float nh = saturate(dot(N, h));

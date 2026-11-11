@@ -569,6 +569,11 @@
 // --gate-look <0|1>  [glitches] the quantum gate's field remastered (1, World::remasteredGate) or the original's texture (0)
 // --no-lamp-shadows  lamps' beams cast no shadows (they do unless this is given: the eight nearest)
 // --no-steady-lamps  [nightlight] lamps switched on and off at once, as before (World::steadyLamps: they fade; to compare)
+// --no-light-shade  [lightshade] the larger small lights (flashes, big glows) shine through the map's hills, as before
+//           (World::lightShade: the ground shadows them); --light-at x,z,height,reach[,r,g,b[,vx,vz]]: a steady light to
+//           all sides there, `height` over the ground, moving vx, vz world units a second (to see and to measure the
+//           ground's shadow; may be given several times); with --debug the run's last line says how many lights had a
+//           ground table (MOHO64_DEBUG_LIGHTSHADE: a line for every table made)
 // --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
 //           to try a factor before a unit's lights list is changed (docs/render-unit-lights.md)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
@@ -910,6 +915,8 @@ struct Options {
   bool vsync = true, debug = false, paused = false, shadows = true, icons = true;
   bool lampShadows = true;              // --no-lamp-shadows
   bool steadyLamps = true;              // --no-steady-lamps ([nightlight])
+  bool lightShade = true;               // --no-light-shade ([lightshade])
+  std::vector<std::array<float, 9>> lightsAt;  // --light-at x,z,height,reach[,r,g,b[,vx,vz]] ([lightshade])
   float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
   bool richGround = true;               // --plain-ground
@@ -1314,6 +1321,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--place-alone") o->placeAlone = true;  // (close-ups of a remastered unit alone)
     else if (a == "--no-lamp-shadows") o->lampShadows = false;
     else if (a == "--no-steady-lamps") o->steadyLamps = false;  // [nightlight]
+    else if (a == "--no-light-shade") o->lightShade = false;    // [lightshade]
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
@@ -1772,6 +1780,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sharpen") o->sharpen = static_cast<float>(atof(v));  // [glitches]
     else if (a == "--gate-look") o->gateLook = atoi(v);  // [glitches]
     else if (a == "--lights") o->testLights = atoi(v);
+    else if (a == "--light-at") {  // [lightshade]
+      std::array<float, 9> l{0, 0, 1, 30, 3, 3, 3, 0, 0};
+      if (sscanf(v, "%f,%f,%f,%f,%f,%f,%f,%f,%f", &l[0], &l[1], &l[2], &l[3], &l[4], &l[5], &l[6], &l[7], &l[8]) < 4) return false;
+      o->lightsAt.push_back(l);
+    }
     else if (a == "--map-decals") o->mapDecals = v;
     else if (a == "--decal-filter") o->decalFilter = v;
     else if (a == "--decal-turn") o->decalTurn = static_cast<float>(atof(v));
@@ -2450,6 +2463,7 @@ int main(int argc, char** argv) {
   world.shadowsOn = opt.shadows;
   world.lampShadows = opt.lampShadows;
   world.steadyLamps = opt.steadyLamps;  // [nightlight]
+  world.lightShade = opt.lightShade;    // [lightshade]
   world.volumetricFog = opt.air;
   world.softShadows = opt.softShadows;
   world.shadowMask = opt.shadowMask > 0;  // [shadowmask]
@@ -4570,6 +4584,10 @@ int main(int argc, char** argv) {
         }
       }
     }
+    for (const std::array<float, 9>& l : opt.lightsAt) {  // --light-at ([lightshade]): steady lights to all sides
+      const float x = l[0] + l[7] * time, z = l[1] + l[8] * time;
+      lights.Add({x, groundHeight(x, z) + l[2], z}, l[3], Vec3{l[4], l[5], l[6]});
+    }
     for (int i = 0; i < opt.testLights; ++i) {  // --lights: in rings around the spot, each its own colour
       const float ring = 3 + 2.5f * static_cast<float>(i / 12), angle = time * (0.5f + 0.07f * static_cast<float>(i % 5)) + static_cast<float>(i) * 0.83f;
       const Vec3 at{emitAt.x + std::cos(angle) * ring, 0, emitAt.z + std::sin(angle) * ring};
@@ -5112,6 +5130,9 @@ int main(int argc, char** argv) {
       if (meshes.posedInstances) printf("; bones %.2f ms", meshes.prepareMs);
       if (lights.count) printf("; %d lights", lights.count);
       if (lights.mergedMost) printf(" (at most %d merged in a frame where squares were crowded)", lights.mergedMost);  // [unitfx]
+      if (opt.debug && lights.shade)  // [lightshade]
+        printf("; ground tables: %d lights now, at most %d in a frame, %d made in all in %.2f ms, at most %d left without", lights.shaded, lights.shadedMost,
+               lights.shadeMadeAll, lights.shadeMs, lights.shadeLeftOutMost);
       if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
       if (world.textures.madeAhead || world.models.madeAhead || world.models.madeAlike)  // [spikes]

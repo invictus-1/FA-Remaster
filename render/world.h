@@ -390,6 +390,11 @@ class World {
   // squares' rule no longer by the order the units come in (buildings first, then lamps lit the frame before, then by the
   // unit's number), and a lamp keeps its shadow map while another is not clearly nearer (Lights::steady). Off: as before.
   bool steadyLamps = true;
+  // [lightshade] The ground shadows the larger small lights (Lights::shade, lights.h: the review of 2026-11-09, light 11):
+  // an explosion's flash, a nuke's or a big glow behind a ridge no longer lights the ground, the units, the smoke and the
+  // mist on the ridge's near side. By the map's heights alone (a table per light, no rays): hills and ridges, with and
+  // without ray tracing; hulls and buildings only by the rays (rayLightShadows), as before. Modern look. Off: as before.
+  bool lightShade = true;
   // The sun's shadow maps' size in texels (2048 at first; 4096 sharper, 1024 and 512 for slower cards).
   int shadowSize = kShadowMapSize;
   // [cardcost] The sun's shadow maps draw only what can cast a shadow onto what the camera sees (shadows.h, Shadows::
