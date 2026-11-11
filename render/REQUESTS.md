@@ -34,6 +34,23 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 67. To the INTERFACE track: a player option for the warp-in in faction colours (2026-11-10, Chris's standing rule; not blocking)
+
+**Who:** renderer; the ui asked for the entry (every new remastered look is a player option with the earlier look as Off).
+
+- **Switch:** `World::warpInColours` (bool, true by default; render f16b9e10, main e923103f). True: a commander warping in
+  is drawn as energy in its faction's colour and the warp-in's flashes take the faction's colour. False: the earlier
+  warp-in (the shield look on the commander, the game's blue flashes).
+- **When it takes effect:** at once; it is read every frame (world.cpp, Begin and AddFrame). A warp-in already running
+  when it is switched changes look in mid-flight, which nobody will do. Nothing is loaded or let go by it.
+- **It only acts** with the modern look and the remastered effects (`look == Modern`, `effectsLook == Remastered`); with
+  either off the warp-in is the earlier one whatever the switch says, so the option can be greyed there or left alone.
+- **Cost:** not measurable in a game: six more texture reads per pixel of the commanders' own pixels for the six seconds
+  of a warp-in, and one more small texture set kept (four 1024 sheets). Fine in every preset from Low up.
+- **Name:** "Warp-in in Faction Colours" is right.
+
+**Answer:** (none yet)
+
 ## 66. To the VISUALS track: the surround's detail files, two changes (2026-11-10; not blocking, the drawing goes on meanwhile) - DONE
 
 **Who:** renderer (your section 120's files are being drawn: the ground by your masks in the map's own layers, the decor
