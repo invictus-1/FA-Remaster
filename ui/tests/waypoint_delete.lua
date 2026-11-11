@@ -211,5 +211,46 @@ ForkThread(function()
     LOG("TEST note: queued at " .. xz(last and last.position) .. ", the mouse's place " .. xz(empty))
 
     shift(false)
+
+    -- A factory's RALLY order taken out the same way (the engine's batch 134, 2026-11-10: the stream's
+    -- RemoveCommandFromQueue also serves a factory's rally queue, the original's second branch 0x749970 -> the
+    -- builder's RemoveFactoryCommand 0x59f580; an emptied rally queue gets the initial rally back at the end of the
+    -- factory's next beat). Two rally points, the second queued with Shift; the second taken out, then the first.
+    SimCallback({Func = "CheatSpawnUnit", Args = {army = army, pos = place(-14.5, -14.5), bpId = "ueb0101", count = 1, yaw = 0}})
+    WaitSeconds(2)
+    local factory = made("ueb0101", "FACTORY")[1]
+    check("a land factory is made", factory ~= nil, true)
+    if factory then
+        SelectUnits({factory})
+        WaitSeconds(0.3)
+        LOG("TEST note: the factory's rally queue at first: " .. types(factory) .. " (" .. ids(factory) .. ")")
+        local r1, r2 = onScreen(place(-2, -20)), onScreen(place(10, -24))
+        click("Right", r1.x, r1.y)
+        shift(true)
+        click("Right", r2.x, r2.y, "Shift")
+        local rq = factory:GetCommandQueue() or {}
+        check("the factory has two rally orders", table.getn(rq) .. " " .. types(factory), "2 Move Move")
+        if table.getn(rq) == 2 then
+            local f1, f2 = tonumber(rq[1].ID), tonumber(rq[2].ID)
+            local a1, a2 = view:Project(rq[1].position), view:Project(rq[2].position)
+            hover(a2.x, a2.y)
+            check("the second rally point is hovered", moho64ui_OrderGraph().hovered, f2)
+            rightNow(a2, "Shift Ctrl")
+            -- (not at once, unlike a unit's own queue: the original's interface changes only its copy of the unit's own
+            -- queue when an order is taken out, 0x8b1220: +0x3c8, not the factory queue's +0x3cc; the rally queue
+            -- follows with the simulation's beat)
+            WaitSeconds(1.5)
+            check("a beat later: still gone (the simulation's rally queue), the first stays", ids(factory), tostring(f1))
+            hover(a1.x, a1.y)
+            check("the first rally point is hovered", moho64ui_OrderGraph().hovered, f1)
+            rightNow(a1, "Shift Ctrl")
+            WaitSeconds(1.5)
+            local left = factory:GetCommandQueue() or {}
+            LOG("TEST note: the rally queue after both were taken out: " .. types(factory) .. " (" .. ids(factory) .. ")")
+            check("the emptied rally queue has the first one no more", string.find(" " .. ids(factory) .. " ", " " .. f1 .. " ", 1, true) == nil, true)
+            check("and the factory has its initial rally back (one order)", table.getn(left), 1)
+        end
+        shift(false)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)
