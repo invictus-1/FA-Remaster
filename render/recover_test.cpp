@@ -94,6 +94,30 @@ int RecoverTest(const moho::Vfs& vfs, const RecoverTestSetup& s) {
       pw.photoLook.Named("plain");
     }
   };
+  // [notice] the test's notice (WorldPicture::SetRecoveryNotice), handed in once, long before any loss: a dark box with a
+  // light frame, a bar and blocks of three colours (no text: the interface draws its own), its colours multiplied by
+  // their alpha as the layer's are; the right third half see-through, to see the dark ground through it
+  std::vector<uint32_t> notice;
+  if (s.noticeWidth > 0 && s.noticeHeight > 0) {
+    const int nw = s.noticeWidth, nh = s.noticeHeight;
+    notice.assign(static_cast<size_t>(nw) * static_cast<size_t>(nh), 0u);
+    const auto pixel = [](uint32_t rgb, uint32_t alpha) {
+      const uint32_t r = ((rgb >> 16) & 255) * alpha / 255, g = ((rgb >> 8) & 255) * alpha / 255, b = (rgb & 255) * alpha / 255;
+      return alpha << 24 | r << 16 | g << 8 | b;
+    };
+    for (int y = 0; y < nh; ++y)
+      for (int x = 0; x < nw; ++x) {
+        const uint32_t alpha = x >= nw * 2 / 3 ? 128u : 255u;
+        uint32_t rgb = 0x18222cu;  // (the box's ground)
+        const int edge = std::min(std::min(x, nw - 1 - x), std::min(y, nh - 1 - y));
+        if (edge < 3) rgb = 0xd0d8e0u;  // (its frame)
+        else if (y >= nh / 3 && y < nh / 2 && x >= nw / 10 && x < nw * 9 / 10) rgb = 0xf0f0f0u;  // (a bar where the text would be)
+        else if (y >= nh * 2 / 3 && y < nh * 5 / 6 && x >= nw / 10 && x < nw * 9 / 10)
+          rgb = (x - nw / 10) * 3 / (nw * 8 / 10) == 0 ? 0xe04040u : (x - nw / 10) * 3 / (nw * 8 / 10) == 1 ? 0x40c060u : 0x4070e0u;
+        notice[static_cast<size_t>(y) * static_cast<size_t>(nw) + static_cast<size_t>(x)] = pixel(rgb, alpha);
+      }
+    picture.SetRecoveryNotice(notice.data(), nw, nh);
+  }
   const Clock::time_point started = Clock::now();
   if (!picture.Open(&vfs, "", &error)) {
     fprintf(stderr, "render: --recover-test: the picture did not open: %s\n", error.c_str());
@@ -232,9 +256,41 @@ int RecoverTest(const moho::Vfs& vfs, const RecoverTestSetup& s) {
       }
       if (ignored) printf("render: --recover-test: %d frames more asked of the lost picture (nothing drawn, nothing said)\n", ignored);
       const Clock::time_point t0 = Clock::now();
+      std::vector<uint8_t> noticeShown;  // [notice] (the notice's frame as presented, read back)
+      if (s.loseInRecovery && recoveries == 0) {  // [notice] (a second loss in the middle of the recovery, then the recovery again)
+        picture.LetGoOfLostDevice();
+        const bool armed = picture.LoseDeviceForTest();
+        picture.CaptureRecoveryNotice(&noticeShown);
+        const bool first = picture.RecoverDevice(&error);
+        printf("render: --recover-test: --lose-in-recovery: the new device lost again after its notice frame (%s): RecoverDevice %s after %.2f s, the picture "
+               "%s (%s)\n", armed ? "armed" : "NOT armed", first ? "succeeded, which it must not" : "failed, as it must", Ms(t0, Clock::now()) / 1000.0,
+               picture.DeviceLost() ? "still lost, as it must be" : "NOT lost", error.c_str());
+        if (first || !picture.DeviceLost() || !armed) return 1;
+        if (!s.pictures.empty() && noticeShown.size() >= static_cast<size_t>(w) * h * 4) {  // (the frame the lost device had shown)
+          shown.swap(noticeShown);
+          write(s.pictures.substr(0, s.pictures.rfind('.')) + "_notice0.png");
+          shown.swap(noticeShown);
+        }
+      }
+      picture.CaptureRecoveryNotice(&noticeShown);
       if (!picture.RecoverDevice(&error)) {
         fprintf(stderr, "render: --recover-test: RecoverDevice failed: %s\n", error.c_str());
         return 1;
+      }
+      {  // [notice] (what was shown while the map opened: written, and said)
+        const WorldPicture::RecoverNumbers shownNumbers = picture.LastRecoverNumbers();
+        if (shownNumbers.noticeSeconds >= 0)
+          printf("render: --recover-test: the notice's frame was presented %.2f s into RecoverDevice, %dx%d in the window's %dx%d; the map took %.2f s after it\n",
+                 shownNumbers.noticeSeconds, shownNumbers.noticeWidth, shownNumbers.noticeHeight, w, h, shownNumbers.seconds - shownNumbers.noticeSeconds);
+        else printf("render: --recover-test: no notice was shown (%s)\n", notice.empty() ? "none set" : "one was set: NOT as it must be");
+        if (!notice.empty() && shownNumbers.noticeSeconds < 0) result = 1;
+        if (!s.pictures.empty() && noticeShown.size() >= static_cast<size_t>(w) * h * 4) {
+          char mark[32];
+          snprintf(mark, sizeof mark, "_notice%d.png", recoveries + 1);
+          shown.swap(noticeShown);
+          if (!write(s.pictures.substr(0, s.pictures.rfind('.')) + mark)) result = 1;
+          shown.swap(noticeShown);
+        }
       }
       // the host's part: its own switches on the new world, and the whole interface layer given again
       if (World* pw = picture.world()) dress(*pw);

@@ -366,6 +366,13 @@ struct WorldPicture::Impl {
   Camera shownCamera;
   bool shownCameraKnown = false;
   bool recovering = false;
+  // [notice] SetRecoveryNotice's pixels (a copy: they outlast the device), where a check wants its frame read back, and
+  // LoseDeviceForTest's switch for the next device RecoverDevice makes
+  std::vector<uint32_t> notice;
+  int noticeWidth = 0, noticeHeight = 0;
+  std::vector<uint8_t>* noticeCapture = nullptr;
+  bool loseNextDevice = false;
+  void ShowNotice(WorldPicture::RecoverNumbers* n, double began, std::vector<uint8_t>* capture);
   WorldPicture::RecoverNumbers recoverNumbers;
   // (a recovery that let go of the old device and could make no new one yet: what it kept of the game and of the picture,
   // held for the next RecoverDevice; the picture is lost meanwhile and has no device)
@@ -693,7 +700,91 @@ bool WorldPicture::ShaderCompilerReady(std::string* message) { return gfx::Shade
 
 bool WorldPicture::DeviceLost() const { return impl_->Lost(); }
 std::string WorldPicture::DeviceLostReason() const { return impl_->device ? impl_->device->LostReason() : impl_->recovery.why; }
-bool WorldPicture::LoseDeviceForTest() { return impl_->device && impl_->device->LoseForTest(); }
+bool WorldPicture::LoseDeviceForTest() {
+  Impl& m = *impl_;
+  if (!m.device && m.recovery.pending) {  // [notice] (the device RecoverDevice makes next: lost after its notice's frame)
+    m.loseNextDevice = true;
+    return true;
+  }
+  return m.device && m.device->LoseForTest();
+}
+
+// [notice] (world_picture.h)
+void WorldPicture::SetRecoveryNotice(const uint32_t* pixels, int width, int height) {
+  Impl& m = *impl_;
+  if (!pixels || width <= 0 || height <= 0) {
+    m.notice.clear();
+    m.noticeWidth = m.noticeHeight = 0;
+    return;
+  }
+  m.notice.assign(pixels, pixels + static_cast<size_t>(width) * static_cast<size_t>(height));
+  m.noticeWidth = width;
+  m.noticeHeight = height;
+}
+
+void WorldPicture::CaptureRecoveryNotice(std::vector<uint8_t>* out) { impl_->noticeCapture = out; }
+
+// [notice] One frame for the player, presented by RecoverDevice on the device it has just made, before the map is opened:
+// very dark, the notice in its middle. Nothing of a world is needed for it (there is none): the notice is laid into a
+// picture of the window's size here, on the processor (its own size, pixel for pixel; made smaller by averaging where it
+// does not fit: its colours are multiplied by their alpha already, so averaging them is right), handed to the card as one
+// texture and drawn by the interface layer's own pipeline, which the device has from its making.
+void WorldPicture::Impl::ShowNotice(WorldPicture::RecoverNumbers* n, double began, std::vector<uint8_t>* capture) {
+  const int width = device->Width(), height = device->Height();
+  if (!HostShows() || notice.empty() || !layerPipeline || width <= 0 || height <= 0) return;
+  std::vector<uint32_t> frame(static_cast<size_t>(width) * static_cast<size_t>(height), 0u);
+  int drawnWidth = noticeWidth, drawnHeight = noticeHeight;
+  if (noticeWidth <= width && noticeHeight <= height) {
+    const int x0 = (width - noticeWidth) / 2, y0 = (height - noticeHeight) / 2;
+    for (int y = 0; y < noticeHeight; ++y)
+      std::copy_n(notice.data() + static_cast<size_t>(y) * static_cast<size_t>(noticeWidth), noticeWidth,
+                  frame.data() + static_cast<size_t>(y0 + y) * static_cast<size_t>(width) + static_cast<size_t>(x0));
+  } else {
+    const double share = std::min(static_cast<double>(width) / noticeWidth, static_cast<double>(height) / noticeHeight);
+    drawnWidth = std::clamp(static_cast<int>(noticeWidth * share), 1, width);
+    drawnHeight = std::clamp(static_cast<int>(noticeHeight * share), 1, height);
+    const int x0 = (width - drawnWidth) / 2, y0 = (height - drawnHeight) / 2;
+    for (int y = 0; y < drawnHeight; ++y) {
+      const int sy0 = static_cast<int>(static_cast<int64_t>(y) * noticeHeight / drawnHeight);
+      const int sy1 = std::max(sy0 + 1, static_cast<int>(static_cast<int64_t>(y + 1) * noticeHeight / drawnHeight));
+      for (int x = 0; x < drawnWidth; ++x) {
+        const int sx0 = static_cast<int>(static_cast<int64_t>(x) * noticeWidth / drawnWidth);
+        const int sx1 = std::max(sx0 + 1, static_cast<int>(static_cast<int64_t>(x + 1) * noticeWidth / drawnWidth));
+        uint64_t sum[4] = {0, 0, 0, 0};
+        for (int sy = sy0; sy < sy1; ++sy)
+          for (int sx = sx0; sx < sx1; ++sx) {
+            const uint32_t p = notice[static_cast<size_t>(sy) * static_cast<size_t>(noticeWidth) + static_cast<size_t>(sx)];
+            for (int k = 0; k < 4; ++k) sum[k] += (p >> (8 * k)) & 0xffu;
+          }
+        const uint64_t count = static_cast<uint64_t>(sy1 - sy0) * static_cast<uint64_t>(sx1 - sx0);
+        uint32_t p = 0;
+        for (int k = 0; k < 4; ++k) p |= static_cast<uint32_t>((sum[k] + count / 2) / count) << (8 * k);
+        frame[static_cast<size_t>(y0 + y) * static_cast<size_t>(width) + static_cast<size_t>(x0 + x)] = p;
+      }
+    }
+  }
+  gfx::TextureDesc td;
+  td.width = width;
+  td.height = height;
+  td.format = gfx::Format::BGRA8;  // (0xAARRGGBB as bytes in memory: blue, green, red, alpha)
+  td.data = frame.data();
+  td.dataSize = frame.size() * 4;
+  const gfx::Texture picture = device->CreateTexture(td);
+  if (!picture) return;
+  const float dark[4] = {0.012f, 0.014f, 0.020f, 1};
+  device->BeginFrame(dark);
+  device->SetPipeline(layerPipeline);
+  device->SetTexture(0, picture);
+  device->Draw(3);
+  device->EndFrame(capture, true);
+  device->Destroy(picture);
+  if (device->Lost()) return;  // (the caller sees it: nothing was shown for certain)
+  n->noticeSeconds = SteadySeconds() - began;
+  n->noticeWidth = drawnWidth;
+  n->noticeHeight = drawnHeight;
+  printf("render: the recovery's notice shown %.2f s after RecoverDevice began (%dx%d of the notice's %dx%d pixels in the middle of the window's %dx%d)\n",
+         n->noticeSeconds, drawnWidth, drawnHeight, noticeWidth, noticeHeight, width, height);
+}
 WorldPicture::RecoverNumbers WorldPicture::LastRecoverNumbers() const { return impl_->recoverNumbers; }
 
 bool WorldPicture::LetGoOfLostDevice() {
@@ -785,6 +876,11 @@ bool WorldPicture::RecoverDevice(std::string* error) {
   if (!error) error = &unused;
   error->clear();
   Impl::Recovery& r = m.recovery;
+  // ([notice] CaptureRecoveryNotice's place, taken by this call whether or not it gets as far as the notice: never left
+  // behind for a later call, when the caller's vector may be gone)
+  std::vector<uint8_t>* const noticeCapture = m.noticeCapture;
+  m.noticeCapture = nullptr;
+  if (noticeCapture) noticeCapture->clear();
   if ((!m.device && !r.pending) || !m.vfs) {
     *error = "the picture is not open";
     return false;
@@ -821,7 +917,36 @@ bool WorldPicture::RecoverDevice(std::string* error) {
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
   }
   n.deviceSeconds = SteadySeconds() - t0;
+  const Impl::Recovery held = r;  // ([notice] for a second loss before the map is back: lostAgain)
   r = Impl::Recovery{};  // (the device is there: what was held is in this call's hands)
+  // [notice] The new device lost before the world is back (a card that is still in trouble, or LoseDeviceForTest's switch):
+  // everything begun on it is let go of and it too, as the first was, and what the first letting go kept of the game is
+  // held again (the worlds of this call had nothing of their own to keep). The picture stays lost and the call fails, as
+  // when no device could be made: the host's next RecoverDevice starts from the same kept game. The program holds no lost
+  // device when that one makes its own.
+  const auto lostAgain = [&] {
+    const std::string reason = m.device->LostReason();
+    m.LetGoForRecovery();
+    r.hadWorld = held.hadWorld;
+    r.path = held.path;
+    r.before = held.before;
+    r.kept = held.kept;
+    r.tick = held.tick;
+    r.behind = held.behind;
+    r.why = reason;
+    *error = "the new graphics device was lost before the picture was back (" + reason + "); what was kept of the game is held: call RecoverDevice again";
+    fprintf(stderr, "render: %s\n", error->c_str());
+    n.seconds = SteadySeconds() - t0;
+    return false;
+  };
+
+  // 3b. [notice] one frame for the player (SetRecoveryNotice), on the window's picture: before the map, which takes the time
+  m.ShowNotice(&n, t0, noticeCapture);
+  if (m.loseNextDevice) {  // (checks: LoseDeviceForTest between LetGoOfLostDevice and RecoverDevice)
+    m.loseNextDevice = false;
+    m.device->LoseForTest();
+  }
+  if (m.device->Lost()) return lostAgain();
 
   // 4. the map shown, opened again as one opened behind, given the game, warmed with the game's last frame, and shown
   bool ok = true;
@@ -874,13 +999,11 @@ bool WorldPicture::RecoverDevice(std::string* error) {
       double turned = began;
       std::string failed;
       while (!MapReady()) {
+        // ([notice] the loss first: a map that fails to open on a lost device has not failed for good. It used to end the
+        // call with the picture left without its map)
+        if (m.device->Lost()) return lostAgain();
         if (MapFailed(&failed)) {
           *error = "the map could not be opened again: " + failed;
-          ok = false;
-          break;
-        }
-        if (m.device->Lost()) {
-          *error = "the new device was lost while the map opened: " + m.device->LostReason();
           ok = false;
           break;
         }

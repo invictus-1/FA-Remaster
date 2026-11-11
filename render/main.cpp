@@ -638,6 +638,11 @@
 //           --vulkan, --debug, --time-of-day, --day-length, --weather auto, --settings, --cam and --focus as for --picture.
 //           --shader-cache <folder>: the picture's device keeps its shaders and pipelines there (a test's own folder:
 //           what a recovery does with the kept pipelines is then not done to the player's).
+//           [notice] --recover-notice <W>x<H>: the size of the test notice the recovery presents while the map opens
+//           (WorldPicture::SetRecoveryNotice: a dark box with a frame and bars; 640x120 unless given; 0x0: none, the
+//           recovery as before); each recovery's notice frame is written as <name>_notice<n>.png. --lose-in-recovery:
+//           the first recovery's new device is lost again right after its notice frame (a second loss in the middle),
+//           RecoverDevice must fail with the picture still lost and bring the game back when called again.
 // --gfx-check  the graphics layer's compute shaders, storage targets and volumes tried, their results read
 //           back and checked (gfx_check.cpp); with --vulkan, the Vulkan backend's
 // --fsr3-check  AMD's FSR 3 upscaler (fsr3.h) tried on a made-up scene and checked against the scene drawn at
@@ -1220,6 +1225,8 @@ struct Options {
   std::vector<int> loseDeviceAts;       // (all of them: --recover-test's)
   int loseDeviceIgnore = 0;             // [devicelost] --lose-device-ignore
   std::vector<int> recoverShots;        // [devicelost] --recover-shots
+  int recoverNotice[2] = {640, 120};    // [notice] --recover-notice
+  bool loseInRecovery = false;          // [notice] --lose-in-recovery
   bool loadTestOpen = false;            // [bgload] --load-test-open
   int loadBackdrop = -1;                // [backdrop] --load-backdrop
   std::string loadGameLooks;            // [ui 39] --load-game-looks
@@ -1401,6 +1408,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-death-unseen") o->fx.deathUnseen = true;  // [debrispile]
     else if (a == "--vulkan") o->vulkan = true;
     else if (a == "--recover-test") o->recoverTest = true;  // [devicelost]
+    else if (a == "--lose-in-recovery") o->loseInRecovery = true;  // [notice]
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
@@ -1813,6 +1821,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (!o->loseDeviceAts.empty()) o->loseDeviceAt = o->loseDeviceAts[0];
     }
     else if (a == "--lose-device-ignore") o->loseDeviceIgnore = std::max(0, atoi(v));  // [devicelost]
+    else if (a == "--recover-notice") {  // [notice] <W>x<H>
+      if (sscanf(v, "%dx%d", &o->recoverNotice[0], &o->recoverNotice[1]) != 2) return false;
+    }
     else if (a == "--recover-shots") {  // [devicelost]
       for (const char* p = v; *p;) {
         o->recoverShots.push_back(atoi(p));
@@ -2359,6 +2370,9 @@ int main(int argc, char** argv) {
     t.loseAt = opt.loseDeviceAts;
     t.ignore = opt.loseDeviceIgnore;
     t.shots = opt.recoverShots;
+    t.noticeWidth = opt.recoverNotice[0];  // [notice]
+    t.noticeHeight = opt.recoverNotice[1];
+    t.loseInRecovery = opt.loseInRecovery;
     t.hasCam = opt.hasCam;
     std::copy(opt.cam, opt.cam + 5, t.cam);
     t.shaderCache = !opt.shaderCache ? std::string("-") : opt.shaderCacheDir;
