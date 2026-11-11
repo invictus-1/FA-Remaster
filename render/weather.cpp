@@ -627,6 +627,14 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
   const float light[3] = {c.skyZenith[0] * 0.6f + c.skyHorizon[0] * 0.6f, c.skyZenith[1] * 0.6f + c.skyHorizon[1] * 0.6f,
                           c.skyZenith[2] * 0.6f + c.skyHorizon[2] * 0.6f};
   const float edge = std::clamp(camera.distance * 1.6f, 30.0f, 900.0f);
+  // [fallhigh] from high up the fall thins out to nothing (weather.h)
+  if (highFade && highTo > highFrom) {
+    const float t = std::clamp((camera.distance - highFrom) / (highTo - highFrom), 0.0f, 1.0f);
+    const float left = 1 - t * t * (3 - 2 * t);
+    if (left <= 0) return;
+    rain *= left;
+    snow *= left;
+  }
   const float perPixel = 2 * std::tan(camera.fovY * 0.5f) / static_cast<float>(view.height) * pixelScale;  // (photofix: the window's pixel)
   device_->SetPipeline(trail > 0 ? trailPipeline_ : reactive ? reactivePipeline_ : lit ? litPipeline_ : pipeline_);
   device_->SetConstants(0, &c, sizeof c);
