@@ -730,7 +730,8 @@
 //           --surround-scenery-reach <from>,<to>: from how far from the eye it is thinned to how far none of it is drawn
 //           (World::surroundSceneryFrom; 0,0: all of it at any distance);
 //           --surround-forest-floor <layer>: the layer of the map's ground laid under its forest, for a surround whose
-//           json names none (World::surroundForestFloor)
+//           json names none (World::surroundForestFloor); --surround-edge-band <n>: [edgeband] over how many world units
+//           past the edge a sculpted surround dims (World::surroundEdgeBand, 12; 0: the soft edge's own 60, as before)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
 // --time-of-day <hours>  the computed sky of that hour (0..24) lights the modern look instead of the map's
 //           own light; --day-length <seconds> lets the day pass, a whole one in that long. Key T: an hour on
@@ -1179,6 +1180,7 @@ struct Options {
   float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
   float surroundSceneryReach[2] = {-1, -1};  // --surround-scenery-reach (-1: World's own)
   int surroundForestFloor = -1;         // --surround-forest-floor
+  float surroundEdgeBand = -1;          // --surround-edge-band [edgeband] (-1: the world's own)
   bool beyondLand = false;              // --beyond-land (beyondland)
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
   std::string inspect;                  // --inspect
@@ -1931,6 +1933,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--snow-lying") o->snowLying = static_cast<float>(atof(v));
     else if (a == "--surround-scenery-pixels") o->surroundSceneryPixels = static_cast<float>(atof(v));  // (surround)
     else if (a == "--surround-forest-floor") o->surroundForestFloor = atoi(v);                           // (surround)
+    else if (a == "--surround-edge-band") o->surroundEdgeBand = static_cast<float>(atof(v));             // [edgeband]
     else if (a == "--surround-scenery-lod") o->surroundSceneryLod = static_cast<float>(atof(v));         // (surround)
     else if (a == "--surround-scenery-reach") {  // (surround) <from>,<to>
       if (sscanf(v, "%f,%f", &o->surroundSceneryReach[0], &o->surroundSceneryReach[1]) != 2) return false;
@@ -2751,6 +2754,7 @@ int main(int argc, char** argv) {
   world.surroundScenery = opt.surroundScenery;
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
+  if (opt.surroundEdgeBand >= 0) world.surroundEdgeBand = opt.surroundEdgeBand;  // [edgeband]
   if (opt.surroundSceneryLod > 0) world.surroundSceneryLod = opt.surroundSceneryLod;
   if (opt.surroundSceneryReach[0] >= 0) {
     world.surroundSceneryFrom = opt.surroundSceneryReach[0];

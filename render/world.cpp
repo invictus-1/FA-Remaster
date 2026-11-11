@@ -1764,6 +1764,9 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // as a grey band under the bright horizon
     if (camera.cinematic) c.skyExtra[3] = 1;
     if (beyondLand) distantLand.SetView(&c);  // (beyondland) the soft edge (beyond_land.h)
+    // [edgeband] past a sculpted surround's edge the dimming comes in over a short band (surroundEdgeBand), so that
+    // where units cannot go reads from the game's height: over the soft edge's own 60 units nothing told the two apart
+    if (beyondLand && sculpted && surroundEdgeBand > 0) c.beyondLand[1] = std::max(surroundEdgeBand, 0.01f);
   }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
