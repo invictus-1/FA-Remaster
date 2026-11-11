@@ -121,6 +121,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.post.sharpen = std::max(0.0f, std::min(1.0f, looks.sharpen));  // (Sharpen)
   w.hazeMist = std::max(0.0f, std::min(2.0f, looks.hazeMist));     // (Haze & Mist, render [hazeamt]: 1 as made)
   w.remasteredGate = looks.remasteredGate;                         // (Remastered Gateway)
+  w.warpInColours = looks.warpInColours;                           // (Warp-in in Faction Colours)
   w.ghostLook = looks.ghostLook ? 1 : 0;                           // (Ghost Look: see-through, or solid as before)
   w.guidePull = looks.guideOverGrass ? 1.2f : 0.0f;                // (Guide over Grass)
   w.cloakLook = looks.cloakLook;                                   // (Cloak Look)

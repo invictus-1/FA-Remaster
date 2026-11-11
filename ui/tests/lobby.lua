@@ -105,7 +105,7 @@ do
         "Display & Performance|Preset|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
     check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
     check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
-    check("52 rows: Go to Section, 8 headers, 43 options", table.getn(items), 52)
+    check("53 rows: Go to Section, 8 headers, 44 options", table.getn(items), 53)
     check("Haze & Mist is on the tab, set by no preset level (a taste setting)", tostring(remaster.remaster_haze_mist ~= nil) .. " " ..
         tostring(O.RemasterPresetValues(4).remaster_haze_mist) .. " " .. tostring(O.RemasterPresetValues(0).remaster_haze_mist), "true nil nil")
     local missing = {}
@@ -201,7 +201,7 @@ do  -- (Chris, 2026-11-06: it adds input delay; no preset level, Ultra included,
 end
 -- The renderer's looks from Chris's big test (2026-11-01): each on unless chosen, the earlier look kept as Off, in no
 -- preset level; at the start the program has their defaults (the test's preferences choose none of them)
-for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_ghost_look', 'remaster_guide',
+for _, key in {'remaster_ocean_glitter', 'remaster_shore_soak', 'remaster_gateway', 'remaster_warpin_colours', 'remaster_ghost_look', 'remaster_guide',
                'remaster_cloak_look', 'remaster_stealth_veil', 'remaster_unit_detail', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky'} do
     check("the Remastered tab has " .. key .. ", on unless chosen", video[key] and video[key].set ~= nil and video[key].default, 1)
 end
@@ -272,6 +272,14 @@ do
     check("Medium without Sharpen", line(2), "1 1 1 75 0 1 1 1 1 1 0 1 1 1 1")
     check("Low without Shore Soak too", line(1), "1 0 1 75 0 1 1 1 1 1 0 1 1 1 1")
     check("Off: the earlier looks, Ghost and Cloak the original's", line(0), "0 0 2 100 0 0 1 0 1 0 0 0 0 0 0")
+    -- Warp-in in Faction Colours (the renderer's request 67, 2026-11-10): on from Low up, the earlier warp-in in Off
+    check("Warp-in in Faction Colours: off in Off, on from Low", O.RemasterPresetValues(0).remaster_warpin_colours .. " " ..
+        O.RemasterPresetValues(1).remaster_warpin_colours .. " " .. O.RemasterPresetValues(4).remaster_warpin_colours, "0 1 1")
+    check("the program has it on at the start", moho64ui_Looks().warpInColours, true)
+    video.remaster_warpin_colours.set('remaster_warpin_colours', 0, false)
+    check("Off chosen in the menu reaches the program", moho64ui_Looks().warpInColours, false)
+    video.remaster_warpin_colours.set('remaster_warpin_colours', 1, false)
+    check("and On again", moho64ui_Looks().warpInColours, true)
 end
 check("the Photographic Look: Off unless chosen, and its five choices", video.remaster_photo_look and
     video.remaster_photo_look.default .. " " .. table.getn(video.remaster_photo_look.custom.states), "0 5")

@@ -35,7 +35,7 @@ local remasterPresets = {
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 0,
             remaster_battle_effects = 0, remaster_energy_shields = 0,
             remaster_ocean_glitter = 0, remaster_sea_sparkle = 0, remaster_unit_detail = 0, remaster_cloud_layout = 0, remaster_storm_clouds = 0, remaster_night_sky = 0, remaster_shore_soak = 0, remaster_shield_bend = 2, remaster_unit_glow = 100,
-            remaster_sharpen = 0, remaster_gateway = 0, remaster_ghost_look = 1, remaster_guide = 0,
+            remaster_sharpen = 0, remaster_gateway = 0, remaster_warpin_colours = 0, remaster_ghost_look = 1, remaster_guide = 0,
             remaster_cloak_look = 1, remaster_stealth_veil = 0 },
     [1] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.5,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 0,
@@ -43,7 +43,7 @@ local remasterPresets = {
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 0, remaster_energy_shields = 0,
             remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_cloud_layout = 1, remaster_storm_clouds = 1, remaster_night_sky = 1, remaster_shore_soak = 0, remaster_shield_bend = 1, remaster_unit_glow = 75,
-            remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_sharpen = 0, remaster_gateway = 1, remaster_warpin_colours = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [2] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 0.75,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
@@ -51,7 +51,7 @@ local remasterPresets = {
             remaster_water_ripples = 0, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
             remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_cloud_layout = 1, remaster_storm_clouds = 1, remaster_night_sky = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
-            remaster_sharpen = 0, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_sharpen = 0, remaster_gateway = 1, remaster_warpin_colours = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [3] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
@@ -59,7 +59,7 @@ local remasterPresets = {
             remaster_water_ripples = 1, remaster_ray_tracing = 0, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
             remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_cloud_layout = 1, remaster_storm_clouds = 1, remaster_night_sky = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
-            remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_sharpen = 50, remaster_gateway = 1, remaster_warpin_colours = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
     [4] = { remaster_look = 'remastered', remaster_effects = 1, remaster_effects_quality = 1,
             remaster_tracers = 1, remaster_rich_ground = 1, remaster_snow_tracks = 1, remaster_soft_shadows = 1,
@@ -67,7 +67,7 @@ local remasterPresets = {
             remaster_water_ripples = 1, remaster_ray_tracing = 1, remaster_hidden_outlines = 1,
             remaster_battle_effects = 1, remaster_energy_shields = 1,
             remaster_ocean_glitter = 1, remaster_sea_sparkle = 0, remaster_unit_detail = 1, remaster_cloud_layout = 1, remaster_storm_clouds = 1, remaster_night_sky = 1, remaster_shore_soak = 1, remaster_shield_bend = 1, remaster_unit_glow = 75,
-            remaster_sharpen = 50, remaster_gateway = 1, remaster_ghost_look = 1, remaster_guide = 1,
+            remaster_sharpen = 50, remaster_gateway = 1, remaster_warpin_colours = 1, remaster_ghost_look = 1, remaster_guide = 1,
             remaster_cloak_look = 1, remaster_stealth_veil = 1 },
 }
 function RemasterPresetValues(level)  -- (also for the tests)
@@ -787,6 +787,21 @@ local looks = {
         },
     },
     {
+        -- the renderer's World::warpInColours (its request 67, 2026-11-10; with the modern look and the remastered effects)
+        title = "Warp-in in Faction Colours",
+        key = 'remaster_warpin_colours',
+        tip = "A commander warps in with its faction's colours: the shimmer on it and the flashes round it. Off: the earlier warp-in, the shield look on the commander and the game's blue flashes. Needs the Remastered look and Remastered Effects.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_warpin_colours"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's World::ghostLook (ui request 41)
         title = "Ghost Look",
         key = 'remaster_ghost_look',
@@ -876,7 +891,8 @@ local remasterSections = {
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak' } },
     { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
-                            'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway' } },
+                            'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway',
+                            'remaster_warpin_colours' } },
     { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour',
                                'remaster_hidden_outlines', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look',
                                'remaster_stealth_veil' } },

@@ -317,7 +317,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_ocean_glitter", "remaster_shore_soak", "remaster_shield_bend", "remaster_unit_glow", "remaster_sharpen",
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
         "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
-        "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist"};
+        "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist", "remaster_warpin_colours"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -389,17 +389,17 @@ int l_FlushEvents(lua_State*) { return 0; }
 int l_LooksForTests(lua_State* L) {
   const LookSettings& looks = Looks();
   lua_newtable(L);
-  const char* names[32] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
+  const char* names[33] = {"remasteredEffects", "tracers", "richGround", "snowTracks", "vulkan", "originalLook", "temporalUpscale",
                            "atmosphere", "softShadows", "rayTracing", "weatherEffects", "groundDetail", "frameGeneration",
                            "waterRipples", "lens", "battleEffects", "energyShields", "hiddenOutlines", "lampsTeamColour", "softScorch",
                            "oceanGlitter", "shoreSoak", "remasteredGate", "ghostLook", "guideOverGrass", "cloakLook", "stealthLook",
-                           "seaSparkle", "unitDetail", "cloudMix", "stormCells", "starryNight"};
-  const bool values[32] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
+                           "seaSparkle", "unitDetail", "cloudMix", "stormCells", "starryNight", "warpInColours"};
+  const bool values[33] = {looks.remasteredEffects, looks.tracers, looks.richGround, looks.snowTracks, looks.vulkan,
                            looks.originalLook, looks.temporalUpscale, looks.atmosphere, looks.softShadows, looks.rayTracing,
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
                            looks.softScorch, looks.oceanGlitter, looks.shoreSoak, looks.remasteredGate, looks.ghostLook,
-                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudMix, looks.stormCells, looks.starryNight};
+                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudMix, looks.stormCells, looks.starryNight, looks.warpInColours};
   lua_pushstring(L, "shieldBend");
   lua_pushnumber(L, looks.shieldBend);
   lua_rawset(L, -3);
@@ -1472,6 +1472,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         key == "REMASTER_FRAME_GENERATION" || key == "REMASTER_WATER_RIPPLES" || key == "REMASTER_LENS" ||
         key == "REMASTER_BATTLE_EFFECTS" || key == "REMASTER_ENERGY_SHIELDS" || key == "REMASTER_HIDDEN_OUTLINES" ||
         key == "REMASTER_OCEAN_GLITTER" || key == "REMASTER_SHORE_SOAK" || key == "REMASTER_GATEWAY" ||
+        key == "REMASTER_WARPIN_COLOURS" ||
         key == "REMASTER_GHOST_LOOK" || key == "REMASTER_GUIDE" || key == "REMASTER_CLOAK_LOOK" ||
         key == "REMASTER_STEALTH_VEIL" || key == "REMASTER_SEA_SPARKLE" || key == "REMASTER_UNIT_DETAIL" ||
         key == "REMASTER_CLOUD_LAYOUT" || key == "REMASTER_STORM_CLOUDS" ||
@@ -1489,6 +1490,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_OCEAN_GLITTER"    ? looks.oceanGlitter
                  : key == "REMASTER_SHORE_SOAK"       ? looks.shoreSoak
                  : key == "REMASTER_GATEWAY"          ? looks.remasteredGate
+                 : key == "REMASTER_WARPIN_COLOURS"   ? looks.warpInColours
                  : key == "REMASTER_GHOST_LOOK"       ? looks.ghostLook
                  : key == "REMASTER_GUIDE"            ? looks.guideOverGrass
                  : key == "REMASTER_CLOAK_LOOK"       ? looks.cloakLook

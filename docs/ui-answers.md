@@ -3,6 +3,13 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 67 (render/REQUESTS.md): Warp-in in Faction Colours as a player option (2026-11-10)
+
+Built. Options > Remastered, section Effects & Battle, after Remastered Gateway: "Warp-in in Faction Colours"
+(`remaster_warpin_colours`, toggle, On unless chosen; Off = the earlier warp-in). It sets `World::warpInColours` with
+the other looks each frame, so it takes effect at once. Console `remaster_warpin_colours 0|1`;
+`moho64ui_Looks().warpInColours` for tests. Preset levels: off in Off, on from Low up (no measurable cost, your word).
+
 ## renderer, request 65 (render/REQUESTS.md): FSR 3 switched off inside a game; the two labels (2026-11-10)
 
 Built, both parts.

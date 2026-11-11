@@ -665,6 +665,9 @@ struct LookSettings {
   bool oceanGlitter = true, shoreSoak = true, remasteredGate = true, ghostLook = true, guideOverGrass = true;
   bool cloakLook = true, stealthLook = true, seaSparkle = false, unitDetail = true, cloudMix = true;
   bool stormCells = true, starryNight = true;
+  // warpInColours (World::warpInColours, the renderer's request 67): a commander's warp-in in its faction's colours;
+  // off: the earlier warp-in. Console remaster_warpin_colours 0|1.
+  bool warpInColours = true;
   int shieldBend = 1;
   float unitGlow = 0.75f, sharpen = 0.5f;
   // Haze & Mist (ours; Chris on the menu flight's dusk, 2026-11-09: "mist/haze should be an option we can adjust like
