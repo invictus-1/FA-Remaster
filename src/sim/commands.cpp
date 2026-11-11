@@ -1261,9 +1261,16 @@ void StartHead(Sim& sim, Unit* u) {
       static std::set<std::pair<int, std::string>> notDoneFor;
       static const bool dbgTasks = getenv("MOHO64_DEBUG_TASKS") != nullptr;
       const std::string bp = u->blueprint ? u->blueprint->id : "?";
-      LogTripwire(std::string("moho64 tripwire: command ") + kCommandNames[static_cast<int>(c.type)] +
-                  " has no task for " + bp + (mobile ? " (mobile" : " (immobile") +
-                  (c.targetId ? ", entity target" : "") + "): the order is finished at once, not carried out");
+      // Not a gap, so not counted: an air staging platform's own copy of a load order. The platform is the dispatching
+      // unit of a TransportLoadUnits with no task in the original as well (the aircraft's copies do the docking):
+      // scene d3_2 run in the original 2026-11-10, the platform's two commands are gone the beat after the issue,
+      // line for line as ours. (An AI that docks aircraft all game made 716 such lines in 9000 beats.)
+      const bool platformCopy = c.type == CommandType::TransportLoadUnits && !mobile &&
+                                BpInCategory(sim, u->blueprint, "AIRSTAGINGPLATFORM");
+      if (!platformCopy)
+        LogTripwire(std::string("moho64 tripwire: command ") + kCommandNames[static_cast<int>(c.type)] +
+                    " has no task for " + bp + (mobile ? " (mobile" : " (immobile") +
+                    (c.targetId ? ", entity target" : "") + "): the order is finished at once, not carried out");
       std::lock_guard<std::mutex> logLock(logMutex);
       if (dbgTasks) {
         const int n = ++notDone[static_cast<int>(c.type)];

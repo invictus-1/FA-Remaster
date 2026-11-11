@@ -3034,9 +3034,14 @@ void Sim::Tick() {
       // (a parent shell whose own step of this pass queued its Destroy still holds the child in this beat: the
       // shells step between the units now, and a sinking wreck took the shell's last place when every shell
       // stepped after every unit, as the gate's sinking wrecks show)
-      const bool queuedInStep = p && p->kind == Entity::Kind::Projectile &&
-                                static_cast<const Projectile*>(p)->queuedInStepTick == tick_;
-      if (p && (!p->destroyQueued || queuedInStep)) {  // the child takes the bone's transform (Entity attach)
+      // ... and so does a shell that a SCRIPT destroyed earlier in the beat: Entity::TaskTick 0x679c40 places a child
+      // by its parent while the weak pointer entity+0x18c holds an object that has had its turn (0x679c56..0x679ca7,
+      // CalculateAttachedTransform 0x67a020), with no test of the parent's Destroy() flag (+0x1b9), and the shell
+      // still takes its step in that beat (ProjectilesTick). Seen (weapons range, scene cybnav, cell 4, 186): the
+      // HARMS xrb2309 rides its sinker shell down; its script destroys the shell after 35 beats and the original's
+      // unit sinks one beat more (y 12.9062481 at 187), ours stopped at 13.1649981.
+      const bool shell = p && p->kind == Entity::Kind::Projectile;
+      if (p && (!p->destroyQueued || shell)) {  // the child takes the bone's transform (Entity attach)
         Vec3 bp;
         Quat bq;
         BoneWorld(p, u->parentBone, &bp, &bq);
@@ -3391,6 +3396,12 @@ void Sim::Tick() {
       // in its naval factory at 12614, is taken by FAF's sinker (made 0.07 above the water, so in Air) and stays in
       // Water in the original; ours put it in Air until the sinker went under at 12632.
       if (u->destroyQueued || !u->parentId || u->beingBuilt) continue;
+      // ... and a unit of MotionType None has no motion at all: Unit::Unit makes a CUnitMotion only for bp+0x290 in
+      // 1..8 (0x6a5d9f..0x6a5dab), so nothing copies the shell's layer to it. Seen (weapons range, scene cybnav, cell
+      // 4): the HARMS xrb2309 (a structure, BuildOnLayerCaps Sub only) hangs itself on a sinker shell made at the
+      // water's surface and rides it down; the original's stays in Sub from its creation on, ours went to Water in
+      // its first beat, and its one weapon (FireTargetLayerCapsTable: the row Sub only) never fired.
+      if (!u->motion.bp || !u->motion.bp->mobile()) continue;
       const Entity* p = FindEntity(u->parentId);
       if (!p || p->destroyQueued || p->kind != Entity::Kind::Projectile) continue;
       const char* pl = p->position.y > map_->waterElevation ? "Air" : "Water";
