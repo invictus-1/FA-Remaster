@@ -19,7 +19,9 @@
 // long it is), the lists, then four rows per light: its place and radius; its colour and a beam's
 // glow (a light to all sides: its steady part, [nightlight]); a beam's way and the cosine of its edge (below -1: a light to all sides); its shadow map's
 // number (-1 none; -2 none, and it rides on the model standing at y, z, w), then the lamps' maps'
-// matrices.
+// matrices, then the larger lights' ground tables ([lightshade], below: a light to all sides that has one says in its
+// third row where it begins, x, and how strongly it counts, y; a table's first row says where its middle lies, x and
+// z, how wide its squares are and how many it has each way).
 //
 // Only the modern look uses them. The original game has no such lights: there the "light particle"
 // of an explosion is a glow laid on the ground (decals.h), which the original look keeps.
@@ -40,6 +42,8 @@ class Vfs;
 
 namespace render {
 
+struct MapData;
+
 // What threw a flash, as the effects know it (Effects::Apply), for those told of it (Lights::onFlash: the volume
 // explosions, volume_blasts.h).
 struct FlashFrom {
@@ -59,6 +63,7 @@ class Lights {
   void Forget() {
     flashes_.clear();
     shadowKeys_.clear();
+    shades_.clear();  // [lightshade]
   }
   // A light for this frame. `color` is linear, as bright as the surface it lights fully would be
   // (1, 1, 1: about as the sun lights it).
@@ -122,6 +127,43 @@ class Lights {
   // colours at their middle (false: as before, viewer --merge-bright)
   bool mergeFlux = true;
   int shadowSwaps = 0;  // (MOHO64_DEBUG_NIGHTLIGHT) beams given a shadow map in the last PlaceShadows that had none the frame before
+  // [lightshade] (the review of 2026-11-09, light 11: "small lights without a lamp shadow map shine through hills") The
+  // ground shadows the larger lights to all sides: an explosion's flash or a big glow behind a ridge lit the ground, the
+  // units, the smoke and the mist on the ridge's near side as if the ridge were not there, and from the game's camera a
+  // nuke's flash lit the far slope of a hill as brightly as the near one. Each such light (a reach of `shadeFrom` world
+  // units or more; in full from `shadeFull`, so that a light whose reach wavers about the line does not pop) gets a
+  // table of squares laid over the ground it reaches (32, 64 or 128 each way by its reach: a square 4 world units wide
+  // or less up to a reach of 256, a nuke's flash of 900 squares of 14), worked out here from the map's heights (Build;
+  // ShadeTable) and read by every shader that reads the lights (light_shade.h's LightShade: the lit surfaces with and
+  // without the rays, what the rays meet, the air, smoke, dust, spray, rain). A square holds two heights: below the
+  // first nothing of the light is seen from there, above the second all of it; between them a share (the light is not
+  // a point: it stands `shadeSize` of its reach tall over its place, `shadeTall` world units at most, so a shadow's
+  // edge is the softer the farther behind the ridge, and ground that merely rolls is not shadowed by its own bumps).
+  // The ground within `shadeBall` of the reach round the light casts no shadow (as the rays' own: World::rayLightSize;
+  // the crater a flash sits in; `shadeBallMost` world units at most: a nuke's flash reaches 320 and more, and a fifth of
+  // that would take every hill near it out), and the ground under a square itself does not count for it (a lit slope
+  // never shadows itself: the shadow begins a square behind the crest). What stands on the ground (hulls, buildings,
+  // trees) is not in the tables: only the rays find those (lighting.h's SmallLightsTraced), on the lit surfaces alone.
+  // At most kShadeMost lights a frame, the ones that throw the most light, in kShadeRowsMost rows of the buffer at
+  // most (the lights that throw least take coarser tables where they would be more). A table is kept while its light
+  // stands where it stood (a flash does), or has moved less than an eighth of a square (a nuke's rising glow: made
+  // anew every few frames; the table says where its own middle lies, so its shadows stand still meanwhile), so most
+  // frames make none.
+  // `ground`: the map's heights (none: no tables); GroundChanged when they change within that rectangle (the tables
+  // kept of lights that reach it are made anew). Off: the buffer as before, to the byte.
+  bool shade = true;
+  float shadeFrom = 10, shadeFull = 14;
+  float shadeSize = 0.1f, shadeTall = 12, shadeBall = 0.2f, shadeBallMost = 8;
+  const MapData* ground = nullptr;
+  void GroundChanged(float x0, float z0, float x1, float z1);
+  static constexpr int kShadeMost = 64;         // (a fight's shells and deaths: some fifty flashes of a reach of 10 to 24 at once)
+  static constexpr int kShadeRowsMost = 49152;  // (768 KB of the buffer: six of the largest tables, or all kShadeMost of the smallest and one of the largest)
+  double shadeMs = 0;    // the processor's time for the tables made, in all (MOHO64_DEBUG_LIGHTSHADE says each one made)
+  int shaded = 0;        // lights with a table in the last Build
+  int shadeMade = 0;     // tables worked out in it (the others kept from frames before)
+  int shadeLeftOut = 0;  // larger lights left without one (more than kShadeMost)
+  int shadedMost = 0;    // (the most in one Build so far; and tables made in all, and the most lights left without)
+  int shadeMadeAll = 0, shadeLeftOutMost = 0;
   int leftOut = 0;      // lights left out of crowded squares in the last Build (each square's count over kMostInSquare, summed)
   int count = 0;              // lights in the last Build
   // [unitfx] lights merged into others in the last Build, where squares of the grid were too crowded (Build: a hundred
@@ -154,6 +196,19 @@ class Lights {
     bool explosion;  // ([calmflash] else its reach is held to calmFlashReach)
   };
   const std::vector<Vec3>* Ramp(const std::string& path);
+  // [lightshade] a light's ground table: n x n squares, two heights each (nothing seen below, all above)
+  void ShadeTable(Vec3 at, float radius, int n, float* lines);
+  struct Shade {
+    Vec3 position;
+    float radius = 0;
+    int cells = 0;      // (squares each way)
+    uint64_t used = 0;  // (the last Build that read it)
+    std::vector<float> lines;
+  };
+  std::vector<Shade> shades_;  // (tables kept: a light that stands where it stood keeps its own)
+  std::vector<float> shadeSlopes_;  // (ShadeTable's working room)
+  const uint16_t* shadeHeights_ = nullptr;  // (the heights the tables kept were made from: another map's are let go of)
+  uint64_t shadeBuild_ = 0;
 
   gfx::Device* device_;
   const moho::Vfs* vfs_;
