@@ -642,6 +642,9 @@
 //           default log2(share) finer, for the window's size, as with FSR 3)
 // --fall-size scene  [fallsize] with an upscaler rain's and snow's widths in the smaller picture's pixels, as before
 //           (World::fallWindowSize off; by default in the window's: a flake as large on the screen as without the upscaler)
+// --no-fall-fade  [fallhigh] the falling rain and snow do not thin out as the camera rises (World::fallFadeHigh off: from
+//           the farthest zoom the fall fills a square in the middle of the picture, as before; by default it thins out
+//           from 560 to 1000 world units of camera distance, the snow lying and the clouds staying)
 // --fall-pace world  [fallpace] rain and snow at one speed in the world at every zoom and the flakes' sway by the zoom,
 //           as before (World::fallSteadyPace off; by default as fast on the screen at every zoom, each box of the ladder
 //           at its own speed, the sway by the flake's own box)
@@ -964,6 +967,7 @@ struct Options {
   bool winterWater = false;             // --winter-water
   bool waterRipples = false;            // --water-ripples
   bool fxMirror = true;                 // [fxmirror] --no-fx-mirror
+  bool fallFadeHigh = true;             // [fallhigh] --no-fall-fade
   bool fxMirrorView = false;            // --fx-mirror-view
   bool fxMirrorBlink = false;           // --fx-mirror-blink
   float fxMirrorBlinkStrength = 0;      // --fx-mirror-blink-strength
@@ -1362,6 +1366,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--winter-water") o->winterWater = true;
     else if (a == "--water-ripples") o->waterRipples = true;
     else if (a == "--no-fx-mirror") o->fxMirror = false;  // [fxmirror]
+    else if (a == "--no-fall-fade") o->fallFadeHigh = false;  // [fallhigh]
     else if (a == "--fx-mirror-view") o->fxMirrorView = true;
     else if (a == "--fx-mirror-blink") o->fxMirrorBlink = true;
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
@@ -2734,6 +2739,7 @@ int main(int argc, char** argv) {
   world.upscaleMipBias = !opt.fsr1NoBias;      // [upmip]
   world.fallWindowSize = !opt.fallSceneSize;   // [fallsize]
   world.fallSteadyPace = !opt.fallWorldPace;   // [fallpace]
+  world.fallFadeHigh = opt.fallFadeHigh;       // [fallhigh]
   world.fallNoLocks = !opt.fallTrails;         // [falltrail]
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;

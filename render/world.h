@@ -630,6 +630,10 @@ class World {
   // [fallpace] The fall as fast on the screen at every zoom, and a flake's sway by its own box on the ladder (weather.h,
   // Precipitation::steadyPace). False: one speed in the world and the sway by the zoom, as before.
   bool fallSteadyPace = true;
+  // [fallhigh] (Chris, 2026-11-10) the falling rain and snow thin out to nothing as the camera rises past where their
+  // box can still fill the view (Precipitation::highFade, 560 to 1000 world units away); the snow lying and the
+  // clouds stay. False: from the farthest zoom the fall fills a square in the middle of the picture, as before.
+  bool fallFadeHigh = true;
   // [falltrail] With FSR 3, what falls marked in its transparency and composition mask too (Fsr3::Inputs::composition): no
   // lock on a flake, so no trail of its light where it was. False: the reactive mask alone, as before.
   bool fallNoLocks = true;

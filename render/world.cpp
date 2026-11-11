@@ -5246,6 +5246,7 @@ void World::Render() {
   // [fallsize] (under an upscaler the widths in the window's pixels) [fallpace]
   falling.windowShare = fallWindowSize && screenHeight_ > view.height ? static_cast<float>(view.height) / static_cast<float>(screenHeight_) : 1.0f;
   falling.steadyPace = fallSteadyPace;
+  falling.highFade = fallFadeHigh;  // [fallhigh]
   if (view.constants.skyZenith[3] > 0.5f) falling.Draw(view, fall, rain, snow, litRain && look == Look::Modern);
   if (rainSplashes && look == Look::Modern && view.constants.skyZenith[3] > 0.5f && rain > 0) {  // (reading the depth)
     post.BeginColorOnly();

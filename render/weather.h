@@ -111,6 +111,14 @@ class Precipitation {
   // 100, 200 and 400 units away (with one speed in the world: 74, 45, 25, 14 and 5). False: one speed in the world at
   // every zoom ([rainpace], 2026-11-06) and the sway by the zoom, as before.
   bool steadyPace = true;
+  // [fallhigh] (Chris, 2026-11-10: "Lets try the fade out as the camera rises") The fall's box grows with the camera's
+  // distance up to 900 world units and no further, so from the farthest zoom (a view 2,500 wide) the flakes filled a
+  // square in the middle of the picture. With `highFade` the fall thins out as the camera rises, from all of it at
+  // `highFrom` world units away (where the box stops growing) to none at `highTo`: fewer and fewer flakes, each as
+  // it was (the last ones fade as the ladder's do, none pops). The snow lying and the clouds are not the fall's and
+  // stay. False: the square, as before.
+  bool highFade = true;
+  float highFrom = 560, highTo = 1000;
 
  private:
   gfx::Pipeline Make(bool lit, std::string* error);
