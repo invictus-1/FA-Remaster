@@ -100,10 +100,37 @@ class WorldPicture {
     int props = 0, effects = 0, looks = 0;
     int scars = 0;  // [settled] (the battle scars past their time: World::Kept::scars)
     bool world = false, groundChanged = false, loadBegunAgain = false;
+    // [notice] (SetRecoveryNotice) when the notice's frame was handed to the screen, seconds from the call's start (-1: none
+    // was shown), and the size it was drawn at in the window (its own, or smaller where it did not fit)
+    double noticeSeconds = -1;
+    int noticeWidth = 0, noticeHeight = 0;
   };
   RecoverNumbers LastRecoverNumbers() const;
+  // [notice] (the interface's request 52; Chris, 2026-11-11: yes) A picture for the player while RecoverDevice opens the map
+  // again: in full screen there is no title bar, and without it the last frame stands still for the seconds the map takes
+  // and nothing says why. `pixels`: `width` x `height` of them, row after row with nothing between the rows, each
+  // 0xAARRGGBB with the colour already multiplied by its alpha, exactly as SetInterfaceLayer's (alpha 0: the dark ground
+  // shows). They are copied here, on the processor's side, so they outlast the device: hand them in once, at any time
+  // (before a loss, or between LetGoOfLostDevice and RecoverDevice), and again when the window's size or the language
+  // changes; pixels null or a size of 0: none any more.
+  // What RecoverDevice does with it, on a picture shown in the host's window (UseWindow and its kin) and on no other: as
+  // soon as the new device and its swap chain are there (some tenths of a second into the call) and before the map is
+  // opened, it presents ONE frame, very dark all over, with the notice in its middle, one pixel of it to one pixel of the
+  // window (not stretched: a small box with the text on a dark ground is what is expected, and text drawn for the
+  // window's pixels stays sharp only at its own size). A notice wider or higher than the window is made smaller to fit,
+  // its shape kept. That frame stays on the screen until the first frame of the game after the recovery. No notice set:
+  // RecoverDevice presents nothing, as before. No device could be made: nothing can be shown. The second window shows
+  // nothing of it.
+  void SetRecoveryNotice(const uint32_t* pixels, int width, int height);
+  // (checks) The notice's frame as the next RecoverDevice presents it, read back into `out` (RGBA bytes, the window's
+  // width x height x 4); left empty where none is shown.
+  void CaptureRecoveryNotice(std::vector<uint8_t>* out);
   // (checks: the viewer's --lose-device-at) Loses this picture's device on purpose (gfx.h, Device::LoseForTest: Direct3D
   // 12 for real, by ID3D12Device5::RemoveDevice; Vulkan made up); the next frame notices. False: no device, or it cannot.
+  // [notice] Between LetGoOfLostDevice and RecoverDevice (the picture has no device then): the device that RecoverDevice
+  // makes next is lost in the same way right after the notice's frame (or where that would be), for trying a second loss
+  // in the middle of a recovery. RecoverDevice then returns false with DeviceLost still true and everything it had kept
+  // of the game held, as when no device could be made: the next RecoverDevice starts from there.
   bool LoseDeviceForTest();
 
   // --- [bgload] a map opened behind the one shown (the interface's request 37) ---

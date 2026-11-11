@@ -34,6 +34,13 @@ struct RecoverTestSetup {
                              // again (what a host that does not look gets: nothing drawn, and no error line a frame)
   std::vector<int> shots;    // --recover-shots a,b,...: counted frames written as pictures
   std::string shaderCache;   // --shader-cache <folder> ("-": --no-shader-cache): WorldPicture::SetShaderCache
+  // [notice] --recover-notice <W>x<H>: the test notice's size (WorldPicture::SetRecoveryNotice: a dark box with a frame and
+  // bars, no text; 640x120 unless given, 0x0: none set, the recovery as it was before the notice); each recovery's notice
+  // frame is written as <name>_notice<n>.png. --lose-in-recovery: the first recovery's new device is lost again right
+  // after its notice frame (LetGoOfLostDevice, LoseDeviceForTest, RecoverDevice, which must fail with the picture still
+  // lost, and RecoverDevice again, which must bring the game back).
+  int noticeWidth = 640, noticeHeight = 120;
+  bool loseInRecovery = false;
   bool hasCam = false;       // --cam x,z,distance,pitch,heading (degrees); else over the map's middle
   float cam[5] = {};
 };

@@ -4,6 +4,30 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui, request 52: a line for the player while a lost device is made anew (2026-11-11, render e49e899f)
+
+`void WorldPicture::SetRecoveryNotice(const uint32_t* pixels, int width, int height);` (world_picture.h)
+
+- **Pixels:** `width` x `height`, row after row with nothing between the rows, each 0xAARRGGBB with the colour
+  already multiplied by its alpha: exactly SetInterfaceLayer's format. Alpha 0 shows the dark ground.
+- **When to call:** once, at any time (the pixels are copied and outlast the device), also between
+  LetGoOfLostDevice and RecoverDevice; again when the window's size or the language changes. Null or a size of 0:
+  no notice, and RecoverDevice presents nothing, as before.
+- **What is shown:** inside RecoverDevice, as soon as the new device and its swap chain exist (0.4 to 2 s into the
+  call) and before the map opens: one frame, dark all over (0.012, 0.014, 0.020), the notice in the middle, one
+  pixel to one pixel. A notice wider or higher than the window is made smaller to fit, its shape kept. It stays on
+  the screen until the game's first frame after the recovery. Only on a picture shown in the host's window; the
+  second window shows nothing of it.
+- **Before the notice:** from the loss until the new device exists the screen shows the picture's clear colour;
+  with a fresh shader cache on Vulkan that was 25 s once in the tests, otherwise 0.4 to 2 s.
+- **New behaviour to know:** if the NEW device is lost before the map is back, RecoverDevice now returns false with
+  DeviceLost() still true and everything it kept of the game still held: call RecoverDevice again. Before, that
+  left the picture without its map.
+- **Numbers:** LastRecoverNumbers() has noticeSeconds (-1: none shown), noticeWidth, noticeHeight (as drawn).
+- **Checks:** CaptureRecoveryNotice(&bytes) before RecoverDevice reads the presented frame back (RGBA, the
+  window's size); the viewer's `--recover-test --recover-notice WxH` and `--lose-in-recovery` use it. Not tried:
+  true full screen, HDR, frame generation, a real driver reset, the interface's own picture.
+
 ## To visuals, section 113: the commanders' warp-in (2026-11-09)
 
 **Q2, where the glow's colour comes from.** In the modern look the warp-in is drawn as a personal shield, because the
