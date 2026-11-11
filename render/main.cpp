@@ -178,8 +178,9 @@
 //           (World::groundMattEye off; by default the highlight fades as the eye skims the ground's slope too)
 // --puddle-sun-mirror  [puddlesun] the sun's highlight on rain puddles as sharp as the mirror they are, as before
 //           (World::puddleSunSoft off: a puddle along the sun's mirrored ray blazes white, with a dotted outline)
-// --layer-normals-own  [layernormals] a remastered ground layer's small shapes laid by its colour's share, not by its mask's raw value
-//           (World::layerNormalsOwn on; off by default, as before: on SETONS_R the absent layers' stones on grass and sand, hairlines between them)
+// --layer-normals-raw  [layernormals] a remastered ground layer's small shapes laid by its mask's raw value, as before
+//           (World::layerNormalsOwn off: on SETONS_R the absent layers' stones on grass and sand, hairlines between them;
+//           --layer-normals-own is taken and changes nothing: the default)
 // --pan <dx,dz>  the camera's point moves that far every frame (world units): a moving camera that repeats
 // --clouds-3d  volumetric clouds (clouds.h, World::volumetricClouds; modern look, a time of day): the clouds as
 //           real volumes lit by the sun, in place of the sky's own layer (--clouds sets how much of the sky)
@@ -1210,7 +1211,7 @@ struct Options {
   bool groundMatt = false;              // [leftover] --ground-matt
   bool groundMattEye = true;            // [matteye] --ground-matt-light-only
   bool puddleSunSoft = true;            // [puddlesun] --puddle-sun-mirror
-  bool layerNormalsOwn = false;         // [layernormals] --layer-normals-own
+  bool layerNormalsOwn = true;          // [layernormals] --layer-normals-raw
   float pan[2] = {0, 0};                // --pan
   float airDust = -1, airSun = -1, airLamps = -1;  // --air-dust, --air-sun, --air-lamps (negative: the default)
   int airAcross = 0, airDeep = 0;       // --air-cells
@@ -1481,7 +1482,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--ground-matt") o->groundMatt = true;        // [leftover]
     else if (a == "--ground-matt-light-only") o->groundMattEye = false;  // [matteye]
     else if (a == "--puddle-sun-mirror") o->puddleSunSoft = false;       // [puddlesun]
-    else if (a == "--layer-normals-own") o->layerNormalsOwn = true;      // [layernormals]
+    else if (a == "--layer-normals-own") o->layerNormalsOwn = true;      // [layernormals] (the default)
+    else if (a == "--layer-normals-raw") o->layerNormalsOwn = false;
     else if (a == "--wildlife") o->wildlife = true;
     else if (a == "--horizon") o->horizon = true;  // [horizon]
     else if (a == "--shafts") o->shafts = true;  // [sunlight]
