@@ -1,5 +1,7 @@
 #include "particles.h"
 
+#include "fx_mirror.h"
+
 #include "effect_files.h"
 
 #include <algorithm>
@@ -58,7 +60,9 @@ Texture2D particleNormals : register(t4);  // (lit particles only)
 Texture2D sixWayTexture : register(t5);  // (six-way light maps' second texture: left, bottom, front; emission)
 #endif
 Texture2D particleMotion : register(t6);  // [motionblend] each frame's motion to the next (MotionTexture)
-#ifdef MSAA
+#if FX_MIRROR
+// [fxmirror] (the mirrored variant, fx_mirror.h: the scene's depth is its block's, read along the mirrored ray)
+#elif defined(MSAA)
 Texture2DMS<float> sceneDepth : register(t3);
 #else
 Texture2D<float> sceneDepth : register(t3);
@@ -243,6 +247,12 @@ VOut VS(uint vertex : SV_VertexID, uint instance : SV_InstanceID) {
 // in front of it (`coverage`); and less where it is about to meet something, so that it fades into
 // the ground and into units instead of being cut off along a hard line.
 float Meets(VOut i, out uint coverage) {
+#if FX_MIRROR
+  // [fxmirror] its mirror image in the water (Particles::DrawMirror): what of it stands above the water and is not
+  // hidden, on the way from the water to it, by something solid (fx_mirror.h); it meets nothing to fade into
+  coverage = 1;
+  return MirrorShows(i.world);
+#else
   coverage = 0;
   float nearest = 1e9;
 #ifdef MSAA
@@ -264,6 +274,7 @@ float Meets(VOut i, out uint coverage) {
   }
 #endif
   return coverage == 0 ? 0 : saturate(nearest / max(meeting.x, 1e-3));
+#endif
 }
 
 // [motionblend] Where a blended frame and the next are read, moved along the frames' motion (MotionTexture): this frame's
@@ -634,7 +645,58 @@ bool Particles::Init(std::string* error) {
   buffer_ = device_->CreateBuffer(bd);
   heatBuffer_ = device_->CreateBuffer(bd);
   litTried_ = litMade_ = heatTried_ = false;  // (lit smoke's and the heat's pipelines made again when wanted: the samples may differ)
+  mirrorTried_ = mirrorMade_ = false;         // [fxmirror] (the mirrored ones too)
   return true;
+}
+
+// [fxmirror] The mirrored variants (DrawMirror; fx_mirror.h), the first time they are wanted: the same shader built
+// with FX_MIRROR (the scene's depth read along the mirrored ray in place of at the pixel), into the mirrored picture
+// (one sample a pixel). What covers writes its alpha there (the water lays the picture over its mirror by it), what
+// adds its light leaves it. With lit smoke's pipelines made, theirs too; where these cannot be made, the particles
+// are not mirrored.
+bool Particles::MirrorReady() {
+  if (mirrorTried_) return mirrorMade_;
+  mirrorTried_ = true;
+  std::string error;
+  const std::string head = "#define FX_MIRROR 1\n#define FX_MIRROR_SAMPLES " + std::to_string(gSceneSamples) + "\n#define SAMPLES 1\n";
+  const std::string source = head + kViewShaderBlock + kFxMirrorShaderBlock + kShader;
+  gfx::PipelineDesc pd;
+  pd.vertexSource = pd.pixelSource = source;
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = kFxMirrorFormat;
+  pd.samples = 1;
+  const struct {
+    const char* name;
+    gfx::Blend blend;
+    bool alpha;
+  } kinds[3] = {{"particles, mirrored in the water, alpha", gfx::Blend::Alpha, true},
+                {"particles, mirrored in the water, adding", gfx::Blend::Additive, false},
+                {"particles, mirrored in the water, premultiplied", gfx::Blend::Premultiplied, true}};
+  mirrorMade_ = true;
+  for (int i = 0; i < 3; ++i) {
+    pd.name = kinds[i].name;
+    pd.blend = kinds[i].blend;
+    pd.alphaWrite = kinds[i].alpha;
+    mirrorPipelines_[i] = device_->CreatePipeline(pd, &error);
+    if (!mirrorPipelines_[i]) mirrorMade_ = false;
+  }
+  // (lit smoke's and the six-way maps': made with them, so that smoke is lit in the mirror as it is over it)
+  const std::string lit = "#define LIT_SMOKE 1\n" + head + kViewShaderBlock + kFxMirrorShaderBlock + kLightingShaderBlock + kShader;
+  if (mirrorMade_ && LitReady()) {
+    pd.vertexSource = pd.pixelSource = lit;
+    pd.alphaWrite = true;
+    pd.name = "particles, mirrored in the water, lit smoke, alpha";
+    pd.blend = gfx::Blend::Alpha;
+    mirrorLit_[0] = device_->CreatePipeline(pd, &error);
+    pd.name = "particles, mirrored in the water, lit smoke, premultiplied";
+    pd.blend = gfx::Blend::Premultiplied;
+    mirrorLit_[1] = device_->CreatePipeline(pd, &error);
+    if (!mirrorLit_[0] || !mirrorLit_[1]) mirrorLit_[0] = mirrorLit_[1] = {};
+  }
+  if (!mirrorMade_) fprintf(stderr, "render: the particles cannot be mirrored in the water (%s)\n", error.c_str());
+  return mirrorMade_;
 }
 
 // The lit smoke's pipelines and the smoke's shadow pass's (World::litSmoke; the particles' shader with LIT_SMOKE and
@@ -1261,16 +1323,31 @@ void Particles::DrawBending(const View& view, gfx::Texture behind, gfx::Texture 
   if (bending_ && behind) DrawSets(view, 1, behind, sceneDepth, zNear);
 }
 
+// [fxmirror] The particles as the water mirrors them, into the mirrored picture's pass (fx_mirror.h), before the scene's
+// own Draw (which finds them gathered).
+void Particles::DrawMirror(const View& mirrored, const FxMirror& mirror) {
+  if (!gathered_) Gather();
+  if (!liveParticles || !MirrorReady()) return;
+  mirror_ = &mirror;
+  DrawSets(mirrored, 3, {}, {}, 0);
+  mirror_ = nullptr;
+}
+
 // The sets of the last Draw: those that bend what is behind them (`pass` 1), or all the others (0), or (2) those
-// that cast the smoke's shadow, into its map.
+// that cast the smoke's shadow, into its map; [fxmirror] or (3) those the water mirrors, into the mirrored picture
+// (`view` the mirrored view): all but what bends or darkens what is behind it (neither has anything behind it there)
+// and what lies flat (a ring on the water is no image in it).
 void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::Texture sceneDepth, float zNear) {
-  const bool bending = pass == 1, shadow = pass == 2;
-  const bool litNow = pass == 0 && litSmoke && LitReady();
+  const bool bending = pass == 1, shadow = pass == 2, mirror = pass == 3;
+  const bool litNow = (pass == 0 || (mirror && mirrorLit_[0])) && litSmoke && LitReady();
   const float now = static_cast<float>(now_);
   const std::vector<std::pair<size_t, size_t>>& spans = spans_;
   // the camera's sideways and upward directions, from the rows of the view-projection matrix
   const Mat4& m = view.constants.viewProj;
-  const Vec3 right = Normalize(Vec3{m.m[0][0], m.m[0][1], m.m[0][2]}), up = Normalize(Vec3{m.m[1][0], m.m[1][1], m.m[1][2]});
+  const Vec3 right = Normalize(Vec3{m.m[0][0], m.m[0][1], m.m[0][2]});
+  // ([fxmirror] the mirrored view's rows are the camera's axes mirrored; a particle that faces the mirrored eye stands
+  // the other way up for it, so that, mirrored, its top is at the bottom, as a flame's image in the water is)
+  const Vec3 up = Normalize(Vec3{m.m[1][0], m.m[1][1], m.m[1][2]}) * (mirror ? -1.0f : 1.0f);
   int bound = -1;
   for (size_t i = 0; i < order_.size(); ++i) {
     if (!spans[i].second) continue;
@@ -1279,15 +1356,20 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
     // 0 alpha, 1 darkening, 2 adding, 3 premultiplied ("modulate 2x inverse" is drawn as adding);
     // 4: bending what is behind it, laid over by its alpha
     const int kind = bending ? 4 : bp.blendMode == 1 ? 1 : (bp.blendMode == 2 || bp.blendMode == 3) ? 2 : bp.blendMode == 4 ? 3 : 0;
+    if (mirror && (kind == 1 || (bp.flat && !bp.alignRotation))) continue;  // [fxmirror]
     // (lit smoke: covering sets drawn through the lit pipelines, numbered after the others)
     // (and six-way maps' sets always, in either look: their colours are light maps, which only the lit shader reads)
-    const bool sixWay = pass == 0 && bp.sixWay && (kind == 0 || kind == 3) && LitReady();
+    const bool sixWay = (pass == 0 || (mirror && mirrorLit_[0])) && bp.sixWay && (kind == 0 || kind == 3) && LitReady();
     const bool litSet = sixWay || (litNow && (kind == 0 || kind == 3) && Smoky(bp, false));
     const int pipeline = shadow ? 6 : litSet ? 4 + (kind == 3 ? 1 : 0) : kind == 4 ? 0 : kind;
     if (pipeline != bound) {
-      device_->SetPipeline(shadow ? shadowPipeline_ : litSet ? litPipelines_[kind == 3 ? 1 : 0] : pipelines_[kind == 4 ? 0 : kind]);
+      if (mirror)  // [fxmirror] (alpha, adding, premultiplied; lit smoke's two)
+        device_->SetPipeline(litSet ? mirrorLit_[kind == 3 ? 1 : 0] : mirrorPipelines_[kind == 0 ? 0 : kind == 2 ? 1 : 2]);
+      else
+        device_->SetPipeline(shadow ? shadowPipeline_ : litSet ? litPipelines_[kind == 3 ? 1 : 0] : pipelines_[kind == 4 ? 0 : kind]);
       if (bending) device_->SetTexture(2, behind);
-      if (!shadow) device_->SetTexture(3, sceneDepth);
+      if (mirror) mirror_->Bind();
+      else if (!shadow) device_->SetTexture(3, sceneDepth);
       device_->SetConstants(0, &view.constants, sizeof view.constants);
       device_->SetShaderBuffer(buffer_);
       bound = pipeline;

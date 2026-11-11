@@ -1,6 +1,7 @@
 #include "ribbons.h"
 
 #include "effect_files.h"
+#include "fx_mirror.h"
 
 #include <algorithm>
 #include <cctype>
@@ -50,6 +51,12 @@ VOut VS(VIn i) {
 }
 float4 PS(VOut i) : SV_Target {
   if (options.z > 0.5 && (i.rampUv.x <= 0 || i.rampUv.x >= 1)) discard;
+#if FX_MIRROR
+  // [fxmirror] its mirror image in the water (Ribbons::DrawMirror): what of it stands above the water and is not hidden
+  // by something solid on the way from the water to it (fx_mirror.h); the card tests no depth for it
+  float shows = MirrorShows(i.world);
+  if (shows <= 0) discard;
+#endif
   float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
   if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
   if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y * (falling.w > 0 ? falling.w : 1) : 1);
@@ -74,6 +81,10 @@ float4 PS(VOut i) : SV_Target {
     c.rgb = options.x > 1.5 && options.x < 2.5 ? c.rgb * (1 - lost) : lerp(c.rgb, MistColor(), lost);
   }
   if (options.w > 0.5) c.a = 1;  // (the device's adding blend weighs by alpha)
+#if FX_MIRROR
+  if (options.x > 1.5) c.rgb *= shows;  // (what adds its light, or carries its alpha in its colour)
+  if (options.x < 0.5 || options.x > 2.5) c.a *= shows;
+#endif
   return c;
 }
 )hlsl";
@@ -125,6 +136,7 @@ bool Ribbons::Init(std::string* error) {
   bd.stride = sizeof(Vertex);
   bd.dynamic = true;
   buffer_ = device_->CreateBuffer(bd);
+  mirrorTried_ = mirrorMade_ = false;  // [fxmirror] (the mirrored ones made again when wanted: the samples may differ)
   plain_.ok = true;
   plain_.texture = plain_.ramp = textures_->White();
   // a soft-edged band of the game's own, where there is one
@@ -358,7 +370,108 @@ void Ribbons::Band(Batch* batch, const View& view, Vec3 a, Vec3 b, float halfA, 
   for (const Vertex& v : {a0, a1, b1, a0, b1, b0}) batch->vertices.push_back(v);
 }
 
+// [fxmirror] The mirrored variants (DrawMirror; fx_mirror.h), the first time they are wanted: the same shader built
+// with FX_MIRROR, into the mirrored picture (one sample a pixel, no depth: the shader asks what hides it). Alpha, adding,
+// premultiplied (what darkens is not mirrored); what covers writes its alpha, what adds leaves it.
+bool Ribbons::MirrorReady() {
+  if (mirrorTried_) return mirrorMade_;
+  mirrorTried_ = true;
+  std::string error;
+  const std::string source = "#define FX_MIRROR 1\n#define FX_MIRROR_SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock +
+                             kFxMirrorShaderBlock + kShader;
+  gfx::PipelineDesc pd;
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0},
+              {"TEXCOORD", 0, gfx::AttrType::Float2, 12},
+              {"TEXCOORD", 1, gfx::AttrType::Float2, 20},
+              {"COLOR", 0, gfx::AttrType::UByte4N, 28}};
+  pd.stride = sizeof(Vertex);
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = kFxMirrorFormat;
+  pd.samples = 1;
+  const struct {
+    const char* name;
+    gfx::Blend blend;
+    bool alpha;
+  } kinds[3] = {{"bands, mirrored in the water, alpha", gfx::Blend::Alpha, true},
+                {"bands, mirrored in the water, adding", gfx::Blend::Additive, false},
+                {"bands, mirrored in the water, premultiplied", gfx::Blend::Premultiplied, true}};
+  mirrorMade_ = true;
+  for (int i = 0; i < 3; ++i) {
+    pd.name = kinds[i].name;
+    pd.blend = kinds[i].blend;
+    pd.alphaWrite = kinds[i].alpha;
+    mirrorPipelines_[i] = device_->CreatePipeline(pd, &error);
+    if (!mirrorPipelines_[i]) mirrorMade_ = false;
+  }
+  if (!mirrorBuffer_) {
+    gfx::BufferDesc bd;
+    bd.stride = sizeof(Vertex);
+    bd.dynamic = true;
+    mirrorBuffer_ = device_->CreateBuffer(bd);
+  }
+  if (!mirrorMade_) fprintf(stderr, "render: beams and trails cannot be mirrored in the water (%s)\n", error.c_str());
+  return mirrorMade_;
+}
+
+// [fxmirror] This frame's beams and all trails as the water mirrors them, into the mirrored picture's pass, before Draw
+// (which draws and forgets the beams): the bands laid again for the mirrored eye, which they face.
+void Ribbons::DrawMirror(const View& mirrored, const FxMirror& mirror) {
+  if ((beams_.empty() && trails_.empty()) || !MirrorReady()) return;
+  const int bands = drawnBands;
+  Lay(mirrored);
+  drawnBands = bands;
+  all_.clear();
+  for (const Batch& b : batches_)
+    if (b.kind->blend != 1) all_.insert(all_.end(), b.vertices.begin(), b.vertices.end());
+  if (all_.empty()) return;
+  device_->UpdateBuffer(mirrorBuffer_, all_.data(), static_cast<uint32_t>(all_.size() * sizeof(Vertex)));
+  uint32_t first = 0;
+  for (const Batch& b : batches_) {
+    if (b.vertices.empty() || b.kind->blend == 1) continue;
+    device_->SetPipeline(mirrorPipelines_[b.kind->blend == 0 ? 0 : b.kind->blend == 2 ? 1 : 2]);
+    device_->SetConstants(0, &mirrored.constants, sizeof mirrored.constants);
+    mirror.Bind();
+    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+                              !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
+    device_->SetConstants(1, options, sizeof options);
+    device_->SetTexture(0, b.kind->texture);
+    device_->SetTexture(1, b.kind->ramp);
+    device_->SetVertexBuffer(mirrorBuffer_);
+    device_->Draw(static_cast<uint32_t>(b.vertices.size()), first);
+    first += static_cast<uint32_t>(b.vertices.size());
+  }
+}
+
 void Ribbons::Draw(const View& view) {
+  Lay(view);
+  beams_.clear();
+
+  all_.clear();
+  for (const Batch& b : batches_) all_.insert(all_.end(), b.vertices.begin(), b.vertices.end());
+  if (all_.empty()) return;
+  device_->UpdateBuffer(buffer_, all_.data(), static_cast<uint32_t>(all_.size() * sizeof(Vertex)));
+  uint32_t first = 0;
+  for (const Batch& b : batches_) {
+    if (b.vertices.empty()) continue;
+    device_->SetPipeline(b.kind->trail ? trailPipelines_[b.kind->blend] : pipelines_[b.kind->blend]);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+                              !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
+    device_->SetConstants(1, options, sizeof options);
+    device_->SetTexture(0, b.kind->texture);
+    device_->SetTexture(1, b.kind->ramp);
+    device_->SetVertexBuffer(buffer_);
+    device_->Draw(static_cast<uint32_t>(b.vertices.size()), first);
+    first += static_cast<uint32_t>(b.vertices.size());
+  }
+}
+
+// This frame's beams and all trails laid as bands facing `view`'s eye, batch by batch (Draw; [fxmirror] and DrawMirror,
+// for the mirrored eye: the beams stay until Draw forgets them).
+void Ribbons::Lay(const View& view) {
   for (Batch& b : batches_) b.vertices.clear();
   drawnBands = 0;
   const float now = static_cast<float>(now_);
@@ -380,7 +493,6 @@ void Ribbons::Draw(const View& view) {
     Band(BatchFor(&k), view, beam.start, beam.end, beam.halfWidth, beam.halfWidth, uvA, uvB, noRamp, noRamp, colorA, colorB);
     ++drawnBands;
   }
-  beams_.clear();
   for (const Trail& t : trails_) {
     const Kind& k = *t.kind;
     Batch* batch = BatchFor(&k);
@@ -412,25 +524,6 @@ void Ribbons::Draw(const View& view) {
       Band(batch, view, a, b, half(a, ageA), half(b, ageB), uvA, uvB, rampA, rampB, 0xffffffffu, 0xffffffffu);
     }
     if (count > 1) ++drawnBands;
-  }
-
-  all_.clear();
-  for (const Batch& b : batches_) all_.insert(all_.end(), b.vertices.begin(), b.vertices.end());
-  if (all_.empty()) return;
-  device_->UpdateBuffer(buffer_, all_.data(), static_cast<uint32_t>(all_.size() * sizeof(Vertex)));
-  uint32_t first = 0;
-  for (const Batch& b : batches_) {
-    if (b.vertices.empty()) continue;
-    device_->SetPipeline(b.kind->trail ? trailPipelines_[b.kind->blend] : pipelines_[b.kind->blend]);
-    device_->SetConstants(0, &view.constants, sizeof view.constants);
-    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
-                              !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
-    device_->SetConstants(1, options, sizeof options);
-    device_->SetTexture(0, b.kind->texture);
-    device_->SetTexture(1, b.kind->ramp);
-    device_->SetVertexBuffer(buffer_);
-    device_->Draw(static_cast<uint32_t>(b.vertices.size()), first);
-    first += static_cast<uint32_t>(b.vertices.size());
   }
 }
 

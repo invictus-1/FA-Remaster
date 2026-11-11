@@ -89,6 +89,7 @@
 #include "ranges.h"
 #include "wakes.h"
 #include "hull_wash.h"  // [hulls]
+#include "fx_mirror.h"  // [fxmirror]
 #include "water.h"
 #include "wildlife.h"
 
@@ -638,6 +639,15 @@ class World {
   // wading leave rings and wakes that spread, cross each other and die out. Modern look, a map with water; off by
   // default.
   bool waterRipples = false;
+  // [fxmirror] The effects' mirror image in the water (fx_mirror.h; the review of 2026-11-09, water 9): what is drawn after
+  // the water - the particles' fire, flashes and smoke, beams, tracers and trails, the volume blasts, the energy shields'
+  // bubbles - was in none of its mirror (the sky, and what the picture showed before the water), so that a night fight at
+  // sea showed fire over water that mirrored none of it. With it they are drawn once more before the water, mirrored about
+  // its level, into a picture of half the scene's size, which the water lays into its mirror: moved and drawn out into
+  // streaks by the waves' tilt, under its Fresnel term and foam, hidden where a hull or a shore stands between. Modern
+  // look, a map with water, the eye above it, and only while there is something to mirror (else nothing of it runs). On
+  // by default; false: the water as before, to the pixel (viewer --no-fx-mirror). The streams' water takes none of it.
+  bool waterFxMirror = true;
   // [wakes] The ships' wakes remade (wakes.h; Chris's test run of 21 October): the foam behind every ship drawn so that it
   // holds for a ship of any size and speed - arms that are lines of foam, streaks that keep their place on the water at
   // the screen's resolution, a wake that runs out softly (the way kept behind a ship spaced by its wake's length, so a
@@ -1141,6 +1151,7 @@ class World {
   PlantLife plantLife;    // [plants] (plantsReact) where the plants are pressed and burnt
   Wakes wakes;            // the foam behind what moves on the water
   HullWash hullWash;      // [hulls] the waves meeting the ships' hulls on the lifted sea (hull_wash.h)
+  FxMirror fxMirror;      // [fxmirror] the effects drawn mirrored for the water (fx_mirror.h; waterFxMirror)
   // [hulls] (ListHull's: each hull's place and clock of the frame before, its speed eased, the frame it was last listed)
   struct HullSeen {
     Vec3 place;
