@@ -245,9 +245,21 @@ struct DeviceDesc {
   // data, "FA Remastered\shaders"; "-": none kept.
   std::string shaderCache;
   // Direct3D 12: the shaders compiled by Direct3D's own compiler (FXC, shader model 5.1) even where DXC
-  // (dxcompiler.dll) is beside the program
+  // (dxcompiler.dll) is beside the program. [nodxc] The only way to it now: a device made without this and without
+  // DXC is not made at all (ShaderCompilerReady below says why). For checks of single shaders: the old compiler does
+  // not finish the horizon's pixel shader (the interface's request 51), so a map in the modern look hangs with it.
   bool oldShaderCompiler = false;
 };
+
+// [nodxc] (Chris, 2026-11-09, the review's A4; the interface's request 51) Whether the shader compiler every device needs
+// is there: Microsoft's DXC, dxcompiler.dll, loaded from beside the program and from nowhere else (Linux and macOS: the
+// system's search for libdxcompiler). It is loaded here, so that a file that is there and cannot be loaded (the wrong
+// build, a broken copy) is found now and not at the first shader. False with one sentence for the player in `message`
+// that names the full path looked at. Device::Create asks this first and makes no device without it (its error is that
+// sentence), where it used to go on with Direct3D's own compiler, which never finished the horizon's pixel shader: a
+// frozen window at the first map frame, and no word why. A host asks it itself before it makes its window, to say so
+// in a dialog of its own (WorldPicture::ShaderCompilerReady for the interface's program).
+bool ShaderCompilerReady(std::string* message);
 
 // [mcrec] Draws recorded on another thread (Device::BeginParallel): a recorder takes the draw calls alone, with the same
 // meanings as the device's own below. Everything else (passes, dispatches, marks, buffers' and textures' updates, what
@@ -353,6 +365,23 @@ class Device {
 
   // Ray tracing (above). False: the card or its driver cannot; the calls below then do nothing.
   virtual bool RayTracing() const { return false; }
+  // [devicelost] (Chris, 2026-11-09, the review's A4: a driver reset - one happened here on 2026-11-06, a bake beside the
+  // game - left a frozen window and an error line a frame) The card's device is gone: the driver was reset or updated, the
+  // card hung or was taken out (Direct3D 12: Present, a failed call or a frame's end found the device removed,
+  // GetDeviceRemovedReason; Vulkan: VK_ERROR_DEVICE_LOST from a queue's submit, a present, an acquire or a fence's wait).
+  // Said once on stderr with the reason (LostReason has the same sentence), and from then on nothing this device draws
+  // is shown and nothing it makes is made: its calls stay safe to make (they do nothing, or fail quietly: no error line
+  // a frame), but the host is to stop drawing with it, let go of everything made on it (worlds, textures; the handles
+  // mean nothing on another device) and of the device itself, and make a new one (WorldPicture::RecoverDevice does all
+  // of that for a host of its kind). Any thread; a host asks after each EndFrame.
+  virtual bool Lost() const { return false; }
+  virtual std::string LostReason() const { return {}; }
+  // [devicelost] (checks: the viewer's --lose-device-at) Loses the device on purpose, with no driver reset and nothing
+  // done to the system or to other programs. Direct3D 12: ID3D12Device5::RemoveDevice, after which the device is removed
+  // for real (every later call fails as after a reset, and the frame's end finds it). Vulkan has no such call: the next
+  // submit's or present's result is taken for VK_ERROR_DEVICE_LOST, so what is tried is this backend's noticing and what
+  // the host then does, not a real loss. False: this device cannot (Windows before 10 1809).
+  virtual bool LoseForTest() { return false; }
   // A geometry structure over `count` parts, built on the card at the next BuildScene (its buffers must
   // stay until then). None where it cannot be made.
   virtual Structure CreateGeometry(const GeometryPart*, int) { return {}; }

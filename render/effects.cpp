@@ -68,6 +68,8 @@ void Effects::Clear() {
   pending_.clear();
   effects_.clear();
   decalOf_.clear();
+  decalMade_.clear();  // [devicelost]
+  timedMade_.clear();
   hanging_.clear();
   shotGlow_.clear();
   shotCells_.clear();
@@ -269,10 +271,68 @@ const std::string& Effects::ArmyFaction(const Frame& frame, int army) {
   return static_cast<size_t>(army) < armyFactions_.size() ? armyFactions_[static_cast<size_t>(army)] : none;
 }
 
+// [devicelost] (effects.h, Keep) An event that has just taken effect, kept if what it made lasts: with its effect where
+// that hangs on something, in the marks' lists where it laid a mark. Moved, not copied: it was about to be let go of.
+void Effects::Remember(FrameEffectEvent&& event) {
+  if (event.kind == FrameEffectEvent::Destroy) return;  // (End has let go of what was kept of it)
+  if (event.kind == FrameEffectEvent::Call) {
+    auto it = effects_.find(event.id);
+    if (it == effects_.end() || it->second.made.empty()) return;
+    std::vector<FrameEffectEvent>& made = it->second.made;
+    // (the last call of each kind is enough: a script that scales an emitter every beat would fill the list)
+    for (size_t i = 1; i < made.size(); ++i)
+      if (made[i].name == event.name && made[i].text == event.text) {
+        made[i] = std::move(event);
+        return;
+      }
+    made.push_back(std::move(event));
+    return;
+  }
+  if (auto it = effects_.find(event.id); it != effects_.end()) {
+    Effect& e = it->second;
+    if (e.made.empty() && (e.attached || e.kind == Kind::Beam || e.kind == Kind::TextureBeam)) e.made.push_back(std::move(event));
+    return;
+  }
+  if (event.name != "CreateDecal" && event.name != "CreateSplat") return;
+  if (decalOf_.count(event.id)) {
+    decalMade_[event.id] = std::move(event);
+  } else if (event.numbers.size() >= 5 && event.numbers[4] > 0 && event.seen) {
+    timedMade_.push_back(std::move(event));
+    if (timedMade_.size() % 256 == 0) {  // (those run out, from the front: laid in the order of their beats)
+      const double now = static_cast<double>(timedMade_.back().tick) * 0.1;
+      while (!timedMade_.empty() && static_cast<double>(timedMade_.front().tick) * 0.1 + static_cast<double>(timedMade_.front().numbers[4]) < now)
+        timedMade_.pop_front();
+    }
+  }
+}
+
+void Effects::Keep(std::vector<FrameEffectEvent>* out, uint32_t tick) const {
+  const size_t first = out->size();
+  const double now = static_cast<double>(tick) * 0.1;
+  for (const FrameEffectEvent& e : timedMade_)
+    if (static_cast<double>(e.tick) * 0.1 + static_cast<double>(e.numbers[4]) > now) out->push_back(e);
+  for (const auto& [id, e] : decalMade_) out->push_back(e);
+  const size_t marks = out->size();
+  for (const auto& [id, e] : effects_)
+    for (const FrameEffectEvent& made : e.made) {
+      out->push_back(made);
+      out->back().tick = tick;
+    }
+  for (size_t i = first; i < out->size(); ++i) (*out)[i].replayed = true;
+  // (in the order the scripts made them: the marks by their beats, then the effects by their numbers, each one's event
+  // that made it before its calls, which the stable sort leaves so)
+  std::stable_sort(out->begin() + static_cast<std::ptrdiff_t>(first), out->begin() + static_cast<std::ptrdiff_t>(marks),
+                   [](const FrameEffectEvent& a, const FrameEffectEvent& b) { return a.tick != b.tick ? a.tick < b.tick : a.id < b.id; });
+  std::stable_sort(out->begin() + static_cast<std::ptrdiff_t>(marks), out->end(),
+                   [](const FrameEffectEvent& a, const FrameEffectEvent& b) { return a.id < b.id; });
+  for (const FrameEffectEvent& e : pending_) out->push_back(e);  // (not yet due: as they came)
+}
+
 void Effects::End(uint32_t id) {
   if (auto d = decalOf_.find(id); d != decalOf_.end()) {  // a mark on the ground (DecalHandle:Destroy)
     decals_->Remove(d->second);
     decalOf_.erase(d);
+    decalMade_.erase(id);  // [devicelost]
     return;
   }
   auto it = effects_.find(id);
@@ -511,7 +571,8 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       ~Original() { d->addingOriginal = false; }
     } original{decals_};
     decals_->addingOriginal = event.original;
-    if (blasts_ && n.size() >= 5 && Decals::IsScar(event.blueprint)) blasts_->FromScar(e.position, n[1], n[2], at);  // (a blast, blasts.h)
+    // ([devicelost] not one laid again in a world made anew: the explosion was long ago)
+    if (blasts_ && n.size() >= 5 && Decals::IsScar(event.blueprint) && !event.replayed) blasts_->FromScar(e.position, n[1], n[2], at);  // (a blast, blasts.h)
     if (n.size() >= 5 && (f == "CreateSplat" || kind == "albedo") && decals_->Add(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
     // the campaign's objective areas ("Water Albedo": unlit, and over water on its surface)
     if (n.size() >= 5 && kind == "water albedo" && decals_->AddWater(event.blueprint, e.position, n[1], n[2], n[0], n[3], at, n[4])) return keep();
@@ -561,12 +622,15 @@ void Effects::Update(double tick, const Frame& frame) {
   if (build_ && build_->On()) build_->TakeSites(frame, models_);  // (buildfx: the units under construction)
 
   while (!pending_.empty() && static_cast<double>(pending_.front().tick) <= tick) {
-    const FrameEffectEvent& event = pending_.front();
+    FrameEffectEvent& event = pending_.front();
     // when the game has run ahead: what began long ago and does not hang on anything is over, or
     // would only now throw out all it should have thrown over that time
     const bool stale = event.kind == FrameEffectEvent::Create && tick - static_cast<double>(event.tick) > 100 &&
                        (event.name == "CreateEmitterAtBone" || event.name == "CreateEmitterAtEntity");
-    if (!stale) Apply(event, frame);
+    if (!stale) {
+      Apply(event, frame);
+      Remember(std::move(event));  // [devicelost] (what it made that lasts, for a world made anew: Keep)
+    }
     pending_.pop_front();
   }
 

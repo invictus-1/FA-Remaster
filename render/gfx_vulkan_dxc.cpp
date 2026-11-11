@@ -95,13 +95,21 @@ std::wstring DxcBeside() {
 }
 #endif
 
+// [nodxc] (DxcLoad) why the library did not load, as the system said it (Windows: GetLastError's number; 0: it loaded,
+// or was not tried yet)
+unsigned long gDxcLoadError = 0;
+
 // DXC's DxcCreateInstance, the library loaded the first time it is asked for (null: not there).
 CreateInstanceFn DxcCreate() {
   static const CreateInstanceFn create = [] {
     CreateInstanceFn fn = nullptr;
 #if defined(_WIN32)
-    if (HMODULE lib = LoadLibraryExW(DxcBeside().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH))
+    if (HMODULE lib = LoadLibraryExW(DxcBeside().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
       fn = reinterpret_cast<CreateInstanceFn>(reinterpret_cast<void*>(GetProcAddress(lib, "DxcCreateInstance")));
+      if (!fn) gDxcLoadError = GetLastError();
+    } else {
+      gDxcLoadError = GetLastError();
+    }
 #elif defined(__APPLE__)
     if (void* lib = dlopen("libdxcompiler.dylib", RTLD_NOW | RTLD_LOCAL)) fn = reinterpret_cast<CreateInstanceFn>(dlsym(lib, "DxcCreateInstance"));
 #else
@@ -449,6 +457,38 @@ bool DxcPresent() {
   return GetFileAttributesW(DxcBeside().c_str()) != INVALID_FILE_ATTRIBUTES;
 #else
   return true;  // (dlopen's own search decides, at the first shader compiled)
+#endif
+}
+
+// [nodxc] (gfx_vulkan_dxc.h)
+bool DxcLoad(std::string* where, std::string* why) {
+#if defined(_WIN32)
+  const std::wstring path = DxcBeside();
+  if (where) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), static_cast<int>(path.size()), nullptr, 0, nullptr, nullptr);
+    where->assign(static_cast<size_t>(std::max(n, 0)), '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, path.c_str(), static_cast<int>(path.size()), where->data(), n, nullptr, nullptr);
+  }
+  if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {  // (said without trying: the usual case, a file not copied)
+    if (why) *why = "the file is not there";
+    return false;
+  }
+  if (DxcCreate()) return true;
+  if (why) {
+    char buf[96];
+    snprintf(buf, sizeof buf, "the file is there and Windows could not load it (error %lu)", gDxcLoadError);
+    *why = buf;
+  }
+  return false;
+#else
+#if defined(__APPLE__)
+  if (where) *where = "libdxcompiler.dylib";
+#else
+  if (where) *where = "libdxcompiler.so";
+#endif
+  if (DxcCreate()) return true;
+  if (why) *why = "the system's library search did not find it, or could not load it";
+  return false;
 #endif
 }
 

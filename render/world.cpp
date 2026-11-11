@@ -524,6 +524,8 @@ void World::RestartGame() {
   clearings_.clear();
   decorUnder_.clear();
   propEvents_.clear();
+  propsKept_.clear();  // [devicelost] (the new game's own from here; its looks come with its SetLooks)
+  looksKept_.clear();
   recentProps_.clear();
   recentPruned_ = 0;
   propBeats_.clear();
@@ -619,7 +621,113 @@ void World::RestartGame() {
   dyingDrawn = 0;
 }
 
+// [devicelost] (world.h)
+void World::Keep(Kept* out, uint32_t tick) const {
+  *out = Kept{};
+  if (!haveMap_) return;
+  out->valid = true;
+  out->tick = tick;
+  out->looks = looksKept_;
+  // (the ground only where the game changed it: else the map's own, which the world made anew has)
+  if (heightsAtOpen_.size() == map.heights.size() && map.heights != heightsAtOpen_) out->heights = map.heights;
+  out->props.reserve(propsKept_.size());
+  for (const auto& [key, event] : propsKept_) {
+    Kept::Prop p;
+    p.event = event;
+    if (event.mapIndex < 0)
+      if (auto made = madeProps_.find(event.id); made != madeProps_.end()) p.glowKnown = made->second.glowKnown;
+    out->props.push_back(std::move(p));
+  }
+  std::sort(out->props.begin(), out->props.end(), [](const Kept::Prop& a, const Kept::Prop& b) {
+    return a.event.tick != b.event.tick ? a.event.tick < b.event.tick : a.event.id < b.event.id;
+  });
+  out->propsPending.assign(propEvents_.begin(), propEvents_.end());
+  effects.Keep(&out->effects, tick);
+  out->wet = wet;
+  out->snowLying = snowLying;
+  out->selected = selected;
+  out->hover = hover;
+  out->hoverKind = hoverKind;
+  out->ghosts = ghosts;
+  out->lines = lines;
+  out->rings = rings;
+  out->userDecals = userDecals;
+  out->placed = placed;
+  out->borders = borders;
+  out->orderTextures = orders.textures;
+  out->orderLegs = orders.legs;
+  out->orderMarks = orders.marks;
+  out->orderNumbers[0] = orders.lineScale;
+  out->orderNumbers[1] = orders.curveSmoothness;
+  out->orderNumbers[2] = orders.markMinPixels;
+  out->orderNumbers[3] = orders.markMaxPixels;
+  out->orderSegments = orders.curveSegments;
+  out->rangeGroups = ranges.groups;
+  out->rangeZoom[0] = ranges.zoomNear;
+  out->rangeZoom[1] = ranges.zoomFar;
+  std::copy(std::begin(playable), std::end(playable), out->playable);
+  out->iconColors = iconColors;
+  out->lifeBars = lifeBars;
+  out->workBars = workBars;
+  out->unexplored = unexplored;
+  out->iconsOn = iconsOn;
+  out->selectionMarks = selectionMarks;
+}
+
+void World::Give(const Kept& kept) {
+  if (!haveMap_ || !kept.valid) return;
+  if (!kept.looks.empty()) SetLooks(kept.looks);
+  // the ground as the game left it (drawn so by the next Begin, as RestartGame's; the ray tracing scene's ground from it)
+  if (kept.heights.size() == map.heights.size() && kept.heights != map.heights) {
+    map.heights = kept.heights;
+    heightsRestored_ = true;
+    raysGround_ = false;
+  }
+  // the scenery: each prop as the simulation last had it, laid at once (not at its beat: those are long past); a wreck
+  // keeps the beat it was made at, by which it cools
+  for (const Kept::Prop& p : kept.props) {
+    ApplyPropEvent(p.event);
+    if (p.event.mapIndex < 0 && p.event.kind != FramePropEvent::Destroy)
+      if (auto made = madeProps_.find(p.event.id); made != madeProps_.end()) made->second.glowKnown = p.glowKnown;
+  }
+  recentProps_.clear();  // ([scars] none of them is of this moment: a flash on one is judged as on any other thing)
+  recentPruned_ = 0;
+  propsChanged = propsGone = 0;  // (counted since the map was opened: the game's own changes from here)
+  for (const FramePropEvent& e : kept.propsPending) propEvents_.push_back(e);
+  effects.Queue(std::vector<FrameEffectEvent>(kept.effects));
+  wet = kept.wet;
+  snowLying = kept.snowLying;
+  selected = kept.selected;
+  hover = kept.hover;
+  hoverKind = kept.hoverKind;
+  ghosts = kept.ghosts;
+  lines = kept.lines;
+  rings = kept.rings;
+  userDecals = kept.userDecals;
+  placed = kept.placed;
+  borders = kept.borders;
+  orders.textures = kept.orderTextures;
+  orders.legs = kept.orderLegs;
+  orders.marks = kept.orderMarks;
+  orders.lineScale = kept.orderNumbers[0];
+  orders.curveSmoothness = kept.orderNumbers[1];
+  orders.markMinPixels = kept.orderNumbers[2];
+  orders.markMaxPixels = kept.orderNumbers[3];
+  orders.curveSegments = kept.orderSegments;
+  ranges.groups = kept.rangeGroups;
+  ranges.zoomNear = kept.rangeZoom[0];
+  ranges.zoomFar = kept.rangeZoom[1];
+  std::copy(std::begin(kept.playable), std::end(kept.playable), playable);
+  iconColors = kept.iconColors;
+  lifeBars = kept.lifeBars;
+  workBars = kept.workBars;
+  unexplored = kept.unexplored;
+  iconsOn = kept.iconsOn;
+  selectionMarks = kept.selectionMarks;
+}
+
 void World::SetLooks(const std::vector<BlueprintLook>& looks) {
+  if (&looks != &looksKept_) looksKept_.insert(looksKept_.end(), looks.begin(), looks.end());  // [devicelost] (Keep)
   iconKinds_.clear();  // (what was looked up before may look different now)
   unitModels_.clear();
   shotModels_.clear();
@@ -2756,6 +2864,21 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     }
   }
   if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
+  {  // [devicelost] (Keep) what the simulation last said of this prop, for a world made anew
+    const uint64_t key = ofMap ? (1ull << 32) | static_cast<uint32_t>(e.mapIndex) : e.id;
+    if (e.kind == FramePropEvent::Destroy && !ofMap) {
+      propsKept_.erase(key);  // (one made in the game and gone again: nothing to say of it)
+    } else {
+      auto [it, fresh] = propsKept_.try_emplace(key);
+      const uint32_t madeAt = it->second.tick;
+      it->second = e;
+      // (one made in the game: told again as its making, at the beat it was made - a wreck's age is by it)
+      if (!ofMap && e.kind != FramePropEvent::Destroy) {
+        it->second.kind = FramePropEvent::Create;
+        if (!fresh) it->second.tick = madeAt;
+      }
+    }
+  }
   if (ofMap) ForgetUnderfoot(static_cast<uint32_t>(e.mapIndex));  // [simunder] (the game's change first: it is its prop)
   // (out of its square's list first; it is listed again where it is now)
   if (ofMap) {

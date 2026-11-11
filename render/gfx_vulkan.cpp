@@ -648,6 +648,16 @@ class VulkanDevice final : public Device {
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
   bool RayTracing() const override { return rayTracing_; }
+  // [devicelost] (gfx.h)
+  bool Lost() const override { return lost_.load(std::memory_order_acquire); }
+  std::string LostReason() const override {
+    std::lock_guard<std::mutex> lock(lostMutex_);
+    return lostReason_;
+  }
+  bool LoseForTest() override {  // (the next submit's or present's result taken for VK_ERROR_DEVICE_LOST: Seen)
+    loseNext_.store(true, std::memory_order_release);
+    return true;
+  }
   Structure CreateGeometry(const GeometryPart* parts, int count) override;
   void BuildScene(Structure* scene, const SceneInstance* instances, uint32_t count) override;
   bool RefitScene(Structure* scene, const SceneInstance* instances, uint32_t count, bool rebuild) override;  // [cardcost]
@@ -989,6 +999,23 @@ class VulkanDevice final : public Device {
   uint32_t swapIndex_ = 0;
   bool waitAcquired_ = false;
   bool inFrame_ = false, rendering_ = false;
+  // [devicelost] The device's loss noticed and said (gfx.h, Device::Lost): Vulkan says it by VK_ERROR_DEVICE_LOST from the
+  // calls that hand work to the card or wait for it, so the result of every queue's submit, present, acquire and fence's
+  // wait goes through Seen, which gives the result back as it came. The first time one is VK_ERROR_DEVICE_LOST the reason
+  // is kept and one line said. `mayLose`: a submit or a present, whose result LoseForTest's switch turns into a loss once
+  // (Vulkan has no call that loses a device: with it the noticing and what the host then does are tried, not a real
+  // loss; the device goes on working, and the result goes back to the caller as it really was). Any thread (the
+  // presenter's present among them).
+  VkResult Seen(VkResult r, const char* where, bool mayLose = false) {
+    bool made = false;
+    if (mayLose && loseNext_.load(std::memory_order_relaxed)) made = loseNext_.exchange(false);
+    if (r == VK_ERROR_DEVICE_LOST || made) NoteLost(where, made);
+    return r;
+  }
+  void NoteLost(const char* where, bool made);
+  std::atomic<bool> lost_{false}, loseNext_{false};
+  mutable std::mutex lostMutex_;
+  std::string lostReason_;
   // the pass begun: its attachments, and whether it has begun drawing (begun again after a copy in its
   // middle, or without its depth for a pipeline drawn without, it loads what is there)
   uint32_t passColor_ = 0, passDepth_ = 0;
@@ -2125,7 +2152,7 @@ void VulkanDevice::Presenter() {
       job = presentJobs_.front();
       presentJobs_.pop_front();
     }
-    vkWaitForFences(device_, 1, &job.fence, VK_TRUE, UINT64_MAX);
+    Seen(vkWaitForFences(device_, 1, &job.fence, VK_TRUE, UINT64_MAX), "a wait for the card");
     const double spacing = pacing_.Ready(Now());
     if (job.between >= 0) {
       waiter.Until(lastShown_ + spacing);
@@ -2162,7 +2189,7 @@ void VulkanDevice::Show(uint32_t image, double* at, double readAt) {
   VkResult r;
   {
     std::lock_guard<std::mutex> lock(swapMutex_);
-    r = vkQueuePresentKHR(presentQueue_, &pi);
+    r = Seen(vkQueuePresentKHR(presentQueue_, &pi), "a present", true);
   }
   if (r != VK_SUCCESS) chainStale_ = true;  // (out of date or suboptimal: a new chain before the next frame)
   if (id) {
@@ -2179,7 +2206,7 @@ bool VulkanDevice::Acquire(VkSemaphore semaphore, uint32_t* image) {
     VkResult r;
     {
       std::lock_guard<std::mutex> lock(swapMutex_);
-      r = vkAcquireNextImageKHR(device_, swapchain_, 0, semaphore, VK_NULL_HANDLE, image);
+      r = Seen(vkAcquireNextImageKHR(device_, swapchain_, 0, semaphore, VK_NULL_HANDLE, image), "taking the window's next picture");
     }
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
       if (r == VK_SUBOPTIMAL_KHR) chainStale_ = true;
@@ -2298,7 +2325,7 @@ void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture, bool later) {
   si.pWaitDstStageMask = &wait;
   si.commandBufferCount = 1;
   si.pCommandBuffers = &cmd;
-  vkQueueSubmit(queue_, 1, &si, f.done);
+  Seen(vkQueueSubmit(queue_, 1, &si, f.done), "a queue's submit", true);
   inFrame_ = false;
   if (capture) {
     capture->clear();
@@ -2308,7 +2335,7 @@ void VulkanDevice::EndFramePhoto(std::vector<uint8_t>* capture, bool later) {
       laterNumber_ = frameNumber_;
       laterBytes_ = bytes;
     } else if (reading) {
-      vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+      Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");
       capture->resize(static_cast<size_t>(bytes));
       std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
     }
@@ -2404,7 +2431,7 @@ void VulkanDevice::EndFrameGenerating(std::vector<uint8_t>* capture, bool presen
   si.pCommandBuffers = &cmd;
   si.signalSemaphoreCount = n;
   si.pSignalSemaphores = signals;
-  vkQueueSubmit(queue_, 1, &si, f.done);
+  Seen(vkQueueSubmit(queue_, 1, &si, f.done), "a queue's submit", true);
   if (latency_ || measureLatency) latencySlots_[cur_].handed = Now(), latencySlots_[cur_].order = ++handedCount_;
   inFrame_ = false;
   if (frameImage >= 0) {  // handed to the presenter, which shows them once the card has finished the frame
@@ -2416,7 +2443,7 @@ void VulkanDevice::EndFrameGenerating(std::vector<uint8_t>* capture, bool presen
     presentWake_.notify_one();
   }
   if (capture) {
-    vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+    Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");
     capture->resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4);
     std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
   }
@@ -2548,7 +2575,7 @@ void VulkanDevice::AcquireImage(Frame& f) {
       if (!CreateSwapchain(&error)) fprintf(stderr, "render: %s\n", error.c_str());
     }
     if (!swapchain_) break;
-    const VkResult r = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &swapIndex_);
+    const VkResult r = Seen(vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &swapIndex_), "taking the window's next picture");
     if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
       imageHeld_ = waitAcquired_ = true;
       chainStale_ = r == VK_SUBOPTIMAL_KHR;
@@ -2588,10 +2615,10 @@ void VulkanDevice::LimitFrames(bool justInTime) {
     }
   } else if (held && !presentWait_) {
     // (the frame before the last)
-    vkWaitForFences(device_, 1, &frames_[(cur_ + 1) % kFrames].done, VK_TRUE, 100000000ull);
+    Seen(vkWaitForFences(device_, 1, &frames_[(cur_ + 1) % kFrames].done, VK_TRUE, 100000000ull), "a wait for the card");
   }
   Frame& f = frames_[cur_];
-  vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);  // (done already: its acquire semaphore free again)
+  Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");  // (done already: its acquire semaphore free again)
   AcquireImage(f);
   earlyAcquired_ = imageHeld_;
   const double t2 = Now();
@@ -2746,7 +2773,7 @@ VkCommandBuffer VulkanDevice::UploadCommands() {
   Upload& u = uploads_[upload_];
   if (!uploadOpen_) {
     // (the batch's commands and staging are free again once the card is done with its last use)
-    vkWaitForFences(device_, 1, &u.done, VK_TRUE, UINT64_MAX);
+    Seen(vkWaitForFences(device_, 1, &u.done, VK_TRUE, UINT64_MAX), "a wait for the card");
     for (auto& s : u.staging) {
       vkDestroyBuffer(device_, s.first, nullptr);
       memory_.Free(s.second);
@@ -2838,7 +2865,7 @@ void VulkanDevice::FlushUploads() {
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   si.commandBufferCount = 1;
   si.pCommandBuffers = &u.cmd;
-  vkQueueSubmit(queue_, 1, &si, u.done);
+  Seen(vkQueueSubmit(queue_, 1, &si, u.done), "a queue's submit", true);
   upload_ = (upload_ + 1) % kUploadBatches;
   uploadOpen_ = false;
   uploadBytes_ = 0;
@@ -4047,6 +4074,7 @@ void VulkanDevice::OpenPipelineCache() {
 }
 
 void VulkanDevice::SavePipelineCache() {
+  if (lost_.load(std::memory_order_acquire)) return;  // [devicelost] (a lost device's cache is not written over the kept file)
   if (!pipelineCache_ || !pipelineCacheGrew_ || shaderCache_.empty()) return;
   pipelineCacheGrew_ = false;
   size_t size = 0;
@@ -4097,13 +4125,24 @@ void VulkanDevice::ReleaseGeneral() {
   general_.clear();
 }
 
+// [devicelost] (the class says what this is)
+void VulkanDevice::NoteLost(const char* where, bool made) {
+  std::lock_guard<std::mutex> lock(lostMutex_);
+  if (lost_.load(std::memory_order_acquire)) return;
+  lostReason_ = std::string("the graphics device is lost (VK_ERROR_DEVICE_LOST") +
+                (made ? ", made up by the viewer's test switch: the device itself still works" : ": the driver was reset or the card stopped answering") +
+                "); noticed at: " + where;
+  lost_.store(true, std::memory_order_release);
+  fprintf(stderr, "render: Vulkan: %s. Nothing more is drawn with this device; the host makes a new one\n", lostReason_.c_str());
+}
+
 void VulkanDevice::BeginFrame(const float clearColor[4]) {
   if (wantGenerating_ != generating_) SwitchFrameGeneration();  // (asked for during the frame before)
   if (wantLatency_ != latency_) SwitchLatency();
   // (the latency limiter, where the host did not wait before its input: its wait here)
   if (latency_ && !generating_ && !earlyAcquired_ && !imageHeld_ && !PhotoNow()) LimitFrames(false);  // (not for a photo's frames)
   Frame& f = frames_[cur_];
-  vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+  Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");
   RecycleUploads();  // [vkpresent]
   if (generating_) WaitPresented(cur_);  // (the presenter no longer waits on this slot's fence)
   if (latency_ && latencySlots_[cur_].timed) TakeWork();  // (as Direct3D 12's: the slot's frame before, done now)
@@ -5464,7 +5503,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   si.pCommandBuffers = &cmd;
   si.signalSemaphoreCount = static_cast<uint32_t>(signals.size());
   si.pSignalSemaphores = signals.empty() ? nullptr : signals.data();
-  vkQueueSubmit(queue_, 1, &si, f.done);
+  Seen(vkQueueSubmit(queue_, 1, &si, f.done), "a queue's submit", true);
   if (latency_ || measureLatency) latencySlots_[cur_].handed = Now(), latencySlots_[cur_].order = ++handedCount_;
   if (show) {
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -5481,7 +5520,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
       pid.pPresentIds = &id;
       pi.pNext = &pid;
     }
-    const VkResult r = vkQueuePresentKHR(queue_, &pi);
+    const VkResult r = Seen(vkQueuePresentKHR(queue_, &pi), "a present", true);
     if (r != VK_SUCCESS) chainStale_ = true;  // (out of date or suboptimal: a new chain before the next frame)
     imageHeld_ = false;
     if (id) {
@@ -5492,7 +5531,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
   PresentExtras();  // [head2]
   for (ExtraWindow& w : extras_)  // ([head2] CaptureInWindow: the frame waited for, the picture copied out)
     if (w.reading) {
-      vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+      Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");
       w.capture->resize(static_cast<size_t>(w.width) * static_cast<size_t>(w.height) * 4);
       std::memcpy(w.capture->data(), readbackMemory_.mapped, w.capture->size());
       w.reading = false;
@@ -5500,7 +5539,7 @@ void VulkanDevice::EndFrame(std::vector<uint8_t>* capture, bool present) {
     }
   inFrame_ = false;
   if (capture) {
-    vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX);
+    Seen(vkWaitForFences(device_, 1, &f.done, VK_TRUE, UINT64_MAX), "a wait for the card");
     capture->resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4);
     std::memcpy(capture->data(), readbackMemory_.mapped, capture->size());
   }
@@ -5691,7 +5730,7 @@ bool VulkanDevice::ShowInWindow(int window, Texture picture) {
   }
   if (!w->chain || w->extent.width != static_cast<uint32_t>(w->width) || w->extent.height != static_cast<uint32_t>(w->height)) return false;
   if (!w->held) {
-    const VkResult r = vkAcquireNextImageKHR(device_, w->chain, 0, w->acquired[cur_], VK_NULL_HANDLE, &w->image);
+    const VkResult r = Seen(vkAcquireNextImageKHR(device_, w->chain, 0, w->acquired[cur_], VK_NULL_HANDLE, &w->image), "taking the window's next picture");
     if (r == VK_ERROR_OUT_OF_DATE_KHR) w->stale = true;
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return false;  // (none free now: nothing drawn for it)
     if (r == VK_SUBOPTIMAL_KHR) w->stale = true;
@@ -5758,7 +5797,7 @@ void VulkanDevice::PresentExtras() {
     pi.swapchainCount = 1;
     pi.pSwapchains = &w.chain;
     pi.pImageIndices = &w.image;
-    const VkResult r = vkQueuePresentKHR(queue_, &pi);
+    const VkResult r = Seen(vkQueuePresentKHR(queue_, &pi), "a present", true);
     if (r != VK_SUCCESS) w.stale = true;
     w.held = false;
     w.show = {};

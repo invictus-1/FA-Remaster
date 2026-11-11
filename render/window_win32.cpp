@@ -210,4 +210,13 @@ std::unique_ptr<Window> Window::Create(const char* title, int width, int height,
   return w;
 }
 
+void ShowMessage(const char* title, const std::string& text) {  // [nodxc] (window.h)
+  const auto wide = [](const std::string& s) {
+    std::wstring out(static_cast<size_t>(MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0)), L'\0');
+    if (!out.empty()) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, out.data(), static_cast<int>(out.size()));
+    return out;
+  };
+  MessageBoxW(nullptr, wide(text).c_str(), wide(title ? title : "").c_str(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+}
+
 }  // namespace render

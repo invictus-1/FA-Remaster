@@ -44,4 +44,9 @@ class Window {
   virtual void SetTitle(const std::string& title) = 0;
 };
 
+// [nodxc] A message the person at the machine must see before the program ends, where it has no window of its own to
+// say it in (the shader compiler missing: before any window is made): the system's own dialog with the text and one
+// button; returns when it is closed. For runs a person watches only: an automatic run says it on stderr and ends.
+void ShowMessage(const char* title, const std::string& text);
+
 }  // namespace render

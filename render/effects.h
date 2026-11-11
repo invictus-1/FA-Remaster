@@ -62,6 +62,16 @@ class Effects {
     out->swap(hits_);
     hits_.clear();
   }
+  // [devicelost] What the scripts made that still lasts, as the events that made it, for a world made anew after the
+  // graphics device was lost (World::Keep; the simulation says each thing once and cannot say it again): every effect
+  // that hangs on something still there (a unit's running emitters, its beams, an adjacency's links, a shot's trail) with
+  // the calls that changed it (the last of each kind), every mark laid on the ground for good (the pads under buildings,
+  // the deposits' marks) and every mark laid for a time that has not run out (scorches, craters), and the events not yet
+  // due. Queue them on the new world's effects. The hanging effects begin at `tick` (an emitter started "then" would
+  // throw out at once all it should have thrown since); the marks keep their own beat, so they fade and go when they
+  // would have. Not kept: what was made at a place and plays out there (an explosion's emitters under way), the prints
+  // under feet and treads, flashes of light. Reads this object alone: also right when the device is lost.
+  void Keep(std::vector<FrameEffectEvent>* out, uint32_t tick) const;
   // Does one of the game's own effects hang on that entity (so that no stand-in is needed for it)?
   bool OnEntity(uint32_t entity) const { return hanging_.count(entity) != 0; }
 
@@ -134,8 +144,12 @@ class Effects {
     bool unlistedUnseen = false;  // [fogbeam] made on an entity in no list where the army did not see (hidden while so)
     bool original = false;     // (buildfx) made in the original effects' look whatever the world's (the stand's right side)
     float beamLength = -1e30f, beamThickness = -1e30f;  // (unitsfx) what SetBeamParam set (below -1e29: not set; exhausts.h)
+    // [devicelost] (Keep) the event that made it and the calls that changed it since, the last of each kind (the events
+    // themselves, moved here when they had taken effect: nothing is copied); empty for one that hangs on nothing
+    std::vector<FrameEffectEvent> made;
   };
   void Apply(const FrameEffectEvent& event, const Frame& frame);
+  void Remember(FrameEffectEvent&& event);  // [devicelost] (an event that has taken effect, kept where it made something lasting)
   void End(uint32_t id);
   // Where an entity's bone is in the frame. False when the entity is not in it.
   // `model`: where the unit's model is remembered between calls (may be null).
@@ -175,6 +189,10 @@ class Effects {
   std::unordered_map<uint32_t, Effect> effects_;
   // the decals a script laid for good, by the effect's number: taken away when it destroys them
   std::unordered_map<uint32_t, uint32_t> decalOf_;
+  // [devicelost] (Keep) the events that laid them; and those that laid marks for a time (in the order laid; the ones
+  // run out dropped from the front now and then)
+  std::unordered_map<uint32_t, FrameEffectEvent> decalMade_;
+  std::deque<FrameEffectEvent> timedMade_;
   std::unordered_map<std::string, int> said_;
   std::unordered_map<uint32_t, int> hanging_;  // entity -> how many effects hang on it
   // this frame: what the glowing things on each shot come to (the shot's place in the frame's list ->

@@ -133,6 +133,9 @@ class LoadingDevice final : public gfx::Device {
   void Destroy(gfx::Texture texture) override;
   void Destroy(gfx::Pipeline pipeline) override;
   bool RayTracing() const override { return real_->RayTracing(); }
+  bool Lost() const override { return real_->Lost(); }  // [devicelost] (the device's own, gfx.h)
+  std::string LostReason() const override { return real_->LostReason(); }
+  bool LoseForTest() override { return real_->LoseForTest(); }
   gfx::Structure CreateGeometry(const gfx::GeometryPart* parts, int count) override;
   std::unique_ptr<Prepared> DescribeGeometry(const gfx::GeometryPart* parts, int count) override;  // [warmtarget]
   void SizeGeometry(Prepared* prepared) override { real_->SizeGeometry(prepared); }

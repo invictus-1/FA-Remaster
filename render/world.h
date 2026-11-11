@@ -1612,7 +1612,65 @@ class World {
   bool streamWater = false;
   StreamWater streams;
 
+  // [devicelost] (Chris, 2026-11-09, the review's A4) What of a game this world keeps when its graphics device is lost and
+  // it is made anew on another: the game itself is the simulation's and is not lost, but the simulation tells a world
+  // of some things once only, and those the world has to carry over itself. Keep reads this world's own memory alone
+  // (nothing of the device: right also when that is lost); Give lays it on a world of the same map just opened, before
+  // its first frame of the game. `tick`: the beat last shown.
+  //   Carried over: how the blueprints look (SetLooks); the ground as the game laid it flat; the scenery as it stands
+  //   (wreckage where it lies, burnt and felled trees, what was reclaimed gone; a wreck's age, so one still hot goes on
+  //   cooling); the scripts' effects that last (Effects::Keep: what hangs on units, the pads under buildings, the
+  //   deposits' marks, scorches and craters not yet run out); how wet the ground is and how much snow lies; the
+  //   interface's lists and the switches WorldPicture sets (selection, hover, ghosts, shapes, ranges, order lines, meshes,
+  //   decals, borders, the playable part, the icons' colours; life bars, work bars, unexplored, icons, selection marks).
+  //   Not carried over, because it lives on the card or is the renderer's own doing over the frames, and begun afresh:
+  //   the battle scars burnt into the ground and the burnt plants, tracks and dents in the ground and in the snow, the
+  //   marks on units (hits, dirt, snow on them), rocks' scars, debris lying, the smoke, fire and dust in the air (what
+  //   still burns smokes again), explosions under way, ripples and surf, the lamps' fading, and what the picture keeps
+  //   from frame to frame (the temporal upscaler, the light in the air, the clouds, the bounce light: settled again
+  //   within a few seconds). The hour and the weather themselves come from the game's clock and its seed: the same.
+  //   A host's own switches on the world are the host's to set again, as after WorldPicture::SwapMap.
+  struct Kept {
+    bool valid = false;
+    uint32_t tick = 0;
+    std::vector<BlueprintLook> looks;
+    std::vector<uint16_t> heights;
+    struct Prop {
+      FramePropEvent event;   // (what the simulation last said of it; one made in the game: as its making, at its own beat)
+      bool glowKnown = true;  // ([fogglow] a wreck's)
+    };
+    std::vector<Prop> props;                   // in the order of their beats
+    std::vector<FramePropEvent> propsPending;  // (told and not yet due)
+    std::vector<FrameEffectEvent> effects;
+    float wet = 0, snowLying = 0;
+    std::unordered_set<uint32_t> selected;
+    uint32_t hover = 0xffffffffu;
+    int hoverKind = 0;
+    std::vector<Ghost> ghosts;
+    std::vector<Line> lines;
+    std::vector<Ring> rings;
+    std::vector<UserDecal> userDecals;
+    std::vector<PlacedMesh> placed;
+    std::vector<std::string> borders, orderTextures;
+    std::vector<OrderLeg> orderLegs;
+    std::vector<OrderMark> orderMarks;
+    float orderNumbers[4] = {1, 35, 7, 100};  // (lineScale, curveSmoothness, markMinPixels, markMaxPixels)
+    int orderSegments = 32;
+    std::vector<RangeGroup> rangeGroups;
+    float rangeZoom[2] = {10, 1000};
+    float playable[4] = {0, 0, 0, 0};
+    std::vector<Vec3> iconColors;
+    bool lifeBars = false, workBars = true, unexplored = false, iconsOn = true, selectionMarks = true;
+  };
+  void Keep(Kept* out, uint32_t tick) const;
+  void Give(const Kept& kept);
+
  private:
+  // [devicelost] (Keep) the looks given so far (SetLooks hands them on and the simulation gives them once), and what the
+  // simulation last said of each prop it changed (by its entity's number; a map's own prop: 2^32 + its place in the map's
+  // list), kept as each change takes hold
+  std::vector<BlueprintLook> looksKept_;
+  std::unordered_map<uint64_t, FramePropEvent> propsKept_;
   bool streamNow_ = false;  // [stream] (streams drawn as water this frame)
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
   Season seasonOpen_ = Season::Summer;  // [seasons]
