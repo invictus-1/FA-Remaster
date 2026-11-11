@@ -70,6 +70,10 @@ class Horizon {
   bool ice = true, fog = true, showers = true, shadows = true;
   // The look (the viewer's --horizon-look name=value,...: Set).
   float floeSize = 16;        // the large floes' cells (world units across)
+  // [snowsur] How far out the floes begin at least (world units; 0: a few units out, as before). The world sets it for a
+  // map with a sculpted surround (World::surroundIceFrom): beside the map the sea past the edge is then open as the
+  // map's own winter sea is, and the floes and the pack ice lie far out, where the land beyond is lost in the haze.
+  float iceFrom = 0;
   float iceDrift = 0.08f;     // how fast the ice drifts with the wind (world units a second)
   float fogHeight = 14;       // how high a bank's middle stands over the water (world units)
   float fogThickness = 1;     // what the banks' density is multiplied by
