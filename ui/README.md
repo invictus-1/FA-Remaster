@@ -61,9 +61,25 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
          [--replay-out <prefix>]
          [--no-sound] [--fullscreen] [--backdrop | --no-backdrop]
          [--day-weather | --day <hour>] [--day-length <seconds>] [--weather <kind>] [--no-weather]
-         [--maps <folder>] [--remasters <folder>] [--own <folder>]
+         [--maps <folder>] [--remasters <folder>] [--own <folder>] [--shader-cache <folder>]
+         [--retest <list.md>]
          [-- <the game's own arguments>]
 ```
+- The re-test panel (ours; Chris's pick of 2026-11-09, "What's new: try it"), only in a program started with
+  `--retest <list.md>`: without the option nothing of it exists (no key action, no console command,
+  `moho64ui_RetestList()` is nil). The list is the Markdown file the engine chat writes for a test session: every
+  `## heading` a group, every row of a table under it an item, the columns taken by their names (`What` or `Item`;
+  `How to see it` or `How`, in a two-column table the other column; an optional `Where` naming the screens: menu,
+  lobby, game, replay, options, score; other columns left out; tables without a what-column skipped). It is read at
+  the start and again when the file changes, and never written. A small window of the game's own kind (Ctrl-Shift-R
+  at first, the key action "Re-test list"; the console's `remaster_retest`) shows the items of the screen the player
+  is on, or of another by its drop-down, each with Pass / Fail / Skip and a note line, and the count on top. Every
+  verdict is written at once to `<list>.verdicts.md` beside the list (a temporary file, then a rename), a table
+  `| Verdict | What | Note | When | Build |` under the list's headings; it is read back at the next start, and a
+  verdict whose row has left the list stays in it. The window is open at a first start, comes back over each screen
+  that is made (the menu, a game, the menu again) if it was open, and keeps its place and its drop-down's choice in
+  the profile (`user/retest.h`, `data/lua/retest.lua`, `data/hook/lua/keymap`; `tests/retest.lua` with
+  `tests/retest_list.md`).
 - The log and the menu's notice line (ours; Chris's pick of 2026-11-09). A run with a window always writes a log:
   the one `--log` names, else `logs/moho64ui_<date>_<time>.log` beside the preferences (the engine's
   `LogOpenDefault`: its first line the build, the newest ten kept, each with its crash dump). A fault leaves a small

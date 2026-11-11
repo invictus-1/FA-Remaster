@@ -258,6 +258,10 @@ class UiManager {
   // to control->DragRelease. A script dragger that was active is cancelled.
   void PostEngineDragger(lua_State* L, Control* control, int key);
   std::vector<Control*> inputCapture;      // the capture stack; the last entry gets the input
+  // Ours, not the original's (the re-test panel, user/retest.h; set only in a program started with --retest): a control
+  // whose own controls get the mouse before the capture stack does, so that the panel can be clicked while a dialog
+  // of the game holds the input (the Options dialog, the score screen: two of the screens its items are for).
+  Control* overCapture = nullptr;
   void Forget(Control* c);                 // a control died: drop it from focus and capture
   // Give the keyboard focus to a control or to none (MAUI_SetKeyboardFocus, FA exe 0x79cc10): the
   // control that had it until now hears self:OnKeyboardFocusChange(), also when it is given the

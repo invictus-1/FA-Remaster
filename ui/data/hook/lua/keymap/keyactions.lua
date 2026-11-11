@@ -60,3 +60,12 @@ keyActions['remaster_radial_ping'] = {
     action = 'UI_Lua import("/moho64ui/lua/radialping.lua").Open()',
     category = 'ui',
 }
+-- The re-test panel, open or closed (Chris's pick of 2026-11-09; its window /moho64ui/lua/retest.lua, the console
+-- command remaster_retest: ui/user/keymap.cpp, the list and the verdicts ui/user/retest.h). Only in a program started
+-- with --retest <list.md>: without it the action does not exist (nothing of the panel is in a shipped build's way).
+if rawget(_G, 'moho64ui_RetestList') and moho64ui_RetestList() then
+    keyActions['remaster_retest'] = {
+        action = 'remaster_retest',
+        category = 'ui',
+    }
+end

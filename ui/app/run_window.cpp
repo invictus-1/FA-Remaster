@@ -232,7 +232,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   // A full screen opens on the screen the player's Primary Adapter chose (DisplayMode::screen).
   Window::Screen startScreen;
   const bool onScreen = fullScreen && ScreenOf(Display().screen, &startScreen);
-  if (!window.Create(width, height, "FA Remastered - interface", cb, fullScreen, !hooks.opened, onScreen ? &startScreen : nullptr)) {
+  static const char* const kTitle = "FA Remastered - interface";
+  if (!window.Create(width, height, kTitle, cb, fullScreen, !hooks.opened, onScreen ? &startScreen : nullptr)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
@@ -240,6 +241,8 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     hooks.opened(window.Handle());
     window.Show();
   }
+  // (the window's title for the host's own word while no frame can be drawn: WindowHooks::title)
+  if (hooks.title) hooks.title([&window](const std::string& title) { window.SetTitle(title.empty() ? std::string(kTitle) : title); });
   NoteWindowScreen(window);
   // [head2] The second head's window (DisplayMode::heads, main.cpp's head rule; docs/ui-dualscreen.md 3.3): owned by
   // the main one and never activated (the keys stay with the main window: the original's keys are global), full screen
@@ -774,6 +777,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     if (hooks.secondClosing) hooks.secondClosing();  // (the renderer's second window goes before window 2 does)
     window.partner = nullptr;
   }
+  if (hooks.title) hooks.title(nullptr);  // (the window goes with this function: nobody sets its title any more)
   LogDrawProfile();
   return frames;
 }

@@ -69,6 +69,9 @@ Control* TopmostIn(Control* root, float x, float y);
 // those, the capturing control itself; the capture stack is one for every head (0x10bdbac, 0x7a4a77).
 Control* Target(UiManager& ui, const UiEvent& e) {
   if (!ui.inputCapture.empty()) {
+    // (ours: the re-test panel under the cursor comes before the capture, control.h overCapture; head 0 only, where it is)
+    if (ui.overCapture && e.head == 0)
+      if (Control* own = TopmostIn(ui.overCapture, e.x, e.y)) return own;
     Control* capture = ui.inputCapture.back();
     Control* hit = TopmostIn(capture, e.x, e.y);
     return hit ? hit : capture;

@@ -11,6 +11,7 @@
 
 #include "user/keymap.h"
 #include "user/notices.h"
+#include "user/retest.h"
 
 #include "core/log.h"
 #include "core/vfs.h"
@@ -185,6 +186,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterUserClasses(L);
   RegisterPrefsBindings(L);
   RegisterNoticeBindings(L);
+  RegisterRetestBindings(L);
   RegisterBasicBindings(L);
   RegisterControlBindings(L);
   RegisterFrameBindings(L);
@@ -445,11 +447,14 @@ void UserState::GameLoaded() {
   lua_pushboolean(L, replay ? 1 : 0);
   CallProvider("CreateGameInterface", 1);
   gameInterface = true;
+  RetestScreenMade(L);  // (ours, only with --retest: the re-test panel made again over the game's screen if it was open)
 }
 
 bool UserState::StartFrontEnd() {
   uiState_ = "frontend";
-  return CallUiMain("StartFrontEndUI");
+  const bool ok = CallUiMain("StartFrontEndUI");
+  RetestScreenMade(state_->L());  // (ours, only with --retest: the re-test panel over the front end if it was open)
+  return ok;
 }
 
 double UserState::clockNow() const {

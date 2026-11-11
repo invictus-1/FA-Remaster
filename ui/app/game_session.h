@@ -347,6 +347,60 @@ class GameSession {
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
 
+  // --- The graphics device lost, and every picture made anew (the renderer's request 71 B, render/REQUESTS.md; its
+  // calls: render/world_picture.h [devicelost]). Ours: nothing of the original's was read for it (its device is of
+  // another kind). ---
+  // The card's device can go while the program runs (the driver reset or updated, the card hanging: Chris's game of
+  // 2026-11-06 froze so). The game is the simulation's and is not lost; the renderer's pictures notice it after a
+  // frame and can make everything anew. This is the program's side of it.
+  // ServeDevice: once a frame, between two frames, on the thread that draws (PresentToWindow calls it after the
+  // frame is shown; the host's loop does where the window's picture does not show the frame: without a window, and
+  // the read-back way). While no picture says its device is lost it costs one call on the picture and one flag read.
+  // When one does: the reason logged once; the window's title says so (`windowTitle`); EVERY picture of the program
+  // lets go of the lost device first, each on the thread that draws it (the window's and a game's own here, the menu
+  // background's own on its thread: Backdrop::LetGoOfLostDevice), because Direct3D 12 keeps one device a card for
+  // the whole program and none can make a new one while another still holds the lost one; then each is made anew
+  // (RecoverDevice: 8 to 20 seconds with the window not drawn; the times go to the log). After it, as after SwapMap:
+  // the switches this program sets on the world itself are set again on the new one (the game's sky and the player's
+  // looks, the menu's evening and the flight's air), the whole interface layer, the second window's layer and the
+  // card's picture over the window are handed over again, and a photo that was being made is said to have failed.
+  // NOT again: GameStarted, Beat, the picture's own settings, the selection, the ranges, the order lines (the
+  // renderer keeps them). The simulation's beats and the sounds go on as they do.
+  // If no device can be made: tried kDeviceTries times, kDevicePauseMs apart, then the program closes in order
+  // (`closeProgram` with one sentence: the log, and a message box where there is a window); the same when the device
+  // is there again but the map could not be opened again.
+  void ServeDevice();
+  // INFERRED numbers, ours (the request says "try again later or close"): each try is itself the renderer's ten
+  // seconds of waiting for the driver, so the player waits about a minute at most before the program gives up.
+  static constexpr int kDeviceTries = 5;
+  static constexpr int kDevicePauseMs = 2000;
+  // The window's title while a recovery runs (an empty text: the window's own again), set by the host's window
+  // (WindowHooks::title); unset: no window to say it in.
+  std::function<void(const std::string& title)> windowTitle;
+  // The program closed in order after a recovery that failed, with the one sentence for the player; set by the host
+  // (main.cpp: the log, a message box in a window, the loops ended after this frame).
+  std::function<void(const std::string& sentence)> closeProgram;
+  // (checks: --shader-cache <folder>) Where the pictures' devices keep their compiled shaders and the driver's
+  // pipelines (WorldPicture::SetShaderCache; "-": none kept); empty: the player's own folder, as ever. A test that
+  // loses the device on purpose must name a folder of its own: the renderer's first such test wrote a short
+  // pipelines file over the player's (HANDOFF-render, 2026-11-10).
+  std::string shaderCache;
+  // moho64ui_RecoverDevice([mode]) (the host's own function for tests): asks for exactly ServeDevice's recovery at
+  // the next frame boundary. `mode` "check" (or none): though the device is not lost (the renderer makes it anew all
+  // the same); "lose": the device REALLY lost first, this program's own only and nothing of the system's
+  // (WorldPicture::LoseDeviceForTest: ID3D12Device5::RemoveDevice), noticed by the next frame a picture draws; only
+  // with --shader-cache. "fail": the end of a recovery that finds no device, without one being lost: every picture
+  // lets go as in any recovery, RecoverDevice is not called but counted as "no device" kDeviceTries times with the
+  // pauses between, and the program closes in order (`closeProgram`), its pictures still without a device. False with
+  // the reason: no picture to recover, or the mode not allowed.
+  bool AskDeviceRecovery(const std::string& mode, std::string* why);
+  // moho64ui_DeviceState(): a table of how the pictures and their device stand: recoveries (done so far), pending (one
+  // asked and not done), lost, closing, shaderCache, pictures = {window, game, gameOwn, backdrop}, last = what the last
+  // recovery did (ok, wasLost, mode, reason, error, seconds, tries, pictures = {{name, ok, seconds, deviceSeconds,
+  // mapSeconds, deviceTries, props, effects, looks, world, loadBegunAgain}}), world = the switches this program sets on
+  // the game's world as that world has them now, stats = the last frame's numbers, backdrop = the menu background's.
+  void PushDeviceState(lua_State* L);
+
   bool running() const { return sim_ != nullptr; }
   // A launch is loaded the original's way (its session states, WLD_Frame 0x88cae0): the launch call
   // only takes the session's description (the load is then due: LoadDue); the host shows the game's
@@ -685,6 +739,32 @@ class GameSession {
   struct Picture;
   std::unique_ptr<Picture> picture_;
   void DressGamePicture(Picture& pic);
+  // The graphics device lost (ServeDevice): the recovery itself; what this program sets again afterwards on the
+  // window's picture and on a game's world; what the last one did, for the log and the tests.
+  enum class DeviceAsk { None, Check, Lose, Fail };
+  DeviceAsk deviceAsk_ = DeviceAsk::None;  // (moho64ui_RecoverDevice: at the next frame boundary)
+  bool deviceLoseDone_ = false;            // ("lose": the device is lost on purpose, the frame that notices awaited)
+  int deviceRecoveries_ = 0;
+  bool deviceClosing_ = false;  // (a recovery failed: the program is closing, nothing more is tried)
+  struct DeviceResult {
+    struct One {
+      std::string name;
+      bool ok = false;
+      double seconds = 0, deviceSeconds = 0, mapSeconds = 0;
+      int deviceTries = 0, props = 0, effects = 0, looks = 0;
+      bool world = false, loadBegunAgain = false;
+    };
+    bool ok = false, wasLost = false;
+    std::string mode, reason, error;
+    double seconds = 0;
+    int tries = 0;
+    std::vector<One> pictures;
+    float backdropHour = -1, backdropClouds = -1;  // (the menu background's own new world, as dressed)
+  };
+  DeviceResult deviceLast_;
+  void RecoverPictures();
+  void RedressWindowPicture(WindowPicture& wp, bool loadBegunAgain);
+  void RedressGameWorld(Picture& pic);
   std::string failedMenuMap_;  // (a background's map that would not open: not tried again)
   int commandSource_ = 0;
   int pictureFocus_ = -2;    // the focus army the picture was last given (0-based; -2: none yet)

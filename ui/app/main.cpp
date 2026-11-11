@@ -55,6 +55,7 @@
 #include "user/bindings.h"
 #include "user/keymap.h"
 #include "user/notices.h"
+#include "user/retest.h"
 #include "user/user_state.h"
 
 using namespace moho;
@@ -149,6 +150,11 @@ bool originalM28 = false;
 std::string ourMods;
 std::string m28Variant;  // the variant's folder when it is used (else empty)
 bool noWorld = false;             // --no-world: a launched game gets no picture of the world (no graphics device is opened)
+// --shader-cache <folder> (checks): the pictures' devices keep their compiled shaders and the driver's pipelines there
+// ("-": none kept), not in the player's own folder (%LOCALAPPDATA%/FA Remastered/shaders, which every run without it
+// shares). A test that loses the graphics device on purpose (moho64ui_RecoverDevice("lose")) must give one: the
+// renderer's first such test wrote a short pipelines file over the player's.
+std::string shaderCache;
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
@@ -156,6 +162,7 @@ int scanTicks = 0;              // --scan-ticks N: the replay timeline's scan st
 uint32_t fastForward = 0;         // --fast-forward N: a game runs ahead to beat N as fast as it goes (for measurements)
 std::string replayOut;            // --replay-out <prefix>: each game's orders, beat by beat (GameSession::replayOut)
 std::string sessionFile;          // --session-out file: where a launched game's configuration is written
+std::string retestFile;           // --retest file.md: the re-test list for the panel of our own (user/retest.h); none: no panel
 
 // The system's folders as this program answers SHGetFolderPath(name): the init file's (through the engine's
 // MountFromInitFile, given them as its answers: AnswerSystemFolders) and the preferences' places (BelowFolder).
@@ -278,6 +285,7 @@ int main(int argc, char** argv) {
     else if (a == "--game-lua") gameLuaFile = next();
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
+    else if (a == "--shader-cache") shaderCache = next();
     else if (a == "--no-sound") noSound = true;
     else if (a == "--fullscreen") fullScreen = windowed = modeGiven = true;
     else if (a == "--second-window") secondWindowArg = next();
@@ -301,6 +309,7 @@ int main(int argc, char** argv) {
     else if (a == "--scan-ticks") scanTicks = std::atoi(next().c_str());
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
+    else if (a == "--retest") retestFile = next();
     else if (a == "--size") {
       // (a size without its x, or of nothing, is said and nothing starts: until 2026-11-10 "--size 1920" kept
       // 1920x1080 and still counted as the command line's choice of the display mode, modeGiven)
@@ -340,6 +349,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
+  ui::SetRetestFile(retestFile);  // (--retest: the re-test list and its verdicts read, the panel of our own exists)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
   // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
@@ -351,7 +361,8 @@ int main(int argc, char** argv) {
                  "usage: moho64ui --init <init.lua> [--mods uids.txt] [--prefs file] [--import-prefs file|none]\n"
                  "                [--stage userinit|setup|frontend]\n"
                  "                [--size 1920x1080] [--window] [--frames N] [--dump-ui] [--screenshot file.png]\n"
-                 "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen] [-- game arguments]\n");
+                 "                [--lua file [--lua-again]] [--list-bindings] [--log out.log] [--quiet] [--no-sound] [--fullscreen]\n"
+                 "                [--retest list.md] [-- game arguments]\n");
     return 2;
   }
   // The shader compiler must be beside the program (dxcompiler.dll; the renderer's request 71 C, its answer to ui
@@ -552,6 +563,7 @@ int main(int argc, char** argv) {
   if (session_seed >= 0) session.seedGiven = true, session.seed = static_cast<uint32_t>(session_seed);
   session.fastForwardTo = fastForward;
   session.wantPicture = !noWorld;
+  session.shaderCache = shaderCache;
   session.waitForWindow = windowed && directWindow;  // (a launched table's picture opens on the window)
   // (the game's time at the PC's clock: a window, or MOHO64UI_REAL_TIME below; then a local game measures its maxSP)
   session.paceByClock = windowed || std::getenv("MOHO64UI_REAL_TIME") != nullptr;
@@ -600,6 +612,9 @@ int main(int argc, char** argv) {
   cfg.worldLoading = [&session]() { return session.Loading(); };
   cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
   cfg.cardBackdrop = session.cardBackdrop();  // (the loading screen's film and the "IN TRANSIT" cover, where the window's picture shows)
+  // (tests: moho64ui_RecoverDevice, moho64ui_DeviceState; the graphics device's recovery, GameSession::ServeDevice)
+  cfg.recoverDevice = [&session](const std::string& mode, std::string* why) { return session.AskDeviceRecovery(mode, why); };
+  cfg.deviceState = [&session](lua_State* L) { session.PushDeviceState(L); };
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.
@@ -626,6 +641,7 @@ int main(int argc, char** argv) {
   };
   if (backdropWanted) {
     backdrop = std::make_unique<ui::Backdrop>(&vfs, backdropMode());
+    backdrop->SetShaderCache(shaderCache);
     cfg.backdrop = backdrop.get();
     session.menuBackdrop = backdrop.get();
   }
@@ -898,6 +914,7 @@ int main(int argc, char** argv) {
       session.menuBackdrop = nullptr;
       backdrop.reset();
       backdrop = std::make_unique<ui::Backdrop>(&vfs, backdropMode());
+      backdrop->SetShaderCache(shaderCache);
       cfg.backdrop = backdrop.get();
       session.menuBackdrop = backdrop.get();
       beginBackdrop();  // (the game's picture is gone: the samples may follow the option again)
@@ -1312,6 +1329,24 @@ int main(int argc, char** argv) {
     float eye[3], focus[3], right[3], zoom = 0;
     if (game && ui::CameraListener(game->L(), eye, focus, right, &zoom)) sounds.SetListener(eye, focus, right, zoom);
   };
+  // The graphics device lost for good (GameSession::ServeDevice: no device could be made again, or the map could not
+  // be opened again; the renderer's request 71 B, point 4): the program closes in order. One sentence for the player,
+  // in the log and, where there is a window, in a message box (as the missing shader compiler's above); the loops
+  // end after this frame and what follows them runs as at any end (the preferences written, the session's lines).
+  session.closeProgram = [&ok](const std::string& sentence) {
+    std::fprintf(stderr, "moho64ui: %s\n", sentence.c_str());
+    Logf(LogLevel::Error, "moho64ui: %s", sentence.c_str());
+#ifdef _WIN32
+    if (windowed) {  // (a headless run has nobody to read a dialog)
+      std::wstring wide(sentence.size() + 1, L'\0');
+      MultiByteToWideChar(CP_UTF8, 0, sentence.c_str(), -1, wide.data(), static_cast<int>(wide.size()));
+      // (in front of the program's own window, which may fill the screen)
+      MessageBoxW(nullptr, wide.c_str(), L"FA Remastered", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    }
+#endif
+    ok = false;  // (the run's exit code says so)
+    ui::RequestExit();
+  };
   int done = 0;
   if (windowed) {  // live: real time, the mouse, until the window is closed (or for --frames frames)
     // The world is shown by the renderer in the game's window itself, the interface laid over it
@@ -1345,6 +1380,8 @@ int main(int argc, char** argv) {
       if (std::getenv("MOHO64UI_SHOW_ONLY_DURING_BEATS") != nullptr) hooks.busy = [&]() { return session.running() && session.BeatRunning(); };
       hooks.clock = [&](double seconds) { session.AdvanceClock(seconds); };
     }
+    // (the window's title while the picture is made anew after the graphics device was lost: GameSession::ServeDevice)
+    hooks.title = [&](std::function<void(const std::string&)> setTitle) { session.windowTitle = std::move(setTitle); };
     hooks.catchingUp = [&]() { return session.CatchingUp(); };
     hooks.framePeriod = [&]() { return session.MenuFramePeriod(); };  // (the menu's flight: at most 60 frames a second)
     // (the hold ends at the top of the frame after the one its beat was reached in: that frame still showed the picture)
@@ -1378,6 +1415,10 @@ int main(int argc, char** argv) {
                              longFrames.Note(what, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
                            };
                            session.InterfaceRendered();  // (what the interface's drawing handed to the card is this frame's)
+                           // (the graphics device lost: where the window's picture shows the frame it asks after
+                           // showing it, PresentToWindow; here for the pictures read back, --gdi and a window whose
+                           // picture would not open: between the interface's drawing, which drew them, and the next)
+                           if (!session.DrawsToWindow()) session.ServeDevice();
                            timed("(host: the picture opened)", [&] { session.OpenPictureIfDue(); });
                            if (session.Loading()) ++loadingDrawn;
                            timed("(host: the sounds)", [&] {
@@ -1482,6 +1523,7 @@ int main(int argc, char** argv) {
       sounds.Update(static_cast<float>(seconds));
       leaveOrRestart();
       startGameInterface();
+      session.ServeDevice();  // (the frame's end: a picture drawn in it found the graphics device lost, GameSession::ServeDevice)
       if (realTime) std::this_thread::sleep_until(last + std::chrono::microseconds(16667));
     }
   }

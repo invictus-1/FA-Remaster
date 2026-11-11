@@ -253,6 +253,12 @@ void Window::Show() {
   if (sdl_) SDL_ShowWindow(Sdl(sdl_));
 }
 
+// (UNTESTED on Linux and Mac, as the rest of this file there: whether the title is drawn before the window's thread
+// goes into a long call is the window system's.)
+void Window::SetTitle(const std::string& title) {
+  if (sdl_) SDL_SetWindowTitle(Sdl(sdl_), title.c_str());
+}
+
 bool Window::ScreenSize(int* width, int* height) {
   if (!VideoUp()) return false;
   const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
