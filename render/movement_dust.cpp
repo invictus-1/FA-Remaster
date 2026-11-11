@@ -92,7 +92,7 @@ float3 PuffSmallLights(float3 p) {
           [branch] if (map > -0.5 && reaches > 0) reaches *= LampShadow(p, l, uint(map));
           fade = (1 - far2) * (1 - far2) / (1 + 1.5 * far2) * reaches + fade * colour.w * saturate(1 - far2 * 25);
         } else {
-          fade *= LightShade(beam, p);  // [lightshade] (a larger light behind a ridge: the ground's shadow, lights.h)
+          fade *= LightShadeHulls(beam, p);  // [lightshade] (a larger light behind a ridge: the ground's shadow, lights.h)
         }
         sum += colour.rgb * fade;
       }

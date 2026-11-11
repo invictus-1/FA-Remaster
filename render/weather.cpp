@@ -53,7 +53,7 @@ float3 DropLight(float3 p, float3 toEye, out float3 small) {
           // third as much: over a base at night their sum drew every drop as a bright white or orange streak (Chris's third
           // test, 2026-11-05: "rain reflecting light looks a tad odd over bases now"); the lamps' beams as before
           // ([lightshade] and a larger one behind a ridge through the ground's shadow, lights.h)
-          fade *= 0.35 * LightShade(beam, p);
+          fade *= 0.35 * LightShadeHulls(beam, p);
         }
         small += colour.rgb * (fade * DropPhase(-l, toEye));
       }

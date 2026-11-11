@@ -286,6 +286,7 @@ struct SmallLight {
   float lit;
   float glow;
   bool beam;
+  float ball;  // [hullshade] (a light to all sides: the most its own ball is for the rays; 0: no most)
 };
 SmallLight SmallLightAt(uint light, float3 world, float3 N, bool ground) {
   SmallLight L;
@@ -295,6 +296,7 @@ SmallLight SmallLightAt(uint light, float3 world, float3 N, bool ground) {
   L.tint = 0;
   L.more = float4(-1, 0, 0, 0);
   L.beam = false;
+  L.ball = 0;
   L.l = 0;
   L.nl = 0;
   L.lit = 0;
@@ -304,6 +306,7 @@ SmallLight SmallLightAt(uint light, float3 world, float3 N, bool ground) {
   float4 beam = lightData[uint(lightGridSize.z) + light * 4 + 2];
   L.more = lightData[uint(lightGridSize.z) + light * 4 + 3];
   L.beam = beam.w > -1.5;
+  L.ball = L.beam ? 0 : -(beam.w + 2);  // [hullshade] (lights.h: -2 less the most)
   L.l = normalize(toLight);
   L.nl = saturate(dot(N, L.l));
   float fade = (1 - far2) * (1 - far2) / (1 + 4 * far2);
@@ -353,6 +356,9 @@ float RayLightSeen(float3 p, float3 N, SmallLight L) {
   float3 to = L.where.xyz - o;
   float far = length(to);
   float ball = L.where.w * (L.beam ? rayLights.w : rayLights.z);
+  // [hullshade] (a large light's ball: a fifth of a nuke's reach of 320 is 64 world units, in which no hull shadowed it;
+  // Lights::rayBallMost)
+  if (L.ball > 0.5) ball = min(ball, L.ball);
   float end = far - ball;
   if (end <= 0.03) return 1;
   RayDesc ray;
@@ -647,7 +653,9 @@ float3 SmallLights(float3 world, float3 N, float3 V, float3 diffuseColor, float3
           // within the beam the ground takes light as if the air scattered some of it down)
           nl = saturate(dot(N, l) + 0.6 * inside);
         } else if (nl > 0) {
-          fade *= LightShade(beam, world);  // [lightshade] (a larger light behind a ridge: the ground's shadow)
+          // [lightshade] (a larger light behind a ridge: the ground's shadow; [hullshade] here, where no ray is cast,
+          // through what stands on the ground too)
+          fade *= LightShadeHulls(beam, world);
         }
         float3 h = normalize(V + l);
         float nh = saturate(dot(N, h));
