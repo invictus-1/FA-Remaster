@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -86,7 +87,10 @@ float MarkOverHoles(float2 xz, float2 perMap) {
   [branch] if (w1 > 0) hole = lerp(hole, HoleTap(1, xz), w1);
   [branch] if (w0 > 0) hole = lerp(hole, HoleTap(0, xz), w0);
   [branch] if (hole > -0.03) return 1;
-  float4 k = holeKinds.SampleLevel(samplerLinearClamp, xz * perMap, 0);
+  // (the map's size from the field's own level over the map, where the camera's block gives none: a map without water
+  // has mapInfo.xy 0, and the kinds were read at one corner of the map there)
+  float2 per = perMap.x > 0 ? perMap : holeLevel[2].z / max(holeLevel[2].w, 1);
+  float4 k = holeKinds.SampleLevel(samplerLinearClamp, xz * per, 0);
   float rest = saturate(1 - k.x - k.y - k.z - k.w);
   float soft = max(k.z + k.x * 0.7 + k.y * 0.55 + rest * lerp(0.6, 0.88, saturate(weather.x)), saturate(weather.y * 2));
   return 1 - smoothstep(0.03, 0.2, -hole * soft);
@@ -124,6 +128,18 @@ float3 WorldAt(float2 pixel, float depth) {
   float2 ndc = float2(pixel.x * viewport.z * 2 - 1, 1 - pixel.y * viewport.w * 2);
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
+
+#if defined(SETTLED_LIGHT) || defined(SETTLED_PLACE)
+// [settled] (the settled scars' picture lit over the ground, Decals::settleScars: one triangle over the whole picture)
+VOut VSSettled(uint id : SV_VertexID) {
+  VOut o;
+  o.position = float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0, 1);
+  o.centre = 0;
+  o.shape = 0;
+  o.options = 0;
+  return o;
+}
+#endif
 
 )hlsl";
 
@@ -214,6 +230,44 @@ float4 PS(VOut i) : SV_Target {
   float depth = DepthAt(int2(i.position.xy));
   if (depth <= 0) discard;  // nothing drawn here
   float3 world = WorldAt(i.position.xy, depth);
+#ifdef SETTLED_PLACE
+  // [settled] (Decals::settleScars) What the place does to a picture the game laid there, the same for every settled scar
+  // over this pixel: how much of it the slope leaves ([steep] below: the same lines) and how much the shell holes
+  // ([churn], MarkOverHoles). Worked out once a pixel for the frame, where each scar's box read the ground's heights and
+  // the holes' field anew (some ten reads a layer).
+  {
+    float place = 1;
+    [branch] if (look > 0.5) {
+      [branch] if (groundInfo.z > 0) {
+        float2 at = (world.xz + 0.5) * groundInfo.xy;
+        float2 rise = float2(groundHeights.SampleLevel(samplerLinearClamp, at + float2(groundInfo.x, 0), 0)
+                             - groundHeights.SampleLevel(samplerLinearClamp, at - float2(groundInfo.x, 0), 0),
+                             groundHeights.SampleLevel(samplerLinearClamp, at + float2(0, groundInfo.y), 0)
+                             - groundHeights.SampleLevel(samplerLinearClamp, at - float2(0, groundInfo.y), 0)) * (groundInfo.z * 0.5);
+        place = smoothstep(0.45, 0.7, rsqrt(1 + dot(rise, rise)));
+      }
+      [branch] if (holeInfo.z > 0.5) place *= MarkOverHoles(world.xz, mapInfo.xy);
+    }
+    return float4(place, 0, 0, 1);
+  }
+#endif
+#ifdef SETTLED_LIGHT
+  // [settled] (Decals::settleScars) The settled scars' picture lit over the ground, in place of each scar lit by itself:
+  // at t0 the scars laid over each other for this frame, pixel for pixel of the scene (their colours as linear light
+  // times how much of each is there, and how much of them all is there: SETTLED_LAY 1 below), at t5 their relief's lean in
+  // the world (x, z, as 0..1) and their share of the lying snow, laid over each other the same way (SETTLED_LAY 2). From
+  // here on it is one mark: lit as the ground it lies on, tilted by its relief, blended by how much is there.
+  float3 N = normalize(cross(ddy(world), ddx(world)));
+  if (N.y < 0) N = -N;
+  float4 c = decalTexture.Load(int3(i.position.xy, 0));
+  if (c.a <= 0.003) discard;
+  c.rgb /= c.a;
+  float4 more = reliefTexture.Load(int3(i.position.xy, 0));
+  more.xyz /= max(more.a, 0.003);
+  float2 lean = more.xy * 2 - 1;
+  N = normalize(N + float3(lean.x, sqrt(saturate(1 - dot(lean, lean))), lean.y) - float3(0, 1, 0));
+  i.options.y = more.z;
+#else
   // [steep] a picture the game laid (a scorch, a scar, a print: centre.w below 0) is thrown straight down, so on a steep face it
   // was drawn out down the face and cut off with a hard line where its box ends. In the modern look it now fades out as
   // the ground steepens (from 45 degrees, gone at 63; nothing walks there) and toward its box's top and bottom. The
@@ -221,6 +275,14 @@ float4 PS(VOut i) : SV_Target {
   // the ground's heights, which run smoothly; the drawn ground's own, from the depth, is one value a triangle, and the
   // fade then ended on a triangle's edge, a straight line.)
   float steepFade = 1;
+#ifdef SETTLED_LAY
+  // [settled] (a settled scar laid into the scars' picture: what the place itself does to every one of them - the slope,
+  // the holes - is read from the picture made of it once for this frame, SETTLED_PLACE above, at t2; the scar's own part,
+  // how far the ground is above or below it, here)
+  float holeFade = 1;
+  if (i.centre.w < 0 && look > 0.5)
+    steepFade = rampTexture.Load(int3(i.position.xy, 0)).r * (groundInfo.z > 0 ? smoothstep(1, 0.7, abs(world.y - i.centre.y) / -i.centre.w) : 1);
+#else
   [branch] if (i.centre.w < 0 && look > 0.5 && groundInfo.z > 0) {
     float2 at = (world.xz + 0.5) * groundInfo.xy;
     float2 rise = float2(groundHeights.SampleLevel(samplerLinearClamp, at + float2(groundInfo.x, 0), 0)
@@ -234,6 +296,7 @@ float4 PS(VOut i) : SV_Target {
   float holeFade = 1;
 #ifndef RIDE
   [branch] if (i.centre.w < 0 && look > 0.5 && holeInfo.z > 0.5) holeFade = MarkOverHoles(world.xz, mapInfo.xy);
+#endif
 #endif
   i.centre.w = abs(i.centre.w);
   [branch] if (i.options.z > 5.5) {
@@ -325,6 +388,38 @@ float4 PS(VOut i) : SV_Target {
 #ifdef DECAL_SNOW_GROUND
   const float3 groundSlope = N;  // [decalsnow]
 #endif
+#ifdef SETTLED_LAY
+  // [settled] (Decals::settleScars) A settled scar laid unlit into the scars' picture, over what is laid there (blended as
+  // premultiplied): all of a picture's own that the lit way above and below takes for it - how much of it is there
+  // (weathered, by its distance, the slope and the holes: options.x; with the snow ground, less the snow lying over it) -
+  // and then 1: its colour as the light takes it (linear in the modern look) times that; or 2: its relief's lean turned
+  // into the world (x, z; none: level), softened under the snow as below, and its share of the lying snow, times that.
+  {
+    float there = c.a;
+#ifdef DECAL_SNOW_GROUND
+    [branch] if (look > 0.5 && weather.y > 0 && i.options.y > 0) {
+      there *= 1 - MarkSnowLying(world, groundSlope, weather.y * i.options.y);
+      if (there <= 0.003) discard;
+    }
+#endif
+#if SETTLED_LAY == 1
+    return float4((look > 0.5 ? ToLinear(c.rgb) : c.rgb) * there, there);
+#else
+    float2 lean = 0;
+    if (i.options.w > 0.5) {
+      float2 t = reliefTexture.Sample(samplerAniso, local * 0.5 + 0.5).ag * 2 - 1;
+#ifndef DECAL_SNOW_GROUND
+      [branch] if (look > 0.5 && weather.y > 0 && i.options.y > 0) {
+        float fallen = weather.y * i.options.y;
+        t *= 1 - 0.9 * MarkSnowLying(world, N, fallen) * saturate(fallen * 1.5 - 0.2);
+      }
+#endif
+      lean = float2(t.x * i.shape.z - t.y * i.shape.w, -t.x * i.shape.w - t.y * i.shape.z);  // (as `turned` below: its x and z)
+    }
+    return float4((lean * 0.5 + 0.5) * there, i.options.y * there, there);
+#endif
+  }
+#endif
   if (i.options.w > 0.5) {  // a remastered picture's own relief, tilting the ground's slope as a normal decal does
     float2 t = reliefTexture.Sample(samplerAniso, local * 0.5 + 0.5).ag * 2 - 1;
 #ifndef DECAL_SNOW_GROUND
@@ -339,6 +434,7 @@ float4 PS(VOut i) : SV_Target {
     float3 turned = float3(inDecal.x * i.shape.z + inDecal.z * i.shape.w, inDecal.y, -inDecal.x * i.shape.w + inDecal.z * i.shape.z);
     N = normalize(N + turned - float3(0, 1, 0));
   }
+#endif
   float shadow = SunShadow(world, N);
   // under water: tinted toward the water ramp's colour by depth, as the ground is (terrain.cpp)
   float4 tint = 0;
@@ -347,15 +443,21 @@ float4 PS(VOut i) : SV_Target {
 #ifdef DECAL_SNOW_GROUND
     // [decalsnow] (Decals::snowGround) the snow that lies over the mark is the ground's own: the mark thins out by as much as
     // lies there, and is lit bare
+#ifndef SETTLED_LIGHT
     [branch] if (weather.y > 0 && i.options.y > 0) {
       c.a *= 1 - MarkSnowLying(world, groundSlope, weather.y * i.options.y);
       if (c.a <= 0.003) discard;
     }
+#endif
     markSnow = 0;
 #else
     markSnow = i.options.y;  // (a mark laid on the snow shows on it until new snow covers it)
 #endif
+#ifdef SETTLED_LIGHT
+    float3 lit = ModernLight(c.rgb, 0, 0.9, 1, 0, N, world, shadow);  // [settled] (laid as linear light already)
+#else
     float3 lit = ModernLight(ToLinear(c.rgb), 0, 0.9, 1, 0, N, world, shadow);
+#endif
 #ifdef MSAA
     return float4(lit, c.a);  // (the modern water colours what is under it itself)
 #endif
@@ -369,10 +471,13 @@ float4 PS(VOut i) : SV_Target {
 
 // The decals' shader source ([scars] `relief`: with the normal decals lit as Decals::modernRelief says; [decalsnow] `snow`:
 // with the snow ground's, Decals::snowGround).
-std::string DecalSource(bool relief, bool snow = false, bool ride = false) {
+// ([settled] `settled`: 1, 2 a settled scar laid into the scars' picture, its colour or its lean; 3 that picture lit; 4
+// what the place does to them all: Decals::settleScars)
+std::string DecalSource(bool relief, bool snow = false, bool ride = false, int settled = 0) {
   // (how much of the lying snow a mark takes is the mark's own: see `snowLying`)
   // ([whitecaps] ride: the pictures on the water laid on the lifted waves, ocean.h's kOceanRideShaderBlock)
-  return std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
+  return std::string(settled == 4 ? "#define SETTLED_PLACE 1\n" : "") + std::string(settled == 1 ? "#define SETTLED_LAY 1\n" : settled == 2 ? "#define SETTLED_LAY 2\n" : settled == 3 ? "#define SETTLED_LIGHT 1\n" : "") +
+         std::string(snow ? "#define DECAL_SNOW_GROUND 1\n" : "") + (relief ? "#define MODERN_RELIEF 1\n" : "") + (gSceneSamples > 1 ? "#define MSAA 1\n" : "") + "static float markSnow = 1;\n#define SURFACE_SNOW markSnow\n" +
          (ride ? "#define RIDE 1\n" : "") + kViewShaderBlock + (ride ? kOceanRideShaderBlock : "") + RayShaders() + kLightingShaderBlock + HotMetal::ShaderBlock() +
          kShaderHead + kMarkSnowLying + kShaderTail;  // (RayShaders: the small lights' shadows by rays; hot metal: hot_metal.h)
 }
@@ -432,6 +537,13 @@ void Decals::SetModernRelief(bool on) {
   if (!normalsModern_) fprintf(stderr, "render: the marks' relief cannot be lit as the ground (%s)\n", error.c_str());
 }
 
+// [settled] (each frame: its shaders made the first time it is on with the battle scars, not in the middle of a game when
+// the first scar settles)
+void Decals::SetSettleScars(bool on) {
+  // (its shaders cannot be made: off, the scars as before)
+  settleScars = on && (!battleScars || SettledPipelines(false));
+}
+
 void Decals::PrepareSnowGround() {
   // (the pictures' pipeline and the relief's, each with the snow ground's: DECAL_SNOW_GROUND)
   auto make = [&](bool relief, gfx::Pipeline* out, const char* name) {
@@ -460,6 +572,7 @@ void Decals::PrepareSnowGround() {
     reliefSnowTried_ = true;
     make(true, &normalsModernSnow_, "normal decals, modern relief, snow ground");
   }
+  if (settleScars && battleScars) SettledPipelines(true);  // [settled]
 }
 
 bool Decals::Plain(uint32_t texture) {
@@ -594,11 +707,27 @@ bool Decals::Add(const std::string& texture, Vec3 centre, float sizeX, float siz
   decals_.back().ours = ours;
   if (battleScars && seconds > 0 && IsScar(texture)) {  // a battle scar: kept; past the most, the oldest fades out
     decals_.back().scar = true;
+    decals_.back().name = ScarName(texture);  // [settled]
     Mark("battle scars kept", static_cast<uint64_t>(scars_ + 1), static_cast<uint64_t>(mostScars));
     if (++scars_ > mostScars) {
       Decal* oldest = nullptr;
-      for (Decal& d : decals_)
-        if (d.scar && d.scarGone <= 0 && (!oldest || d.born < oldest->born)) oldest = &d;
+      if (settleScars) {
+        // [settled] (the oldest whose glow is out settles as it is, and goes on weathering there. All of them still
+        // glowing - the most passed by scars of the last minute alone: none goes; they settle as their glow goes out,
+        // LaySettled, and the list is over the most for that long)
+        for (Decal& d : decals_)
+          if (d.scar && d.scarGone <= 0 && &d != &decals_.back() && !Glowing(d, born) && (!oldest || d.born < oldest->born)) oldest = &d;
+        if (oldest) {
+          Decal moved = std::move(*oldest);
+          decals_.erase(decals_.begin() + (oldest - decals_.data()));
+          Settle(std::move(moved));
+          --scars_;
+          oldest = nullptr;
+        }
+      } else {
+        for (Decal& d : decals_)
+          if (d.scar && d.scarGone <= 0 && (!oldest || d.born < oldest->born)) oldest = &d;
+      }
       if (oldest) oldest->scarGone = born + 10;
     }
   }
@@ -628,6 +757,12 @@ void Decals::ForgetGame(uint32_t lastOfMap, size_t depositsOfMap) {
   pads_.clear();
   scars_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.scar; }));
   waterDecals_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.water; }));
+  cells_.clear();  // [settled] (every settled scar was the game's)
+  givenScars_.clear();
+  settledCount_ = 0;
+  settledVisible_.clear();
+  settledDents_.clear();
+  settledNow_ = settledLit_ = false;
   snowFallen_ = 2;
   snowClock_ = -1;
   settled_ = false;
@@ -764,7 +899,71 @@ void Decals::TarmacPads(double now, std::vector<Tarmacs::Pad>* out) {
     if (d.tarmac >= 0 && TarmacPad(d, now, nullptr, &pad)) out->push_back(pad);
 }
 
+// [settled] (decals.h) How much of a battle scar is there by its age.
+float Decals::ScarAlpha(const Decal& d, double now) const {
+  const float past = static_cast<float>(now - d.born) - d.seconds;
+  float alpha = 1 - (1 - scarFloor) * Clamp(past / std::max(scarWeathering, 1.0f), 0, 1);
+  if (d.scarGone > 0) alpha *= Clamp(static_cast<float>(d.scarGone - now) / 10, 0, 1);
+  return alpha;
+}
+
+// A decal as the shader draws it this frame (Draw's, and [settled] LaySettled's for the settled scars).
+bool Decals::Show(const Decal& d, const View& view, double now, bool overWater, Visible* out) {
+  const bool modernNormals = modernRelief && normalsModern_;  // [scars]
+  const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
+  // the ground under a decal may rise and fall across it: the box is tall for its width
+  const float halfHeight = reach * 0.7f + 1.5f;
+  const Vec3 r{reach, halfHeight, reach};
+  const float lodAlpha = LodAlpha(d, view.eye);  // [decalfade] (-1: beyond its cutoff)
+  if (lodAlpha < 0) return false;
+  if (!view.BoxVisible(d.centre - r, d.centre + r)) return false;
+  if (now < d.born) return false;  // (a light whose beat the picture has not reached)
+  float alpha = 1;
+  // (it fades out over its last five seconds, a short-lived one over the second half of its time: a
+  // tank's tread marks last a second, a walker's footprints four; how the original fades them is a GUESS)
+  if (d.scar && battleScars) {  // a battle scar: weathered after the game's time, faded out once the most is passed
+    alpha = ScarAlpha(d, now);
+  } else if (d.seconds > 0) {
+    alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
+  }
+  // it comes in as its distance says (LodAlpha: as before over the last fifth of it, a GUESS; or as the original's
+  // GetLODAlpha, fadeFraction), and with the original's fade it is left out where the original leaves it out
+  alpha *= lodAlpha;
+  if (fadeFraction >= 0 && alpha < 1.0f / 255) return false;
+  Instance n{};
+  n.centre[0] = d.centre.x;
+  n.centre[1] = d.centre.y;
+  n.centre[2] = d.centre.z;
+  // ([steep] one the game laid, not the map: the shader fades it out on steep ground; told by the sign)
+  n.halfHeight = d.mapOwn || d.water || d.mark || d.ramp ? halfHeight : -halfHeight;
+  n.halfX = d.halfX;
+  n.halfZ = d.halfZ;
+  n.cosHeading = std::cos(d.heading);
+  n.sinHeading = std::sin(d.heading);
+  n.alpha = alpha;
+  n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
+  n.light = d.water ? (overWater ? 5.0f : 4.0f) : d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
+  // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
+  if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
+  // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
+  n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
+  // [scars] (modernRelief: a normal decal's age says how much of the lying snow covers it, as a picture's, from -1 down;
+  // a plain normal map's glow 2)
+  // ([snowfix] every normal decal's: the plain ones' relief is filled under the snow too, NormalDecalBuried)
+  if (d.normal && !d.water && !d.mark && !d.ramp) n.age = -1 - (snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1);
+  if (modernNormals && d.normal && !d.water && !d.mark && !d.ramp) {
+    if (!d.ours && Plain(d.texture.id)) {
+      n.glow = 2;
+      ++plainNormals;
+    }
+  }
+  *out = {d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n, d.mapOwn};
+  d.seenAt = wall_;  // [settled] (a scar settles while no view shows it)
+  return true;
+}
+
 void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now, bool overWater) {
+  wall_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();  // [settled]
   if (!overWater) {
     drawn = 0;
     tarmacsDrawn = 0;  // [tarmac]
@@ -787,6 +986,25 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   const bool pads = remasteredTarmacs && !overWater;
   const bool modernNormals = modernRelief && normalsModern_;  // [scars]
   if (!overWater) plainNormals = 0;
+  // [settled] (settleScars) what LaySettled made ready for this frame: the place the settled scars' picture is lit at -
+  // among the pictures, where the lowest texture of those laid stands, before any other of that texture (they are older)
+  // - and the settled dents in view, drawn as before
+  if (!overWater && settledNow_) {
+    if (settledLit_) {
+      Visible place{settledFirst_, 0, 0, 0, Instance{}, false};
+      place.settled = true;
+      visible_.push_back(place);
+    } else {  // (too few to pay for their own picture: each drawn as a picture is, in the same place among them)
+      for (Visible& scar : settledVisible_) {
+        scar.old = true;
+        visible_.push_back(scar);
+      }
+    }
+    for (const Visible& dent : settledDents_) {
+      if (dent.instance.glow == 2) ++plainNormals;
+      visible_.push_back(dent);
+    }
+  }
   for (size_t which = 0; which < decals_.size() + marks_.size(); ++which) {
     const Decal& d = which < decals_.size() ? decals_[which] : marks_[which - decals_.size()];
     if (overWater && !d.water) continue;
@@ -797,56 +1015,10 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
       if (TarmacPad(d, now, &view, &pad)) pads_.push_back(pad);
       continue;
     }
-    const float reach = std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f;
-    // the ground under a decal may rise and fall across it: the box is tall for its width
-    const float halfHeight = reach * 0.7f + 1.5f;
-    const Vec3 r{reach, halfHeight, reach};
-    const float lodAlpha = LodAlpha(d, view.eye);  // [decalfade] (-1: beyond its cutoff)
-    if (lodAlpha < 0) continue;
-    if (!view.BoxVisible(d.centre - r, d.centre + r)) continue;
-    if (now < d.born) continue;  // (a light whose beat the picture has not reached)
-    float alpha = 1;
-    // (it fades out over its last five seconds, a short-lived one over the second half of its time: a
-    // tank's tread marks last a second, a walker's footprints four; how the original fades them is a GUESS)
-    if (d.scar && battleScars) {  // a battle scar: weathered after the game's time, faded out once the most is passed
-      const float past = static_cast<float>(now - d.born) - d.seconds;
-      alpha = 1 - (1 - scarFloor) * Clamp(past / std::max(scarWeathering, 1.0f), 0, 1);
-      if (d.scarGone > 0) alpha *= Clamp(static_cast<float>(d.scarGone - now) / 10, 0, 1);
-    } else if (d.seconds > 0) {
-      alpha = Clamp(static_cast<float>(d.born + static_cast<double>(d.seconds) - now) / std::min(5.0f, d.seconds * 0.5f), 0, 1);
-    }
-    // it comes in as its distance says (LodAlpha: as before over the last fifth of it, a GUESS; or as the original's
-    // GetLODAlpha, fadeFraction), and with the original's fade it is left out where the original leaves it out
-    alpha *= lodAlpha;
-    if (fadeFraction >= 0 && alpha < 1.0f / 255) continue;
-    Instance n{};
-    n.centre[0] = d.centre.x;
-    n.centre[1] = d.centre.y;
-    n.centre[2] = d.centre.z;
-    // ([steep] one the game laid, not the map: the shader fades it out on steep ground; told by the sign)
-    n.halfHeight = d.mapOwn || d.water || d.mark || d.ramp ? halfHeight : -halfHeight;
-    n.halfX = d.halfX;
-    n.halfZ = d.halfZ;
-    n.cosHeading = std::cos(d.heading);
-    n.sinHeading = std::sin(d.heading);
-    n.alpha = alpha;
-    n.age = d.seconds > 0 ? static_cast<float>((now - d.born) / static_cast<double>(d.seconds)) : 0;
-    n.light = d.water ? (overWater ? 5.0f : 4.0f) : d.mark ? 3.0f : d.ramp ? 1.0f : d.normal ? 2.0f : 0.0f;
-    // (a plain mark has no use for the age: there it says how much of the lying snow covers it)
-    if (!d.mark && !d.ramp && !d.normal) n.age = snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1;
-    // (a light's brightness; a picture's 1 with its own relief; a normal decal's 1 when it is the visuals track's)
-    n.glow = d.ramp ? glow : d.normal ? (d.ours ? 1.0f : 0.0f) : d.relief && !d.mark && !d.water ? 1.0f : 0.0f;
-    // [scars] (modernRelief: a normal decal's age says how much of the lying snow covers it, as a picture's, from -1 down;
-    // a plain normal map's glow 2)
-    // ([snowfix] every normal decal's: the plain ones' relief is filled under the snow too, NormalDecalBuried)
-    if (d.normal && !d.water && !d.mark && !d.ramp) n.age = -1 - (snowLying > 0 ? Clamp(snowFallen_ - d.snowAtBirth, 0, 1) : 1);
-    if (modernNormals && d.normal && !d.water && !d.mark && !d.ramp) {
-      if (!d.ours && Plain(d.texture.id)) {
-        n.glow = 2;
-        ++plainNormals;
-      }
-    }
-    visible_.push_back({d.texture.id, d.ramp.id, d.relief.id, d.water ? 4 : d.mark ? 3 : d.ramp ? 2 : d.normal ? 1 : 0, n, d.mapOwn});
+    Visible shown;
+    if (!Show(d, view, now, overWater, &shown)) continue;
+    const Instance& n = shown.instance;
+    visible_.push_back(shown);
     // hot metal: a fresh scorch's or crater's middle glows over it (not under water, where it would only steam)
     if (d.burn && hotMetal && heat && !overWater && !d.normal && !d.water && !d.mark && !d.ramp && d.centre.y > waterLevel) {
       const float across = 2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ));
@@ -868,37 +1040,28 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   // ([tarmac] with remastered pads drawn: the map's own pictures, the pads, then the pictures laid since: rank 0.5)
   const bool padsNow = !pads_.empty();
   auto rank = [padsNow](const Visible& v) { return v.kind == 5 ? 2.5f : padsNow && v.kind == 0 && !v.mapOwn ? 0.5f : static_cast<float>(v.kind); };
-  std::stable_sort(visible_.begin(), visible_.end(), [&rank](const Visible& a, const Visible& b) {
+  // ([settled] the settled scars stand together where the lowest texture of them stands, before any other of that
+  // texture - their picture's place, or each of them when they are drawn one by one; none there: as before)
+  const uint32_t settledAt = settledFirst_;
+  auto place = [settledAt](const Visible& v) { return v.settled || v.old ? settledAt : v.texture; };
+  std::stable_sort(visible_.begin(), visible_.end(), [&rank, &place](const Visible& a, const Visible& b) {
     if (rank(a) != rank(b)) return rank(a) < rank(b);
+    if (place(a) != place(b)) return place(a) < place(b);
+    if ((a.settled || a.old) != (b.settled || b.old)) return a.settled || a.old;
     if (a.texture != b.texture) return a.texture < b.texture;
     return a.ramp != b.ramp ? a.ramp < b.ramp : a.relief < b.relief;
   });
 
-  Vec3 right, up, back;
-  camera.Axes(&right, &up, &back);
   const bool water = waterMap_ && waterRamp_ && mapWidth_ > 0 && mapHeight_ > 0;
-  const float cameraConstants[20] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
-                                     up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
-                                     back.x, back.y, back.z, camera.zNear,
-                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f,
-                                     groundHeights_ ? 1 / heightsWidth_ : 0, groundHeights_ ? 1 / heightsHeight_ : 0,  // [steep]
-                                     groundHeights_ ? groundUnit_ : 0, 0};
+  float cameraConstants[20];
+  CameraConstants(view, camera, cameraConstants);
   // [decalsnow] while the ground lays its snow from its shelter (snowGround): the pictures', and with modernRelief the relief's,
   // pipelines with the snow ground's, their constants after the camera's (the wind's way and the map's size, the tuning, the
   // materials), the shelter at t6. (Not on the water's drawing: its decals take no snow.)
   const bool snowNow = snowGround.shelter && !overWater && snowGround.mapWidth > 0 && snowGround.mapHeight > 0;
   const bool picturesSnow = snowNow && picturesSnow_, normalsSnow = snowNow && modernNormals && normalsModernSnow_;
   float snowConstants[32] = {};
-  if (snowNow) {
-    std::copy(cameraConstants, cameraConstants + 20, snowConstants);
-    const float wind = std::sqrt(snowGround.wind[0] * snowGround.wind[0] + snowGround.wind[1] * snowGround.wind[1]);
-    snowConstants[20] = wind > 0 ? snowGround.wind[0] / wind : 0.0f;
-    snowConstants[21] = wind > 0 ? snowGround.wind[1] / wind : 0.0f;
-    snowConstants[22] = 1 / snowGround.mapWidth;
-    snowConstants[23] = 1 / snowGround.mapHeight;
-    std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 24);
-    snowConstants[28] = snowGround.materials ? 1.0f : 0.0f;
-  }
+  if (snowNow) SnowConstants(cameraConstants, snowConstants);
   // ([padsnow] the pads lay it as the marks do: Tarmacs::snowShelter)
   tarmacs.snowShelter = snowNow ? snowGround.shelter : gfx::Texture{};
   if (snowNow) std::copy(snowConstants + 20, snowConstants + 32, tarmacs.snow);
@@ -936,10 +1099,40 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
   };
   for (size_t at = 0; at < visible_.size();) {
     if (!padsDone && rank(visible_[at]) >= 0.5f) drawPads();
+    if (visible_[at].settled) {  // [settled] the settled scars' picture, lit once over the ground (LaySettled laid it)
+      const bool snowLit = settledSnow_;  // (as it was laid)
+      const SettledPicture& picture = settledPictures_[static_cast<size_t>(settledPicture_)];
+      if (settledLight_[snowLit ? 1 : 0]) {
+        device_->SetPipeline(settledLight_[snowLit ? 1 : 0]);
+        device_->SetConstants(0, &view.constants, sizeof view.constants);
+        if (snowLit) device_->SetConstants(1, snowConstants, sizeof snowConstants);
+        else device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
+        if (snowLit) device_->SetTexture(6, snowGround.shelter);
+        device_->SetTexture(0, picture.colour);
+        device_->SetTexture(5, picture.lean);
+        device_->SetTexture(1, sceneDepth);
+        device_->SetTexture(3, water ? waterMap_ : textures_->Black());
+        device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
+        device_->SetTexture(7, groundHeights_ ? groundHeights_ : textures_->Black());
+        TrackFieldConstants field = holes.constants;  // (not read by this one: the layers gave way as they were laid)
+        field.info[2] = 0;
+        device_->SetConstants(3, &field, sizeof field);
+        device_->SetTexture(8, textures_->Black());
+        device_->SetTexture(9, textures_->Black());
+        device_->Draw(3);
+        drawn += settledLaid;
+        device_->SetTexture(0, {});  // (the scars' picture is drawn into again before the next frame's scene)
+        device_->SetTexture(5, {});
+        if (snowLit) device_->SetTexture(6, {});
+      }
+      bound = -1;  // (the decals' own pipeline and textures bound again)
+      ++at;
+      continue;
+    }
     const uint32_t texture = visible_[at].texture, ramp = visible_[at].ramp, relief = visible_[at].relief;
     const int kind = visible_[at].kind;
     size_t n = 0;
-    while (at + n < visible_.size() && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && visible_[at + n].relief == relief &&
+    while (at + n < visible_.size() && !visible_[at + n].settled && visible_[at + n].texture == texture && visible_[at + n].ramp == ramp && visible_[at + n].relief == relief &&
            visible_[at + n].kind == kind && n < kMaxInstances) {
       batch_[n] = visible_[at + n].instance;
       ++n;
@@ -987,6 +1180,410 @@ void Decals::Draw(const View& view, const Camera& camera, gfx::Texture sceneDept
     device_->SetTexture(9, {});
   }
   if (riding) ride->UnbindRide();  // [whitecaps]
+  if (!overWater) settledNow_ = settledLit_ = false;  // [settled] (the next frame's LaySettled says anew)
+}
+
+// The camera's constants as the decals' shader takes them (DecalCamera), and with the snow ground's after them.
+void Decals::CameraConstants(const View& view, const Camera& camera, float* c) const {
+  Vec3 right, up, back;
+  camera.Axes(&right, &up, &back);
+  const bool water = waterMap_ && waterRamp_ && mapWidth_ > 0 && mapHeight_ > 0;
+  const float cameraConstants[20] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+                                     up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
+                                     back.x, back.y, back.z, camera.zNear,
+                                     water ? 1 / mapWidth_ : 0, water ? 1 / mapHeight_ : 0, water ? 1.0f : 0.0f, water ? waterLevel : 0.0f,
+                                     groundHeights_ ? 1 / heightsWidth_ : 0, groundHeights_ ? 1 / heightsHeight_ : 0,  // [steep]
+                                     groundHeights_ ? groundUnit_ : 0, 0};
+  std::copy(cameraConstants, cameraConstants + 20, c);
+}
+
+void Decals::SnowConstants(const float* cameraConstants, float* snowConstants) const {
+  std::copy(cameraConstants, cameraConstants + 20, snowConstants);
+  const float wind = std::sqrt(snowGround.wind[0] * snowGround.wind[0] + snowGround.wind[1] * snowGround.wind[1]);
+  snowConstants[20] = wind > 0 ? snowGround.wind[0] / wind : 0.0f;
+  snowConstants[21] = wind > 0 ? snowGround.wind[1] / wind : 0.0f;
+  snowConstants[22] = 1 / snowGround.mapWidth;
+  snowConstants[23] = 1 / snowGround.mapHeight;
+  std::copy(snowGround.tune, snowGround.tune + 4, snowConstants + 24);
+  snowConstants[28] = snowGround.materials ? 1.0f : 0.0f;
+}
+
+// ---- [settled] settled scars (decals.h, settleScars) ---------------------------------------------------------------------
+
+uint16_t Decals::ScarName(const std::string& texture) {
+  for (size_t k = 0; k < scarNames_.size(); ++k)
+    if (scarNames_[k] == texture) return static_cast<uint16_t>(k);
+  if (scarNames_.size() >= 0xffff) return 0xffff;
+  scarNames_.push_back(texture);
+  return static_cast<uint16_t>(scarNames_.size() - 1);
+}
+
+void Decals::KeepScars(double now, std::vector<KeptScar>* out) const {
+  out->clear();
+  if (!settleScars || !battleScars) return;
+  auto keep = [&](const Decal& d, bool settled) {
+    if (!d.scar || d.name >= scarNames_.size() || d.scarGone > 0) return;
+    if (!settled && d.born + static_cast<double>(d.seconds) > now) return;  // (not yet past its time: the effects lay it again)
+    KeptScar k;
+    k.texture = scarNames_[d.name];
+    k.centre = d.centre;
+    k.sizeX = d.halfX * 2;
+    k.sizeZ = d.halfZ * 2;
+    k.heading = d.heading;
+    k.cutoff = d.cutoff;
+    k.born = d.born;
+    k.seconds = d.seconds;
+    k.snow = Clamp(snowFallen_ - d.snowAtBirth, 0, 1);
+    k.normal = d.normal;
+    k.settled = settled;
+    out->push_back(std::move(k));
+  };
+  for (const Decal& d : decals_) keep(d, false);
+  for (const auto& entry : cells_)
+    for (const Decal& d : entry.second.scars) keep(d, true);
+  // (in the order they were made: the settled ones' squares come in no order)
+  std::stable_sort(out->begin(), out->end(), [](const KeptScar& a, const KeptScar& b) { return a.born < b.born; });
+}
+
+void Decals::LayGivenScars() {
+  // each laid as a plain mark and then made the scar it was (not counted against the most as a new one, no glow: it is
+  // long cold), the settled ones settled at once
+  const bool scarsWere = battleScars, hotWas = hotMetal;
+  battleScars = hotMetal = false;
+  const std::vector<KeptScar> scars = std::move(givenScars_);
+  givenScars_.clear();
+  for (const KeptScar& k : scars) {
+    const bool laid = k.normal ? AddNormal(k.texture, k.centre, k.sizeX, k.sizeZ, k.heading, k.cutoff, k.born, k.seconds)
+                               : Add(k.texture, k.centre, k.sizeX, k.sizeZ, k.heading, k.cutoff, k.born, k.seconds);
+    if (!laid) continue;
+    Decal& d = decals_.back();
+    d.scar = true;
+    d.name = ScarName(k.texture);
+    d.snowAtBirth = snowFallen_ - k.snow;
+    d.mapOwn = false;  // (the game's: gone on steep ground, after the map's own and the pads)
+    if (k.settled) {
+      Decal moved = std::move(d);
+      decals_.pop_back();
+      Settle(std::move(moved));
+    } else {
+      ++scars_;
+    }
+  }
+  battleScars = scarsWere;
+  hotMetal = hotWas;
+}
+
+bool Decals::Glowing(const Decal& d, double now) const {
+  if (!d.burn || !hotMetal || !heat) return false;
+  return static_cast<float>(now - d.born) < heat->CraterSeconds(2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ)));
+}
+
+void Decals::Settle(Decal&& d) {
+  Cell& cell = cells_[CellKey(d.centre.x, d.centre.z)];
+  cell.reach = std::max(cell.reach, std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) * 1.5f);
+  cell.low = std::min(cell.low, d.centre.y);
+  cell.high = std::max(cell.high, d.centre.y);
+  if (d.cutoff > 0) cell.cutoff = std::max(cell.cutoff, d.cutoff);
+  else cell.anyCutoff = false;
+  d.burn = false;
+  cell.scars.push_back(std::move(d));
+  ++settledCount_;
+  Mark("battle scars settled", static_cast<uint64_t>(settledCount_), static_cast<uint64_t>(mostSettled));
+  // past the most the oldest of all goes (each square's own are in the order they settled: its first is its oldest)
+  while (settledCount_ > std::max(mostSettled, 0)) {
+    Cell* from = nullptr;
+    for (auto& entry : cells_)
+      if (!entry.second.scars.empty() && (!from || entry.second.scars.front().born < from->scars.front().born)) from = &entry.second;
+    if (!from) break;
+    from->scars.erase(from->scars.begin());
+    --settledCount_;
+  }
+}
+
+void Decals::Unsettle(double now) {
+  // all back among the others, each where its number puts it (the list is in the order they were made; a light on the
+  // ground has no number and stays behind the one it follows)
+  std::vector<std::pair<uint32_t, Decal>> all;
+  all.reserve(decals_.size() + static_cast<size_t>(settledCount_));
+  uint32_t last = 0;
+  for (Decal& d : decals_) {
+    if (d.id) last = d.id;
+    all.emplace_back(last, std::move(d));
+  }
+  for (auto& entry : cells_)
+    for (Decal& d : entry.second.scars) all.emplace_back(d.id, std::move(d));
+  cells_.clear();
+  settledCount_ = 0;
+  std::stable_sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  decals_.clear();
+  for (auto& entry : all) decals_.push_back(std::move(entry.second));
+  // and, as before, no more than the most: the oldest past it fade out
+  std::vector<Decal*> scars;
+  for (Decal& d : decals_)
+    if (d.scar && d.scarGone <= 0) scars.push_back(&d);
+  scars_ = static_cast<int>(std::count_if(decals_.begin(), decals_.end(), [](const Decal& d) { return d.scar; }));
+  if (battleScars && static_cast<int>(scars.size()) > mostScars) {
+    std::stable_sort(scars.begin(), scars.end(), [](const Decal* a, const Decal* b) { return a->born < b->born; });
+    for (size_t k = 0; k + static_cast<size_t>(std::max(mostScars, 0)) < scars.size(); ++k) scars[k]->scarGone = now + 10;
+  }
+}
+
+bool Decals::SettledPipelines(bool snow) {
+  const int s = snow ? 1 : 0;
+  if (settledTried_[s]) return settledPlace_ && settledLay_[0][s] && settledLay_[1][s] && settledLight_[s];
+  settledTried_[s] = true;
+  std::string error;
+  if (!settledPlace_) {  // what the place does to them all, into its own picture (one channel)
+    const std::string source = DecalSource(false, false, false, 4);
+    gfx::PipelineDesc pd;
+    pd.name = "settled scars: the place";
+    pd.vertexSource = pd.pixelSource = source;
+    pd.vertexEntry = "VSSettled";
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    pd.cull = gfx::Cull::None;
+    pd.blend = gfx::Blend::Opaque;
+    pd.colorFormat = gfx::Format::R8;
+    pd.samples = 1;
+    settledPlace_ = device_->CreatePipeline(pd, &error);
+    if (!settledPlace_) fprintf(stderr, "render: the settled scars' place cannot be worked out (%s)\n", error.c_str());
+  }
+  for (int pass = 0; pass < 3; ++pass) {
+    const std::string source = DecalSource(false, snow, false, pass + 1);  // (kept while the pipeline is made: the description points into it)
+    gfx::PipelineDesc pd;
+    pd.vertexSource = pd.pixelSource = source;
+    pd.depthTest = pd.depthWrite = false;
+    pd.depthTarget = false;
+    if (pass < 2) {  // a scar's box laid into the scars' picture: over what is there, premultiplied
+      pd.name = pass == 0 ? (snow ? "settled scars laid: colour, snow ground" : "settled scars laid: colour")
+                          : (snow ? "settled scars laid: relief and snow, snow ground" : "settled scars laid: relief and snow");
+      pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+      pd.stride = 12;
+      pd.cull = gfx::Cull::Front;
+      pd.blend = gfx::Blend::Premultiplied;
+      pd.colorFormat = gfx::Format::RGBA16F;
+      pd.samples = 1;
+      pd.alphaWrite = true;
+      settledLay_[pass][s] = device_->CreatePipeline(pd, &error);
+      if (!settledLay_[pass][s]) fprintf(stderr, "render: the settled scars cannot be laid (%s)\n", error.c_str());
+    } else {  // the scars' picture lit over the ground
+      pd.name = snow ? "settled scars lit, snow ground" : "settled scars lit";
+      pd.vertexEntry = "VSSettled";
+      pd.cull = gfx::Cull::None;
+      pd.blend = gfx::Blend::Alpha;
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      pd.alphaWrite = false;
+      settledLight_[s] = device_->CreatePipeline(pd, &error);
+      if (!settledLight_[s]) fprintf(stderr, "render: the settled scars cannot be lit (%s)\n", error.c_str());
+    }
+  }
+  return settledPlace_ && settledLay_[0][s] && settledLay_[1][s] && settledLight_[s];
+}
+
+void Decals::LaySettled(const View& view, const Camera& camera, gfx::Texture sceneDepth, double now) {
+  wall_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  settledNow_ = true;
+  settledLit_ = false;
+  settledLaid = 0;
+  // (a scars' picture no view has used for ten seconds is let go: no settled scar was in view at its size)
+  for (size_t k = settledPictures_.size(); k-- > 0;)
+    if (wall_ - settledPictures_[k].usedAt > 10) {
+      device_->Destroy(settledPictures_[k].colour);
+      device_->Destroy(settledPictures_[k].lean);
+      device_->Destroy(settledPictures_[k].place);
+      settledPictures_.erase(settledPictures_.begin() + static_cast<std::ptrdiff_t>(k));
+    }
+  settledVisible_.clear();
+  settledDents_.clear();
+  if (!settleScars || !battleScars) {  // off: what had settled is back among the others (and goes as they go)
+    if (settledCount_) Unsettle(now);
+    givenScars_.clear();
+    return;
+  }
+  if (!givenScars_.empty()) LayGivenScars();  // ([devicelost] the scars of the world this one takes the place of)
+  // (its pipelines are made ahead: SetSettleScars, PrepareSnowGround. With the snow ground's while the pictures lay theirs so.)
+  const bool snowNow = snowGround.shelter && snowGround.mapWidth > 0 && snowGround.mapHeight > 0;
+  const bool plain = settledPlace_ && settledLay_[0][0] && settledLay_[1][0] && settledLight_[0];
+  const bool withSnow = snowNow && picturesSnow_ && settledLay_[0][1] && settledLay_[1][1] && settledLight_[1];
+  settledSnow_ = withSnow;
+  if (!plain) return;  // (cannot be laid: every scar stays among the others, as before)
+  // the snow that has fallen since the last frame, as Draw moves it on (it then finds it done for this frame)
+  if (snowClock_ >= 0 && now > snowClock_) snowFallen_ += snowing * static_cast<float>(std::min(now - snowClock_, 0.5)) / 90.0f;
+  snowClock_ = now;
+  // what has weathered to its floor settles, while no view shows it (not one that is fading out, nor one whose middle
+  // still glows)
+  {
+    size_t kept = 0;
+    for (size_t k = 0; k < decals_.size(); ++k) {
+      Decal& d = decals_[k];
+      if (d.scar && d.scarGone <= 0 && !d.water && !d.mark && static_cast<float>(now - d.born) - d.seconds >= scarWeathering &&
+          (settleInView || wall_ - d.seenAt > 0.5) && !Glowing(d, now)) {
+        Settle(std::move(d));
+        --scars_;
+        continue;
+      }
+      if (kept != k) decals_[kept] = std::move(d);
+      ++kept;
+    }
+    decals_.resize(kept);
+  }
+  // (still over the most - scars whose glow kept them from settling when it was passed, Add: the oldest whose glow is
+  // out by now settle, in view or not)
+  while (scars_ > mostScars) {
+    Decal* oldest = nullptr;
+    for (Decal& d : decals_)
+      if (d.scar && d.scarGone <= 0 && !d.water && !d.mark && !Glowing(d, now) && (!oldest || d.born < oldest->born)) oldest = &d;
+    if (!oldest) break;
+    Decal moved = std::move(*oldest);
+    decals_.erase(decals_.begin() + (oldest - decals_.data()));
+    Settle(std::move(moved));
+    --scars_;
+  }
+  if (!settledCount_) return;
+  // the settled scars in view, a square at a time
+  const int plainBefore = plainNormals;
+  const float focal = static_cast<float>(view.height) / (2 * std::tan(camera.fovY * 0.5f));  // (pixels a world unit at distance 1)
+  double covered = 0;
+  for (const auto& entry : cells_) {
+    const Cell& cell = entry.second;
+    if (cell.scars.empty()) continue;
+    const float x0 = static_cast<float>(static_cast<int32_t>(static_cast<uint32_t>(entry.first >> 32))) * kSettledCell;
+    const float z0 = static_cast<float>(static_cast<int32_t>(static_cast<uint32_t>(entry.first))) * kSettledCell;
+    const float tall = cell.reach * 0.7f + 1.5f;
+    const Vec3 lo{x0 - cell.reach, cell.low - tall, z0 - cell.reach}, hi{x0 + kSettledCell + cell.reach, cell.high + tall, z0 + kSettledCell + cell.reach};
+    if (!view.BoxVisible(lo, hi)) continue;
+    if (cell.anyCutoff) {  // (beyond the farthest cutoff of them all: none is drawn, LodAlpha)
+      float least;
+      if (fadeFraction < 0) {
+        const Vec3 nearest{Clamp(view.eye.x, lo.x, hi.x), Clamp(view.eye.y, lo.y, hi.y), Clamp(view.eye.z, lo.z, hi.z)};
+        least = Length(nearest - view.eye) * lod.scale;
+      } else {
+        const Vec3 nearest{lod.forward.x >= 0 ? lo.x : hi.x, lod.forward.y >= 0 ? lo.y : hi.y, lod.forward.z >= 0 ? lo.z : hi.z};
+        least = lod.scale * (lod.widthPerDepth * Dot(nearest - lod.eye, lod.forward));
+      }
+      if (least > cell.cutoff) continue;
+    }
+    for (const Decal& d : cell.scars) {
+      Visible shown;
+      if (!Show(d, view, now, false, &shown)) continue;
+      shown.id = d.id;
+      (d.normal ? settledDents_ : settledVisible_).push_back(shown);
+      if (!d.normal) {  // (about how many pixels its picture covers: its size across at its distance, half of the square)
+        const float across = std::min(focal * 2 * std::max(std::fabs(d.halfX), std::fabs(d.halfZ)) / std::max(Length(d.centre - view.eye), 0.1f), 2 * focal);
+        covered += 0.5 * static_cast<double>(across) * static_cast<double>(across);
+      }
+    }
+  }
+  plainNormals = plainBefore;  // (Draw counts the dents' anew)
+  if (settledVisible_.empty()) return;
+  // laid in the order the pictures are drawn in: by texture, those of one in the order they were made
+  std::sort(settledVisible_.begin(), settledVisible_.end(), [](const Visible& a, const Visible& b) {
+    if (a.texture != b.texture) return a.texture < b.texture;
+    return a.relief != b.relief ? a.relief < b.relief : a.id < b.id;
+  });
+  settledFirst_ = settledVisible_.front().texture;
+  // Whether their own picture pays: it costs three passes over the whole scene whatever is in it (measured at 1920 x
+  // 1080: 0.13 ms of the card's time), and saves two thirds of what the scars' own pixels cost lit one by one. So it is
+  // made when the scars in view cover, layer by layer, more than 0.6 of the scene's pixels (left again under 0.3: no
+  // flicker between the two at the edge); under that each is drawn as a picture is (Draw), in the same place among
+  // the pictures, so that going from one way to the other changes the order of nothing.
+  {
+    const double pixels = static_cast<double>(view.width) * static_cast<double>(view.height);
+    settledPays_ = litOnce >= 0 ? litOnce > 0 : covered > (settledPays_ ? 0.3 : 0.6) * pixels;
+  }
+  if (!settledPays_) return;
+  // the scars' picture at the scene's size (made the first time one is in view; a side picture's size has its own)
+  settledPicture_ = -1;
+  for (size_t k = 0; k < settledPictures_.size(); ++k)
+    if (settledPictures_[k].width == view.width && settledPictures_[k].height == view.height) settledPicture_ = static_cast<int>(k);
+  if (settledPicture_ < 0) {
+    if (settledPictures_.size() >= 4) {  // (the one longest unused gives way)
+      size_t oldest = 0;
+      for (size_t k = 1; k < settledPictures_.size(); ++k)
+        if (settledPictures_[k].usedAt < settledPictures_[oldest].usedAt) oldest = k;
+      device_->Destroy(settledPictures_[oldest].colour);
+      device_->Destroy(settledPictures_[oldest].lean);
+      device_->Destroy(settledPictures_[oldest].place);
+      settledPictures_.erase(settledPictures_.begin() + static_cast<std::ptrdiff_t>(oldest));
+    }
+    SettledPicture made;
+    made.width = view.width;
+    made.height = view.height;
+    gfx::TargetDesc td;
+    td.width = view.width;
+    td.height = view.height;
+    td.format = gfx::Format::RGBA16F;
+    made.colour = device_->CreateTarget(td);
+    td.format = gfx::Format::RGBA16F;
+    made.lean = device_->CreateTarget(td);
+    td.format = gfx::Format::R8;
+    td.clearValue[0] = 1;
+    made.place = device_->CreateTarget(td);
+    if (!made.colour || !made.lean || !made.place) {
+      if (made.colour) device_->Destroy(made.colour);
+      if (made.lean) device_->Destroy(made.lean);
+      if (made.place) device_->Destroy(made.place);
+      settledPays_ = false;  // (no room for their picture: each drawn as a picture is, Draw)
+      return;
+    }
+    settledPictures_.push_back(made);
+    settledPicture_ = static_cast<int>(settledPictures_.size() - 1);
+  }
+  SettledPicture& picture = settledPictures_[static_cast<size_t>(settledPicture_)];
+  picture.usedAt = wall_;
+  float cameraConstants[20], snowConstants[32] = {};
+  CameraConstants(view, camera, cameraConstants);
+  if (withSnow) SnowConstants(cameraConstants, snowConstants);
+  const bool water = waterMap_ && waterRamp_ && mapWidth_ > 0 && mapHeight_ > 0;
+  for (int pass = -1; pass < 2; ++pass) {
+    gfx::PassDesc into;
+    into.color = pass < 0 ? picture.place : pass == 0 ? picture.colour : picture.lean;
+    if (pass < 0) into.clearValue[0] = 1;
+    device_->BeginPass(into);  // (cleared: nothing laid)
+    device_->SetPipeline(pass < 0 ? settledPlace_ : settledLay_[pass][withSnow ? 1 : 0]);
+    device_->SetConstants(0, &view.constants, sizeof view.constants);
+    if (withSnow && pass >= 0) device_->SetConstants(1, snowConstants, sizeof snowConstants);
+    else device_->SetConstants(1, cameraConstants, sizeof cameraConstants);
+    if (withSnow && pass >= 0) device_->SetTexture(6, snowGround.shelter);
+    device_->SetTexture(1, sceneDepth);
+    device_->SetTexture(3, water ? waterMap_ : textures_->Black());
+    device_->SetTexture(4, water ? waterRamp_ : textures_->Black());
+    device_->SetTexture(7, groundHeights_ ? groundHeights_ : textures_->Black());  // [steep]
+    TrackFieldConstants field = holes.constants;  // [churn] (the shell holes under the marks, as Draw gives them)
+    if (!holes.field) field.info[2] = 0;
+    device_->SetConstants(3, &field, sizeof field);
+    device_->SetTexture(8, holes.field ? holes.field : textures_->Black());
+    device_->SetTexture(9, holes.kinds ? holes.kinds : textures_->Black());
+    if (pass < 0) {  // what the place does to every one of them, once a pixel
+      device_->SetTexture(2, textures_->White());
+      device_->Draw(3);
+      device_->SetTexture(8, {});
+      device_->SetTexture(9, {});
+      continue;
+    }
+    device_->SetTexture(2, picture.place);
+    device_->SetVertexBuffer(cube_);
+    for (size_t at = 0; at < settledVisible_.size();) {
+      const uint32_t texture = settledVisible_[at].texture, relief = settledVisible_[at].relief;
+      size_t n = 0;
+      while (at + n < settledVisible_.size() && settledVisible_[at + n].texture == texture && settledVisible_[at + n].relief == relief && n < kMaxInstances) {
+        batch_[n] = settledVisible_[at + n].instance;
+        ++n;
+      }
+      device_->SetTexture(0, gfx::Texture{texture});
+      device_->SetTexture(5, relief ? gfx::Texture{relief} : textures_->FlatNormal());
+      device_->SetConstants(2, batch_.data(), static_cast<uint32_t>(n * sizeof(Instance)));
+      device_->Draw(36, 0, static_cast<uint32_t>(n));
+      at += n;
+    }
+    if (withSnow) device_->SetTexture(6, {});
+    device_->SetTexture(2, {});
+    device_->SetTexture(8, {});
+    device_->SetTexture(9, {});
+  }
+  settledLaid = static_cast<int>(settledVisible_.size());
+  settledLit_ = true;
 }
 
 }  // namespace render

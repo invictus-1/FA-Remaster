@@ -801,6 +801,7 @@ bool WorldPicture::RecoverDevice(std::string* error) {
   const Impl::Recovery::Behind behind = r.behind;
   n.props = static_cast<int>(kept->props.size());
   n.effects = static_cast<int>(kept->effects.size());
+  n.scars = static_cast<int>(kept->scars.size());  // [settled]
   n.looks = static_cast<int>(kept->looks.size());
   n.groundChanged = !kept->heights.empty();
 
@@ -928,9 +929,9 @@ bool WorldPicture::RecoverDevice(std::string* error) {
   }
   n.seconds = SteadySeconds() - t0;
   printf("render: the graphics device made again in %.2f s (%s; the device after %.2f s and %d %s, the map %.2f s): %s; carried over: %d props' "
-         "states, %d effects' events, %d blueprints' looks%s%s%s\n",
+         "states, %d effects' events, %d battle scars, %d blueprints' looks%s%s%s\n",
          n.seconds, why.empty() ? "it was not lost" : why.c_str(), n.deviceSeconds, n.deviceTries, n.deviceTries == 1 ? "try" : "tries", n.mapSeconds,
-         !hadWorld ? "no map was shown" : ok ? shownPath.c_str() : error->c_str(), n.props, n.effects, n.looks, n.groundChanged ? ", the ground as the game laid it" : "",
+         !hadWorld ? "no map was shown" : ok ? shownPath.c_str() : error->c_str(), n.props, n.effects, n.scars, n.looks, n.groundChanged ? ", the ground as the game laid it" : "",
          n.loadBegunAgain ? "; the map opening behind begun again" : "", ok ? "" : " (NOT as it was)");
   return ok;
 }

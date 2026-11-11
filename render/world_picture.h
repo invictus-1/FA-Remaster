@@ -98,6 +98,7 @@ class WorldPicture {
     double seconds = 0, deviceSeconds = 0, mapSeconds = 0;
     int deviceTries = 0;
     int props = 0, effects = 0, looks = 0;
+    int scars = 0;  // [settled] (the battle scars past their time: World::Kept::scars)
     bool world = false, groundChanged = false, loadBegunAgain = false;
   };
   RecoverNumbers LastRecoverNumbers() const;

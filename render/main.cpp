@@ -288,9 +288,18 @@
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
-//           --scar-test n[,radius]: n of the game's scorches laid at random round where the camera starts (within
-//           radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes: to see
-//           and time the build-up
+//           --scar-test n[,radius[,youngest]]: n of the game's scorches laid at random round where the camera starts
+//           (within radius, 40), as scripts lay them (a minute's time each), as if over the last twenty minutes (the
+//           twenty minutes up to `youngest` seconds ago): to see and time the build-up
+//           --scars-unsettled  [settled] the scars as before (World::settledScars off): each one lit by itself for as
+//           long as it is kept, and past the most the oldest fades out. By default a scar weathered to its floor is
+//           settled: kept for the whole game, the settled ones in view laid into one picture and lit once.
+//           --scar-weathering <s>, --most-scars <n>, --most-settled <n>  [settled] for tests: the seconds a scar weathers
+//           (600), the most scars not yet settled (2000), the most settled ones kept (60000)
+//           --scars-settle-in-view  [settled] for tests: a scar settles at once, also while a view shows it (by default
+//           only while none does, so that the change is not seen: Decals::settleInView)
+//           --scars-lit-once 0|1  [settled] for tests: the settled scars in view never / always laid into their own
+//           picture and lit once (by default where it pays: Decals::litOnce)
 // --mark-relief  [scars] the marks' relief lit as the ground (World::markRelief, Decals::modernRelief; modern look): normal
 //           decals (craters, trenches) lit by the modern light, kept right by night, softened under lying snow, plain
 //           normal maps (the remastered map's own) applied as such
@@ -1117,8 +1126,13 @@ struct Options {
   float hotSmoke = -1;                  // --hot-metal-smoke
   std::string wreckUnit = "uel0201";
   int scarTest = 0;                     // --scar-test
+  bool scarsUnsettled = false;          // [settled] --scars-unsettled
+  float scarWeathering = -1;            // [settled] --scar-weathering
+  int mostScars = -1, mostSettled = -1; // [settled] --most-scars, --most-settled
   bool orderTest = false;               // --order-test
-  float scarRadius = 40;
+  float scarRadius = 40, scarYoungest = 0;  // ([settled] the test's youngest scar's age, seconds)
+  bool scarsSettleInView = false;       // [settled] --scars-settle-in-view
+  int scarsLitOnce = -1;                // [settled] --scars-lit-once
   bool frameGeneration = false;         // --frame-generation
   bool captureBetween = false;          // --capture-between
   bool lowLatency = false;              // --low-latency
@@ -1409,6 +1423,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--sunlight") o->shafts = o->cloudDrift = true;  // [sunlight]
     else if (a == "--wildlife-verbose") o->wildlife = o->wildlifeVerbose = true;
     else if (a == "--battle-scars") o->battleScars = true;
+    else if (a == "--scars-unsettled") o->scarsUnsettled = true;  // [settled]
+    else if (a == "--scars-settle-in-view") o->scarsSettleInView = true;
     else if (a == "--mark-relief") o->markRelief = true;  // [scars]
     else if (a == "--leaf-light") o->leafLight = true;
     else if (a == "--blasts") o->blastWaves = o->blastDust = o->debris = true;
@@ -1691,8 +1707,12 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (unit[0]) o->wreckUnit = unit;
     }
     else if (a == "--scar-test") {
-      if (sscanf(v, "%d,%f", &o->scarTest, &o->scarRadius) < 1) return false;
+      if (sscanf(v, "%d,%f,%f", &o->scarTest, &o->scarRadius, &o->scarYoungest) < 1) return false;
     }
+    else if (a == "--scar-weathering") o->scarWeathering = static_cast<float>(atof(v));
+    else if (a == "--most-scars") o->mostScars = atoi(v);
+    else if (a == "--most-settled") o->mostSettled = atoi(v);
+    else if (a == "--scars-lit-once") o->scarsLitOnce = atoi(v);
     else if (a == "--burn-test") {  // [plants]
       if (sscanf(v, "%d,%f,%f", &o->burnTest, &o->burnRadius, &o->burnAge) < 1) return false;
     }
@@ -2607,6 +2627,12 @@ int main(int argc, char** argv) {
   if (opt.plantDensity >= 0) world.grass.plantDensity = opt.plantDensity;
   if (opt.plantTallest > 0) world.grass.plantTallest = opt.plantTallest;
   world.battleScars = opt.battleScars;
+  world.settledScars = !opt.scarsUnsettled;  // [settled]
+  world.decals.settleInView = opt.scarsSettleInView;
+  world.decals.litOnce = opt.scarsLitOnce;
+  if (opt.scarWeathering >= 0) world.decals.scarWeathering = opt.scarWeathering;
+  if (opt.mostScars >= 0) world.decals.mostScars = opt.mostScars;
+  if (opt.mostSettled >= 0) world.decals.mostSettled = opt.mostSettled;
   world.markRelief = opt.markRelief;  // [scars]
   world.decalFadeFraction = opt.decalFade;  // [decalfade]
   world.leafLight = opt.leafLight;
@@ -3283,6 +3309,7 @@ int main(int argc, char** argv) {
   float driversAt = -1;  // (the time they were last moved)
   if (opt.scarTest > 0) {  // --scar-test: the game's scorches laid at random round where the camera starts
     world.decals.battleScars = world.battleScars;
+    world.decals.settleScars = world.settledScars;  // [settled] (past the most the oldest settle, as in a game)
     world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
     uint32_t r = 12345;
     auto next = [&r]() {
@@ -3295,9 +3322,10 @@ int main(int argc, char** argv) {
       snprintf(name, sizeof name, "scorch_%03d_albedo", 1 + static_cast<int>(next() * 10) % 10);
       const float a = next() * 6.2831853f, d = opt.scarRadius * std::sqrt(next()), size = 2 + next() * 6;
       const Vec3 at{camera.target.x + std::cos(a) * d, 0, camera.target.z + std::sin(a) * d};
-      if (world.decals.Add(name, at, size, size, next() * 6.2831853f, 400, -1200.0 * next(), 60)) ++laid;  // (laid over the last 20 minutes)
+      // (laid over the last 20 minutes; [settled] or over the 20 minutes before the youngest's age)
+      if (world.decals.Add(name, at, size, size, next() * 6.2831853f, 400, -1200.0 * next() - static_cast<double>(opt.scarYoungest), 60)) ++laid;
     }
-    printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars\n", laid, world.decals.Scars());
+    printf("render: --scar-test: %d scorches laid, %d of them kept as battle scars, %d settled\n", laid, world.decals.Scars(), world.decals.Settled());
   }
   if (opt.burnTest > 0) {  // [plants] --burn-test: burns with their scorches round where the camera starts, over the last ten minutes
     world.decals.remastered = world.effectsLook == World::EffectsLook::Remastered;
@@ -5198,6 +5226,8 @@ int main(int argc, char** argv) {
       if (haveLive)
         printf("; effects: %d live of %d started, %d events of kinds not drawn yet, %d bands, %.2f ms; %d decals drawn of %d", effects.live,
                effects.started, effects.notShown, ribbons.drawnBands, effects.cpuMs, decals.drawn, decals.Count());
+      if (haveLive && decals.Settled())  // [settled]
+        printf(" (%d scars not settled, %d settled, %d of those laid into the scars' picture)", decals.Scars(), decals.Settled(), decals.settledLaid);
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (world.horizonWeather)  // [horizon]

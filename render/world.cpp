@@ -666,6 +666,7 @@ void World::Keep(Kept* out, uint32_t tick) const {
   });
   out->propsPending.assign(propEvents_.begin(), propEvents_.end());
   effects.Keep(&out->effects, tick);
+  decals.KeepScars(static_cast<double>(tick) * 0.1, &out->scars);  // [settled]
   out->wet = wet;
   out->snowLying = snowLying;
   out->selected = selected;
@@ -718,6 +719,8 @@ void World::Give(const Kept& kept) {
   propsChanged = propsGone = 0;  // (counted since the map was opened: the game's own changes from here)
   for (const FramePropEvent& e : kept.propsPending) propEvents_.push_back(e);
   effects.Queue(std::vector<FrameEffectEvent>(kept.effects));
+  // [settled] (the battle scars past their game's time, settled or weathering: laid as they were with the first frame)
+  decals.GiveScars(kept.scars);
   wet = kept.wet;
   snowLying = kept.snowLying;
   selected = kept.selected;
@@ -1573,6 +1576,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   effects.warpInColours = warpInColours && look == Look::Modern && effectsLook == EffectsLook::Remastered;  // [warpin]
   decals.battleScars = battleScars;
+  decals.SetSettleScars(settledScars);  // [settled]
   decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]
   // hot metal (hot_metal.h): this frame's, the modern look's only; the marks laid from now on glow while fresh
   hotOn_ = hotMetal && look == Look::Modern;
@@ -4913,6 +4917,8 @@ void World::Render() {
     decals.holes.kinds = decals.holes.field ? terrain.GroundKinds() : gfx::Texture{};
     decals.holes.constants = deepNow_ ? trackField.Constants() : TrackFieldConstants{};
     if (decals.Count() && hide.find("decals") == std::string::npos) {
+      // [settled] (the settled scars in view laid into their own picture, in passes of its own; Draw lights it once)
+      decals.LaySettled(view, camera, post.Depth(), clock_);
       post.BeginColorOnly();
       lights.Bind();
       decals.Draw(view, camera, post.Depth(), clock_);
