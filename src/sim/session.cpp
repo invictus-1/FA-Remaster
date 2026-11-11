@@ -302,6 +302,13 @@ bool SessionFromGameConfig(lua_State* L, int config, const LaunchParams& params,
         lua_pushstring(L, "Human");
         lua_pushboolean(L, 0);
         lua_settable(L, -3);
+        // (the lobby makes the options of a civilian army from its defaults, lobbyComm.lua GetDefaultPlayerOptions:
+        // AIPersonality is the empty string there, not nil. M28 reads it for every brain that is not human: with nil
+        // its IsM28AIPersonality raised a script error for each civilian army of a headless session. Seen 2026-11-10
+        // in the parallel-order skirmish of the gate, x4.)
+        lua_pushstring(L, "AIPersonality");
+        lua_pushstring(L, "");
+        lua_settable(L, -3);
         armies.push_back({-1, lua_gettop(L)});
       }
       a = e + 1;
