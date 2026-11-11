@@ -51,6 +51,18 @@ class Water {
   // the bed under the shallows itself (to its wet band's 0.6, gone by kSoakDepth of depth), the water's only darker again on
   // an exposed beach. The view's shore.x is 2. False: as before (viewer --soak-old).
   bool soakFixed = true;
+  // [mirrorfine] (the scan of 2026-11-11, finding 13) With ray-traced reflections (World::rayReflections): the mirror image
+  // of what stands far off across the water (an island, a shore) with soft edges. It was two rays a pixel, each meeting
+  // the island or the sky, all or nothing, and seen low across the sea it broke into flat bars a pixel high and dozens
+  // long. Now the share of a pixel's water whose rays meet the island, found by halving toward the lean from which they
+  // pass over it (water.cpp, the modern shader's mirror). False: the two rays, as before (viewer --no-mirror-fine). Built
+  // into the modern pipelines (MIRROR_FINE): a change makes them again (KeepVariants), once.
+  bool mirrorFine = true;
+  // [edgesea] Past the map's edge the modern water's surface dims over a band of its own (the view's beyondMore.x;
+  // World::surroundEdgeBandWater), built into its pipelines (EDGE_SEA) as mirrorFine is. Set by World::Begin from
+  // surroundEdgeBandWater > 0 (true, as its default is, so that the pipelines made at the load are not made again at
+  // the first frame). False: over the land's band, the very shader of before.
+  bool ownEdgeBand = true;
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
   // ocean.Active(), each variant (with the ripples' field or not, winter, the surf, the wet beach) made by PrepareOcean the
@@ -102,6 +114,10 @@ class Water {
   gfx::Pipeline pipeline_, modern_;
   gfx::Pipeline modernRipples_;  // (the modern water reading the ripples' field: made the first time it is wanted)
   bool ripplesTried_ = false;
+  bool mirrorFineBuilt_ = true;  // [mirrorfine] (the mirror's way the modern pipelines were made with)
+  bool ownEdgeBandBuilt_ = true;  // [edgesea] (and the edge's band)
+  void KeepVariants();
+  gfx::Pipeline PlainPipeline(std::string* error);  // [edgesea] (the classic look's water)
   gfx::Pipeline modernWinter_[2];  // (winter water: without and with the ripples' field; made the first time wanted)
   bool winterTried_[2] = {false, false};
   gfx::Pipeline modernSurf_[8];  // [surf] (by 1 the ripples' field, 2 winter, [shore] 4 the wet beach; each made the first time wanted)

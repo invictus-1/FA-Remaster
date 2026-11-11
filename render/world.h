@@ -506,6 +506,17 @@ class World {
   // soft step that reads from the game's height and is no line; it lies on the ground, so it does not shift with
   // the zoom). 0: the soft edge's own band, as before (viewer --surround-edge-band 0).
   float surroundEdgeBand = 12;
+  // [edgesea] (the scan of 2026-11-11, finding 4: "the sea changes tone along the map's edge, so from high up the map is a
+  // visible square in the water") Over 12 units the dimming is a soft step on land, where the ground's own pattern hides
+  // it; across open sea, one even tone, it was a straight line (green 42.4 against 38.3 over 35 pixels from the game's
+  // height; from all the way up 16 pixels, with the soft edge's shadow line on top, which a band that narrow in the
+  // picture brings back). The water's surface dims over this many world units instead (lighting.h's BEYOND_BAND; the
+  // land, and the bed seen through shallow water, keep surroundEdgeBand): the same dimming in the end, no line on the
+  // way. 192 by measure: the dimming's steepest change across the edge, in sRGB levels per 8 pixels, from the whole map
+  // from above (the game's widest view) 4.85 with 12, 1.11 with 96, 0.45 with 192 - under half the weakest step the scan
+  // saw as a line (1.04, from 230 up) - and 0.14 / 0.09 from 230 up (96 / 192). 0: over the land's band, as before
+  // (viewer --surround-edge-band-water 0).
+  float surroundEdgeBandWater = 192;
   // [snowsur] The surround under lying snow (Chris, 2026-11-10: from far up the land past the edge lay under a flat
   // grey snow beside the map's own white, and the far sea's floes stood as hard-edged cells right beside the map):
   //   - its ground holds the snow as the map's ground does (surround.h: the ground's own snow rule, materials and

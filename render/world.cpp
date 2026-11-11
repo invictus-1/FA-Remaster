@@ -1816,6 +1816,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     // [edgeband] past a sculpted surround's edge the dimming comes in over a short band (surroundEdgeBand), so that
     // where units cannot go reads from the game's height: over the soft edge's own 60 units nothing told the two apart
     if (beyondLand && sculpted && surroundEdgeBand > 0) c.beyondLand[1] = std::max(surroundEdgeBand, 0.01f);
+    // [edgesea] the water's surface over a band of its own (never narrower than the land's)
+    if (beyondLand && sculpted && surroundEdgeBandWater > 0) c.beyondMore[0] = std::max(surroundEdgeBandWater, c.beyondLand[1]);
   }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});
@@ -1836,6 +1838,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (!extraView) water.ripples.Begin(clock_, ripplesOn, sidePicture);  // [views] (moved on once a frame, by the first view)
     if (!sidePicture) water.ClearAfloat();  // [floatfoam] (what floats listed anew for each view, AddFrame; a side picture drawn
                                             // without its own AddFrame keeps the frame's)
+    water.ownEdgeBand = surroundEdgeBandWater > 0;  // [edgesea] (built into the water's pipelines: Water::KeepVariants)
     if (ripplesOn) water.PrepareRipples();
     // (winter water's pipeline made while the option is on, before the first snow needs it)
     if (winterWater && look == Look::Modern && haveMap_ && map.water.present) water.PrepareWinter(ripplesOn);
