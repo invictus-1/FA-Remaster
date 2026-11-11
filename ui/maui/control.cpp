@@ -77,7 +77,8 @@ void Control::Destroy(lua_State* L) {
     sib.erase(std::remove(sib.begin(), sib.end(), this), sib.end());
   }
   parent_ = nullptr;
-  if (!dead_ && root_ && root_ != this) root_->deadList_.push_back(this);
+  // (Not on the list already: its first Destroy, or one after SetParent took it off the list again.)
+  if (!onDeadList_ && root_ && root_ != this) root_->deadList_.push_back(this), onDeadList_ = true;
   dead_ = true;
   if (UserState* us = UserState::From(L)) us->ui().Forget(this);
   RunScript(L, "OnDestroy");
@@ -117,12 +118,18 @@ bool Control::HitTest(float x, float y) const {
 }
 
 // Inferred: the control joins the new parent's children as the newest and takes its root frame;
-// its hidden state stays as it is.
+// its hidden state stays as it is. Read (0x786ad0): a destroyed control leaves the dead list for the new parent's
+// children (control.h).
 void Control::SetParent(Control* parent) {
   if (parent == parent_ || !parent) return;
   if (parent_) {
     auto& sib = parent_->children_;
     sib.erase(std::remove(sib.begin(), sib.end(), this), sib.end());
+  }
+  if (onDeadList_) {
+    auto& gone = root_->deadList_;
+    gone.erase(std::remove(gone.begin(), gone.end(), this), gone.end());
+    onDeadList_ = false;
   }
   parent_ = parent;
   parent->children_.push_back(this);

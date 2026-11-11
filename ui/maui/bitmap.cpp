@@ -36,8 +36,10 @@ class Bitmap : public Control {
   // pattern (+0x180), its textures (+0x120) and the texture of the frame shown first (0x780872..0x7808ca) and
   // reads the four edges only after (0x7808d0..0x7808fa). FAF's notify overlay (notifyoverlay.lua
   // createEnhancementOverlay) is such a bitmap on the root frame, laid out only in its first OnFrame.
+  // (A solid colour is one texture there, CD3DSolidBatchTexture: with no pattern it is not drawn either. Only
+  // ShareTextures makes such a bitmap; InternalSetSolidColor gives the pattern {0}.)
   void Draw(lua_State* L, DrawTarget& target) override {
-    if (!solid && (textures.empty() || pattern.empty())) return;
+    if (pattern.empty() || (!solid && textures.empty())) return;
     Rect dst;
     GetRect(&dst.x0, &dst.y0, &dst.x1, &dst.y1);
     const bool turnedX = dst.x0 > dst.x1, turnedY = dst.y0 > dst.y1;
@@ -125,11 +127,13 @@ class Bitmap : public Control {
     AddLazyVar(L, bitmapHeight, "BitmapHeight");
   }
   void SetFrame(int n) { frame = std::max(0, std::min(n, static_cast<int>(pattern.size()) - 1)); }
+  // The textures as the original counts them (+0x120): a solid colour is one (0x7814c0, FromSolidColor 0x4478c0).
+  int TextureCount() const { return solid ? 1 : static_cast<int>(textures.size()); }
   // The patterns the scripts ask for by name (0x780420 .. 0x780700), of the textures' count N:
   // forward 0..N-1, backward N-1..0, ping-pong 0..N-1..0, looping ping-pong 0..N-1..1. None of them
   // moves the place in it.
   void MakePattern(int kind) {
-    const int n = static_cast<int>(textures.size());
+    const int n = TextureCount();
     pattern.clear();
     if (kind == 1) {
       for (int i = n - 1; i >= 0; --i) pattern.push_back(i);
@@ -321,7 +325,7 @@ int l_SetFramePattern(lua_State* L) {
     Logf(LogLevel::Warning, "Bitmap:SetFramePattern requires an array of integers!");
     return 0;
   }
-  const int n = luaL_getn(L, 2), textures = static_cast<int>(b->textures.size());
+  const int n = luaL_getn(L, 2), textures = b->TextureCount();
   std::vector<int> pattern;
   for (int i = 1; i <= n; ++i) {
     lua_rawgeti(L, 2, i);
@@ -338,15 +342,37 @@ int l_SetFramePattern(lua_State* L) {
   return 0;
 }
 
-// ShareTextures(bitmap): this bitmap shows the other one's textures.
+// ShareTextures(bitmap) (FA exe 0x782d60 -> CMauiBitmap::ShareTextures 0x77fcf0): two arguments, no more; this
+// bitmap's textures (+0x11c) become the other's, the very same texture objects, so with them their border (a file
+// texture's +0x14) and, for a solid colour, the colour (CD3DSolidBatchTexture); then BitmapWidth (+0x12c) and
+// BitmapHeight (+0x140) are set from the first of them (its +0xc and +0x10, 0x77fd31..0x77fd7a) as SetTexture
+// 0x77fd90 sets them: a file's size less its border on each side (0x448120), a solid colour's 2 x 2 (0x4479dd).
+// The bitmap is given back. The frame pattern (+0x180) and the place in it (+0x174) are NOT touched: a bitmap that
+// had none (made, then ShareTextures alone) still draws nothing, in the original too (Draw's test of the pattern,
+// 0x780872), until a script gives it one (SetForwardPattern ...); FAF's only caller (AutolobbyMapPreview.lua) shares
+// into a bitmap made with a solid colour, whose pattern {0} is there already. A pattern that names more textures
+// than there are now is held inside them by Draw (the original reads past them). INFERRED: the other bitmap with no
+// textures leaves the size as it was (the original reads the first texture of none there, 0x77fd37).
 int l_ShareTextures(lua_State* L) {
+  if (lua_gettop(L) != 2)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", "ShareTextures(bitmap) - allows two bitmaps to use the same textures", 2,
+                      lua_gettop(L));
   Bitmap* b = CheckControl<Bitmap>(L, 1);
   Bitmap* other = CheckControl<Bitmap>(L, 2);
   b->textures = other->textures;
   b->border = other->border;
   b->solid = other->solid;
   b->color = other->color;
-  return 0;
+  int w = 0, h = 0;
+  bool sized = false;
+  if (b->solid) w = h = 2, sized = true;
+  else if (!b->textures.empty()) TextureDimensions(L, b->textures[0], b->border, &w, &h), sized = true;
+  if (sized) {
+    b->bitmapWidth.Set(static_cast<float>(w));
+    b->bitmapHeight.Set(static_cast<float>(h));
+  }
+  lua_settop(L, 1);
+  return 1;
 }
 
 // width, height = GetTextureDimensions(filename, border = 1) (FA exe 0x780af0); nil when the

@@ -475,6 +475,8 @@ int main(int argc, char** argv) {
   ui::sound::SoundSystem sounds(&vfs);
   cfg.sound = &sounds;
   if (windowed && !noSound && !sounds.OpenDevice()) Logf(LogLevel::Warning, "moho64ui: no sound device: the run is silent");
+  // (ours) A live window with no device still moves its sounds on, by the clock (SoundSystem::RunWithoutDevice).
+  if (windowed) sounds.RunWithoutDevice();
   // A live window never waits for the disk on its frame: a wave's bytes are brought in on the sound
   // system's own thread; a run without a window (the tests) brings them in there and then, so that a
   // cue sounds at once (MOHO64UI_SOUND_TOUCH=thread / here: either way for any run).

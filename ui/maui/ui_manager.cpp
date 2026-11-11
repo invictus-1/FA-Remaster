@@ -35,7 +35,8 @@ void Frame::Update(lua_State* L, float seconds) {
     if (c->dead() || !c->needsFrameUpdate) continue;
     c->FrameUpdate(L, seconds);
   }
-  PurgeDeleted();
+  UserState* us = UserState::From(L);
+  PurgeDeleted(us ? &us->ui() : nullptr);
 }
 
 void Control::FrameUpdate(lua_State* L, float seconds) {
@@ -48,10 +49,23 @@ void Control::AbandonKeyboardFocus(lua_State* L) {
   if (ui.focus == this) ui.SetFocus(L, nullptr);
 }
 
-void Frame::PurgeDeleted() {
+void Frame::PurgeDeleted(UiManager* ui) {
   std::vector<Control*> dead;
   dead.swap(deadList_);
-  for (Control* c : dead) delete c;  // the Lua table stays; it reads as destroyed from here on
+  for (Control* c : dead) DeleteWithChildren(c, ui);  // the Lua table stays; it reads as destroyed from here on
+}
+
+// One dead control deleted, and before it the children still in its list (control.h, PurgeDeleted). Such a child is
+// on no dead list itself: Destroy takes a control out of its parent's children, SetParent off the dead list.
+void Frame::DeleteWithChildren(Control* c, UiManager* ui) {
+  std::vector<Control*> kids;
+  kids.swap(c->children_);
+  for (Control* k : kids) {
+    k->parent_ = nullptr;
+    DeleteWithChildren(k, ui);
+  }
+  if (ui) ui->Forget(c);
+  delete c;
 }
 
 // The largest Depth among the frame's living controls (CMauiFrame::GetTopmostDepth 0x796680: its controls depth
@@ -79,7 +93,7 @@ UiManager::~UiManager() {
     std::vector<Control*> all;
     Collect(f, all);
     for (Control* c : all) delete c;
-    f->PurgeDeleted();
+    f->PurgeDeleted(this);
     delete f;
   }
 }

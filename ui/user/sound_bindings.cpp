@@ -7,8 +7,10 @@
 // How its sound manager limits and fades is not read; what is here follows the sound files' own
 // settings. How it ducks the other sounds under a voice is read (sound/sound_system.h, at Duck).
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/log.h"
@@ -281,6 +283,41 @@ int l_SoundMix(lua_State* L) {
   return 1;
 }
 
+// moho64ui_SoundDevice(kind, milliseconds [, lostAfterMs, awayMs]) -> what the device says of itself, the frames
+// mixed meanwhile; nil when there is none to be had (or one runs already: a live window's). For tests in a run
+// without a window, which has no device: one is opened here, left to run for that many REAL milliseconds (the run
+// waits), and closed again. Kind "silent": the mixer on the clock with no output (SoundSystem::RunWithoutDevice).
+// Kind "output": the system's default output, as a live window opens it; it plays what the mixer holds (nothing,
+// unless the test started a sound), and with lostAfterMs it loses its output that long after it opened and finds
+// none for awayMs after that (sound/device.h SetDeviceTestLoss; the Windows session device).
+int l_SoundDevice(lua_State* L) {
+  sound::SoundSystem* s = System(L);
+  const std::string kind = luaL_checkstring(L, 1);
+  const int ms = static_cast<int>(luaL_checknumber(L, 2));
+  if (!s || s->HasDevice() || ms < 0 || ms > 10000 || (kind != "silent" && kind != "output")) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (kind == "output") {
+    sound::SetDeviceTestLoss(static_cast<int>(luaL_optnumber(L, 3, -1)), static_cast<int>(luaL_optnumber(L, 4, 0)));
+    const bool open = s->OpenDevice();
+    sound::SetDeviceTestLoss(-1, 0);
+    if (!open) {
+      lua_pushnil(L);
+      return 1;
+    }
+  } else {
+    s->RunWithoutDevice();
+  }
+  const int64_t before = s->mixer().framesMixed();
+  std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  const std::string state = s->DeviceState();
+  s->CloseDevice();
+  lua_pushstring(L, state.c_str());
+  lua_pushnumber(L, static_cast<lua_Number>(s->mixer().framesMixed() - before));
+  return 2;
+}
+
 int l_GetCueBank(lua_State* L) {
   std::string bank, cue;
   moho::SoundNames(L, 1, &bank, &cue);
@@ -323,6 +360,7 @@ void RegisterSoundBindings(lua_State* L) {
   lua_register(L, "moho64ui_SoundVoices", l_SoundVoices);
   lua_register(L, "moho64ui_SoundPlace", l_SoundPlace);
   lua_register(L, "moho64ui_SoundMix", l_SoundMix);
+  lua_register(L, "moho64ui_SoundDevice", l_SoundDevice);
 }
 
 }  // namespace moho::ui
