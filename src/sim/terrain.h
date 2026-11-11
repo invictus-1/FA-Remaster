@@ -64,6 +64,9 @@ class TerrainMap {
   // Whether SetHeightAt(i, j, h) over [x0, x1] x [z0, z1] (clipped as SetHeightAt clips) would change a vertex.
   bool WouldChangeHeights(int x0, int z0, int x1, int z1, float h) const;
   uint64_t changes() const { return changes_; }
+  // A number no other state of any map's heights in this process has: a new one at Load and at every SetHeightAt
+  // (a copy keeps its source's until one of the two is written). For caches of values made from the heights.
+  uint64_t heightStamp() const { return heightStamp_; }
   // Every rectangle of grid vertices whose heights were set since the map was loaded, in order (render request 25:
   // the drawn ground follows FlattenMapRect). Inclusive, clamped to the map; read between beats.
   struct HeightChange {
@@ -83,6 +86,7 @@ class TerrainMap {
   std::vector<uint16_t> heights_;  // (width+1) * (height+1)
   std::vector<uint8_t> types_;     // width * height
   uint64_t changes_ = 0;           // SetHeightAt calls
+  uint64_t heightStamp_ = 0;       // (heightStamp)
   std::vector<HeightChange> heightChanges_;
 };
 

@@ -1,6 +1,7 @@
 #include "sim/terrain.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -49,6 +50,12 @@ struct Reader {
 
 }  // namespace
 
+// (TerrainMap::heightStamp: process-wide, so that two maps, or one address used twice, never share a stamp)
+static uint64_t NextHeightStamp() {
+  static std::atomic<uint64_t> next{0};
+  return ++next;
+}
+
 bool TerrainMap::Load(const std::string& data, std::string* error) {
   Reader r{data};
   auto fail = [&](const char* what) {
@@ -70,6 +77,7 @@ bool TerrainMap::Load(const std::string& data, std::string* error) {
   if (!r.Need(n * 2)) return fail("truncated heightfield");
   heights_.resize(n);
   std::memcpy(heights_.data(), data.data() + r.p, n * 2);
+  heightStamp_ = NextHeightStamp();
   r.p += n * 2;
   r.Skip(1);
   r.S();  // terrain shader
@@ -175,6 +183,7 @@ void TerrainMap::SetHeightAt(int x, int z, float h) {
   float v = std::clamp(h / heightScale_, 0.0f, 65535.0f);
   heights_[static_cast<size_t>(z) * (width_ + 1) + x] = static_cast<uint16_t>(static_cast<int>(v));
   ++changes_;
+  heightStamp_ = NextHeightStamp();
 }
 
 bool TerrainMap::WouldChangeHeights(int x0, int z0, int x1, int z1, float h) const {

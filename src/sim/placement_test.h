@@ -223,6 +223,18 @@ bool LocationIsFree(W& w, const NamedFootprint& fp, const D& d, float x, float z
     const int oz = static_cast<int16_t>(RoundEven(z - fp.sizeZ * 0.5f));
     const int ox = static_cast<int16_t>(RoundEven(x - fp.sizeX * 0.5f));
     unsigned caps = w.MobileCaps(fp, ox, oz);
+    // 0x720e5e..0x720eba: Land + Seabed go where the land grid holds a cell of the footprint's rect, Water where the
+    // water grid does (GetRectOr 0x8d8460 on ogrid+0x38 / +0x48), with NO test of the footprint's IgnoreStructures
+    // flag: only OCCUPY_FootprintFits 0x7209e0 has one (0x720a2b: test byte ptr [fp + 3], 1). So for a blueprint
+    // that drives over structures (Amphibious6x6, Amphibious3x3, Vehicle5x5) a place on a structure is still not
+    // free: CAiBrain::CanBuildStructureAt 0x57cbb0, CreateUnitNearSpot 0x589910 and ResolvePossibleCollision's
+    // side-step room 0x596f30 (both through FindFreeSpot 0x62b200), the mobile build task 0x5f7440. (The navigator's
+    // and the teleport's free spot, the same function: sim/landnav.cpp FreeSpotFits, where it was seen.)
+    if (fp.flags & 1) {
+      NamedFootprint counted = fp;
+      counted.flags = static_cast<uint8_t>(counted.flags & ~1);
+      return w.FootprintFits(static_cast<uint8_t>(caps), counted, ox, oz) != 0;
+    }
     caps = w.FootprintFits(static_cast<uint8_t>(caps), fp, ox, oz);
     return caps != 0;
   }

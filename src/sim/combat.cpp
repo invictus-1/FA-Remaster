@@ -31,6 +31,7 @@
 #include <limits>
 #include <map>
 #include <string>
+#include <unordered_map>
 
 #include "core/log.h"
 #include "core/speculate.h"
@@ -216,6 +217,210 @@ static bool TerrainTriHit(float nx, float ny, float nz, float fcx, float fcz, fl
   return false;
 }
 
+// The cell (cx, cz) against the ray's piece tIn .. tOut (0x47740e..0x47768b), cut along its diagonal into two
+// triangles: P0 = ray at tIn, P1 = ray at tOut, k = cx - cz; which triangle by (P.x - P.z) against k at both ends;
+// a piece that crosses the diagonal (t = (k - (O.x - O.z)) / (D.x - D.z)) gives the first triangle P0 -> M and, if
+// that misses, the second M -> P1.
+static bool TerrainCellHit(const TerrainMap* map, int cx, int cz, const Vec3& O, const Vec3& D, float tIn, float tOut,
+                           float* dist) {
+  const Vec3 P0{O.x + D.x * tIn, O.y + D.y * tIn, O.z + D.z * tIn};
+  const Vec3 P1{O.x + D.x * tOut, O.y + D.y * tOut, O.z + D.z * tOut};
+  const float fcx = static_cast<float>(cx), fcz = static_cast<float>(cz);
+  const float hA = map->HeightAt(cx, cz), hC = map->HeightAt(cx + 1, cz + 1);
+  // 0x4778f0: the triangle holding (cx, cz + 1); 0x477b80: the one holding (cx + 1, cz)
+  auto triA = [&](const Vec3& a, const Vec3& b) {
+    const float ay = map->HeightAt(cx, cz + 1) - hA, by = hC - hA;
+    return TerrainTriHit(ay - by, 1.0f, by * 0.0f - ay, fcx, fcz, hA, O, D, a, b, tIn, dist);
+  };
+  auto triB = [&](const Vec3& a, const Vec3& b) {
+    const float ay = map->HeightAt(cx + 1, cz) - hA, by = hC - hA;
+    return TerrainTriHit(by * 0.0f - ay, 1.0f, ay - by, fcx, fcz, hA, O, D, a, b, tIn, dist);
+  };
+  const float k = static_cast<float>(cx - cz);
+  const float e0 = P0.x - P0.z, e1 = P1.x - P1.z;
+  auto mid = [&]() {
+    const float tm = (k - (O.x - O.z)) / (D.x - D.z);
+    return Vec3{O.x + D.x * tm, O.y + D.y * tm, O.z + D.z * tm};
+  };
+  if (k > e0) {
+    if (k > e1) return triA(P0, P1);
+    const Vec3 M = mid();
+    return triA(P0, M) || triB(M, P1);
+  }
+  if (!(e1 < k)) return triB(P0, P1);
+  const Vec3 M = mid();
+  return triB(P0, M) || triA(M, P1);
+}
+
+// A block's highest sample as 0x475bf0 reads it from the height field's min/max pyramid: level L >= 1, block (bx, bz)
+// clamped to the level's size, the entry's high word times 1 / 128 [0xe4f6dc]. The pyramid is exact: a level-1 entry
+// is the 3 x 3 samples from (2 bx, 2 bz), a higher one its 2 x 2 children (CHeightField::UpdateBounds 0x476bb0), and
+// SetElevationRect 0x477e10 refreshes it over (x0 - 1, z0 - 1) .. (x1, z1) of the samples it wrote, which are all the
+// entries those samples are in. So the value is taken from the samples here and kept per thread until a height
+// changes. The levels (CHeightField's ctor 0x476090, w and h the map's cells): bsr(max(w, h) - 1) + 1 of them
+// (0x4760d7..0x4760f7), level k a grid of max(1, w >> k) x max(1, h >> k) entries (0x47613c..0x476185, 0x478630). An
+// entry's children are the two (or, at the level's end, the one) entries from 2 b of the level below, so on a map
+// whose size is no power of two a high entry reaches less far than (b + 1) << L: its last level-1 entry is followed
+// down here.
+static int TerrainPyramidLevels(const TerrainMap* map) {
+  int n = 0;
+  for (unsigned v = static_cast<unsigned>(std::max(map->width(), map->height()) - 1); v; v >>= 1) ++n;
+  return n;
+}
+static float TerrainBlockMax(const TerrainMap* map, int L, int bx, int bz) {
+  struct Kept {
+    uint64_t stamp = 0;
+    std::unordered_map<uint64_t, uint16_t> m;
+  };
+  static thread_local Kept kept;
+  if (kept.stamp != map->heightStamp() || kept.m.size() > 65536) {
+    kept.stamp = map->heightStamp();
+    kept.m.clear();
+  }
+  const int w = map->width(), h = map->height();
+  bx = std::clamp(bx, 0, std::max(1, w >> L) - 1);
+  bz = std::clamp(bz, 0, std::max(1, h >> L) - 1);
+  const uint64_t key = (static_cast<uint64_t>(L) << 48) | (static_cast<uint64_t>(bz) << 24) | static_cast<uint64_t>(bx);
+  auto it = kept.m.find(key);
+  if (it == kept.m.end()) {
+    int lx = bx, lz = bz;  // the entry's last level-1 entry on each axis
+    for (int k = L; k > 1; --k) {
+      lx = std::min(2 * lx + 1, std::max(1, w >> (k - 1)) - 1);
+      lz = std::min(2 * lz + 1, std::max(1, h >> (k - 1)) - 1);
+    }
+    const int x0 = bx << L, z0 = bz << L, x1 = std::min(2 * lx + 2, w), z1 = std::min(2 * lz + 2, h);
+    uint16_t m = 0;
+    for (int z = z0; z <= z1; ++z) {
+      const uint16_t* row = map->heightRow(z);
+      for (int x = x0; x <= x1; ++x) m = std::max(m, row[x]);
+    }
+    it = kept.m.emplace(key, m).first;
+  }
+  return static_cast<float>(it->second) * 0.0078125f;
+}
+
+// CHeightField's line test 0x477030 as the exe walks it, level by level over the min/max pyramid, for the part
+// [nearT, farT] of the ray already clipped to the map in x and z. TerrainLineHit below walks the ray's cells only,
+// which gives the same answer as long as the pyramid does nothing but skip blocks the ray passes above. That fails
+// for a ray that runs exactly along a block's edge in z (its x the same at both ends, on a multiple of the block
+// size), because of how the walk goes one level down (0x4773a1..0x477409):
+//   - the stepper has already moved on to the next block (0x477230..0x477277: across x when ((curZ + step) - z1) dx
+//     > ((curX + step) - x1) dz, else across z); to go down, the move is taken back, and WHICH move it was is not
+//     remembered but tested again on the corner it led to: (curZ - z1) dx > (curX - x1) dz takes the z move back,
+//     anything else the x move (0x4773c7: comiss, jbe). For a z move that test is "the block's corner lies left
+//     of the line", true whenever the line has any dx; with dx = 0 and curX = x1 both sides are 0, and curX goes
+//     back one block instead: the walk now stands one block to the LEFT and still one block AHEAD in z;
+//   - the stepper is then set to the finer step (0x40d960): the ray's start is not inside that block, so each
+//     halving picks the half the ray "enters" (0x40da40..0x40da9c), which takes curX half-way back to the line: the
+//     block just left of the line, in the next row; and the walk goes on from there (jmp 0x477230) with t_in still
+//     the entry of the block it meant to go down into (only 0x477226 writes it).
+// So the finer blocks of the block being entered are never tested, and the first cell tested, a whole coarse block
+// further on, gets P0 = the ray at that old entry: if P0 is under THAT cell's plane the hit is "at t_in", back at
+// the coarse block's edge. Seen (weapons range, scene uefland, R0 hup, 3559): the land scout uel0101 at (638, 622)
+// shoots along x = 638 at a target on a pedestal (the samples 636..640 x 640..644 at 42, the plate at 40). The
+// shell's step from z 636.97 (y 41.658) to z 639.44: level 2, block (636,636), down to level 1; block (638,636) is
+// passed above; block (638,638) holds the pedestal's edge (max 42), so the walk goes down from it: curX 638 -> 636,
+// curZ stays 640, then (637,640) at level 0: the cell is the pedestal's flat top, P0 = (638, 41.6807289, 638) is
+// under 42: Terrain hit there, in the air two cells before the slope. Ours hit the slope a beat later, at
+// (638, 41.7131157, 639.856567).
+// Read besides: the level it starts at = bsr(ceil((far - near) max(|D.x|, |D.z|) 2.0 [0xdfeb0c])), at most the
+// number of pyramid levels, at least 0 (0x4770f4..0x4771b9); the clip against the map's highest sample before it
+// (0x477830..0x4778b9 in 0x4776e0: the top level's entry (0, 0); a ray going down starts where it comes under it,
+// one going up ends where it rises above it; the ray's part must not be empty).
+static bool TerrainLineHitPyramid(const TerrainMap* map, const Vec3& O, const Vec3& D, float nearT, float farT,
+                                  float* dist) {
+  const int w = map->width() + 1, h = map->height() + 1;  // height samples per row / column
+  const int levels = TerrainPyramidLevels(map);
+  if (D.y != 0.0f) {
+    const float t = (TerrainBlockMax(map, levels, 0, 0) - O.y) / D.y;
+    if (0.0f > D.y) {
+      if (t > nearT) nearT = t;
+    } else if (!(t > farT)) {
+      farT = t;
+    }
+  }
+  if (farT < nearT) return false;
+  auto floorI = [](float v) {  // (frndint, one down when above: 0x40d901..0x40d91b)
+    const float r = std::nearbyint(v);
+    return static_cast<int>(r) + (v < r ? -1 : 0);
+  };
+  const float ax = std::fabs(D.x), az = std::fabs(D.z);
+  const float span = ((farT - nearT) * (az <= ax ? ax : az)) * 2.0f;
+  const float spanR = std::nearbyint(span);
+  const int cells = static_cast<int>(spanR) + (span > spanR ? 1 : 0);
+  int L = -1;
+  for (unsigned v = cells > 0 ? static_cast<unsigned>(cells) : 0u; v; v >>= 1) ++L;
+  if (L >= levels) L = levels;
+  if (L < 0) L = 0;
+  // the stepper 0x40d860: mirrored so that the ray runs toward +x and +z (a block's index = cur XOR mask, mask =
+  // -step on a mirrored axis)
+  int step = 1 << L;
+  const float xN = D.x * nearT + O.x, xF = D.x * farT + O.x, zN = D.z * nearT + O.z, zF = D.z * farT + O.z;
+  const bool mx = xF < xN, mz = zF < zN;
+  const float x0 = mx ? -0.0f - xN : xN, x1 = mx ? -0.0f - xF : xF;
+  const float z0 = mz ? -0.0f - zN : zN, z1 = mz ? -0.0f - zF : zF;
+  const float dx = x1 - x0, dz = z1 - z0;
+  int maskX = mx ? -step : 0, maskZ = mz ? -step : 0;
+  int curX = floorI(x0) & -step, curZ = floorI(z0) & -step;
+  int cx = maskX ^ curX, cz = curZ ^ maskZ;
+  float tIn = nearT;
+  for (int guard = 0; guard < 4000000; ++guard) {
+    const int nX = curX + step, nZ = curZ + step;
+    if ((static_cast<float>(nZ) - z1) * dx > (static_cast<float>(nX) - x1) * dz) curX = nX;
+    else curZ = nZ;
+    const float fcurX = static_cast<float>(curX);
+    bool last = false;
+    float tOut;
+    int ncx = cx, ncz = cz;
+    if (fcurX > x1 || static_cast<float>(curZ) > z1) {
+      last = true;
+      tOut = farT;
+    } else {
+      ncx = maskX ^ curX;
+      ncz = curZ ^ maskZ;
+      if (cx != ncx) tOut = (static_cast<float>(std::max(cx, ncx)) - O.x) / D.x;
+      else tOut = (static_cast<float>(std::max(cz, ncz)) - O.z) / D.z;
+    }
+    if (cx >= 0 && cx < w - 1 && cz >= 0 && cz < h - 1) {
+      if (L > 0) {
+        const float top = TerrainBlockMax(map, L, cx >> L, cz >> L);
+        if (top >= D.y * tIn + O.y || top >= D.y * tOut + O.y) {
+          // one level down (0x4773a1): the move taken back by the test on the corner, then 0x40d960
+          if ((static_cast<float>(curZ) - z1) * dx > (fcurX - x1) * dz) curZ -= step;
+          else curX -= step;
+          --L;
+          const int fine = 1 << L;
+          if (x0 >= static_cast<float>(curX) && z0 >= static_cast<float>(curZ)) {  // the ray starts in this block
+            step = fine;
+            maskX = maskX ? -fine : 0;
+            maskZ = maskZ ? -fine : 0;
+            curX = floorI(x0) & -fine;
+            curZ = floorI(z0) & -fine;
+          } else {
+            do {
+              step >>= 1;
+              maskX >>= 1;
+              maskZ >>= 1;
+              if (!((static_cast<float>(curX) - x1) * dz < (static_cast<float>(step + curZ) - z1) * dx)) curZ += step;
+              else if (!((static_cast<float>(curZ) - z1) * dx < (static_cast<float>(step + curX) - x1) * dz)) curX += step;
+            } while (fine < step);
+          }
+          cx = maskX ^ curX;
+          cz = curZ ^ maskZ;
+          continue;  // (t_in stays)
+        }
+      } else if (TerrainCellHit(map, cx, cz, O, D, tIn, tOut, dist)) {
+        return true;
+      }
+    }
+    if (last) return false;
+    tIn = tOut;
+    cx = ncx;
+    cz = ncz;
+  }
+  return false;
+}
+
 // CHeightField's line test 0x477030 (behind STIMap::Intersection 0x476f30): the first t in [nearT, farT] at which
 // the ray O + D t is under the terrain. The exe walks a min/max pyramid of the heights; what it ends up testing
 // are the ray's cells in order, each cut along its (x, z) -> (x + 1, z + 1) diagonal into two triangles. (The
@@ -252,6 +457,37 @@ static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, 
   const float x0 = mx ? -0.0f - xN : xN, x1 = mx ? -0.0f - xF : xF;
   const float z0 = mz ? -0.0f - zN : zN, z1 = mz ? -0.0f - zF : zF;
   const float dx = x1 - x0, dz = z1 - z0;
+  // A ray with no dx: the exe's own walk (TerrainLineHitPyramid above: only such a ray can run along a block's edge).
+  // MOHO64_DEBUG_TERRAINWALK=1 logs each such ray whose answer the cells' walk below would not have given; =2 also
+  // walks every other ray both ways and logs a difference (the answer stays the cells').
+  static const int dbgWalk = getenv("MOHO64_DEBUG_TERRAINWALK") ? atoi(getenv("MOHO64_DEBUG_TERRAINWALK")) : 0;
+  static thread_local bool inDbg = false;
+  if (!inDbg) {
+    if (dx == 0.0f && !dbgWalk) return TerrainLineHitPyramid(map, O, D, nearT, farT, dist);
+    if (dbgWalk && (dx == 0.0f || dbgWalk >= 2)) {
+      float tp = 0.0f, tc = 0.0f;
+      const bool hp = TerrainLineHitPyramid(map, O, D, nearT, farT, &tp);
+      inDbg = true;
+      const bool hc = TerrainLineHit(map, O, D, nearT, farT, &tc);
+      inDbg = false;
+      static std::atomic<uint64_t> nRays{0}, nNoDx{0}, nDiffer{0};
+      const bool differ = hp != hc || (hp && std::memcmp(&tp, &tc, sizeof tp) != 0);
+      const uint64_t n = ++nRays;
+      if (dx == 0.0f) ++nNoDx;
+      if (differ) {
+        ++nDiffer;
+        Logf(LogLevel::Info, "terrainwalk: %s ray O %.9g %.9g %.9g D %.9g %.9g %.9g t %.9g..%.9g: pyramid %d %.9g, cells %d %.9g",
+             dx == 0.0f ? "z" : "any", O.x, O.y, O.z, D.x, D.y, D.z, nearT, farT, hp ? 1 : 0, tp, hc ? 1 : 0, tc);
+      }
+      if ((n & (n - 1)) == 0 || n % 100000 == 0)
+        Logf(LogLevel::Info, "terrainwalk: count %llu rays walked both ways, %llu of them with no dx, %llu differ",
+             static_cast<unsigned long long>(n), static_cast<unsigned long long>(nNoDx.load()),
+             static_cast<unsigned long long>(nDiffer.load()));
+      const bool usePyramid = dx == 0.0f;
+      if (usePyramid ? hp : hc) *dist = usePyramid ? tp : tc;
+      return usePyramid ? hp : hc;
+    }
+  }
   int curX = static_cast<int>(std::floor(x0)), curZ = static_cast<int>(std::floor(z0));
   int cx = mx ? ~curX : curX, cz = mz ? ~curZ : curZ;
   float tIn = nearT;
@@ -272,42 +508,7 @@ static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, 
       if (cx != ncx) tOut = (static_cast<float>(std::max(cx, ncx)) - O.x) / D.x;
       else tOut = (static_cast<float>(std::max(cz, ncz)) - O.z) / D.z;
     }
-    if (cx >= 0 && cx < w - 1 && cz >= 0 && cz < h - 1) {
-      const Vec3 P0{O.x + D.x * tIn, O.y + D.y * tIn, O.z + D.z * tIn};
-      const Vec3 P1{O.x + D.x * tOut, O.y + D.y * tOut, O.z + D.z * tOut};
-      const float fcx = static_cast<float>(cx), fcz = static_cast<float>(cz);
-      const float hA = map->HeightAt(cx, cz), hC = map->HeightAt(cx + 1, cz + 1);
-      // 0x4778f0: the triangle holding (cx, cz + 1); 0x477b80: the one holding (cx + 1, cz)
-      auto triA = [&](const Vec3& a, const Vec3& b) {
-        const float ay = map->HeightAt(cx, cz + 1) - hA, by = hC - hA;
-        return TerrainTriHit(ay - by, 1.0f, by * 0.0f - ay, fcx, fcz, hA, O, D, a, b, tIn, dist);
-      };
-      auto triB = [&](const Vec3& a, const Vec3& b) {
-        const float ay = map->HeightAt(cx + 1, cz) - hA, by = hC - hA;
-        return TerrainTriHit(by * 0.0f - ay, 1.0f, ay - by, fcx, fcz, hA, O, D, a, b, tIn, dist);
-      };
-      const float k = static_cast<float>(cx - cz);
-      const float e0 = P0.x - P0.z, e1 = P1.x - P1.z;
-      auto mid = [&]() {
-        const float tm = (k - (O.x - O.z)) / (D.x - D.z);
-        return Vec3{O.x + D.x * tm, O.y + D.y * tm, O.z + D.z * tm};
-      };
-      bool hit;
-      if (k > e0) {
-        if (k > e1) {
-          hit = triA(P0, P1);
-        } else {
-          const Vec3 M = mid();
-          hit = triA(P0, M) || triB(M, P1);
-        }
-      } else if (!(e1 < k)) {
-        hit = triB(P0, P1);
-      } else {
-        const Vec3 M = mid();
-        hit = triB(P0, M) || triA(M, P1);
-      }
-      if (hit) return true;
-    }
+    if (cx >= 0 && cx < w - 1 && cz >= 0 && cz < h - 1 && TerrainCellHit(map, cx, cz, O, D, tIn, tOut, dist)) return true;
     if (last) return false;
     tIn = tOut;
     cx = ncx;

@@ -1272,15 +1272,31 @@ bool UnitFitsAt(Sim& sim, const Unit* u, float x, float z) {
 // Seen: FAF 3840 pro replay 6v6_2 6722, army 5's Salem 0x500067 (urs0201: AltFootprint water only, forced by its
 // script at 6721) leaves its naval factory for the rally cell (855,573): the original keeps that cell and drives
 // straight out; ours found the cell unfit for the water-only footprint, took (851,569) and turned at once.
+//
+// A structure under the footprint makes the place unfit WHATEVER the footprint's IgnoreStructures flag: 0x720d90's
+// mobile branch (0x720e5e..0x720eba) takes Land + Seabed off the caps OCCUPY_Check 0x5652e0 gave (its mobile path,
+// OCCUPY_MobileCheck 0x564ab0: the terrain's) where the land grid (ogrid+0x38, GetRectOr 0x8d8460) holds a cell of
+// the blueprint footprint's rect, and Water where the water grid (+0x48) does; it has no test of the flag, which
+// only OCCUPY_FootprintFits 0x7209e0 reads (0x720a2b: test byte ptr [fp + 3], 1), the path search's and Reach's fit.
+// So a unit that drives over structures (Amphibious6x6, Amphibious3x3, Vehicle5x5) is still never SENT onto one:
+// its 1x1 goal moves to the first free ring place. Seen (weapons range, scene uefland, R0 appr, 3377 on): the
+// Fatboy MkII uelb0401 (no Footprint of its own: Amphibious6x6) attacks a T1 power generator at (251, 404); its
+// attack task's later goals are the generator's place, cell (248,401). The original's waypoints (from its headings)
+// are (243,393) at 3405 / 3446 and (242,394) at 3451: the end of a path to (242,395), the first ring candidate
+// (-6, -6); ours kept (248,401) and went by (244,400), (245,401).
+static bool FreeSpotGridFits(const PathGrid* g, int x, int z) {
+  if (!g) return true;
+  return FitsCaps(g->Caps(x, z), false, g->BlockedLand(x, z), g->BlockedWater(x, z)) != 0;
+}
 static bool FreeSpotFits(Sim& sim, const Unit* u, const PathCell& c) {
-  if (!(u->altFootprintNav || u->altFootprintForced)) return Fits(sim, u, c);
+  if (!(u->altFootprintNav || u->altFootprintForced)) return FreeSpotGridFits(Grid(sim, u), c.x, c.z);
   const MotionBlueprint& b = Bp(u);
   if (tl_navDry && b.gridOwner != &sim.navigation()) throw NavDryStop{};
   const PathGrid* g = FootprintGrid(sim, b);
   if (!g) return true;
   const float x = c.x + SX(u) * 0.5f, z = c.z + SZ(u) * 0.5f;
   const float bx = x - std::max<int>(1, b.footprint.sizeX) * 0.5f, bz = z - std::max<int>(1, b.footprint.sizeZ) * 0.5f;
-  return g->Passable(static_cast<int>(std::nearbyint(bx)), static_cast<int>(std::nearbyint(bz)));
+  return FreeSpotGridFits(g, static_cast<int>(std::nearbyint(bx)), static_cast<int>(std::nearbyint(bz)));
 }
 
 // The rings of the free-spot search 0x62b200 around a cell that does not fit: square rings stepping by the
