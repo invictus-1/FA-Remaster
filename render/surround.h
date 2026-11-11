@@ -59,6 +59,17 @@
 //   and where none stand (farther out than the scenery goes, or with the scenery off) the forest as one canopy: dark
 //   green crowns some five world units across with the floor in their shade between them (as the map's own woods look
 //   from above), each crown's sunny side lighter, the grain let go of as a crown gets smaller than a pixel.
+//   [snowsur] Under LYING SNOW (while the ground lays its snow by its own pipeline, Terrain::snowGround) the detail look
+//   holds it as the map's ground does: a variant of its pipeline (SURROUND_SNOW) works out what the ground's shader
+//   works out before the light (terrain.cpp, SnowAround and SnowMakeUp: how deep and how readily the snow lies by the
+//   slope, the wind's lee and the hold on steep ground, the sky's light it gets, the shade in hollows under an
+//   overcast; the "fresh" snow material's colour, creases, roughness and small shapes, its mottled edge and the thin
+//   snow's cover), and lighting.h lays it by the same rule and the same patches (they are laid by the place in the
+//   world, so they run on over the edge). What stands round a place is not known out there but for the surround's own
+//   woods (the forest's picture counts as the crowns over it; the painted canopy's crowns hold two thirds of the snow); by the
+//   edge the map's own shelter (read on past it, mirrored) goes over into that. Not out there: the drifts and their
+//   material, trodden and packed snow, the steep faces' frozen recolour. Without snow lying the pipeline is the one it
+//   was. The block-out keeps the lighting's plain snow.
 //   Without "masks" in the json, or with `blockOut` set: the block-out, as before.
 #pragma once
 #include <cstdint>
@@ -164,6 +175,8 @@ class Surround {
   // under the forest and the canopy's colour as the json gives them; the map's upper layer where each layer shows
   // (Terrain::UpperByLayer, asked once); the ground whose layers are bound (Prepare's)
   gfx::Pipeline detail_;
+  gfx::Pipeline detailSnow_;  // [snowsur] (its variant that holds lying snow as the ground does: made the first time)
+  bool detailSnowTried_ = false;
   bool detailTried_ = false, detailNow_ = false, upperAsked_ = false;
   std::vector<uint8_t> masks_, forest_;
   int masksSamples_ = 0, forestSamples_ = 0;

@@ -699,6 +699,10 @@ bool Horizon::Begin(const MapData& map, float reach, const Weather& weather, flo
   k.ice[0] = iceAmount;
   k.ice[1] = std::max(6.0f, 0.012f * R);
   k.ice[2] = R * (0.9f - 0.52f * iceAmount);
+  if (iceFrom > k.ice[1]) {  // [snowsur] (beside a sculpted surround: from farther out, closing a third of the reach on)
+    k.ice[1] = iceFrom;
+    k.ice[2] = std::max(k.ice[2], iceFrom + 0.33f * R);
+  }
   k.ice[3] = std::max(floeSize, 1.0f);
   k.drift[0] = windX * iceDrift * time;
   k.drift[1] = windZ * iceDrift * time;

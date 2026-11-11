@@ -2095,6 +2095,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       w.cloudCover = c.skyClouds[0];
       w.cold = climate == Climate::Cold;
       w.seed = weatherSeed;
+      // [snowsur] (beside a sculpted surround the winter sea's floes begin far out: Horizon::iceFrom)
+      horizon.iceFrom = mapSurround && surround.Usable() && !terrain.beyondCopies ? std::max(surroundIceFrom, 0.0f) * terrain.beyondReach : 0.0f;
       horizonNow_ = horizon.Begin(map, terrain.beyondReach, w, time, camera, view.width, view.height);
     }
   }
