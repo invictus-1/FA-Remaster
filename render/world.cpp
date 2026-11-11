@@ -1788,6 +1788,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     }
     surround.blockOut = surroundBlockOut;        // (the detail look's switches)
     surround.edgeMirror = surroundEdgeMirror;    // [edgehand]
+    surround.grain = surroundGrain;              // [surgrain]
+    water.surf.outsideLap = mapSurround && surround.Usable() && !surroundBlockOut ? surroundShoreLap : 0.0f;  // [surshore] (the detail look's)
     surround.handOver = surroundHandOver;
     surround.forestFloor = surroundForestFloor;
     const bool sculpted = mapSurround && surround.Usable();

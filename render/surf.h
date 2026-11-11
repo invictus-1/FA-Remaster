@@ -445,6 +445,9 @@ class Surf {
   // up, blue down, green the white water); [shore] 3 with World::waterDetail, over the beach the wetness the surf lays
   // (SurfWetAt: red the film a wave left, green how wet; the water as it is); 0 off.
   int view = 0;
+  // [surshore] How much of the water's own even foam stays along the shores past the map's edge, where the surf has no
+  // field (the world sets it for a map with a sculpted surround: World::surroundShoreLap); 0: all of it, as before.
+  float outsideLap = 0;
   // The most puffs kept (the oldest let go first), and how far from the eye spray is still thrown.
   static constexpr int kMostPuffs = 3000;
   float farthest = 420;

@@ -710,7 +710,8 @@ void Surf::Constants(float area[4], float look[4], float look2[4], float look3[4
   look2[3] = strength * fade_;
   look3[0] = static_cast<float>(view);
   look3[1] = WetShare();  // [shore] (the beach's wetness: read by the water's pass with World::waterDetail alone)
-  look3[2] = look3[3] = 0;
+  look3[2] = std::max(outsideLap, 0.0f);  // [surshore]
+  look3[3] = 0;
 }
 
 const Surf::Kind& Surf::KindOf(const std::string& blueprint) {

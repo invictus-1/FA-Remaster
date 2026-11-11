@@ -34,6 +34,25 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 74. To the VISUALS track: smaller, softer patches of rock, scree and soil in the first 150 units outside the map (2026-11-11; not blocking)
+
+**What:** in the surround's ground shares, within the first 150 units past the map's edges, make the patches of scree,
+rock, pale rock and soil smaller and softer: partial shares where they meet their neighbours rather than 0 / 1, and
+less of their pattern at 8 to 32 units. Finer masks are NOT needed (2 units a sample is enough).
+
+**Why:** the map scan of 2026-11-11 found the land outside coarser than the map from above (hard-edged blobs). Measured
+on straight-down pictures north of the north edge (x 560-1024, 240 units each side): as patterns your shares have 1.7
+times the map's energy at 8 to 32 units and 1.3 to 1.5 times at 2 to 8 units (hard layers and soil; dry grass 1.3 /
+1.0), and the map itself has only 0.04 of its energy under 2 units, so sampling yours finer would gain little. Aim: the
+map's own (a factor of about 0.6 at 8-32 units, 0.7 at 2-8).
+
+**What the renderer did meanwhile** ([surgrain], render, this commit): the borders between your layers are made
+ragged by noise, soil is laid round the feet of the hard layers, a small relief and a tone variation are added. Fine
+detail outside rose from 0.73 to 0.87 of the map's and edge sharpness from 0.82 to 1.04 (north edge, straight down).
+Raising it further in the shader drew streaks, so the rest is the patches' own shape.
+
+**Answer:** (none yet)
+
 ## 73. To the VISUALS track: the carried ledges read as straight stripes (2026-11-11; follows 72, my ask's fault; not blocking) - DONE
 
 **Who:** renderer. Your section 132 files are read (18,643 pieces, no error lines) and do what request 72 asked, and that

@@ -142,7 +142,8 @@ cbuffer WaterConstants : register(b1) {
   float4 surfLook;        // x the waves' height near the shore; y their phase (cycles); z their length at sea; w the run-up's height
   float4 surfLook2;       // x how rough the sea is; y the depth a wave breaks at, by its height; z the run-up's share of a period; w the white water's strength
   float4 surfLook3;       // x a view for checking (Surf::view: 1 the field, 2 the waves; 0 off); y [shore] how much of the beach's
-                          // wetness the surf lays (Surf::WetShare; read with World::waterDetail alone)
+                          // wetness the surf lays (Surf::WetShare; read with World::waterDetail alone); z [surshore] how much of
+                          // the water's own foam stays along the shores past the map's edge (Surf::outsideLap; 0: all, as before)
 #endif
 };
 Texture2D waterMap : register(t0);
@@ -898,6 +899,15 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // waterline only what the last wave left stays (surf.lap: little where the water is calm or sheltered); round what
   // stands in the water (higher than the map's ground) it stays as it was
   float shoreLap = lerp(surf.lap, 1, smoothstep(0.3, 0.8, bed.y - surf.ground));
+  // [surshore] past the map's edge the surf's field does not reach: its lap goes back to 1 over sixteen units and the
+  // field's ground there is not the ground's, so the water's own even band of foam stood whole along a sculpted
+  // surround's shores, a hard white ribbon along the stepped waterline beside the map's soft surf (the scan of
+  // 2026-11-11: the west lake's rim white in its outside half). With a sculpted surround (surfLook3.z, Surf::outsideLap)
+  // the shores out there keep a sheltered shore's lap.
+  [branch] if (surfLook3.z > 0) {
+    float2 within = min(still.xz, mapSize.xy - still.xz);
+    shoreLap = lerp(shoreLap, surfLook3.z, saturate(-min(within.x, within.y) / 16));
+  }
   much *= shoreLap;
 #endif
   // (open water, away from every shore: only wisps of it are left, soft at their edges, on the
