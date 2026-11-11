@@ -2433,6 +2433,72 @@ void Terrain::HeightsChanged(int x0, int z0, int x1, int z1) {
 // smaller than 3 cm) and a quarter of a world unit (the decals lie on the relief's middle). Half of it for grass (a grass
 // scan's relief is mostly the blades lying over the turf, which this draws as solid ridges, nothing seen under them).
 // Times parallaxDepth.
+// (surround) The layers' pictures bound for another's shader, where the ground's own has them, and their constants (as Draw
+// sets them).
+bool Terrain::BindLayers(LayerTiles* tiles) const {
+  if (!map_ || levels_.empty()) return false;
+  *tiles = LayerTiles{};
+  for (int i = 0; i < 10; ++i) tiles->albedoTile[i][0] = albedoScale_[i] > 0 ? 1.0f / albedoScale_[i] : 0;
+  for (int i = 0; i < 9; ++i) tiles->albedoTile[i][1] = richGround && materials_ && material_[i] ? 1.0f : 0.0f;
+  for (int i = 0; i < 9; ++i) tiles->normalTile[i][0] = normalScale_[i] > 0 ? 1.0f / normalScale_[i] : 0;
+  for (int i = 0; i < 9; ++i) tiles->normalTile[i][1] = normalUp_[i] ? 1.0f : 0.0f;
+  tiles->xp = shaderKind_ == 1 ? 1.0f : 0.0f;
+  tiles->specular = map_->lighting.specular.x;
+  device_->SetTexture(2, maskLow_);
+  device_->SetTexture(3, maskHigh_);
+  for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);
+  for (int i = 0; i < 9; ++i) device_->SetTexture(16 + i, normal_[i]);
+  if (materials_) device_->SetTexture(25, materials_);
+  return true;
+}
+
+// (surround) The upper layer's mean colour and alpha where each layer shows: from its file and the map's two masks, read
+// on the processor at 256 places across and down (the upper layer is a soft picture over the whole map; the masks'
+// fine shapes even out over a layer's whole area).
+bool Terrain::UpperByLayer(float out[9][4]) const {
+  for (int n = 0; n < 9; ++n) std::fill(out[n], out[n] + 4, 0.0f);
+  if (!map_ || map_->albedo[9].texture.empty()) return false;
+  const std::optional<std::string> file = textures_->ReadFile(map_->albedo[9].texture);
+  if (!file) return false;
+  std::string why;
+  DdsImage upper, low, high;
+  std::vector<uint8_t> u, l, h;
+  if (!ParseDds(*file, &upper, &why) || !DecodeRgba(upper, 0, &u)) return false;
+  if (!ParseDds(map_->maskLow, &low, &why) || !DecodeRgba(low, 0, &l)) return false;
+  const bool eight = shaderKind_ == 1 && ParseDds(map_->maskHigh, &high, &why) && DecodeRgba(high, 0, &h);
+  const int across = 256;
+  double sum[9][4] = {}, weight[9] = {}, all[4] = {};
+  auto at = [](const std::vector<uint8_t>& pixels, const DdsImage& image, int i, int j, int across) {
+    const int x = std::min(image.width - 1, (2 * i + 1) * image.width / (2 * across)), y = std::min(image.height - 1, (2 * j + 1) * image.height / (2 * across));
+    return pixels.data() + (static_cast<size_t>(y) * static_cast<size_t>(image.width) + static_cast<size_t>(x)) * 4;
+  };
+  for (int j = 0; j < across; ++j)
+    for (int i = 0; i < across; ++i) {
+      const uint8_t* c = at(u, upper, i, j, across);
+      const uint8_t* a = at(l, low, i, j, across);
+      const uint8_t* b = eight ? at(h, high, i, j, across) : nullptr;
+      // each layer's share: the lower layer, then each stratum laid over what is there by its mask (mask * 2 - 1)
+      double share[9] = {1, 0, 0, 0, 0, 0, 0, 0, 0};
+      for (int n = 1; n < 9; ++n) {
+        const uint8_t raw = n <= 4 ? a[n - 1] : b ? b[n - 5] : 0;
+        const double m = std::clamp(raw / 255.0 * 2 - 1, 0.0, 1.0);
+        for (int k = 0; k < n; ++k) share[k] *= 1 - m;
+        share[n] = m;
+      }
+      for (int k = 0; k < 4; ++k) all[k] += c[k] / 255.0;
+      // (by the share's square: where a layer shows most counts most, not the many places it shows a little among others)
+      for (int n = 0; n < 9; ++n) {
+        const double much = share[n] * share[n];
+        weight[n] += much;
+        for (int k = 0; k < 4; ++k) sum[n][k] += much * (c[k] / 255.0);
+      }
+    }
+  const double places = static_cast<double>(across) * across;
+  for (int n = 0; n < 9; ++n)
+    for (int k = 0; k < 4; ++k) out[n][k] = static_cast<float>(weight[n] > 1e-3 * places ? sum[n][k] / weight[n] : all[k] / places);
+  return true;
+}
+
 float Terrain::LayerDepth(int i) const {
   const float perMetre = layerUnitsPerMetre_[i] > 0 ? layerUnitsPerMetre_[i] : albedoScale_[i] / 2.0f;
   return std::min({0.03f * perMetre, 0.02f * albedoScale_[i], 0.25f}) * (1 - 0.5f * groundKind_[i][3]) * parallaxDepth;
