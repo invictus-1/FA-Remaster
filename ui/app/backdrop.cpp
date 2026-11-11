@@ -264,9 +264,9 @@ bool Backdrop::AskDevice(DeviceAsk ask, Recovered* result) {
 
 bool Backdrop::LetGoOfLostDevice() { return AskDevice(DeviceAsk::LetGo, nullptr); }
 bool Backdrop::LoseDeviceForTest() { return AskDevice(DeviceAsk::Lose, nullptr); }
-Backdrop::Recovered Backdrop::RecoverDevice() {
+Backdrop::Recovered Backdrop::RecoverDevice(bool takeMapAsGone) {
   Recovered r;
-  AskDevice(DeviceAsk::Recover, &r);
+  AskDevice(takeMapAsGone ? DeviceAsk::RecoverNoMap : DeviceAsk::Recover, &r);
   return r;
 }
 
@@ -290,6 +290,7 @@ bool Backdrop::ServeDevice(render::WorldPicture& picture) {
   } else {
     r.own = true;
     r.ok = picture.RecoverDevice(&r.error);
+    if (r.ok && ask == DeviceAsk::RecoverNoMap) r.ok = false, r.error = "a check: its map is taken to be gone";
     r.lost = !r.ok && picture.DeviceLost();
     const render::WorldPicture::RecoverNumbers n = picture.LastRecoverNumbers();
     r.seconds = n.seconds, r.deviceSeconds = n.deviceSeconds, r.mapSeconds = n.mapSeconds, r.deviceTries = n.deviceTries;
@@ -305,7 +306,7 @@ bool Backdrop::ServeDevice(render::WorldPicture& picture) {
       deviceReason_.clear();
     } else if (!r.lost) {
       // (a device, but the map could not be opened again: this picture shows nothing more and its thread ends; the
-      // program closes, GameSession::ServeDevice)
+      // menu goes on without its background and says so, GameSession::RecoverPictures)
       running_ = false;
     }
   }
@@ -313,6 +314,9 @@ bool Backdrop::ServeDevice(render::WorldPicture& picture) {
     std::lock_guard<std::mutex> lock(deviceMutex_);
     deviceAsk_ = DeviceAsk::None;
     deviceAnswer_ = answer, deviceResult_ = r, deviceAnswered_ = true;
+    // (its map gone: this picture is no longer one of the program's from now, not only once the thread has taken it
+    // down, which lasts seconds: the next ask must not wait for it)
+    if (!running_) pictureState_ = PictureState::Ended;
   }
   deviceCv_.notify_all();
   return deviceLetGo_ || deviceLost_;
