@@ -565,6 +565,11 @@ float4 AirOver(float3 world) {
 // [weather] The dimming and the line along the edge are the ground's, not the air's before it: what the air adds (fog, mist,
 // the haze) is taken off first and laid again after, as on the map (they darkened the fog past the edge: seams down the
 // strategic view at the map's sides, Chris's snapshot test, 2026-10-25).
+// [edgesea] BEYOND_BAND: over how many world units past the edge the soft edge's dimming comes in: the land's, beyondLand.y,
+// unless a shader defines it before this block (the water's pipelines with their own band, water.cpp's EDGE_SEA: beyondMore.x).
+#ifndef BEYOND_BAND
+#define BEYOND_BAND beyondLand.y
+#endif
 float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   float t = saturate(outside * beyond.z);
   float3 airAdds = 0;
@@ -580,11 +585,11 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
     // over beyondLand.y world units, and a soft shadow lies along the edge itself, fading out over beyondLand.x
     // pixels at any zoom (`pixel`: how much of the way out one pixel is), so where the playable ground ends stays
     // plain from all the way up without a hard line
-    float grow = smoothstep(0, beyondLand.y, outside);
+    float grow = smoothstep(0, BEYOND_BAND, outside);
     color = lerp(color, dot(color, float3(0.3, 0.6, 0.1)), beyondLand.w * grow) * lerp(1, abs(beyond.w), grow);
     // (sky) the shadow only from far up, while the dimming's band is too narrow in the picture to show the edge by itself;
     // close in, over a band many pixels wide, it read as a seam cut through the land and the sea
-    float shadow = beyondLand.z * (1 - smoothstep(6, 24, beyondLand.y / max(pixel, 1e-5)));
+    float shadow = beyondLand.z * (1 - smoothstep(6, 24, BEYOND_BAND / max(pixel, 1e-5)));
     if (pixel > 0) color *= 1 - shadow * exp(-outside / max(pixel * beyondLand.x, 1e-4));
   } else {
     // just outside: dimmer and with a third of its colour gone, behind a thin dark line along the

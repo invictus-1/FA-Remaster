@@ -100,7 +100,7 @@ float4 PS(VOut i) : SV_Target {
   through *= 1 - c;
   // the modern look works in linear light: the same water for now, its colours converted
   if (look > 0.5) rgb = ThroughAirTo(pow(max(rgb, 0), 2.2) * (lightMultiplier * modern.x * 0.55 * daylight), i.world);
-  return float4(BeyondMap(rgb, i.world), 1 - through);
+  return float4(BeyondMap(rgb, i.world), 1 - through);  // ([edgesea] with EDGE_SEA over the water's own band: BEYOND_BAND)
 }
 )hlsl";
 
@@ -301,6 +301,30 @@ float3 WorldAt(float2 pixel, float depth) {
   float2 ndc = float2(pixel.x * viewport.z * 2 - 1, 1 - pixel.y * viewport.w * 2);
   return cameraPosition + (cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz) * away;
 }
+
+#if RAYS && MIRROR_FINE
+// [mirrorfine] The way a line of sight goes on mirrored off water that leans by `lean` (how far its upward face tips, along
+// x and z, for each unit up), never below the horizon (as the mirror's rays always were kept).
+float3 MirrorOff(float3 toPixel, float2 lean) {
+  float3 d = reflect(toPixel, normalize(float3(lean.x, 1, lean.y)));
+  d.y = max(d.y, 0.02);
+  return normalize(d);
+}
+// [mirrorfine] Whether a ray meets anything at all (ray_scene.h's RayTrace without what it met: the search ends at the
+// first thing in the way, leaves by their chance as there).
+bool RayMeets(float3 from, float3 d, float tMin, float tMax, uint mask, uint seed) {
+  RayDesc ray;
+  ray.Origin = from;
+  ray.Direction = d;
+  ray.TMin = tMin;
+  ray.TMax = tMax;
+  RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> q;
+  q.TraceRayInline(scene, RAY_FLAG_NONE, mask, ray);
+  while (q.Proceed())
+    if (RayTakesLeaf(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), seed)) q.CommitNonOpaqueTriangleHit();
+  return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+#endif
 
 #if !LIFT
 // [floatfoam] The map's ground (Terrain::HeightTexture, one a grid point; Water::SetGround), for telling what stands off it
@@ -683,6 +707,18 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     glintWide *= min(1, kGlitterMost / max(max(glintWide.x, glintWide.y), 1e-8));  // (scaled whole: it stays a spread)
   }
 #endif
+#if RAYS && MIRROR_FINE
+  // [mirrorfine] (Water::mirrorFine, built in as MIRROR_FINE; the rays' mirror image, below) How much the mirrored ray's
+  // height over the horizon changes from this pixel to the next, as a lean of the surface toward the eye: the calmed lean's own change (the waves
+  // from row to row of the picture: mirrorStep.x) and half the line of sight's (a mirror raises the ray by twice its lean:
+  // mirrorStep.y). Taken here, before any pixel can be left out.
+  float2 mirrorToEye = normalize(-toPixel.xz + 1e-6);
+  float2 mirrorStep = 0;
+  {
+    float2 lean = float2(0.3 * dot(N.xz, mirrorToEye) / max(N.y, 0.05), 0.5 * asin(saturate(-toPixel.y)));
+    mirrorStep = abs(ddx(lean)) + abs(ddy(lean));
+  }
+#endif
 
   // the light on the water
   float shadow = SunShadow(i.world, float3(0, 1, 0)) * CloudShadow(i.world);
@@ -1030,6 +1066,81 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // many facets of real ripples give, not a hard dash.)
     uint seed = RayHash(asuint(i.world.x * 37.0) ^ RayHash(asuint(i.world.z * 53.0)));
     float3 mirrored = 0;
+#if MIRROR_FINE
+    {
+      // [mirrorfine] (the scan of 2026-11-11, finding 13: "mirror images of islands in the sea break into flat horizontal
+      // bars". They were these two rays': each met the island or the sky, all or nothing, by the lean of the one pixel's
+      // water; seen low across the sea a row of the picture takes in the water of several world units, each row other
+      // waves, so that a row mirrored the island, the next the sky: runs of one tone a pixel high and dozens long, with a
+      // third tone where one ray met and the other did not. The picture's march, below, draws next to nothing that far
+      // off: without the rays the sea shows no island at all.)
+      // One mirror image now, off the lean kept at 30% (between the two), with a soft edge: a pixel's water is taken to
+      // lean toward the eye by a spread about that (a bell curve: the two rays' leans apart, 15% of the lean either way;
+      // the lean's change to the next pixel, mirrorStep, above, as a footprint a pixel wide; the ocean's waves too small
+      // for the pixel, calmed as much), and it mirrors the island with the share of those leans whose rays meet it. A ray
+      // off a surface leaning more toward the eye rises higher, and passes over what a lower one meets: the lean from which
+      // the rays pass over (the island's skyline as the water sees it) is found by halving between a ray that meets and one
+      // that does not, two spreads to either side of the kept lean; the share is the bell curve's below that lean. Where
+      // both rays agree it is all or nothing as before. Rays: two a pixel that say what they met, as before (what both
+      // met is averaged, as it was), and in the edge's pixels three more that only say whether they met anything.
+      // (And where the lean changes from one row of the picture to the next by as much as it is, the rows no longer show
+      // the waves but pick one each at random: by that share the lean is not kept but counted into the spread. Far off
+      // the image then stands as off calm water, drawn out toward the eye and soft, where it was torn row by row.)
+      float2 kept = 0.3 * N.xz / max(N.y, 0.05);
+      float along = dot(kept, mirrorToEye);
+      float leanStep = mirrorStep.x;
+#if WINTER
+      leanStep *= 1 - ice.calm;  // (taken before the ice stilled the waves)
+#endif
+      float shown = along * along / max(along * along + 4 * leanStep * leanStep, 1e-12);
+      float pixelStep = leanStep + mirrorStep.y;
+      float spread2 = (0.25 + (1 - shown) * (1 - shown)) * along * along + 0.36 * pixelStep * pixelStep;
+      kept *= shown;
+#if OCEAN
+      {
+        float3 s = ocean.spread / (glintTilt * glintTilt);  // (the waves' own slopes, not the steeper ones drawn)
+        spread2 += 0.09 * max(mirrorToEye.x * mirrorToEye.x * s.x + mirrorToEye.y * mirrorToEye.y * s.y + 2 * mirrorToEye.x * mirrorToEye.y * s.z, 0);
+      }
+#endif
+      float spread = min(sqrt(spread2), 0.25);
+      float3 from = i.world + float3(0, 0.05, 0);
+      float3 way[2];
+      RayHit met[2];
+      bool meets[2];
+      way[0] = MirrorOff(toPixel, kept);
+      meets[0] = RayTrace(from, way[0], 0.05, rayEffects.y, 0x01, seed, met[0]);
+      meets[1] = meets[0];
+      way[1] = way[0];
+      met[1] = met[0];
+      float share = meets[0] ? 1 : 0;
+      [branch] if (spread > 1e-5) {
+        // (the other side: two spreads higher where the kept lean's ray meets something, two lower where it does not)
+        float reach = meets[0] ? 2 * spread : -2 * spread;
+        way[1] = MirrorOff(toPixel, kept + mirrorToEye * reach);
+        meets[1] = RayTrace(from, way[1], 0.05, rayEffects.y, 0x01, seed + 1, met[1]);
+        [branch] if (meets[1] != meets[0]) {
+          float inside = meets[0] ? 0 : reach, outside = meets[0] ? reach : 0;  // (leans whose rays meet something / pass over)
+          for (int half = 0; half < 3; ++half) {
+            float middle = (inside + outside) * 0.5;
+            if (RayMeets(from, MirrorOff(toPixel, kept + mirrorToEye * middle), 0.05, rayEffects.y, 0x01, seed + 2 + half)) inside = middle; else outside = middle;
+          }
+          // (the bell curve's share below the lean found; a logistic curve stands in for it, within a hundredth)
+          share = 1 / (1 + exp(-1.702 * (inside + outside) * 0.5 / spread));
+        }
+      }
+      float3 lit = 0;
+      float count = 0;
+      for (int ray = 0; ray < 2; ++ray) {
+        [branch] if (meets[ray] && (ray == 0 || spread > 1e-5)) {
+          float3 hit = from + way[ray] * met[ray].t, hitAlbedo, n;
+          RaySurfaceAt(met[ray], hit, way[ray], rayEffects.zw, hitAlbedo, n);
+          lit += ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + ray, 8), hit);  // (8 of the small lights at most: all would be dear)
+          count += 1;
+        }
+      }
+      mirrored = count > 0 ? lerp(mirror, lit / count, share) : mirror;
+    }
+#else
     for (int ray = 0; ray < 2; ++ray) {
       float3 calm = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), ray == 0 ? 0.55 : 0.85)));
       calm.y = max(calm.y, 0.02);
@@ -1043,6 +1154,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       }
       mirrored += c * 0.5;
     }
+#endif
     mirror = mirrored;
   }
 #endif
@@ -1198,7 +1310,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #endif
   // at its very edge the water thins out to nothing over what is behind it
   color = lerp(behind.SampleLevel(samplerLinearClamp, uv, 0).rgb, ThroughAirTo(color, i.world), saturate(deep / 0.035));
-  return float4(BeyondMap(color, i.world), 1);
+  return float4(BeyondMap(color, i.world), 1);  // ([edgesea] with EDGE_SEA over the water's own band: BEYOND_BAND)
 }
 )hlsl";
 
@@ -1224,6 +1336,23 @@ constexpr float kRippleTilt = 2.0f, kRippleFoamSlope = 0.8f, kRippleWaterline = 
 
 }  // namespace
 
+// The classic look's water ([edgesea] with the water's own band past the edge built in: EDGE_SEA, KeepVariants).
+gfx::Pipeline Water::PlainPipeline(std::string* error) {
+  std::string source = std::string(ownEdgeBandBuilt_ ? "#define EDGE_SEA 1\n#define BEYOND_BAND (beyondMore.x > 0 ? beyondMore.x : beyondLand.y)\n" : "") + kViewShaderBlock + kLightingShaderBlock + kShader;
+  gfx::PipelineDesc pd;
+  pd.name = "water";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
+  pd.stride = 8;
+  pd.cull = gfx::Cull::None;
+  pd.depthWrite = false;
+  pd.blend = gfx::Blend::Premultiplied;
+  pd.colorFormat = kSceneFormat;
+  pd.samples = gSceneSamples;
+  pd.alphaWrite = false;
+  return device_->CreatePipeline(pd, error);
+}
+
 gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winter, bool surf, bool wet, bool ocean, bool lift) {
   // (the modern look's water reads the scene's depth: several samples a pixel, or one. Without ripples, winter and the
   // surf its source is the same as it ever was, but for [shore] the glint's block, water_glint.h, read only with
@@ -1233,6 +1362,8 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
                        (ocean ? "#define OCEAN 1\n" : "") +           // [ocean]
                        (ocean && lift ? "#define LIFT 1\n" : "") +    // [lift]
                        "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt)
+                       (mirrorFineBuilt_ ? "#define MIRROR_FINE 1\n" : "") +  // [mirrorfine] (KeepVariants)
+                       (ownEdgeBandBuilt_ ? "#define EDGE_SEA 1\n#define BEYOND_BAND (beyondMore.x > 0 ? beyondMore.x : beyondLand.y)\n" : "") +  // [edgesea] (lighting.h; KeepVariants)
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                        kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + (ocean ? kOceanShaderBlock : "") +
                        kModernShader;
@@ -1256,8 +1387,49 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
   return device_->CreatePipeline(pd, error);
 }
 
+// [mirrorfine] [edgesea] The modern pipelines are made with the mirror's way and the edge's band built in (MIRROR_FINE,
+// EDGE_SEA: so that, off, they are the very shaders they were before; a run-time branch changed Direct3D 12's pictures
+// by a level here and there): when mirrorFine or ownEdgeBand has changed since, all of them are dropped and made again
+// (the ones of the variants made the first time they are wanted: when next wanted). Called first by every Prepare and
+// by DrawWith.
+void Water::KeepVariants() {
+  if (!modern_ || (mirrorFine == mirrorFineBuilt_ && ownEdgeBand == ownEdgeBandBuilt_)) return;
+  const bool wasFine = mirrorFineBuilt_, wasBand = ownEdgeBandBuilt_;
+  mirrorFineBuilt_ = mirrorFine;
+  ownEdgeBandBuilt_ = ownEdgeBand;
+  std::string why;
+  gfx::Pipeline again = ModernPipeline(false, &why);
+  if (!again) {
+    fprintf(stderr, "render: the water's mirror / edge band cannot be changed (%s)\n", why.c_str());
+    mirrorFine = mirrorFineBuilt_ = wasFine;  // (kept as they were made)
+    ownEdgeBand = ownEdgeBandBuilt_ = wasBand;
+    return;
+  }
+  auto drop = [&](gfx::Pipeline& p) {
+    if (p) device_->Destroy(p);
+    p = {};
+  };
+  drop(modern_);
+  modern_ = again;
+  if (ownEdgeBand != wasBand) {  // (the classic look's too)
+    gfx::Pipeline plain = PlainPipeline(&why);
+    if (plain) {
+      drop(pipeline_);
+      pipeline_ = plain;
+    } else {
+      fprintf(stderr, "render: the classic water's edge band cannot be changed (%s)\n", why.c_str());
+    }
+  }
+  drop(modernRipples_);
+  ripplesTried_ = false;
+  for (int k = 0; k < 2; ++k) drop(modernWinter_[k]), winterTried_[k] = false;
+  for (int k = 0; k < 8; ++k) drop(modernSurf_[k]), surfTried_[k] = false;
+  for (int k = 0; k < 32; ++k) drop(oceanPipes_[k]), oceanTried_[k] = false;
+}
+
 void Water::PrepareRipples() {
   if (!map_ || !map_->water.present || !modern_) return;
+  KeepVariants();
   ripples.Ready();
   if (ripplesTried_) return;
   ripplesTried_ = true;
@@ -1268,6 +1440,7 @@ void Water::PrepareRipples() {
 
 void Water::PrepareSurf(bool ripples, bool winter, bool wet) {
   if (!map_ || !map_->water.present || !modern_) return;
+  KeepVariants();
   for (int k = 0; k < 8; ++k) {
     // (the variants the options on now may want: with the ripples' field or without it, in winter or not)
     // ([shore] and, 4, the wet beach's: World::waterDetail on)
@@ -1293,6 +1466,7 @@ gfx::Pipeline Water::OceanPipeline(int key) {
 
 void Water::PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool lift) {
   if (!map_ || !map_->water.present || !modern_) return;
+  KeepVariants();
   // (the variants the options on now may want: with the ripples' field or without it, in winter or not, with the surf;
   // [lift] lifted, or flat while the lift is off; [prebuild] with the lift on, the flat ones too: Draw takes them the frames
   // the lifted grid has no patch (Ocean::Lifted false: none of its patches placed), and Chris's second test froze 3.1 s an hour in, the
@@ -1305,6 +1479,7 @@ void Water::PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool li
 
 void Water::PrepareWinter(bool ripples) {
   if (!map_ || !map_->water.present || !modern_) return;
+  KeepVariants();
   const int k = ripples ? 1 : 0;
   if (winterTried_[k]) return;
   winterTried_[k] = true;
@@ -1320,19 +1495,9 @@ bool Water::Load(const MapData* map, std::string* error) {
   ocean.SetMap(map);  // [ocean]
   if (!map->water.present) return true;
   if (!pipeline_) {
-    std::string source = std::string(kViewShaderBlock) + kLightingShaderBlock + kShader;
-    gfx::PipelineDesc pd;
-    pd.name = "water";
-    pd.vertexSource = pd.pixelSource = source;
-    pd.attrs = {{"POSITION", 0, gfx::AttrType::Float2, 0}};
-    pd.stride = 8;
-    pd.cull = gfx::Cull::None;
-    pd.depthWrite = false;
-    pd.blend = gfx::Blend::Premultiplied;
-    pd.colorFormat = kSceneFormat;
-    pd.samples = gSceneSamples;
-    pd.alphaWrite = false;
-  pipeline_ = device_->CreatePipeline(pd, error);
+    mirrorFineBuilt_ = mirrorFine;  // [mirrorfine]
+    ownEdgeBandBuilt_ = ownEdgeBand;  // [edgesea]
+    pipeline_ = PlainPipeline(error);
     if (!pipeline_) return false;
     const float corners[12] = {0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1};
     gfx::BufferDesc bd;
@@ -1372,6 +1537,7 @@ void Water::DrawModern(const View& view, const Camera& camera, gfx::Texture behi
 
 void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind, gfx::Texture sceneDepth) {
   if (!map_ || !map_->water.present || !pipeline_) return;
+  KeepVariants();  // [mirrorfine]
   const MapWater& w = map_->water;
   WaterConstants c = {};
   c.mapSize[0] = static_cast<float>(map_->width);

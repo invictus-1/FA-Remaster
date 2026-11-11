@@ -217,6 +217,11 @@ struct ViewConstants {
   // terrain.cpp's RICH): 1 = a remastered layer's small shapes are laid by the share its colour is laid with, not by the
   // mask's raw value. w unused.
   float groundLook[4];
+  // [edgesea] The world beyond the map's edge, more: x over how many world units past the edge the WATER dims
+  // (World::surroundEdgeBandWater; lighting.h's BEYOND_BAND in the water's pipelines, water.cpp's EDGE_SEA), where the land
+  // dims over beyondLand.y: 0 as the land does
+  // (as before); y, z, w unused.
+  float beyondMore[4];
 };
 
 // The same block, as HLSL source: shaders start with it.
@@ -283,6 +288,7 @@ cbuffer View : register(b0) {
                           // w the share of the weak sun's light the sky's light is cut by
   float4 groundLook;      // x [puddlesun] 1 = the sun's highlight on still ground water soft; y [matteye] 1 = dry ground matt
                           // where the eye skims it too; z [layernormals] 1 = a remastered layer's shapes laid as its colour
+  float4 beyondMore;      // [edgesea] x over how many world units past the map's edge the water dims (0: as the land, beyondLand.y)
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)

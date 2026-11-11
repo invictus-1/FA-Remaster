@@ -206,7 +206,9 @@
 // --shadow-mask-smooth <share>  [shadowmask] how smooth the ground's depth must be round a pixel for the mask to serve there
 //           (SunMask::smoothness, 0.002)
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
-//           device has ray tracing): smooth surfaces mirror what their rays meet
+//           device has ray tracing): smooth surfaces mirror what their rays meet; [mirrorfine] on the water the mirror image
+//           of what stands far off with soft edges (Water::mirrorFine; --no-mirror-fine: two rays a pixel, all or
+//           nothing, as before: flat bars at a low angle)
 // --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
 //           --ray-reflections; where the device has ray tracing): flashes, shots and lamps shadowed by what stands between;
 //           `rays` the most a place casts (1..4; 4 unless given), `all`: one for every light (exact, to compare with)
@@ -795,6 +797,8 @@
 //           --surround-forest-floor <layer>: the layer of the map's ground laid under its forest, for a surround whose
 //           json names none (World::surroundForestFloor); --surround-edge-band <n>: [edgeband] over how many world units
 //           past the edge a sculpted surround dims (World::surroundEdgeBand, 12; 0: the soft edge's own 60, as before);
+//           --surround-edge-band-water <n>: [edgesea] over how many the water's surface dims there (World::
+//           surroundEdgeBandWater, 192: no line across open sea; 0: over the land's band, as before);
 //           --surround-ice-from <share>: [snowsur] beside a sculpted surround the far sea's winter floes (--horizon) begin
 //           that share of the surround's reach out (World::surroundIceFrom, 0.55; 0: a few units past the edge, as before)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
@@ -1064,6 +1068,7 @@ struct Options {
   float snowShadeTune[7] = {-1, -1, -1, -1, -1, -1, -1};       // [snowshade] --snow-shade-tune (below 0: World's own)
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
+  bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -1269,6 +1274,7 @@ struct Options {
   float surroundSceneryReach[2] = {-1, -1};  // --surround-scenery-reach (-1: World's own)
   int surroundForestFloor = -1;         // --surround-forest-floor
   float surroundEdgeBand = -1;          // --surround-edge-band [edgeband] (-1: the world's own)
+  float surroundEdgeBandWater = -1;     // --surround-edge-band-water [edgesea] (-1: the world's own)
   float surroundIceFrom = -1;           // --surround-ice-from [snowsur] (-1: the world's own)
   bool beyondLand = false;              // --beyond-land (beyondland)
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
@@ -1402,6 +1408,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
+    else if (a == "--no-mirror-fine") o->mirrorFine = false;  // [mirrorfine]
     else if (a == "--soak-old") o->soakOld = true;  // [soakfix]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
@@ -2055,6 +2062,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround-scenery-pixels") o->surroundSceneryPixels = static_cast<float>(atof(v));  // (surround)
     else if (a == "--surround-forest-floor") o->surroundForestFloor = atoi(v);                           // (surround)
     else if (a == "--surround-edge-band") o->surroundEdgeBand = static_cast<float>(atof(v));             // [edgeband]
+    else if (a == "--surround-edge-band-water") o->surroundEdgeBandWater = static_cast<float>(atof(v));  // [edgesea]
     else if (a == "--surround-ice-from") o->surroundIceFrom = static_cast<float>(atof(v));               // [snowsur]
     else if (a == "--surround-hand-over") o->surroundHandOver = static_cast<float>(atof(v));             // [edgehand]
     else if (a == "--surround-grain") o->surroundGrain = static_cast<float>(atof(v));                    // [surgrain]
@@ -2562,6 +2570,9 @@ int main(int argc, char** argv) {
     world.bloom = opt.bloom;
     world.mapSurround = opt.surround;  // [surahead] (before the map opens: its surround is read ahead beside the load)
     world.surroundAhead = opt.surroundAhead;
+    // [mirrorfine] [edgesea] (built into the water's pipelines, made as the map opens: Water::KeepVariants)
+    world.water.mirrorFine = opt.mirrorFine;
+    if (opt.surroundEdgeBandWater >= 0) world.water.ownEdgeBand = opt.surroundEdgeBandWater > 0;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
       return 1;
@@ -2632,6 +2643,7 @@ int main(int argc, char** argv) {
     if (opt.snowShadeTune[k] >= 0) world.snowShadeTune[k] = opt.snowShadeTune[k];
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
+  world.water.mirrorFine = opt.mirrorFine;        // [mirrorfine]
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
@@ -2902,6 +2914,7 @@ int main(int argc, char** argv) {
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
   if (opt.surroundEdgeBand >= 0) world.surroundEdgeBand = opt.surroundEdgeBand;  // [edgeband]
+  if (opt.surroundEdgeBandWater >= 0) world.surroundEdgeBandWater = opt.surroundEdgeBandWater;  // [edgesea]
   if (opt.surroundIceFrom >= 0) world.surroundIceFrom = opt.surroundIceFrom;     // [snowsur]
   if (opt.surroundSceneryLod > 0) world.surroundSceneryLod = opt.surroundSceneryLod;
   if (opt.surroundSceneryReach[0] >= 0) {
