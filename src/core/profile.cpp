@@ -280,6 +280,14 @@ double PeakWorkingSetMB() {
 #endif
 }
 
+double CommittedMB() {
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS pmc{};
+  if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return static_cast<double>(pmc.PagefileUsage) / (1024.0 * 1024.0);
+#endif
+  return 0;
+}
+
 // ---- the beat breakdown ----
 
 double HitchMs() {

@@ -88,6 +88,14 @@ struct TransportTaskData {
   bool rectHeld = false;  // CUnitCallTeleport+0x39: the unit's o-grid rect is reserved
 };
 
+int TransportTaskChildren(const BuildTask& t, BuildTask** out) {
+  int n = 0;
+  if (!t.tdata) return 0;
+  if (t.tdata->child) out[n++] = t.tdata->child.get();
+  if (t.tdata->work) out[n++] = t.tdata->work;
+  return n;
+}
+
 void FollowAttachBone(Sim& sim, Unit* u, Entity* p, int pass);
 
 namespace {

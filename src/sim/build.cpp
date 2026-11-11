@@ -3866,6 +3866,15 @@ int TickBuildTask(Sim& sim, Unit* u, BuildTask& t) {
   return r;
 }
 
+int TaskChildren(const BuildTask& t, BuildTask** out) {
+  int n = 0;
+  if (t.sub) out[n++] = t.sub;
+  if (t.gdata && t.gdata->child) out[n++] = t.gdata->child;
+  if (const BuildTask* c = PatrolChildTask(t)) out[n++] = const_cast<BuildTask*>(c);
+  n += TransportTaskChildren(t, out + n);
+  return n;
+}
+
 void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
   lua_State* L = sim.L();
   if (t.ended) return;

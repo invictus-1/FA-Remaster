@@ -56,6 +56,7 @@ double LuaMsTotal(int s);  // the whole run's Lua time of one source
 void ResetLuaTotals();    // forget what was counted so far (the start-up's Lua, and the beat breakdown's counts)
 
 double PeakWorkingSetMB();  // the process's peak working set so far (0 where unknown)
+double CommittedMB();       // the process's private memory now (Windows: its commit charge; 0 where unknown)
 
 // ---- the beat breakdown (MOHO64_PROFILE_HITCH) ----
 bool Hitch();      // MOHO64_PROFILE and MOHO64_PROFILE_HITCH are set (read once)

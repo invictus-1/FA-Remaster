@@ -106,6 +106,9 @@ uint32_t LiveCommandCaps(lua_State* L, const Unit* u);
 // TransportLoadUnits (22) and Dock (39) share one case of the dispatch; TransportReverseLoadUnits (23), the unload
 // types (24, 25) and Ferry (17).
 BuildTask* StartTransportTask(Sim& sim, Unit* u, const UnitCommand& c);
+// The tasks a transport task holds (TaskChildren, sim/build.h): its pushed child and its work task; into out (room
+// for 2), returns how many.
+int TransportTaskChildren(const BuildTask& t, BuildTask** out);
 // The transport orders DispatchTask carries out without a task: DetachFromTransport (26), an unload order a
 // teleporter gets on an entity (its destination), a carrier's Dock on itself. true: done (the order is popped).
 bool TransportOrderOnTheSpot(Sim& sim, Unit* u, const UnitCommand& c);

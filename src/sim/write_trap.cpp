@@ -2,16 +2,19 @@
 #include "sim/write_trap.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <new>
 #include <string>
 #include <vector>
 
 #include "core/backtrace.h"
 #include "core/log.h"
+#include "sim/build.h"
 #include "sim/sim.h"
 #include "sim/units.h"
 
@@ -20,6 +23,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <sys/mman.h>
 #endif
 
 namespace moho {
@@ -30,10 +35,16 @@ void Unit::operator delete(void* p) {
   else ::operator delete(p);
 }
 void* Projectile::operator new(size_t n) {
-  return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kProjectile) : ::operator new(n);
+  return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kProjectile) : deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n);
 }
 void Projectile::operator delete(void* p) {
   if (wtrap::On()) wtrap::Free(p);
+  else if (deadtrap::On()) deadtrap::Free(p);
+  else ::operator delete(p);
+}
+void* BuildTask::operator new(size_t n) { return deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n); }
+void BuildTask::operator delete(void* p) {
+  if (deadtrap::On()) deadtrap::Free(p);
   else ::operator delete(p);
 }
 void* Army::operator new(size_t n) { return wtrap::On() ? wtrap::Alloc(n, wtrap::Kind::kArmy) : ::operator new(n); }
@@ -41,6 +52,82 @@ void Army::operator delete(void* p) {
   if (wtrap::On()) wtrap::Free(p);
   else ::operator delete(p);
 }
+
+// ---- the dead-object trap (write_trap.h) ----
+namespace deadtrap {
+namespace {
+constexpr size_t kTrapPage = 4096, kTrapHead = 16, kTrapChunk = size_t{1} << 30;
+std::mutex g_trapMutex;
+char* g_trapNext = nullptr;  // the next free page of the reserved chunk (under g_trapMutex)
+char* g_trapEnd = nullptr;
+std::atomic<uint64_t> g_trapMade{0}, g_trapGone{0};
+}  // namespace
+
+bool On() {
+  static const bool on = [] {
+    const char* v = getenv("MOHO64_DEAD_TRAP");
+    return v && *v && strcmp(v, "0") && strcmp(v, "off");
+  }();
+  return on;
+}
+
+// Whole pages from a reserved stretch of addresses (1 GB at a time), never handed out twice: the object begins 16
+// bytes into its first page, after its pages' byte count.
+void* Alloc(size_t n) {
+  const size_t bytes = (n + kTrapHead + kTrapPage - 1) & ~(kTrapPage - 1);
+  if (bytes > kTrapChunk) throw std::bad_alloc();
+  char* p = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_trapMutex);
+    if (!g_trapNext || g_trapNext + bytes > g_trapEnd) {
+#if defined(_WIN32)
+      g_trapNext = static_cast<char*>(VirtualAlloc(nullptr, kTrapChunk, MEM_RESERVE, PAGE_NOACCESS));
+#else
+      void* m = mmap(nullptr, kTrapChunk, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+      g_trapNext = m == MAP_FAILED ? nullptr : static_cast<char*>(m);
+#endif
+      if (!g_trapNext) throw std::bad_alloc();
+      g_trapEnd = g_trapNext + kTrapChunk;
+      Logf(LogLevel::Info, "moho64: MOHO64_DEAD_TRAP: freed objects lose their pages; addresses %p to %p (an access "
+                           "violation there is a read or write of a freed object)", static_cast<void*>(g_trapNext),
+           static_cast<void*>(g_trapEnd));
+    }
+    p = g_trapNext;
+    g_trapNext += bytes;
+  }
+#if defined(_WIN32)
+  if (!VirtualAlloc(p, bytes, MEM_COMMIT, PAGE_READWRITE)) throw std::bad_alloc();
+#else
+  if (mprotect(p, bytes, PROT_READ | PROT_WRITE) != 0) throw std::bad_alloc();
+#endif
+  memcpy(p, &bytes, sizeof bytes);
+  g_trapMade.fetch_add(1, std::memory_order_relaxed);
+  return p + kTrapHead;
+}
+
+void Free(void* q) {
+  if (!q) return;
+  char* p = static_cast<char*>(q) - kTrapHead;
+  size_t bytes = 0;
+  memcpy(&bytes, p, sizeof bytes);
+#if defined(_WIN32)
+  VirtualFree(p, bytes, MEM_DECOMMIT);  // (the addresses stay reserved: nothing else will ever lie there)
+#else
+  madvise(p, bytes, MADV_DONTNEED);
+  mprotect(p, bytes, PROT_NONE);
+#endif
+  g_trapGone.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Report() {
+  if (!On()) return;
+  char line[200];
+  snprintf(line, sizeof line, "deadtrap: %llu objects made in pages of their own, %llu freed and their pages taken away",
+           static_cast<unsigned long long>(g_trapMade.load()), static_cast<unsigned long long>(g_trapGone.load()));
+  fprintf(stderr, "%s\n", line);
+  Logf(LogLevel::Info, "%s", line);
+}
+}  // namespace deadtrap
 
 namespace wtrap {
 

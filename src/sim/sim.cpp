@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <typeinfo>
 
 #include "core/keyed_rng.h"
 #include "sim/write_trap.h"
@@ -1061,8 +1062,10 @@ Sim::~Sim() {
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
+  if (getenv("MOHO64_DEBUG_OWNED")) ReportOwned("at the end");
   if (rec_) fclose(rec_);
   owned_.clear();  // unbind every engine object while the Lua state still exists
+  deadtrap::Report();
   ReleaseEffectObjects(*this);
   ReleaseAnimators(*this);
   armies_.clear();
@@ -2033,6 +2036,130 @@ void Sim::ProcessDestroyQueue() {
     }
     e->UnbindLua();
   }
+  // MOHO64_FREE_DEAD=1: the purged shells are deleted here, as EntityDb::Purge 0x684560 deletes every purged entity
+  // at this point. Without the switch every engine object stays allocated to the Sim's end, as it always has (the
+  // owner list is only ever added to), so a long game's memory grows with every shell fired (MOHO64_DEBUG_OWNED
+  // measures it). Shells are the first class: the most numerous of the dead objects in a battle, and by reading
+  // nothing of the engine keeps a pointer to a purged one (it has left the shell list, the handle and id tables,
+  // the grid and the intel; its Lua table has lost its object; a shell a shell threw keeps the first one's
+  // launcher, not the shell). The proof is the trap, MOHO64_DEAD_TRAP=1 (sim/write_trap.h): with it a deleted
+  // shell's pages are gone, and any later read is an access violation. NOT YET THE DEFAULT (2026-11-10): the trap
+  // ran clean on one replay (Naval, 6059 shells deleted in the game), and a 60-minute AI game (four M28 on Seton's,
+  // parallel order, one thread) had the same fingerprints with the shells deleted as with them kept; the 16 replays
+  // of the gate, at one thread and at many, with and without the trap, are still to run.
+  // The owner list keeps the empty place (8 bytes), so its order and every other object's place stay as they were.
+  if (FreeDead())
+    for (Entity* e : done) {
+      if (e->kind != Entity::Kind::Projectile) continue;
+      const uint32_t slot = static_cast<Projectile*>(e)->ownedSlot;
+      if (slot < owned_.size() && owned_[slot].get() == e) {
+        owned_[slot].reset();
+        ++shellsFreed;
+      }
+    }
+  if (FreeDead()) SweepTasks();
+}
+
+bool Sim::FreeDead() {
+  static const bool on = getenv("MOHO64_FREE_DEAD") != nullptr;
+  return on;
+}
+
+void Sim::NoteOwned(ScriptObject* o) {
+  if (BuildTask* t = dynamic_cast<BuildTask*>(o)) {
+    t->ownedSlot = static_cast<uint32_t>(owned_.size() - 1);
+    tasks_.push_back(t);
+  }
+}
+
+// The second class of dead objects that is deleted during the game (MOHO64_FREE_DEAD=1; shells are the first,
+// above): tasks. The original deletes a task when it is popped off its unit's command thread; ours let go of it
+// in many places (the dispatcher, a guard's, a patrol's, a transport task's child, a build's reclaim) and kept the
+// object to the Sim's end: 214,331 dead tasks after an hour of a four-AI game (2026-11-10). Instead of a call at
+// every such place there is this one point, at the end of the beat's destroy drain, when no task code runs: a
+// task is alive while a holder reaches it. The holders are a registered unit's Unit::task and, from a task, what
+// TaskChildren gives (sub, the guard's child, the patrol's child, the transport task's child and work): every
+// member of the engine that holds a task. A task that went through Own, is reached by none and has no Lua object
+// (a script task's is unbound when it ends; one that still has it is left alone, so the Lua side never changes)
+// is deleted. The proof is the trap, MOHO64_DEAD_TRAP=1: a deleted task's pages are gone.
+void Sim::SweepTasks() {
+  if (tasks_.empty()) return;
+  const uint32_t sweep = ++taskSweep_;
+  static thread_local std::vector<BuildTask*> stack;
+  stack.clear();
+  auto reach = [&](BuildTask* t) {
+    if (t && t->reachedSweep != sweep) {
+      t->reachedSweep = sweep;
+      stack.push_back(t);
+    }
+  };
+  for (Unit* u : units_) reach(u->task);
+  while (!stack.empty()) {
+    BuildTask* t = stack.back();
+    stack.pop_back();
+    BuildTask* kids[8];
+    const int n = TaskChildren(*t, kids);
+    for (int i = 0; i < n; ++i) reach(kids[i]);
+  }
+  size_t keep = 0;
+  for (BuildTask* t : tasks_) {
+    if (t->reachedSweep == sweep || t->HasLuaObject() || t->ownedSlot >= owned_.size() || owned_[t->ownedSlot].get() != t) {
+      tasks_[keep++] = t;
+      continue;
+    }
+    owned_[t->ownedSlot].reset();
+    ++tasksFreed;
+  }
+  tasks_.resize(keep);
+}
+
+// MOHO64_DEBUG_OWNED=<n> (measuring only; audit of 2026-11-09, B6): every n beats and at the Sim's end, what the
+// owner list holds, by class: the objects, how many of them are dead (an entity no longer registered; any other
+// object: one that has lost its Lua object or never had one), and the bytes of the objects themselves where the
+// class's size is known here (0 otherwise; what an object holds on the heap is never counted). A line for each
+// class with a dead object or 500 objects, then the totals with the process's private memory and the Lua heap.
+void Sim::ReportOwned(const char* when) const {
+  struct Row {
+    size_t owned = 0, dead = 0, size = 0;
+  };
+  std::map<std::string, Row> rows;
+  size_t owned = 0, dead = 0, empty = 0, bytes = 0, deadBytes = 0;
+  for (const auto& o : owned_) {
+    const ScriptObject* p = o.get();
+    if (!p) {
+      ++empty;
+      continue;
+    }
+    const std::type_info& ti = typeid(*p);
+    Row& r = rows[ti.name()];
+    if (!r.owned)
+      r.size = ti == typeid(Unit) ? sizeof(Unit) : ti == typeid(Projectile) ? sizeof(Projectile) : ti == typeid(Prop) ? sizeof(Prop)
+             : ti == typeid(Entity) ? sizeof(Entity) : ti == typeid(UnitWeapon) ? sizeof(UnitWeapon)
+             : ti == typeid(BuildTask) ? sizeof(BuildTask) : ti == typeid(ShieldEntity) ? sizeof(ShieldEntity)
+             : ti == typeid(CollisionBeam) ? sizeof(CollisionBeam) : 0;
+    const Entity* e = dynamic_cast<const Entity*>(p);
+    const bool isDead = e ? FindEntity(e->handle) != e : !p->HasLuaObject();
+    ++r.owned;
+    ++owned;
+    bytes += r.size;
+    if (isDead) {
+      ++r.dead;
+      ++dead;
+      deadBytes += r.size;
+    }
+  }
+  for (const auto& [name, r] : rows)
+    if (r.dead || r.owned >= 500)
+      Logf(LogLevel::Info, "moho64 owned %s, beat %u: class %s: %zu owned, %zu dead, %zu bytes each (%zu KB, dead %zu KB)",
+           when, tick_, name.c_str(), r.owned, r.dead, r.size, r.owned * r.size >> 10, r.dead * r.size >> 10);
+  size_t heap = 0, threshold = 0;
+  lua_gpg_gcbytes(state_->L(), &heap, &threshold);
+  Logf(LogLevel::Info, "moho64 owned %s, beat %u: total %zu owned, %zu dead, %zu places emptied (%llu shells freed); known "
+       "object bytes %zu KB, of dead objects %zu KB; process private memory %.0f MB, lua heap %zu KB; units %zu, shells %zu, props %zu; "
+       "tasks freed %llu",
+       when, tick_, owned, dead, empty, static_cast<unsigned long long>(shellsFreed), bytes >> 10, deadBytes >> 10,
+       prof::CommittedMB(), heap >> 10, units_.size(), projectiles.size(), props.size(),
+       static_cast<unsigned long long>(tasksFreed));
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.
@@ -3541,6 +3668,8 @@ void Sim::Tick() {
   phases.EndTick(tick_);
   if (orderLatency) orderLatency->Beat(*this);  // (MOHO64_PROFILE only: made by ProfileTrackOrder)
   phases.Report(tick_);
+  static const int ownedEvery = getenv("MOHO64_DEBUG_OWNED") ? std::max(1, atoi(getenv("MOHO64_DEBUG_OWNED"))) : 0;
+  if (ownedEvery && tick_ % static_cast<uint32_t>(ownedEvery) == 0) ReportOwned("now");  // (measuring only)
   static const bool stats = getenv("MOHO64_STATS") != nullptr;
   if (stats && tick_ % 600 == 0) {  // a quick health line per game minute
     int n = 0, air = 0, flying = 0, dead = 0;

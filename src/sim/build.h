@@ -74,6 +74,11 @@ struct BuildTask : public ScriptObject {
   std::shared_ptr<struct GuardData> gdata;          // the guard task (CUnitGuardTask)
   std::shared_ptr<struct AttackData> adata;         // the attack task (CUnitAttackTargetTask)
   std::shared_ptr<struct PatrolData> pdata;         // the patrol / attack-move task (CUnitPatrolTask)
+  // MOHO64_FREE_DEAD (Sim::SweepTasks; nothing in the simulation reads these): its place in Sim::owned_ (a task
+  // that went through Sim::Own), and the sweep that last reached it from a holder
+  uint32_t ownedSlot = 0xffffffffu, reachedSweep = 0;
+  static void* operator new(size_t n);  // (MOHO64_DEAD_TRAP: pages of its own, sim/write_trap.cpp)
+  static void operator delete(void* p);
 };
 
 Vec3 SnapStructurePosition(Sim& sim, const BlueprintInfo& bp, Vec3 p);
@@ -110,6 +115,9 @@ bool GuardSteersItself(const Unit* u);
 // (null when neither is an attack task).
 const BuildTask* ThreadAttackTask(const Unit* u);
 const BuildTask* PatrolChildTask(const BuildTask& t);  // (sim/commands.cpp: the patrol's pushed child, or null)
+// The tasks t holds (Sim::SweepTasks): its site-clearing reclaim (sub), its guard's child, its patrol's child, a
+// transport task's pushed child and its work task. Into out (room for 5); returns how many, nulls left out.
+int TaskChildren(const BuildTask& t, BuildTask** out);
 // Movement helpers for command tasks (sim/combat.cpp).
 bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);

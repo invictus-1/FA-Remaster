@@ -66,4 +66,19 @@ void NoteLua(const char* method, const void* obj);
 void Report();  // the "writetrap:" lines (Sim's teardown)
 
 }  // namespace wtrap
+
+// The dead-object trap (MOHO64_DEAD_TRAP=1; audit of 2026-11-09, B6): the proof that nothing reads an engine object
+// after it was freed. A class whose dead objects are freed during the game (today: Projectile) is made in pages of
+// its own while the switch is on, each address used once; deleting an object takes its pages away, so any later
+// read or write of it is an access violation at that very instruction, which the crash handler reports with the
+// stack (core/crash.h). Without the switch a freed block goes back to the allocator and a late read would see
+// another object's bytes without a sign. Run it over every replay and session of the gate, in both orders and at
+// one and many threads, before a class's objects are freed; the game is the same with it (the trap changes where
+// objects lie, nothing else). Not together with MOHO64_PAR_WRITETRAP (that switch's pages win).
+namespace deadtrap {
+bool On();  // MOHO64_DEAD_TRAP set (read once)
+void* Alloc(size_t n);
+void Free(void* p);  // (p from Alloc)
+void Report();  // how many objects it made and took away (Sim's teardown)
+}  // namespace deadtrap
 }  // namespace moho

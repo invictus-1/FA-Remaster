@@ -236,6 +236,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   p->expireTick = tick_ + static_cast<uint32_t>(std::max(0.0f, std::nearbyint(Uniform(*this, b.lifetime, b.lifetimeRange) * 10)));
   p->launcher = launcher && launcher->kind == Entity::Kind::Projectile ? static_cast<Projectile*>(launcher)->launcher
                                                                         : launcher;
+  p->ownedSlot = static_cast<uint32_t>(owned_.size());
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);

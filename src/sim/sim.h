@@ -769,11 +769,20 @@ class Sim {
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
+  // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
+  void ReportOwned(const char* when) const;
+  uint64_t shellsFreed = 0;  // purged shells deleted so far (ProcessDestroyQueue); for the stats lines only
   // Keep an engine object alive for the session (objects scripts may still hold).
   ScriptObject* Own(std::unique_ptr<ScriptObject> o) {
     owned_.push_back(std::move(o));
+    if (FreeDead()) NoteOwned(owned_.back().get());  // (a task: its place, for SweepTasks)
     return owned_.back().get();
   }
+  static bool FreeDead();  // MOHO64_FREE_DEAD set (read once): dead shells and tasks are deleted during the game
+  void NoteOwned(ScriptObject* o);
+  // MOHO64_FREE_DEAD: the tasks no holder reaches any more are deleted (sim.cpp; the end of ProcessDestroyQueue)
+  void SweepTasks();
+  uint64_t tasksFreed = 0;  // (for the stats lines only)
 
  private:
   Vfs* vfs_;
@@ -794,6 +803,8 @@ class Sim {
   bool hasGauss_ = false;
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
+  std::vector<BuildTask*> tasks_;  // (MOHO64_FREE_DEAD: the tasks owned_ holds; SweepTasks)
+  uint32_t taskSweep_ = 0;
   std::map<uint32_t, Entity*> others_;  // (otherEntities(): the fingerprint walks it)
   // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity
   // without the map's search (265 M calls in B1, ~280 ns each in the map). A removed entity's slot is null.

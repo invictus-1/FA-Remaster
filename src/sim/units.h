@@ -563,8 +563,9 @@ class CollisionBeam : public Entity {
 class Projectile : public Entity {
  public:
   Projectile() { typeBits |= kTypeProjectile; }
-  static void* operator new(size_t n);  // (as Unit's: MOHO64_PAR_WRITETRAP)
+  static void* operator new(size_t n);  // (as Unit's: MOHO64_PAR_WRITETRAP; MOHO64_DEAD_TRAP)
   static void operator delete(void* p);
+  uint32_t ownedSlot = 0xffffffffu;  // its place in Sim::owned_ (the purge deletes it there: Sim::ProcessDestroyQueue)
   Entity* launcher = nullptr;
   Vec3 velocity;  // units per second
   LayerString layer = "None";
