@@ -279,6 +279,18 @@ class Terrain {
   // picture does not reach. False (and all of `out` 0) where the map has no upper layer, or it or the masks cannot be
   // read on the processor.
   bool UpperByLayer(float out[9][4]) const;
+  // (surround) [snowsur] The lying snow as the ground's last scene drawing laid it (Draw, by its snow pipeline), for
+  // what lays snow as the ground does beside it (the map's surround, surround.h): its constants as the ground's shader
+  // has them (snowInfo, snowSlice, snowWind, snowTune), the snow's normals and thin cover bound at `normalsSlot` (the
+  // ground's wetNormalMaps) and the snow's shelter over the map at `shelterSlot`; the snow's albedos and third maps are
+  // layers of the layers' third maps' texture (BindLayers binds it, t25). False while the ground lays no snow that way.
+  struct SnowLook {
+    float info[4] = {}, slice[4][4] = {}, wind[4] = {}, tune[4] = {};
+  };
+  bool BindSnow(SnowLook* look, int normalsSlot, int shelterSlot) const;
+  // The statics lighting.h's snow reads under GROUND_SNOW, as the ground's own source declares them before the
+  // lighting's block (with the deep tracks' statics lighting.h's snow reads beside them, all none).
+  static std::string SnowStatics();
   // The ground's heights as the shader reads them (one per grid point), and the world units of their largest value.
   gfx::Texture HeightTexture() const { return heightTexture_; }
   // The visuals track's plants for this map's ground (remap.json: the map's entry names its "cover", the card atlas's
@@ -428,6 +440,7 @@ class Terrain {
   gfx::Texture snowMask_;
   bool snowMaskTried_ = false;
   bool snowLaidNow_ = false, snowMaterialsNow_ = false;  // [decalsnow] (the last scene drawing's: SnowShelterLaid)
+  SnowLook snowLast_;  // [snowsur] (the last scene drawing's snow constants: BindSnow)
   // A remastered map's third map per layer (beside `<name>_albedo.dds` a `<name>_arh.dds`: red what
   // its creases let in of the sky's light, green how rough it is, blue how high it stands), all
   // nine as the layers of one texture; `material_[i]`: layer i has one.

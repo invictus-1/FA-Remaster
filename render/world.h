@@ -474,6 +474,14 @@ class World {
   // soft step that reads from the game's height and is no line; it lies on the ground, so it does not shift with
   // the zoom). 0: the soft edge's own band, as before (viewer --surround-edge-band 0).
   float surroundEdgeBand = 12;
+  // [snowsur] The surround under lying snow (Chris, 2026-11-10: from far up the land past the edge lay under a flat
+  // grey snow beside the map's own white, and the far sea's floes stood as hard-edged cells right beside the map):
+  //   - its ground holds the snow as the map's ground does (surround.h: the ground's own snow rule, materials and
+  //     shading, Terrain::BindSnow), where the ground lays its snow by its own pipeline (snowGround);
+  //   - surroundIceFrom: beside a sculpted surround the horizon's floes (horizon.h) begin this share of the surround's
+  //     reach out, not a few units past the edge: the sea beside the map is open as the map's own winter sea, and the
+  //     floes lie where the haze has taken most of the land (0: as before; viewer --surround-ice-from).
+  float surroundIceFrom = 0.55f;
   int surroundPropsListed = 0;  // (of the frame last begun: pieces of the surround's scenery in the squares in view)
   size_t SurroundProps() const { return surroundProps_.size(); }
   int propsBeyond = 0;  // trees and rocks added beyond the map's edge in the last frame

@@ -2455,6 +2455,21 @@ bool Terrain::BindLayers(LayerTiles* tiles) const {
 // (surround) The upper layer's mean colour and alpha where each layer shows: from its file and the map's two masks, read
 // on the processor at 256 places across and down (the upper layer is a soft picture over the whole map; the masks'
 // fine shapes even out over a layer's whole area).
+// (surround) [snowsur] The last scene drawing's snow for another's shader: its constants, its normals and its shelter.
+bool Terrain::BindSnow(SnowLook* look, int normalsSlot, int shelterSlot) const {
+  if (!snowLaidNow_ || !shelter_) return false;
+  *look = snowLast_;
+  device_->SetTexture(normalsSlot, wetNormals_ ? wetNormals_ : materials_ ? materials_ : textures_->Black());
+  device_->SetTexture(shelterSlot, shelter_);
+  return true;
+}
+
+std::string Terrain::SnowStatics() {
+  return std::string(kSnowStatics) +
+         "#define SURFACE_DEEP_TRACKS 1\nstatic float4 deepTrack = 0;\nstatic float4 deepSlope = 0;\nstatic float deepWater = 0;\n"
+         "static float2 deepGloss = 0;\nstatic float4 deepDent = 0;\n";
+}
+
 bool Terrain::UpperByLayer(float out[9][4]) const {
   for (int n = 0; n < 9; ++n) std::fill(out[n], out[n] + 4, 0.0f);
   if (!map_ || map_->albedo[9].texture.empty()) return false;
@@ -3032,6 +3047,11 @@ void Terrain::Draw(const View& view, bool shadowPass, bool beyondToo) {
     c.snowWind[2] = static_cast<float>(debug);
     c.snowWind[3] = std::clamp(snowHold, 0.0f, 1.0f);  // [snowhold]
     std::copy(snowTune, snowTune + 4, c.snowTune);
+    // [snowsur] (kept for what lays snow as the ground does beside it: BindSnow)
+    std::copy(c.snowInfo, c.snowInfo + 4, snowLast_.info);
+    std::memcpy(snowLast_.slice, c.snowSlice, sizeof snowLast_.slice);
+    std::copy(c.snowWind, c.snowWind + 4, snowLast_.wind);
+    std::copy(c.snowTune, c.snowTune + 4, snowLast_.tune);
   }
 
   for (int k = 0; k <= top && k < 12; ++k) {

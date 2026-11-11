@@ -39,6 +39,14 @@ cbuffer Surround : register(b1) {
   float4 albedoTile[10];  // as the ground's (terrain.cpp): x a layer's repeats per world unit; y 1 = it has its third map
   float4 normalTile[9];   // x its normal's repeats per world unit; y 1 = +y is up in its texture
   float4 upperOf[9];      // the map's upper layer where each layer shows, on the whole (rgb as stored, a its share)
+#ifdef SURROUND_SNOW
+  // [snowsur] (the lying snow's, as the ground's shader has them: terrain.cpp)
+  float4 snowInfo;       // x 1 = the snow's materials are drawn; y the fresh one's repeats per world unit; w 1 = the shelter is read
+  float4 snowSlice[4];   // fresh, drift, packed: x its albedo's layer of materialMaps, y its third map's, z its normal's of
+                         // wetNormalMaps (-1: none), w its repeats per world unit; 4th: the thin snow's cover (x its layer, w its repeats)
+  float4 snowWind;       // xy the way the wind blows; w how much more the steep and the exposed hold
+  float4 snowTune;       // x how much the shelter cuts the sky's light, y the trees' crowns, z the drifts' relief, w the drifts
+#endif
 #endif
 };
 Texture2D<float> surHeights : register(t0);  // its heights, the north row first, with smaller levels
@@ -50,6 +58,12 @@ Texture2D maskLow : register(t2);            // the map's own masks (read on pas
 Texture2D maskHigh : register(t3);
 Texture2D<float> surForest : register(t4);   // 1 closed forest
 Texture2D surMasks2 : register(t5);          // more layers' shares (surKinds2), where the surround brings them
+#ifdef SURROUND_SNOW
+// [snowsur] (t0 to t25 are taken and t26 to t40 the lighting's: the two slots of the ground's mud, free in this pass;
+// Surround::Draw lets go of them again)
+Texture2DArray wetNormalMaps : register(t41);  // the snow's normals and the thin snow's cover (Terrain::BindSnow)
+Texture2D snowShelter : register(t42);         // the snow's shelter over the map: g the sky seen, b the crowns, a how it lies
+#endif
 Texture2D albedoMaps[10] : register(t6);
 Texture2D normalMaps[9] : register(t16);
 Texture2DArray materialMaps : register(t25);  // per layer: r creases' shading, g roughness, b height
@@ -102,6 +116,49 @@ float4 LayerNormal(float4 raw, float up) {
   if (up > 0.5) n.y = -n.y;
   return n;
 }
+
+#ifdef SURROUND_SNOW
+// [snowsur] The "fresh" snow material's three maps at a place, as the ground reads them (terrain.cpp, SnowRead with k 0):
+// read twice and joined so that its repeats do not show (at its own size, and a third larger, turned), by patches of a
+// slow noise whose edges go by the snow's own height; `joined` 0..1: how much of the second reading there is (1 near the
+// eye and at the map's edge, where it is the ground's own reading; 0 far off: one reading), `shapes`: its normal read too.
+void SurSnowRead(float2 xz, float2 stepX, float2 stepY, float joined, bool shapes, out float3 albedo, out float3 arh, out float2 n, out float lod) {
+  float s = snowSlice[0].w;
+  float3 slice = snowSlice[0].xyz;
+  const float2x2 turn = float2x2(0.8253, -0.5646, 0.5646, 0.8253);  // (34 degrees)
+  float b = joined > 0 ? saturate((CloudNoise(float3(xz * (s * 0.35), 4.2)) - 0.5) * 3 + 0.5) * joined : 0;
+  float3 albedoA = 0, arhA = 0, albedoB = 0, arhB = 0;
+  float2 nA = 0, nB = 0;
+  [branch] if (b < 0.95) {
+    float2 uv = xz * s, gx = stepX * s, gy = stepY * s;
+    albedoA = materialMaps.SampleGrad(samplerAniso, float3(uv, slice.x), gx, gy).rgb;
+    arhA = materialMaps.SampleGrad(samplerAniso, float3(uv, slice.y), gx, gy).rgb;
+    [branch] if (shapes) nA = LayerNormal(wetNormalMaps.SampleGrad(samplerAniso, float3(uv, slice.z), gx, gy), 1).xy;
+  }
+  [branch] if (b > 0.05) {
+    float2 uv = mul(turn, xz) * (s * 0.77) + float2(0.37, 0.71), gx = mul(turn, stepX) * (s * 0.77), gy = mul(turn, stepY) * (s * 0.77);
+    albedoB = materialMaps.SampleGrad(samplerAniso, float3(uv, slice.x), gx, gy).rgb;
+    arhB = materialMaps.SampleGrad(samplerAniso, float3(uv, slice.y), gx, gy).rgb;
+    [branch] if (shapes) nB = mul(LayerNormal(wetNormalMaps.SampleGrad(samplerAniso, float3(uv, slice.z), gx, gy), 1).xy, turn);
+  }
+  float ha = arhA.b + (1 - b) * 1.5, hb = arhB.b + b * 1.5, top = max(ha, hb) - 0.3;
+  float wa = max(ha - top, 0), wb = max(hb - top, 0), t = wb / max(wa + wb, 1e-4);
+  albedo = lerp(albedoA, albedoB, t);
+  arh = lerp(arhA, arhB, t);
+  n = lerp(nA, nB, t);
+  uint w, h, layers, levels;
+  materialMaps.GetDimensions(0, w, h, layers, levels);
+  lod = log2(max(max(length(stepX), length(stepY)) * s * float(w), 1));
+}
+// A normal of the snow's (`n`, the layers' way) put on the surface it lies on (terrain.cpp, SnowOn).
+float3 SurSnowOn(float2 n, float3 under) {
+  float3 detail = float3(n.x, sqrt(saturate(1 - dot(n, n))), n.y);
+  float3 h = normalize(under + float3(0, 1, 0));
+  float3 axisX = float3(1 - 2 * h.x * h.x, 2 * h.x * h.y, -2 * h.x * h.z);
+  float3 axisZ = float3(-2 * h.z * h.x, 2 * h.z * h.y, 1 - 2 * h.z * h.z);
+  return normalize(float3(dot(detail, axisX), dot(detail, under), dot(detail, axisZ)));
+}
+#endif
 
 // The detail look: the map's own layers, laid by the surround's masks as the ground's shader lays the map's (terrain.cpp,
 // Ground: the same pictures at the same repeats, so that a layer's picture runs on over the edge), the map's own masks
@@ -197,9 +254,21 @@ float4 PS(VOut i) : SV_Target {
   // it brings its own roughness and crease shading (`matter`: creases, roughness, how much of the pixel is such a layer's)
   #define MATERIAL(n) materialMaps.SampleGrad(samplerAniso, float3(xz * albedoTile[n].x, n), stepX * albedoTile[n].x, stepY * albedoTile[n].x).rgb
   float3 matter = 0;
+#ifdef SURROUND_SNOW
+  // [snowsur] (the layers' height as they are laid, for the snow's edge: the hollows first, as the ground's)
+  float groundHeight = 0.5;
+  #define SNOW_BASE(m) groundHeight = m.b;
+  #define SNOW_RICH(n, m) groundHeight = lerp(groundHeight, m.b, c[n]);
+  #define SNOW_PLAIN(n) groundHeight = lerp(groundHeight, 0.5, c[n]);
+#else
+  #define SNOW_BASE(m)
+  #define SNOW_RICH(n, m)
+  #define SNOW_PLAIN(n)
+#endif
   [branch] if (bare && albedoTile[0].y > 0.5) {
     float3 mm = MATERIAL(0);
     matter = float3(mm.r, mm.g, 1);
+    SNOW_BASE(mm)
   }
   #define RICH(n) \
     [branch] if (albedoTile[n].y > 0.5 && raw[n] > 0.002) { \
@@ -207,8 +276,10 @@ float4 PS(VOut i) : SV_Target {
       c[n] = saturate((mm.b + c[n] * 1.35 - 1) / 0.35); \
       raw[n] = saturate((mm.b + raw[n] * 1.35 - 1) / 0.35); \
       matter = lerp(matter, float3(mm.r, mm.g, 1), c[n]); \
+      SNOW_RICH(n, mm) \
     } else { \
       matter = lerp(matter, 0, c[n]); \
+      SNOW_PLAIN(n) \
     }
   RICH(1) RICH(2) RICH(3) RICH(4) RICH(5) RICH(6) RICH(7) RICH(8)
   #define ALBEDO(n) albedoMaps[n].SampleGrad(samplerAniso, xz * albedoTile[n].x, stepX * albedoTile[n].x, stepY * albedoTile[n].x)
@@ -261,6 +332,9 @@ float4 PS(VOut i) : SV_Target {
   roughness = lerp(roughness, matter.y, matter.z);
   float creases = lerp(1, matter.x, matter.z) * lerp(0.75 + 0.25 * saturate(base.y), 1, own);
   float lit = i.lit;
+#ifdef SURROUND_SNOW
+  float woodCover = 0, woodCrowns = 0;  // [snowsur] (the forest over the place, and how much of the pixel is the painted canopy's crowns)
+#endif
   // the beach the waves have just wetted, as the map's shores have it (terrain.cpp): darker and shinier in a band over
   // the water's level, its edge uneven, and on under the water as the bed's soak
   [branch] if (shore.x > 0.5) {
@@ -303,7 +377,96 @@ float4 PS(VOut i) : SV_Target {
     // (between the crowns, and under the scenery's single trees: their shade on the floor, in patches)
     lit *= 1 - 0.42 * cover * (1 - crowns) * (0.6 + 0.8 * crown);
     creases *= 1 - 0.15 * cover * (1 - crowns);
+#ifdef SURROUND_SNOW
+    woodCover = cover;
+    woodCrowns = crowns;
+#endif
   }
+#ifdef SURROUND_SNOW
+  // [snowsur] The lying snow as the map's ground holds it: what the ground's shader works out before the light
+  // (terrain.cpp, SnowAround and SnowMakeUp), for lighting.h's snow (under GROUND_SNOW) to lay by the same rule.
+  [branch] if (weather.y > 0) {
+    // what is round the place: its shelter (g the sky it sees, b the crowns over it, a how the wind lays the snow there,
+    // 0.5 level). Out here only the surround's own woods are known (their cover as the crowns); by the edge the map's
+    // own shelter (read on past the edge, mirrored), with its drifts' slope, going over into that
+    float4 around = float4(0, 1, 0.8 * woodCover, 0.5);
+    float2 tilt = 0;
+    [branch] if (own > 0 && snowInfo.w > 0.5) {
+      float2 uv = MirrorUv(xz * surMap.xy);
+      float2 mirrored = 1 - 2 * abs(fmod(floor(xz * surMap.xy), 2));
+      float4 here = snowShelter.SampleLevel(samplerLinearClamp, uv, 0);
+      uint sw, sh, levels;
+      snowShelter.GetDimensions(0, sw, sh, levels);
+      float2 e = 1 / float2(sw, sh);
+      float dx = snowShelter.SampleLevel(samplerLinearClamp, uv + float2(e.x, 0), 0).a - here.a;
+      float dz = snowShelter.SampleLevel(samplerLinearClamp, uv + float2(0, e.y), 0).a - here.a;
+      float height = 2 * 0.6 * snowTune.z * saturate(weather.y * 2 - 0.3);
+      tilt = float2(dx, dz) * height / (e * surMap.zw) * mirrored * own;
+      around = lerp(around, here, own);
+    }
+    float sky = around.g, over = around.b, lay = around.a * 2 - 1;
+    float slope = length(base.xz);
+    float lee = slope > 1e-3 ? dot(base.xz / slope, snowWind.xy) * saturate(slope * 5) : 0;  // (1: facing away from the wind, -1: into it)
+    snowLie = (1 + 0.4 * lay * (lay > 0 ? 1 : 0.5) * snowTune.w + 0.15 * lee) * (1 - 0.3 * over * snowTune.y);
+    snowLess = 0.08 * over * snowTune.y + 0.1 * saturate((0.85 - base.y) * 4) + 0.1 * saturate(-lee) + 0.1 * saturate(-lay) * snowTune.w;
+    snowLess *= 1 - snowWind.w;                              // ([snowhold], as the ground's)
+    snowLie = lerp(snowLie, max(snowLie, 1.0), snowWind.w);
+    float open = 1 - 0.65 * (1 - exp(-4 * snowTune.x * saturate(1 - sky)));
+    snowSky = open * (1 - 0.2 * over * snowTune.y) * (1 - 0.1 * saturate(-lay) * snowTune.w);
+    snowBareSky = lerp(1, snowSky, 0.6 * saturate(weather.y * 4));
+    // ([snowshade], as the ground's: under an overcast the hollows and folds shade the snow in them, by how far the
+    // ground on two rings round the place lies above it; the heights read no finer than the pixel)
+    [branch] if (snowShade.x > 0 && snowShadeMore.y > 0) {
+      float r = snowShadeMore.z, near = 0, far = 0;
+      float ringLevel = max(level, log2(max(r * surGrid.z, 1)) - 1);
+      float here = SurHeight(xz, ringLevel);
+      [unroll] for (int k = 0; k < 8; ++k) {
+        float2 way = float2(cos(k * 0.785398), sin(k * 0.785398));
+        near += SurHeight(xz + way * r, ringLevel);
+        far += SurHeight(xz + way * (r * 2.5), ringLevel + 1.3);
+      }
+      float hollow = 0.6 * saturate((near / 8 - here) / r * 2.5) + 0.4 * saturate((far / 8 - here) / (r * 2.5) * 2.5);
+      snowSky *= 1 - snowShade.x * saturate(snowShadeMore.y) * 0.6 * hollow;
+    }
+    // its own make-up: the fresh material's colour, creases, roughness, small shapes and height; thin snow follows the
+    // ground's small shapes, deep snow hides them; its edge by the layers' height and its own, mottled from afar; the
+    // thin snow's cover
+    float fallen = weather.y * snowLie;
+    float3 under = normalize(lerp(N, base, saturate(fallen * 2 - 0.4)) - float3(tilt.x, 0, tilt.y));
+    snowNormal = normalize(float3(-tilt.x, 1, -tilt.y));
+    float height = 0.5;
+    [branch] if (snowInfo.x > 0.5) {
+      float3 colour, arh;
+      float2 n;
+      float lod;
+      SurSnowRead(xz, stepX, stepY, fine, fine > 0, colour, arh, n, lod);
+      float far = saturate((lod - 1.5) / 2.5);
+      n *= lerp(1, 0.55, far);
+      float rough = sqrt(arh.g * arh.g + 0.1 * saturate(lod / 4));
+      snowSurface = float4(ToLinear(colour), 1);
+      // (its creases as its own, around what the ground's layers give on the whole here)
+      float ownCreases = materialMaps.SampleLevel(samplerLinear, float3(0.5, 0.5, snowSlice[0].y), 16).r;
+      float layersCreases = albedoTile[0].y > 0.5 ? materialMaps.SampleLevel(samplerLinear, float3(0.5, 0.5, 0), 16).r : 1;
+      [unroll] for (int q = 1; q < 9; ++q)
+        [branch] if (c[q] > 0) layersCreases = lerp(layersCreases, albedoTile[q].y > 0.5 ? materialMaps.SampleLevel(samplerLinear, float3(0.5, 0.5, q), 16).r : 1, c[q]);
+      snowMatter = float3(saturate(arh.r / max(ownCreases, 0.05) * layersCreases), rough, arh.b);
+      snowNormal = SurSnowOn(n, under);
+      height = arh.b;
+      snowEdge = float2(0.5 * (1 - groundHeight) + 0.5 * arh.b, lerp(1, 0.2, far));
+      snowMottle = CloudNoise(float3(xz * 0.45, 1.3)) * 0.6 + CloudNoise(float3(xz * 1.3, 4.7)) * 0.4;
+      [branch] if (snowSlice[3].x >= 0) {
+        float s = snowSlice[3].w;
+        snowCover = wetNormalMaps.SampleGrad(samplerAniso, float3(xz * s, snowSlice[3].x), stepX * s, stepY * s).r;
+      }
+    }
+    // (wet snow at the thaw and in rain, the hollows first: as the ground's)
+    float melt = weather.x * max(saturate(falling.x * 3), saturate((1 - weather.y) * 2 + 0.2)) * (1 - saturate(falling.y * 4));
+    [branch] if (melt > 0) snowWet = saturate((melt * 1.25 - (height * 0.7 + CloudNoise(float3(xz * 0.35, 2.1)) * 0.3)) / 0.2);
+    // (the painted canopy's crowns hold two thirds of the snow the ground does: a snowed wood from far up is not a white
+    // field; measured against SETONS_R's own snowed woods from the farthest zoom)
+    surfaceSnowShare = 1 - 0.35 * woodCrowns;
+  }
+#endif
   float3 color = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, 0, N, i.world, lit);
   return float4(BeyondMap(color, i.world), 1);
 }
@@ -344,6 +507,7 @@ struct SurroundConstants {
   // (the detail look's, after the block-out's)
   float pictures[4], kinds[4], more[4], map[4], canopy[4], trees[4], sight[4], pictures2[4], kinds2[4];
   float albedoTile[10][4], normalTile[9][4], upperOf[9][4];
+  float snowInfo[4], snowSlice[4][4], snowWind[4], snowTune[4];  // [snowsur] (the snow variant's, after the rest)
 };
 
 // A square picture's smaller levels after it (`all`: the picture itself, `channels` bytes a pixel), each the mean of
@@ -921,8 +1085,35 @@ void Surround::Draw(const View& view) {
   // block-out, as before
   Terrain::LayerTiles tiles;
   bool detailed = detailNow_ && terrain_;
+  // [snowsur] while the ground lays its snow by its own pipeline: the variant that holds it as the ground does (made the
+  // first time; the snow's normals and shelter at the two slots of the ground's mud, let go of after the drawing)
+  Terrain::SnowLook snow;
+  bool snowed = false;
+  if (detailed && view.constants.weather[1] > 0 && terrain_->BindSnow(&snow, kMudSlot, kMudSlot + 1)) {
+    if (!detailSnowTried_) {
+      detailSnowTried_ = true;
+      const std::string source = std::string("#define SURROUND_DETAIL 1\n#define SURROUND_SNOW 1\n") + Terrain::SnowStatics() + kViewShaderBlock +
+                                 kLightingShaderBlock + kShader;
+      gfx::PipelineDesc pd;
+      pd.name = "the map's surround, in the map's layers, under snow";
+      pd.vertexSource = pd.pixelSource = source;
+      pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, 0}};
+      pd.stride = sizeof(float) * 3;
+      pd.cull = gfx::Cull::None;
+      pd.colorFormat = kSceneFormat;
+      pd.samples = gSceneSamples;
+      std::string error;
+      detailSnow_ = device_->CreatePipeline(pd, &error);
+      if (!detailSnow_) fprintf(stderr, "render: the map's surround cannot hold snow as the ground does (the plain snow lies on it): %s\n", error.c_str());
+    }
+    snowed = static_cast<bool>(detailSnow_);
+    if (!snowed) {
+      device_->SetTexture(kMudSlot, {});
+      device_->SetTexture(kMudSlot + 1, {});
+    }
+  }
   if (detailed) {
-    device_->SetPipeline(detail_);
+    device_->SetPipeline(snowed ? detailSnow_ : detail_);
     detailed = terrain_->BindLayers(&tiles);
   }
   if (detailed) {
@@ -954,8 +1145,14 @@ void Surround::Draw(const View& view) {
     std::memcpy(c.albedoTile, tiles.albedoTile, sizeof c.albedoTile);
     std::memcpy(c.normalTile, tiles.normalTile, sizeof c.normalTile);
     std::memcpy(c.upperOf, upperOf_, sizeof c.upperOf);
+    if (snowed) {  // [snowsur]
+      std::copy(snow.info, snow.info + 4, c.snowInfo);
+      std::memcpy(c.snowSlice, snow.slice, sizeof c.snowSlice);
+      std::copy(snow.wind, snow.wind + 4, c.snowWind);
+      std::copy(snow.tune, snow.tune + 4, c.snowTune);
+    }
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    device_->SetConstants(1, &c, sizeof c);
+    device_->SetConstants(1, &c, snowed ? sizeof c : offsetof(SurroundConstants, snowInfo));
     device_->SetTexture(0, texture_);
     device_->SetTexture(1, masksTexture_);
     device_->SetTexture(4, forestTexture_ ? forestTexture_ : texture_);
@@ -984,6 +1181,10 @@ void Surround::Draw(const View& view) {
     count = p.count;
   }
   if (count) device_->DrawIndexed(count, first);
+  if (snowed) {  // [snowsur] (the mud's slots let go of: the water's pass has its own there)
+    device_->SetTexture(kMudSlot, {});
+    device_->SetTexture(kMudSlot + 1, {});
+  }
 }
 
 }  // namespace render
