@@ -176,6 +176,8 @@ const std::vector<Vec3>* Lights::Ramp(const std::string& path) {
   return &ramp;
 }
 
+bool Lights::HasRamp(const std::string& ramp) const { return vfs_->Exists(ramp); }  // [warpin]
+
 void Lights::Flash(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from) {
   // (the same test as Add's: a place or size that is not a number reaches the grid's bounds and the lights' buffer)
   if (!(size > 0) || !(seconds > 0) || !std::isfinite(size) || !std::isfinite(seconds) || !Finite(position)) return;

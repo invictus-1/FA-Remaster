@@ -34,7 +34,30 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 65. To the INTERFACE track: FSR 3 switched off inside a game leaves no anti-aliasing; two labels (2026-11-10, Chris's playtest of 11-09; not blocking)
+## 66. To the VISUALS track: the surround's detail files, two changes (2026-11-10; not blocking, the drawing goes on meanwhile) - DONE
+
+**Who:** renderer (your section 120's files are being drawn: the ground by your masks in the map's own layers, the decor
+through the map's own model path, the forest picture as floor, shade and far canopy; first pictures in
+`_scratch/render/t1109/surround/pics/`).
+
+1. **The forests' ground layer is missing from the masks.** The map's own forests lie on its layer 5 (forest_floor);
+   the masks hold layers 1, 2, 3, 7 and the rest 0, so the surround's forests stand on grass. **Asked:** name the layer in
+   the json's masks, `"forest_floor": 5`; no new channel is needed, I take its share from the forest picture (where the
+   canopy is closed the floor is layer 5, going over to the masks' ground with the canopy's value). Until the json has it
+   I use 5 by a viewer switch. If you would rather paint the floor yourself (a fifth share), say so and say where it goes.
+2. **Ruler-straight forest blocks outside the edges.** Carrying the map's tree density straight out of an edge gives
+   columns with dead-straight sides, a block as wide as the forest was at the edge and as long as the carry
+   (`_scratch/render/t1109/surround/pics/forest_crop_south.png`: south edge, a white column about 60 samples wide with
+   parallel sides; the trees placed by it show the same, `d1_treestop_crop.png`). From the game's farthest zoom and in
+   low shots along the edge that reads as a planted rectangle. **Asked:** break the carry up: let the block's sides wander
+   and narrow or widen with distance (the way the heights' hand-over from the carried edge to the sculpt wanders now),
+   and feather its far end into the patches; then place the decor's trees by the new picture.
+
+More may follow when the drawing is finished (snow, night and Vulkan are not looked at yet).
+
+**Answer:** done the same day (her section 123): the json's masks hold "forest_floor": 5; the forest picture's carried blocks wander and feather at their far ends; the decor's trees are re-placed from it (16,510 entries, same table); heights and masks unchanged.
+
+## 65. To the INTERFACE track: FSR 3 switched off inside a game leaves no anti-aliasing; two labels (2026-11-10, Chris's playtest of 11-09; not blocking) - DONE
 
 **Who:** renderer. **Why:** Chris, 2026-11-09: "Without fsr 3 on units seem to lack a lot of details like no anti aliasing."
 A helper traced it (report in `_scratch/render/t1109/fsr/`, numbers in HANDOFF-render.md's block of 2026-11-10):
@@ -58,7 +81,7 @@ Nothing to wire for the renderer's own fixes of that item (render commit of 2026
 `World::fallNoLocks`, [fallpace] `World::fallSteadyPace` (snow and rain: flakes sized by the window, no trails under FSR 3,
 one pace on the screen at every zoom).
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-10 (main b7b841a4; docs/ui-answers.md's top entry): while the picture has 1 sample and the looks ask for more, FSR 3 and Frame Generation keep their values until the next picture is made (logged once); the option is "Render Scale" now, with tips saying which FSR scales it up.
 
 ## 64. To the VISUALS track: three thin cells of the plants' atlas lose leaf area in their smaller levels (2026-11-09; not blocking, low)
 

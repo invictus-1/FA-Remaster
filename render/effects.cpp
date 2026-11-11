@@ -460,6 +460,24 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     // [scars] not a light that is no explosion's: Chris, 2026-10-20, a black mass under every wall begun and wherever a
     // wreck or a tree was reclaimed; nor a volume explosion where nothing exploded (Lights::onFlash)
     const bool explosion = Explosion(event, frame);
+    // [warpin] (effects.h, warpInColours) a warp-in's flash in its army's faction's ramp: one thrown by the warp-in's own
+    // effect (no explosion, on a projectile of /effects/entities/UnitTeleport..), where the visuals track has made that
+    // ramp for the faction; every other flash, and this one without her file, by the game's ramp as always
+    std::string ramp = "/textures/particles/" + event.text + ".dds";
+    if (warpInColours && particles_->remastered && !explosion && !event.text.empty()) {
+      auto shot = projectileAt_.find(event.entity);
+      const uint32_t bp = shot != projectileAt_.end() ? frame.projectiles[shot->second].blueprint : kNone;
+      if (frame.blueprints && bp < frame.blueprints->size() && IsTeleportEffect((*frame.blueprints)[bp])) {
+        const std::string faction = FactionOf(event, frame);
+        std::string own = std::string(kRemasteredEffects) + "/textures/particles/warpin/" + faction + "_" + event.text + ".dds";
+        for (char& c : own) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!faction.empty() && lights_->HasRamp(own)) {
+          ramp = own;
+          ++warpInFlashes;
+          if (verbose) printf("render: effects: a warp-in's flash (%s, size %g) in the %s ramp %s\n", event.blueprint.c_str(), n.empty() ? 0.0 : static_cast<double>(n[0]), faction.c_str(), own.c_str());
+        }
+      }
+    }
     // the modern look gets a light; the original look the glow on the ground the original draws
     if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity)) {
       FlashFrom from;  // (for the volume explosions: whose it is, and how large a unit it is that dies)
@@ -468,13 +486,13 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
         from.faction = FactionOf(event, frame);
         from.dyingWidth = DyingWidth(event, frame);
       }
-      lights_->Flash("/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f, from);
+      lights_->Flash(ramp, e.position, n[0], at, n[1] * 0.1f, from);
     }
     if (VolfxLog* log = VolfxLog::Get()) log->ClearOrigin();
     // (a blast, blasts.h)
     if (blasts_ && n.size() >= 2 && !Hidden(frame, event.entity) && explosion) blasts_->FromFlash(e.position, n[0], at, event.entity);
     if (n.size() >= 2 && !event.blueprint.empty() && !Hidden(frame, event.entity))  // ([fogwar] as the flash: not on an unseen thing)
-      decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", "/textures/particles/" + event.text + ".dds", e.position, n[0], at, n[1] * 0.1f);
+      decals_->AddLight("/textures/particles/" + event.blueprint + ".dds", ramp, e.position, n[0], at, n[1] * 0.1f);
     return;
   } else if (f == "CreateDecal" || f == "CreateSplat") {
     // numbers: heading, sizeX, sizeZ, lod, duration (seconds - a GUESS), fidelity; a decal's kind is text2

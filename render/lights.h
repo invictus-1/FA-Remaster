@@ -85,6 +85,8 @@ class Lights {
   // (volume explosions, volume_blasts.h) told of every explosion's flash as Flash is given it, while set: big ones are
   // blasts (a structure begun, a unit being built, a warp-in, a reclaim throw their flashes too, and are none)
   std::function<void(const std::string& ramp, Vec3 position, float size, double born, float seconds, const FlashFrom& from)> onFlash;
+  // [warpin] Whether there is such a ramp texture to read (the game's, or one of the mounted remasters').
+  bool HasRamp(const std::string& ramp) const;
   // The colour a thing glows in whose particles take theirs from that ramp texture: the ramp's
   // strongest place (linear light), for the light a shot in flight throws.
   Vec3 RampGlow(const std::string& ramp);
