@@ -717,9 +717,10 @@
 //           up from what the map's edges hold (World::beyondLand, beyond_land.h; modern look); --beyond-land-look
 //           name=value,... tunes it (BeyondLand's numbers: band, edgeShadow, edgeWidth, edgeGrey, haze, hazeHeight, begin,
 //           end, hills, mountains, islands, farLand, snowline, softness, reach)
-// --surround  (surround) with the world beyond the map's edge, on a map that brings a sculpted surround (x_surround.json
-//           beside its x.scmap): that land drawn past the map's edges, not the map laid out again mirrored
-//           (World::mapSurround, surround.h; modern look). Where the surround brings its ground's masks, its forest and
+// --no-surround  (surround) with the world beyond the map's edge, a map that brings a sculpted surround (x_surround.json
+//           beside its x.scmap) has that land drawn past its edges (World::mapSurround, surround.h; modern look; Chris,
+//           2026-11-10: on by default; --surround is still taken and changes nothing). --no-surround: the map laid out
+//           again mirrored there, as on every map without a surround. Where the surround brings its ground's masks, its forest and
 //           its scenery (the detail look), its ground is drawn in the map's own ground layers and its scenery stands on it;
 //           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
 //           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
@@ -1171,7 +1172,7 @@ struct Options {
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
-  bool surround = false;  // --surround
+  bool surround = true;   // --no-surround (Chris, 2026-11-10: on by default; --surround is taken and changes nothing)
   bool surroundBlockOut = false;        // --surround-blockout (the detail look)
   bool surroundScenery = true;          // --no-surround-scenery
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
@@ -1466,7 +1467,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fog-old") o->fogOld = true;  // [weather]
     else if (a == "--fog-even") o->fogEven = true;  // [mistpatch]
     else if (a == "--beyond-land") o->beyondLand = true;
-    else if (a == "--surround") o->surround = true;  // (beyondland)
+    else if (a == "--surround") o->surround = true;  // (beyondland; the default now)
+    else if (a == "--no-surround") o->surround = false;
     else if (a == "--surround-blockout") o->surroundBlockOut = true;  // (surround: the detail look's switches)
     else if (a == "--no-surround-scenery") o->surroundScenery = false;
     else if (a == "--noicons") o->icons = false;

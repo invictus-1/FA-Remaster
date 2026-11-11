@@ -15,7 +15,7 @@ bool WritePng(const std::string& path, const uint8_t* rgba, int width, int heigh
 bool ReadPngGrey16(const std::string& file, int* width, int* height, std::vector<uint16_t>* out, std::string* why);
 
 // (surround) Reads a PNG of 8-bit values, not interlaced, of `channels` 4 (RGBA, its alpha as it is: a map's surround's
-// ground masks) or 1 (grey: its forest): `out` width * height * channels bytes, top row first. False and why for
+// ground masks), 3 (RGB: its second masks) or 1 (grey: its forest): `out` width * height * channels bytes, top row first. False and why for
 // anything else.
 bool ReadPng8(const std::string& file, int channels, int* width, int* height, std::vector<uint8_t>* out, std::string* why);
 

@@ -2577,6 +2577,7 @@ void World::ReadSurroundScenery() {
   // the last stands, 150 of 420 world units, and fewer and fewer from there)
   surroundTrees_[0] = 0.36f * farthestTree;
   surroundTrees_[1] = farthestTree;
+  surround.TreesGiven(&surroundTrees_[0], &surroundTrees_[1]);  // (the json's own "decor_trees", where it says)
   printf("render: the surround's scenery: %zu pieces of %zu kinds in %zu squares from %s, %d of them trees out to %.0f world units past the edge"
          "%s (read and placed in %.0f ms)\n",
          surroundProps_.size(), kindModels.size(), surroundCells_.size(), name.c_str(), trees, farthestTree,

@@ -437,8 +437,9 @@ class World {
   bool beyondLand = false;
   // (surround) With the world beyond the edge, on a map that brings a sculpted surround (x_surround.json beside its
   // x.scmap; surround.h): that land is drawn past the map's edges, not the map laid out again mirrored. Read the first
-  // time it is wanted. Modern look; off by default (the first surround is a block-out).
-  bool mapSurround = false;
+  // time it is wanted. Modern look. Chris, 2026-11-10: on by default (a map that brings no surround draws exactly as
+  // before: the map laid out again mirrored); false: that for every map (viewer --no-surround).
+  bool mapSurround = true;
   // (surround) The detail look (surround.h; the visuals session's detail pass of 2026-11-10), where the map's surround
   // brings its ground's masks, its forest and its scenery; all of it only with mapSurround:
   //   surroundBlockOut: its ground as the first look had it (the map's colours by height and slope), although it brings

@@ -1,7 +1,8 @@
 // (surround) The land round the map (Chris, 2026-11-09: "sculpt an entire terrain outside the map so the map actually
 // looks like it exists vs emptiness or a mirrored exterior outside of the map square"): a map may bring a sculpted
-// surround, its own ground past its four edges, and with World::mapSurround that is drawn there in place of the map
-// laid out again mirrored (terrain.h, beyondReach). A picture only: nothing of it is in the game.
+// surround, its own ground past its four edges, and with World::mapSurround (Chris, 2026-11-10: on by default) that is
+// drawn there in place of the map laid out again mirrored (terrain.h, beyondReach). A picture only: nothing of it is in
+// the game.
 //
 // The files, beside the map's own (x.scmap): x_surround.json and the picture of heights it names.
 //   { "version": 1,
@@ -33,12 +34,18 @@
 //                "r": 1, "g": 2, "b": 3, "a": 7,    and alpha are the shares of the layers of these numbers (the
 //                "rest": 0 },                       map's own: 0 its lower layer, 1 to 8 its strata), what the four
 //                                                   leave of 255 the share of layer "rest"
+//     "masks2": { "file": "x_surround_masks2.png",  (may be left out) a second such picture, 8-bit RGB or RGBA, for
+//                 "samples": 1537,                  more of the map's layers: the shares of the layers its "r", "g",
+//                 "r": 4, "g": 6, "b": 8 },         "b" and "a" name (each may be left out). The shares of both
+//                                                   pictures together are at most 255; what they leave is "rest"'s
 //     "forest": "x_surround_forest.png",            8-bit grey PNG over the same square: 255 closed forest
 //     "forest_floor": 5,                            (may be left out; here or among the masks' numbers) the layer laid
 //                                                   under the forest by that picture
 //     "forest_colour": [0.165, 0.155, 0.095],         (may be left out) the far forest's crowns, as stored colours
-//     "decor": "x_surround_decor.bin"               the scenery standing on it (scmap.h, LoadDecor: the map's own
+//     "decor": "x_surround_decor.bin",              the scenery standing on it (scmap.h, LoadDecor: the map's own
 //                                                   decor format); drawn by the world (World::surroundScenery)
+//     "decor_trees": [150, 420]                     (may be left out) from how far past the map's edge that scenery's
+//                                                   trees thin out, and where the last stands (world units)
 //   Its GROUND is then drawn in the map's own layers (the ground's own albedos, normals and third maps at the map's
 //   repeats: Terrain::BindLayers), laid by the masks in the layers' order and as the ground's shader lays them (a
 //   layer with a third map comes through by its height first, and brings its roughness and crease shading); the upper
@@ -105,6 +112,14 @@ class Surround {
   // the map's (empty: none).
   bool HasMasks() const { return !masks_.empty(); }
   const std::string& Decor() const { return decor_; }
+  // From how far past the map's edge to how far the scenery's trees thin out, where the json says ("decor_trees");
+  // false where it does not (the world then takes it from where the trees stand).
+  bool TreesGiven(float* from, float* to) const {
+    if (treesGiven_[1] <= treesGiven_[0]) return false;
+    *from = treesGiven_[0];
+    *to = treesGiven_[1];
+    return true;
+  }
   // How far the ground at a place was moved by joining it to the map's edge (world units, + up; 0 farther out than
   // `seam`): the scenery's file has its heights from the surround as it came, and stands on the ground as drawn by
   // this much more. Kept only where the json names scenery, until LetGoAsCame (the world, once it has placed it).
@@ -158,6 +173,12 @@ class Surround {
   float canopyColour_[3] = {0.165f, 0.155f, 0.095f};  // (measured against SETONS_R's own woods from the farthest zoom)
   float upperOf_[9][4] = {};
   std::string decor_;
+  // (the second masks: as read, expanded to RGBA; their texture; which layers its four shares are of, -1 none)
+  std::vector<uint8_t> masks2_;
+  int masks2Samples_ = 0;
+  gfx::Texture masks2Texture_;
+  int kinds2_[4] = {-1, -1, -1, -1};
+  float treesGiven_[2] = {0, 0};  // ("decor_trees")
   std::vector<uint16_t> asCame_;  // (its heights before the join, for JoinMoved; empty: let go of, or no scenery)
   Terrain* terrain_ = nullptr;
   std::vector<uint16_t> heights_;  // samples_ * samples_, the north row first; joined to the map's edge

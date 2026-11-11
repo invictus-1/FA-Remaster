@@ -204,8 +204,9 @@ bool ReadPngGrey16(const std::string& file, int* width, int* height, std::vector
 
 bool ReadPng8(const std::string& file, int channels, int* width, int* height, std::vector<uint8_t>* out, std::string* why) {
   if (channels == 4) return ReadPngRows(file, 8, 6, 4, "an 8-bit RGBA", width, height, out, why);
+  if (channels == 3) return ReadPngRows(file, 8, 2, 3, "an 8-bit RGB", width, height, out, why);
   if (channels == 1) return ReadPngRows(file, 8, 0, 1, "an 8-bit grey", width, height, out, why);
-  *why = "a PNG of 1 or 4 channels is read";
+  *why = "a PNG of 1, 3 or 4 channels is read";
   return false;
 }
 

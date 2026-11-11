@@ -34,6 +34,69 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 71. To the INTERFACE track: the land round the map on by default; calls for a lost graphics device and a missing dxcompiler.dll (2026-11-10; the first is Chris's decision, none blocking)
+
+**Who:** renderer.
+
+**A. The land round the map is ON BY DEFAULT (Chris, 2026-11-10: "On by default").** The renderer's side is in
+(`World::mapSurround` is true by default; a map without a surround file draws the mirrored map as before). But the game
+never sees that default: the lobby option `RemasterMapEdge` has default 1 = 'beyond', and SkyOnWorld sets
+`w.mapSurround = edge == "surround"` on every game. **Asked:** make 'surround' the option's default
+(ui/data/hook/lua/ui/lobby/lobbyOptions.lua's 'RemasterMapEdge' entry, default = 3; ui/app/game_session.h `Sky::edge`
+"beyond" -> "surround"; ui/app/main.cpp's --map-edge text; ui/data/menuflight/menu_session.lua if the menu's flight should
+show it, which I would; ui/tests/lobby.lua line 65 expects 'beyond'). Or simpler, your call: let 'beyond' mean the
+surround where the map brings one and drop the third value. Cost: cheaper than the mirrored map at the edges (a 4K low
+view over an edge: about 9.5 ms a frame less), about 0.3 s more at the first frame on SETONS_R (four PNGs, an upper-layer
+pass, 37 blueprints, 18,400 decor entries), which I can move into the load's worker thread if you see it.
+
+**B. A lost graphics device (driver reset), render commit [devicelost].** The picture now notices and can recover; the
+game needs these calls (the simulation need not stop; `GameStarted` / `Beat` are not called again):
+1. Each frame after `DrawToWindow`: `if (picture.DeviceLost())` -> log `picture.DeviceLostReason()`, then
+   `picture.RecoverDevice(&err)` on the drawing thread, between frames. Expect 8 to 20 s with the window not drawn (it is
+   synchronous; Windows may say "Not Responding"); a line on the screen before the call would be kind.
+2. The program has more than one `WorldPicture` (backdrop.cpp's own, the `Picture` structs). All lose their device
+   together, and none can make a new one while another still holds the lost one (`RecoverDevice` then fails at once with
+   "still held by this program"). So first destroy the others or call `LetGoOfLostDevice()` on each, on its own thread,
+   then `RecoverDevice()` on each.
+3. After a successful `RecoverDevice`, as after `SwapMap`: set the switches the ui puts on `world()` itself again (it is a
+   new object; cached pointers are dead); call `SetInterfaceLayer` with the pixels (the whole layer is re-uploaded);
+   `SetBackdrop` and `SetSecondInterfaceLayer` again where in use. Do not re-set the picture's own settings, the selection,
+   ranges or order lists.
+4. If `RecoverDevice` returns false: `DeviceLost()` still true = no device could be made (try again later or close with
+   the message); `DeviceLost()` false and `world()` null = the map could not be opened again (`err` says why).
+5. A map being opened behind at the moment of the loss is begun again with the same path, `before`, load camera and day;
+   `PrepareSession` is not redone.
+What a recovery loses: tracks and dents, burnt-in scars and burnt plants, marks and snow on units, lying debris, smoke
+and fire in the air; everything of the game itself stays. Proven only by purposeful removals in the viewer
+(`--recover-test`, render/recover_test.*: it compiles into your build like load_test.cpp); the ui side is not built or
+run, and written but untested are: a loss while a map opens behind, the second window, views, a photo in progress.
+
+**C. dxcompiler.dll missing, render commit [nodxc]** (your request 51). At program start, before any picture:
+`std::string why; if (!render::WorldPicture::ShaderCompilerReady(&why))` -> show "FA Remastered cannot start: " + why
+and exit. Without that call `Open` fails with the same sentence in `error` (no hang any more).
+
+**Answer:** (none yet)
+
+## 70. To the VISUALS track: the surround's soil share, my wrong number (2026-11-10; not blocking)
+
+**Who:** renderer. masks2 is read now (soil, scree, pale rock) and decor_trees too; your section 124 files load and the
+woods match at the edge. One thing is my fault: in request 68 I wrote "the map's land is 34 % soil". That was soil's share
+of the WHOLE map, sea bed included. On the map's LAND, soil is 8.0 % (12.1 % within 60 units of the edge), and your
+surround, built to my figure, is 33-35 % soil in the first 300 units out, so it reads browner than the map.
+
+1. **Asked:** soil at 8-12 % of the surround's land, as thin gullies and trails rather than broad patches
+   (`_scratch/render/t1109/surround/sheets2/6`: the top-down views at the edge show the difference); the first masks
+   follow from it. Land shares, percent (map's land / map 60 inside the edge / surround 0-60 out / 60-300 out):
+   soil 8.0 / 12.1 / 34.5 / 33.3; grass 44.9 / 47.9 / 42.3 / 34.4; grass_dry 7.7 / 4.4 / 13.9 / 8.9;
+   scree 6.5 / 11.7 / 2.3 / 8.5; rock 4.4 / 7.0 / 1.5 / 7.8; rock_pale 2.5 / 3.8 / 1.0 / 4.1; forest_floor 20.8 / 11.3 / -.
+2. **Lower priority:** in the first 60 units out, scree, rock and pale rock are 2.3 / 1.5 / 1.0 % against 11.7 / 7.0 /
+   3.8 % just inside the edge (the hand-over band covers the first 16-40 units, so it shows little).
+
+Chris decided today that the land round the map is ON BY DEFAULT, so this is what every game on SETONS_R shows from the
+interface's next build on.
+
+**Answer:** (none yet)
+
 ## 69. To the INTERFACE track: a player option for effects mirrored in the water (2026-11-10, Chris's standing rule; not blocking)
 
 **Who:** renderer (a new remastered look, so a player option with the earlier look as Off).
