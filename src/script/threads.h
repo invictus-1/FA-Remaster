@@ -59,6 +59,7 @@ class ThreadScheduler {
     void** waitBox = nullptr;  // the event's `_c_object` box, while ObjectRebinds() is waitEpoch (WaitObject)
     uint32_t waitEpoch = 0;
     bool inWaiters = false;   // listed in waiters_
+    bool woken = false;       // its event's signal has put it at the run order's end; it tests the event at its turn
     int profSource = -1;      // MOHO64_PROFILE: the Lua timer's source for this thread (core/profile.h)
     const std::string* profLabel = nullptr;  // MOHO64_PROFILE_HITCH: its function's file:line, for the beat breakdown
     const void* traceZone = nullptr;  // the profiler build (core/trace.h): its resumes' zone, named by its function
