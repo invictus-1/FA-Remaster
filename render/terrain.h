@@ -292,6 +292,10 @@ class Terrain {
     float albedoTile[10][4] = {};
     float normalTile[9][4] = {};
     float xp = 0, specular = 0;
+    // [surgrain] (by the layers' kinds of ground: GroundKinds) albedoTile[n] z: how far a layer stands over the others
+    // where they meet (world units: rock and scree up, soil and mud a little down), w: 1 = hard ground (rock, scree);
+    // `rimLayer`: the first soil or mud layer under the hard ones (-1: none), which lies round their feet
+    int rimLayer = -1;
   };
   bool BindLayers(LayerTiles* tiles) const;
   // (surround) The upper layer (the tenth: one picture over the whole map, laid over all the others by its alpha) where

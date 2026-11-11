@@ -475,6 +475,14 @@ class World {
   // [edgehand] (surround.h) the earlier hand-over at the edge, the map's ground mirrored over 40 units (viewer
   // --surround-edge-mirror), and over how many world units the map's masks go over into the surround's now (viewer
   // --surround-hand-over)
+  // [surgrain] (surround.h, Surround::grain) how much of the map's own small character the surround's ground is given near
+  // the eye, 0..1 (viewer --surround-grain; 0: its ground as before)
+  float surroundGrain = 1;
+  // [surshore] The shores of a sculpted surround: how much of the water's own even band of foam along the waterline
+  // stays there (the surf's waves do not run past the map's edge; without this the band stood whole, a hard white
+  // ribbon beside the map's soft surf). 0.15 is a sheltered shore's lap on the map (surf.h, kSurfLapCalm); 0: as before
+  // (viewer --surround-shore-lap).
+  float surroundShoreLap = 0.15f;
   bool surroundEdgeMirror = false;
   float surroundHandOver = 6;
   // [surahead] The surround's files read as the map opens, on a thread of their own beside the rest of the load (its

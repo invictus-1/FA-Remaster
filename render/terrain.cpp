@@ -2699,6 +2699,18 @@ bool Terrain::BindLayers(LayerTiles* tiles) const {
   for (int i = 0; i < 9; ++i) tiles->normalTile[i][1] = normalUp_[i] ? 1.0f : 0.0f;
   tiles->xp = shaderKind_ == 1 ? 1.0f : 0.0f;
   tiles->specular = map_->lighting.specular.x;
+  {  // [surgrain] (kinds: snow, mud, sand, grass, dirt, hard)
+    int firstHard = 9;
+    for (int i = 8; i >= 1; --i)
+      if (groundKind_[i][5] >= 0.6f) firstHard = i;
+    for (int i = 0; i < 9; ++i) {
+      const float* k = groundKind_[i];
+      tiles->albedoTile[i][2] = 0.5f * k[5] - 0.12f * (k[1] + k[4]) - 0.04f * k[2];
+      tiles->albedoTile[i][3] = k[5] >= 0.6f ? 1.0f : 0.0f;
+      if (tiles->rimLayer < 0 && i >= 1 && i < firstHard && k[1] + k[4] >= 0.75f) tiles->rimLayer = i;
+    }
+    if (firstHard == 9) tiles->rimLayer = -1;
+  }
   device_->SetTexture(2, maskLow_);
   device_->SetTexture(3, maskHigh_);
   for (int i = 0; i < 10; ++i) device_->SetTexture(6 + i, albedo_[i]);

@@ -102,6 +102,11 @@ class Surround {
   // held at the edge's values over `upperHold` units (read softer the farther out), the snow's shelter over
   // `ownColours` as before; nothing mirrored. What is held is the edge's nearest place, wandering along the edge with
   // the way out, so that nothing is drawn straight out of the edge.
+  // [surgrain] (the detail look) How much of the map's own small character its ground is given near the eye (surround.cpp's
+  // PS: the masks read a little off their place and their borders made ragged by a fine noise, soil round the feet of rock
+  // and scree, a small relief shading the ground, the upper layer's tone varying from place to place): 1 all of it, 0 none
+  // (as at first; viewer --surround-grain); the relief's strength; how much soil lies round the rock.
+  float grain = 1, grainRelief = 1.0f, grainRims = 0.9f;
   bool edgeMirror = false;
   float handOver = 6, upperHold = 20;  // (6: tried 4, 12 and 30; the longer ones draw the edge's ledges out in pale smears)
   float softness = 0.06f;  // how soft its shadows are (the slope over which a shadow's edge fades)

@@ -780,6 +780,11 @@
 //           over into the surround's (World::surroundHandOver, 6);
 //           --no-surround-ahead: [surahead] its files read on the first frame that draws it, as at first, not beside the
 //           map's load on a thread of their own (World::surroundAhead);
+//           --surround-grain <0..1>: [surgrain] how much of the map's own small character its ground is given near the eye
+//           (ragged borders between its layers, soil round the rock, a small relief, the tone varying; World::surroundGrain,
+//           1; 0: as before);
+//           --surround-shore-lap <n>: [surshore] how much of the water's own band of foam stays along its shores
+//           (World::surroundShoreLap, 0.15; 0: all of it, the hard white ribbon as before);
 //           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
 //           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
 //           map's edge (World::surroundScenery); --surround-scenery-pixels <n>: how many times the smallest size on
@@ -1256,6 +1261,8 @@ struct Options {
   bool surroundEdgeMirror = false;      // --surround-edge-mirror [edgehand]
   bool surroundAhead = true;            // --no-surround-ahead [surahead]
   float surroundHandOver = -1;          // --surround-hand-over [edgehand] (-1: the world's own)
+  float surroundGrain = -1;             // --surround-grain [surgrain] (-1: the world's own)
+  float surroundShoreLap = -1;          // --surround-shore-lap [surshore] (-1: the world's own)
   bool surroundScenery = true;          // --no-surround-scenery
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
   float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
@@ -2050,6 +2057,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround-edge-band") o->surroundEdgeBand = static_cast<float>(atof(v));             // [edgeband]
     else if (a == "--surround-ice-from") o->surroundIceFrom = static_cast<float>(atof(v));               // [snowsur]
     else if (a == "--surround-hand-over") o->surroundHandOver = static_cast<float>(atof(v));             // [edgehand]
+    else if (a == "--surround-grain") o->surroundGrain = static_cast<float>(atof(v));                    // [surgrain]
+    else if (a == "--surround-shore-lap") o->surroundShoreLap = static_cast<float>(atof(v));             // [surshore]
     else if (a == "--surround-scenery-lod") o->surroundSceneryLod = static_cast<float>(atof(v));         // (surround)
     else if (a == "--surround-scenery-reach") {  // (surround) <from>,<to>
       if (sscanf(v, "%f,%f", &o->surroundSceneryReach[0], &o->surroundSceneryReach[1]) != 2) return false;
@@ -2887,6 +2896,8 @@ int main(int argc, char** argv) {
   world.surroundBlockOut = opt.surroundBlockOut;  // (surround: the detail look's switches)
   world.surroundEdgeMirror = opt.surroundEdgeMirror;  // [edgehand]
   if (opt.surroundHandOver >= 0) world.surroundHandOver = opt.surroundHandOver;
+  if (opt.surroundGrain >= 0) world.surroundGrain = opt.surroundGrain;  // [surgrain]
+  if (opt.surroundShoreLap >= 0) world.surroundShoreLap = opt.surroundShoreLap;  // [surshore]
   world.surroundScenery = opt.surroundScenery;
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
