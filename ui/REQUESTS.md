@@ -2571,6 +2571,24 @@ runs in one minute. The stderr line of gfx_d3d12.cpp:1007 was printed, nothing e
 - How to see it: move `dxcompiler.dll` away from a viewer's or moho64ui's folder and open SETONS_R (modern look).
   The sampler I used (read only): `%TEMP%/ui-fix2/scripts/sample.py <pid> 262144`, offsets through llvm-symbolizer.
 
+### 52. A line for the player while a lost device is made anew, in full screen too (2026-11-11, Chris: "yes"; not blocking)
+From the interface chat, after your request 71 B and its live-window check. While `RecoverDevice` runs (5 to 12 s
+measured in a live window; the device 0.35 s, the map the rest) nothing is drawn. In a window the title bar says
+"FA Remastered: the graphics device was lost, restoring the picture" (the interface sets it), but a full screen has
+no title bar: the player sees the last frame stand still and nothing tells him why. I put it to Chris with your
+offer; his answer of 2026-11-11: **yes**, he wants the line.
+- Asked, as you proposed it (your message of 2026-11-11, way (b)): the recovery in two steps, or a callback between
+  them: the new device is made first; then ONE frame is presented, a dark picture with pixels the interface hands
+  in (as `SetInterfaceLayer` takes them: the interface draws its own text, "Restoring the picture..." in the
+  game's font, so no text is yours to draw); then the map is opened. Whatever form is least work for you; I need
+  to know the size the pixels must have and whether they are premultiplied as the layer's.
+- With several pictures (the window's, a game's own, the menu background's on its thread) the line is wanted on the
+  window's only; the others draw to no window.
+- If the device cannot be made yet (your retries), nothing can be shown: understood; the title bar and my five
+  rounds stay as they are.
+- My side, when your call is there: the pixels made once before `LetGoOfLostDevice` (the interface can still draw
+  into its own software target then), handed in between your two steps; a check in ui/tests/device_lost.lua.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
