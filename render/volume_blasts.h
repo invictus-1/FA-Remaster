@@ -53,6 +53,7 @@ namespace render {
 
 class Lights;
 class TextureCache;
+class FxMirror;  // [fxmirror] fx_mirror.h
 
 class VolumeBlasts {
  public:
@@ -90,6 +91,12 @@ class VolumeBlasts {
   void Light(const View& view, gfx::Texture sunShadows, gfx::Texture cloudShadows, gfx::Texture smokeShadows, Lights* lights);
   // Into the scene's colour (a pass of colour alone, as the particles'), before the particles.
   void Draw(const View& view, gfx::Texture sceneDepth, float zNear);
+  // [fxmirror] The drawn blasts as the water mirrors them (World::waterFxMirror; fx_mirror.h): into the mirrored
+  // picture's pass (FxMirror::Begin), with the view it gave, once they are filled and lit. MirrorReady: its pipeline
+  // made now (false: it cannot be).
+  void DrawMirror(const View& mirrored, const FxMirror& mirror);
+  bool MirrorReady();
+  bool Made() const { return made_; }  // (its own pipelines are made: a volume has been drawn or is about to be)
 
   // --- a nuke, for the world's other looks ---
   // What its flash adds to the sky's light now (linear, as the sky's colours are; 0: none). World::Begin.
@@ -186,6 +193,8 @@ class VolumeBlasts {
   Slot slots_[8];
   int slotCount_ = 0;
   gfx::Pipeline fill_, light_, noise_, draw_, shadow_;
+  gfx::Pipeline mirrorDraw_;  // [fxmirror] (made the first time: MirrorReady)
+  bool mirrorTried_ = false;
   gfx::Texture detail_;
   bool tried_ = false, made_ = false, noiseMade_ = false, scanned_ = false;
   double clock_ = 0;

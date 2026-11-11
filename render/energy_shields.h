@@ -31,6 +31,8 @@
 
 namespace render {
 
+class FxMirror;  // [fxmirror] fx_mirror.h
+
 class EnergyShields {
  public:
   explicit EnergyShields(gfx::Device* device) : device_(device) {}
@@ -55,6 +57,10 @@ class EnergyShields {
   // into the scene's colour and depth open: Post::ContinueScene). Leaves such a pass open. The first call makes
   // the shaders; where they cannot be made, nothing is drawn (said once).
   void Draw(const View& view, Post* post);
+  // [fxmirror] The shells as the water mirrors them (World::waterFxMirror; fx_mirror.h): before Draw, into the mirrored
+  // picture's pass (FxMirror::Begin), with the view it gave. MirrorReady: its pipeline made now (false: it cannot be).
+  void DrawMirror(const View& mirrored, const FxMirror& mirror);
+  bool MirrorReady();
 
   // How much of each (1: as made): the bending of what is behind, the light on what is inside, the rings.
   // ([clearshell] the bending 0.35 since 2026-11-03: at 1 the units under a shield's rim smeared, Chris's big test)
@@ -129,9 +135,13 @@ class EnergyShields {
     float hit[8][4];  // toward, age
   };
   bool Init();
+  bool Lay(const View& view, float* frame);
+  void Dome(const Bubble& b, Vec3 eye);
   gfx::Device* device_;
   int state_ = 0;  // 0 the shaders not tried yet, 1 made, -1 they cannot be
   gfx::Pipeline inside_, shell_;
+  gfx::Pipeline mirrorShell_;  // [fxmirror] (made the first time: MirrorReady)
+  bool mirrorTried_ = false;
   std::vector<Bubble> bubbles_;
   std::vector<Hit> hits_;
   std::vector<Owner> owners_;

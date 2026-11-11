@@ -1,5 +1,9 @@
 #include "energy_shields.h"
 
+#include "fx_mirror.h"
+
+#include <cstring>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -13,6 +17,7 @@ namespace {
 
 constexpr int kMostLit = 32;  // bubbles whose light on what is inside them each pixel adds up (the nearest)
 constexpr int kMostHits = 8;  // a bubble's hits at once (the newest)
+constexpr int kFrameFloats = 16 + 4 + kMostLit * 8 + 5 * 4;  // the frame's constants ([shellglint] its row after the ground's)
 
 // Two passes over each bubble's dome (its own mesh, at the place the frame has it):
 //  InsidePS, over the shell nearest the eye, before anything see-through: the picture behind it (Post::CopyBehind),
@@ -569,6 +574,16 @@ float4 ShellPS(VOut i) : SV_Target {
   glow *= 1 - 0.5 * faceOn * faceOn;
   return float4((plain * alpha + glow) * (1 - 0.6 * stutter), alpha);
 }
+
+#if FX_MIRROR
+// [fxmirror] The shell's mirror image in the water (EnergyShields::DrawMirror; fx_mirror.h): the shell as the mirrored eye
+// sees it, where it stands above the water and nothing solid hides it on the way from the water to it.
+float4 MirrorShellPS(VOut i) : SV_Target {
+  float shows = MirrorShows(i.world);
+  if (shows <= 0) discard;
+  return ShellPS(i) * shows;
+}
+#endif
 )hlsl";
 
 }  // namespace
@@ -639,6 +654,37 @@ bool EnergyShields::Prepare() {
   return state_ > 0;
 }
 
+// [fxmirror] The shell's mirrored variant (DrawMirror; fx_mirror.h), the first time it is wanted: the same shader built
+// with FX_MIRROR, into the mirrored picture (one sample a pixel, no depth: the shader asks what hides it; it writes its
+// alpha, by which the water lays the picture over its mirror).
+bool EnergyShields::MirrorReady() {
+  if (mirrorTried_) return static_cast<bool>(mirrorShell_);
+  mirrorTried_ = true;
+  if (!Prepare()) return false;
+  std::string error;
+  const std::string source = "#define FX_MIRROR 1\n#define FX_MIRROR_SAMPLES " + std::to_string(gSceneSamples) + "\n#define SAMPLES " +
+                             std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + kFxMirrorShaderBlock + kLightingShaderBlock +
+                             kOriginalShieldBlock + IcosahedronBlock() + kShader;
+  gfx::PipelineDesc pd;
+  pd.name = "energy shields, the shell mirrored in the water";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.pixelEntry = "MirrorShellPS";
+  pd.attrs = {{"POSITION", 0, gfx::AttrType::Float3, offsetof(ScmVertex, position)},
+              {"NORMAL", 0, gfx::AttrType::Float3, offsetof(ScmVertex, normal)},
+              {"TEXCOORD", 0, gfx::AttrType::Float4, offsetof(ScmVertex, uv0)}};
+  pd.stride = sizeof(ScmVertex);
+  pd.colorFormat = kFxMirrorFormat;
+  pd.samples = 1;
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.blend = gfx::Blend::Premultiplied;
+  pd.alphaWrite = true;
+  mirrorShell_ = device_->CreatePipeline(pd, &error);
+  if (!mirrorShell_) fprintf(stderr, "render: energy shields cannot be mirrored in the water (%s)\n", error.c_str());
+  return static_cast<bool>(mirrorShell_);
+}
+
 void EnergyShields::Begin() {
   bubbles_.clear();
   hits_.clear();
@@ -669,19 +715,20 @@ void EnergyShields::AddHit(Vec3 at, Vec3 toward, float age) {
 
 void EnergyShields::AddOwner(Vec3 position, float shieldRatio) { owners_.push_back({position, shieldRatio}); }
 
-void EnergyShields::Draw(const View& view, Post* post) {
-  drawn = 0;
-  if (bubbles_.empty() || !post) return;
-  if (!Prepare()) return;
+// The bubbles `view` sees, the farthest from its eye first (order_), each with its hits and what is left of its shield,
+// and the frame's constants (`frame`: kFrameFloats numbers). False: none in view. (Draw's; [fxmirror] and DrawMirror's,
+// for the mirrored view before it: laid anew each time.)
+bool EnergyShields::Lay(const View& view, float* frame) {
   const Vec3 eye{view.constants.cameraPosition[0], view.constants.cameraPosition[1], view.constants.cameraPosition[2]};
   order_.clear();
   for (Bubble& b : bubbles_) {
+    b.hits = 0;
     const Vec3 r{b.radius, b.radius, b.radius};
     if (!view.BoxVisible(b.centre - r, b.centre + r)) continue;
     b.distance = Length(b.centre - eye);
     order_.push_back(&b);
   }
-  if (order_.empty()) return;
+  if (order_.empty()) return false;
   // each hit to the bubble its flash was made at (its centre: the nearest, within three quarters of its radius, since
   // a flash stays where it was made while a mobile shield drives on), the newest kept
   for (const Hit& h : hits_) {
@@ -721,7 +768,7 @@ void EnergyShields::Draw(const View& view, Post* post) {
 
   // the frame's constants: the way back from the picture into the world, and the bubbles whose light falls inside
   // them (the nearest kMostLit)
-  float frame[16 + 4 + kMostLit * 8 + 5 * 4] = {};  // ([shellglint] its row after the ground's)
+  std::memset(frame, 0, kFrameFloats * sizeof(float));
   const Mat4 back = Inverse(view.constants.viewProj);
   for (int r = 0; r < 4; ++r)
     for (int k = 0; k < 4; ++k) frame[r * 4 + k] = back.m[r][k];
@@ -749,7 +796,11 @@ void EnergyShields::Draw(const View& view, Post* post) {
   look[12] = groundWidth_, look[13] = groundHeight_, look[14] = ground ? groundUnit_ : 0.0f, look[15] = 0.15f;
   look[16] = std::max(sunGlint, 0.0f), look[17] = lowSunGlint ? 1.0f : 0.0f;  // [shellglint]
   look[18] = rainFromHits ? 1.0f : 0.0f;  // [rainhits] (shellGlint.z)
+  return true;
+}
 
+// A bubble's dome drawn with the pipeline set: its constants (`eye`: the view's), its textures, its mesh.
+void EnergyShields::Dome(const Bubble& b, Vec3 eye) {
   auto bubbleConstants = [&](const Bubble& b, float* out) {
     for (int k = 0; k < 4; ++k) {
       out[k] = b.world.m[0][k];
@@ -771,19 +822,43 @@ void EnergyShields::Draw(const View& view, Post* post) {
     for (int k = 0; k < kMostHits; ++k)
       for (int j = 0; j < 4; ++j) out[24 + k * 4 + j] = k < b.hits ? b.hit[k][j] : 0.0f;
   };
-  auto drawDome = [&](const Bubble& b) {
-    const ModelLod& lod = b.model->lods[0];
-    float constants[24 + kMostHits * 4];
-    bubbleConstants(b, constants);
-    device_->SetConstants(2, constants, sizeof constants);
-    device_->SetTexture(0, lod.albedo);
-    device_->SetTexture(3, lod.normals);  // [basepattern]
-    device_->SetTexture(4, lod.specular);
-    device_->SetTexture(5, lod.secondary);
-    device_->SetVertexBuffer(lod.vertices);
-    device_->SetIndexBuffer(lod.indices);
-    device_->DrawIndexed(lod.indexCount);
-  };
+  const ModelLod& lod = b.model->lods[0];
+  float constants[24 + kMostHits * 4];
+  bubbleConstants(b, constants);
+  device_->SetConstants(2, constants, sizeof constants);
+  device_->SetTexture(0, lod.albedo);
+  device_->SetTexture(3, lod.normals);  // [basepattern]
+  device_->SetTexture(4, lod.specular);
+  device_->SetTexture(5, lod.secondary);
+  device_->SetVertexBuffer(lod.vertices);
+  device_->SetIndexBuffer(lod.indices);
+  device_->DrawIndexed(lod.indexCount);
+}
+
+// [fxmirror] The shells as the water mirrors them, into the mirrored picture's pass (fx_mirror.h), before Draw: laid for
+// the mirrored view (the farthest from the mirrored eye first), the shells alone (what is inside them is the scene's,
+// which the water's own mirror shows).
+void EnergyShields::DrawMirror(const View& mirrored, const FxMirror& mirror) {
+  if (bubbles_.empty() || !MirrorReady()) return;
+  float frame[kFrameFloats];
+  if (!Lay(mirrored, frame)) return;
+  const Vec3 eye{mirrored.constants.cameraPosition[0], mirrored.constants.cameraPosition[1], mirrored.constants.cameraPosition[2]};
+  device_->SetPipeline(mirrorShell_);
+  device_->SetConstants(0, &mirrored.constants, sizeof mirrored.constants);
+  device_->SetConstants(1, frame, sizeof frame);
+  mirror.Bind();
+  for (const Bubble* b : order_) Dome(*b, eye);
+}
+
+void EnergyShields::Draw(const View& view, Post* post) {
+  drawn = 0;
+  if (bubbles_.empty() || !post) return;
+  if (!Prepare()) return;
+  float frame[kFrameFloats];
+  if (!Lay(view, frame)) return;
+  const Vec3 eye{view.constants.cameraPosition[0], view.constants.cameraPosition[1], view.constants.cameraPosition[2]};
+  const bool ground = static_cast<bool>(groundHeights_) && groundUnit_ > 0;
+  auto drawDome = [&](const Bubble& b) { Dome(b, eye); };
 
   // what is inside and behind each, bent and lit: from a copy of the picture as it is now (where none can be taken,
   // the shells alone)

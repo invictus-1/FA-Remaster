@@ -83,6 +83,7 @@ World::World(gfx::Device* device, const moho::Vfs* vfs)
       plantLife(device),  // [plants]
       wakes(device),
       hullWash(device),  // [hulls]
+      fxMirror(device),  // [fxmirror]
       ranges(device),
       placedDraw(device, &models),
       orders(device, &textures),
@@ -4099,6 +4100,12 @@ void World::PrepareAhead() {
     if (moving && plantMotion && motionView != 4) meshes.PrepareSwayMotion();
     if (groundCover && grassMade_) grass.PrepareVariants(plantsReact, blastWaves, moving && plantMotion && motionView != 4);
     if (exhaustsNow_) exhausts.Prepare();
+    if (waterFxMirror && map.water.present) {  // [fxmirror] (the mirrored effects' pipelines: wanted with the first shot over water)
+      particles.MirrorReady();
+      ribbons.MirrorReady();
+      if (volumes.Made()) volumes.MirrorReady();
+      if (energyShields) energy.MirrorReady();
+    }
     if (map.water.present) wakes.Prepare(lifted);
     if (lifted) hullWash.Prepare();
     device_->EndBackgroundPipelines();
@@ -4875,6 +4882,37 @@ void World::Render() {
                      static_cast<float>(map.height), standing);
         post.ContinueScene();
         lights.Bind();
+      }
+    }
+    // [fxmirror] the effects' mirror image for the water (fx_mirror.h): what is drawn after the water, drawn mirrored about
+    // its level into a picture of its own first, in the order the scene draws them (the shields' bubbles, beams and
+    // trails, the volume blasts, the particles); only while there is something of them, and the eye is above the water
+    water.fxMirror = {};
+    if (waterFxMirror && look == Look::Modern && map.water.present && !sidePicture && view.eye.y > map.water.elevation + 0.05f) {
+      const bool bands = hide.find("bands") == std::string::npos && ribbons.Any();
+      const bool sparks = hide.find("particles") == std::string::npos && particles.Gathered() > 0;
+      const bool bubbles = energy.Any();
+      if (bands || sparks || volumesDrawn_ || bubbles) {
+        Stage("effects mirrored in the water");
+        const View mirrored = fxMirror.Begin(view, map.water.elevation, post.Depth(), camera.zNear);
+        lights.Bind();
+        if (bubbles) energy.DrawMirror(mirrored, fxMirror);
+        if (bands) ribbons.DrawMirror(mirrored, fxMirror);
+        if (volumesDrawn_) volumes.DrawMirror(mirrored, fxMirror);
+        if (sparks) {
+          if (litSmokeNow_) {  // (lit smoke reads the lights, the shadow maps, the clouds' and the smoke's shadows: as its own stage)
+            lights.Bind();
+            device_->SetTexture(kShadowMapSlot, shadows.Map());
+            device_->SetTexture(kLampShadowSlot, lights.ShadowMap());
+            device_->SetTexture(kCloudShadowSlot, cloudShadowsNow);
+            device_->SetTexture(kSmokeShadowSlot, smokeNow_ ? smokeMap.Map() : gfx::Texture{});
+          }
+          particles.DrawMirror(mirrored, fxMirror);
+        }
+        fxMirror.End();
+        post.ContinueScene();
+        lights.Bind();
+        water.fxMirror = fxMirror.Picture();
       }
     }
     Stage("water");

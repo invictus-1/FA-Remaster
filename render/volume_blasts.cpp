@@ -1,5 +1,7 @@
 #include "volume_blasts.h"
 
+#include "fx_mirror.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -165,7 +167,9 @@ BoxOut BoxVS(uint vertex : SV_VertexID) {
 
 Texture3D volLightTex : register(t1);
 Texture3D volDetail : register(t2);
-#ifdef MSAA
+#if FX_MIRROR
+// [fxmirror] (the mirrored variant, fx_mirror.h: the scene's depth is its block's, read along the mirrored ray)
+#elif defined(MSAA)
 Texture2DMS<float> sceneDepth : register(t3);
 #else
 Texture2D<float> sceneDepth : register(t3);
@@ -200,7 +204,15 @@ float4 BoxPS(BoxOut i, out uint coverage : SV_Coverage) : SV_Target {
   // ahead the place is; along the line, that over how fast the line goes ahead)
   float ahead = max(dot(viewProj[3].xyz, rd), 1e-4);
   float end = t0;
-#ifdef MSAA
+#if FX_MIRROR
+  // [fxmirror] its mirror image in the water (VolumeBlasts::DrawMirror): the line comes from the mirrored eye, under the
+  // water, and shows what of the volume stands above the water's level: marched from where it comes up through the
+  // surface. What hides it is asked once, for the middle of what it shows (below).
+  if (rd.y <= 1e-5) discard;
+  t0 = max(t0, (mirrorEye.w - cameraPosition.y) / rd.y);
+  coverage = 1;
+  end = 1e9;
+#elif defined(MSAA)
   for (uint s = 0; s < SAMPLES; ++s) {
     float d = sceneDepth.Load(int2(i.position.xy), s);
     float ts = d > 0 ? volExtra.x / d / ahead : 1e9;
@@ -258,6 +270,14 @@ float4 BoxPS(BoxOut i, out uint coverage : SV_Coverage) : SV_Target {
   if (alpha < 1e-3) discard;
   // seen through the air between the eye and it, at the middle of what it shows
   float3 at = cameraPosition + rd * (middle / max(weight, 1e-6));
+#if FX_MIRROR
+  {  // [fxmirror] (hidden by something solid between the water and it: fx_mirror.h)
+    float shows = MirrorShows(at);
+    if (shows <= 0) discard;
+    light *= shows;
+    alpha *= shows;
+  }
+#endif
   [branch] if (air.x > 0.5) {
     float4 a = AirAt(at);
     light = light * a.a + a.rgb * alpha;
@@ -661,6 +681,33 @@ bool VolumeBlasts::Ready() {
   return made_;
 }
 
+// [fxmirror] The mirrored variant of the draw (DrawMirror; fx_mirror.h), the first time it is wanted: the same shader
+// built with FX_MIRROR, into the mirrored picture (one sample a pixel; it writes its alpha: the water lays the picture
+// over its mirror by it).
+bool VolumeBlasts::MirrorReady() {
+  if (mirrorTried_) return static_cast<bool>(mirrorDraw_);
+  mirrorTried_ = true;
+  if (!Ready()) return false;
+  std::string error;
+  const std::string source = "#define FX_MIRROR 1\n#define FX_MIRROR_SAMPLES " + std::to_string(gSceneSamples) + "\n#define SAMPLES 1\n" +
+                             kViewShaderBlock + kFxMirrorShaderBlock + kLightingShaderBlock + kShader;
+  gfx::PipelineDesc pd;
+  pd.name = "volume blasts, mirrored in the water";
+  pd.vertexSource = pd.pixelSource = source;
+  pd.vertexEntry = "BoxVS";
+  pd.pixelEntry = "BoxPS";
+  pd.cull = gfx::Cull::None;
+  pd.depthTest = pd.depthWrite = false;
+  pd.depthTarget = false;
+  pd.colorFormat = kFxMirrorFormat;
+  pd.samples = 1;
+  pd.blend = gfx::Blend::Premultiplied;
+  pd.alphaWrite = true;
+  mirrorDraw_ = device_->CreatePipeline(pd, &error);
+  if (!mirrorDraw_) fprintf(stderr, "render: volume explosions cannot be mirrored in the water (%s)\n", error.c_str());
+  return static_cast<bool>(mirrorDraw_);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // A frame
 
@@ -990,6 +1037,32 @@ void VolumeBlasts::Draw(const View& view, gfx::Texture sceneDepth, float zNear) 
     device_->Draw(36);
   }
   for (int t = 0; t < 4; ++t) device_->SetTexture(t, {});
+}
+
+// [fxmirror] The drawn blasts as the water mirrors them, into the mirrored picture's pass (fx_mirror.h): their boxes
+// with the mirrored view, each pixel marching the line from the mirrored eye through the volume as it stands (filled
+// and lit for this frame already: Fill, Light).
+void VolumeBlasts::DrawMirror(const View& mirrored, const FxMirror& mirror) {
+  if (!MirrorReady()) return;
+  std::vector<std::pair<float, int>> order;
+  for (int i = 0; i < slotCount_; ++i)
+    if (slots_[i].blast >= 0) order.push_back({-Length(slots_[i].low + slots_[i].size * 0.5f - mirrored.eye), i});
+  if (order.empty()) return;
+  std::sort(order.begin(), order.end());
+  device_->SetPipeline(mirrorDraw_);
+  device_->SetConstants(0, &mirrored.constants, sizeof mirrored.constants);
+  mirror.Bind();
+  device_->SetTexture(2, detail_);
+  for (const auto& [far, i] : order) {
+    const Slot& s = slots_[i];
+    VolumeConstants k;
+    Constants(s, mirrored, reinterpret_cast<float*>(&k));
+    device_->SetConstants(1, &k, sizeof k);
+    device_->SetTexture(0, s.field);
+    device_->SetTexture(1, s.light);
+    device_->Draw(36);
+  }
+  for (int t = 0; t < 3; ++t) device_->SetTexture(t, {});
 }
 
 }  // namespace render

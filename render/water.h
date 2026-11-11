@@ -74,6 +74,15 @@ class Water {
     ground_ = heights;
     groundUnit_ = heightUnit;
   }
+  // [fxmirror] The effects' mirror image for the modern water (fx_mirror.h; World::waterFxMirror sets it each frame, before
+  // DrawModern): the picture of what is drawn after the water, drawn mirrored about its level (none: the water mirrors
+  // none of it, as before). `fxMirrorReach`: how far off (world units) what it shows is taken to be, for how far the
+  // waves' tilt moves and smears it; `fxMirrorStrength`: 1, as light mirrors (from the game's height that is a fiftieth:
+  // next to nothing); more: looked down on, the image of what glows as if the water never mirrored less than that many
+  // fiftieths (8: a tracer's image shows from the game's height; from a low eye nothing changes).
+  gfx::Texture fxMirror;
+  float fxMirrorReach = 4.0f, fxMirrorStrength = 1.0f;
+  bool fxMirrorView = false;  // (for checking: the mirrored picture itself in place of the water; viewer --fx-mirror-view)
   // [floatfoam] What floats, for that: the units (World::AddFrame, each unit seen: its place, its turn and its model's bounds,
   // scaled), those in the water over water deep enough to float in kept; listed anew for each view (World::Begin:
   // ClearAfloat), the nearest 64 to the eye used. The foam is left out only under them, so that a rock keeps its band.
