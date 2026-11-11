@@ -99,7 +99,6 @@ bool Recording::Load(const std::string& hostPath, std::string* error) {
           u.orientation[3] = q[0];
         }
         std::memcpy(u.position, p, sizeof p);
-        u.states = Get<uint64_t>(d, off + 32);
         u.layer = Get<uint32_t>(d, off + 40);
         u.health = Get<float>(d, off + 44);
         u.fractionComplete = Get<float>(d, off + 48);

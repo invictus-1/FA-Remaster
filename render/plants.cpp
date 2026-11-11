@@ -13,8 +13,8 @@ namespace render {
 const char kPlantsShaderBlock[] = R"hlsl(
 Texture2D plantsPress : register(PLANTS_PRESS);  // (PlantLife::Press) x, z which way laid x how hard; how hard; seconds since x how hard
 Texture2D plantsBurnt : register(PLANTS_BURN);   // (PlantLife::Burnt) how hard burnt; how fresh x how hard
-// k0: the field's first texel's x, z, 1 / its width, the clock; k1: 1 / the map's width and height, 1 when there is a burnt
-// picture, 1 when the field is there
+// k0: the field's first texel's x, z, 1 / its width, a free place; k1: 1 / the map's width and height, 1 when there is a
+// burnt picture, 1 when the field is there
 float4 PlantsPressAt(float2 xz, float4 k0, float4 k1) {
   [branch] if (k1.w < 0.5) return 0;
   float2 uv = (xz - k0.xy) * k0.z;
@@ -461,7 +461,6 @@ void PlantLife::Prepare(const View& view, const Camera& camera, const std::vecto
   constants_[5] = 1 / mapHeight_;
   // (nothing burnt for half an hour, nothing pressed for forty seconds: the shaders read neither, and cost nothing more)
   constants_[6] = Burning() ? 1.0f : 0.0f;
-  constants_[3] = static_cast<float>(clock);
   constants_[7] = 0;
   ready_ = true;
   // the field round what the camera looks at (a cinematic camera: by how high the eye is over the ground ahead, and the

@@ -1730,9 +1730,9 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
     return;
   }
 
-  const float clear[4] = {0.05f, 0.06f, 0.08f, 1}, black[4] = {0, 0, 0, 1};
+  const float clear[4] = {0.05f, 0.06f, 0.08f, 1};
   const auto t1 = std::chrono::steady_clock::now();
-  m.device->BeginFrame(m.worldShown ? clear : black);
+  m.device->BeginFrame(clear);
   const auto t2 = std::chrono::steady_clock::now();
   m.stats.waitMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
   // [views] with views, view 0 at its own place's size (where it does not fill the window: drawn into a picture of its own),

@@ -1377,11 +1377,27 @@ class World {
     bool known = false;
   };
   std::vector<KnownModel> unitModels_, shotModels_, entityModels_;
+  // (the ground cover's lists, kept from frame to frame: what stands on the ground - x, z, radius each - and how far each
+  // is from what the camera looks at)
+  std::vector<float> coverDiscs_, coverNearest_;
+  std::vector<std::pair<float, uint32_t>> coverBy_;
   bool debrisWarm_ = false;  // [groundfix] (the debris on: each kind's glow read ahead as its model is made, Debris::Warm)
   std::vector<KnownModel> originalShotModels_;  // (shots a frame wants in the original look whatever the world's)
   std::vector<KnownModel> originalEntityModels_;  // (the same for script entities)
   EffectsLook entitiesLook_ = EffectsLook::Remastered;  // (the look entityModels_ were looked up in)
   std::vector<std::pair<Vec3, std::string>> bubbles_;  // this frame's shield bubbles: their centres and factions
+  // What a script entity's mesh blueprint says by its name alone, and its models in the factions' looks, by its number in
+  // Frame::blueprints: worked out the first time it is asked, not for every entity each frame (the shots are entities too,
+  // thousands in a battle). Emptied with entityModels_.
+  struct EntityMesh {
+    bool known = false;
+    bool section = false;   // a shield's flash where it is hit ("shieldsection")
+    bool uefShell = false;  // the UEF's bubble
+    std::string faction;    // whose shield's mesh it is (MeshFaction; empty: nobody's)
+    std::vector<std::pair<std::string, const Model*>> models;  // its model in a faction's look (null: it has no blueprint file)
+  };
+  std::vector<EntityMesh> entityMeshes_;
+  EntityMesh& EntityMeshOf(const Frame& frame, uint32_t mesh);
   EffectsLook shotsLook_ = EffectsLook::Remastered;  // (the look shotModels_ were looked up in)
   std::unordered_map<uint64_t, const Model*> shotsByUnit_;  // [byunit] (shell blueprint << 32 | launcher: its own model, or none)
   template <typename LookUp>
@@ -1473,6 +1489,11 @@ class World {
   std::vector<float> hullBuildingField_;  // [buildingglow] the same, of the structures' glows alone
   void ShareHullGlows(const std::vector<uint8_t>& allowed, std::vector<float>* shares);
   std::vector<PendingLamp> pendingLamps_;
+  // (FlushLamps' lists, kept from frame to frame: the lamps' order, which of them the crowded squares allow, the hull
+  // glows' shares)
+  std::vector<uint64_t> lampOrder_;
+  std::vector<uint8_t> lampAllowed_;
+  std::vector<float> lampShares_;
   uint32_t pendingUnits_ = 0;
   struct LampLevel {
     float level = 0;

@@ -79,7 +79,7 @@ class PlantLife {
   void DrawGround(const View& view, const Camera& camera, gfx::Texture sceneDepth);
   bool AnyBurnt() const { return ready_ && Burning(); }
   // What the shaders read (after Prepare): the field, the burnt picture (none: not made), and the constants for
-  // kPlantsShaderBlock (two float4: the field's first texel's x, z, 1 / its width, the clock; 1 / the map's width and
+  // kPlantsShaderBlock (two float4: the field's first texel's x, z, 1 / its width, a free place; 1 / the map's width and
   // height, 1 when there is a burnt picture, 1 when the field is there this frame).
   gfx::Texture Press() const { return press_[current_]; }
   gfx::Texture Burnt() const { return burnt_; }

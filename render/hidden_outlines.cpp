@@ -272,7 +272,10 @@ void HiddenOutlines::Draw() {
   if (!drawn) return;
   // (the line's width by the screen's height; at least a pixel)
   const float lineWidth = std::max(width * static_cast<float>(screenHeight_) / 1080.0f, 1.0f);
-  std::vector<float> constants(8 + 255 * 4, 0.0f);
+  // (only as much of it as is handed over is filled: the eight numbers and the palette, one colour at the least)
+  float constants[8 + 255 * 4];
+  const size_t count = 8 + std::max(palette_.size(), size_t{1}) * 4;
+  std::fill(constants, constants + count, 0.0f);
   constants[0] = lineWidth;
   constants[1] = line;
   constants[2] = fill;
@@ -285,7 +288,7 @@ void HiddenOutlines::Draw() {
     constants[8 + i * 4 + 2] = palette_[i].z;
   }
   device_->SetPipeline(lay_);
-  device_->SetConstants(1, constants.data(), static_cast<uint32_t>((8 + std::max(palette_.size(), size_t{1}) * 4) * sizeof(float)));
+  device_->SetConstants(1, constants, static_cast<uint32_t>(count * sizeof(float)));
   device_->SetTexture(0, masks_[0]);
   device_->SetTexture(1, masks_[1]);
   device_->Draw(3);

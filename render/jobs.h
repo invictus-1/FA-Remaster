@@ -44,7 +44,7 @@ class Jobs {
   const std::function<void(int)>* piece_ = nullptr;
   int pieces_ = 0;
   uint64_t round_ = 0;  // which job the workers are on (a new job: one more)
-  std::atomic<int> next_{0}, done_{0};
+  std::atomic<int> next_{0};
   int busy_ = 0;  // workers still in the current job
   // [mcrec] the job's number for the workers that wait awake a while after a job (awakeMicroseconds) before they sleep
   std::atomic<uint64_t> roundNow_{0};

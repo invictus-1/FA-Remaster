@@ -72,8 +72,6 @@ void Head2Test(WorldPicture& picture, const Camera& gameCamera, double tick, con
   }
 #if defined(_WIN32)
   SetWindowPos(static_cast<HWND>(second->Handle()), HWND_TOPMOST, 40, 40, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
-  RECT cr{};
-  GetClientRect(static_cast<HWND>(second->Handle()), &cr);
 #endif
   const int sw = second->Width(), sh = second->Height();
   if (!picture.UseSecondWindow(second->Handle(), sw, sh)) {

@@ -34,17 +34,13 @@ void Jobs::Run(int pieces, const std::function<void(int)>& piece) {
     piece_ = &piece;
     pieces_ = pieces;
     next_.store(0);
-    done_.store(0);
     busy_ = static_cast<int>(threads_.size());
     ++round_;
     roundNow_.store(round_, std::memory_order_release);  // [mcrec] (for the workers still waiting awake)
   }
   wake_.notify_all();
   // (the caller takes pieces too)
-  for (int i; (i = next_.fetch_add(1)) < pieces;) {
-    piece(i);
-    done_.fetch_add(1);
-  }
+  for (int i; (i = next_.fetch_add(1)) < pieces;) piece(i);
   // every worker has left the job before the function it points to goes out of scope
   std::unique_lock<std::mutex> lock(mutex_);
   finished_.wait(lock, [this] { return busy_ == 0; });
@@ -71,10 +67,7 @@ void Jobs::Work() {
       piece = piece_;
       pieces = pieces_;
     }
-    for (int i; (i = next_.fetch_add(1)) < pieces;) {
-      (*piece)(i);
-      done_.fetch_add(1);
-    }
+    for (int i; (i = next_.fetch_add(1)) < pieces;) (*piece)(i);
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (--busy_ == 0) finished_.notify_one();

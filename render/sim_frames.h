@@ -147,7 +147,6 @@ class SimFrames {
   std::vector<uint8_t> sightWork_, sightEver_;
   int sightEverOf_ = 0;
   bool sightNew_ = false, sightWasOn_ = false;
-  uint32_t sightBeat_ = 0;
   std::vector<FrameEffectEvent> effectEvents_;  // not yet taken
   std::vector<FramePropEvent> propEvents_;      // not yet taken
   std::vector<FrameGroundChange> groundChanges_;  // not yet taken

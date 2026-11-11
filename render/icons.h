@@ -135,6 +135,7 @@ class StrategicIcons {
   bool showSymbols = true;  // false: Draw leaves the symbols out (the life bars are still drawn)
 
  private:
+  bool OnScreen(Vec3 position, float* x, float* y) const;
   struct Rect {
     int x = 0, y = 0, width = 0, height = 0;  // in the shared texture
   };

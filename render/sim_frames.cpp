@@ -531,7 +531,6 @@ void SimFrames::Beat(const moho::Sim& sim) {
       sightNew_ = true;
       sightJobNew_ = false;  // [sightoff]
       sightWasOn_ = false;
-      sightBeat_ = 0;
     }
   }
   for (const moho::UnitView& v : e.views) {

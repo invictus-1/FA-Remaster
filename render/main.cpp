@@ -284,6 +284,10 @@
 //           redrawn ground read back at once, waiting for the card, as before WorldPicture's read-back later; `step=<s>`: how far
 //           the clouds move each time (0.25 unless given: past a tenth it is a weather cut, World::weatherCuts, which restarts the
 //           air's and the clouds' histories at once; a game's weather moves by less, 0.08 is one)
+// --side-check off|minimap  (gate G7) with --picture: thirty frames of the game's one moment (--tick's beat) through the pixel
+//           interface, in steady rain, the last written to the --picture file; `minimap`: the minimap's ground drawn before the last
+//           four of them (a side picture: WorldPicture::DrawMinimap, its first drawing). A side picture leaves the game's
+//           next frames alone, so the two runs' files must be the same picture: the renderer's gate_side.sh compares them
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
@@ -1271,6 +1275,7 @@ struct Options {
   bool minimapTestOld = false;
   bool minimapTestSpaced = false, minimapTestWait = false;  // [weather] (,spaced  ,wait)
   float minimapTestStep = 0.25f;  // [weather] (,step=<s>: how far the clouds move each time)
+  std::string sideCheck;          // (gate G7) --side-check
   bool rangeFill = false;                       // [range fill] --range-fill
   std::string enhancement;
   float soften = -1;                    // --soften
@@ -1949,6 +1954,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       o->minimapTestWait = std::string(v).find(",wait") != std::string::npos;
       if (const char* s = std::strstr(v, ",step=")) o->minimapTestStep = std::clamp(static_cast<float>(atof(s + 6)), 0.0f, 1.0f);
       o->minimapTestSize = std::clamp(o->minimapTestSize, 16, 2048);
+    }
+    else if (a == "--side-check") {  // (gate G7) off|minimap
+      o->sideCheck = v;
+      if (o->sideCheck != "off" && o->sideCheck != "minimap") return false;
     }
     else if (a == "--upgrade-test") {  // [hitches] <beat>,<x>,<z>[,<after>[,<from>,<to>]]
       char from[32] = "", to[32] = "";
@@ -4131,6 +4140,39 @@ int main(int argc, char** argv) {
         const std::string path = opt.picture.substr(0, opt.picture.rfind('.')) + "_minimaptest.png";
         printf("render: --minimap-test: the minimap %s\n", WritePng(path, bytes.data(), size, size) ? path.c_str() : "could not be written");
       }
+      break;
+    }
+    if (!opt.picture.empty() && !opt.sideCheck.empty() && playing && !liveBusy && frameCount >= 3) {
+      // (gate G7) --side-check: the same frames with and without a side picture among them
+      const int w = device->Width(), h = device->Height(), frames = 30, after = 4;
+      const double moment = std::floor(playTick) + 1;  // (a whole beat: how far into it the viewer is differs from run to run)
+      if (World* pw = picture.world()) {
+        pw->steadyFrames = true;  // (each frame a frame's share of the histories, whatever the clock says)
+        pw->cloudCover = 1;       // (steady rain: a weather clock moved by the side picture wets the ground in one step)
+        pw->rain = 1;
+      }
+      std::vector<uint8_t> bytes;
+      for (int i = 0; i < frames; ++i) {
+        if (opt.sideCheck == "minimap" && i == frames - after) picture.DrawMinimap(300, 300, opt.minimapResources);
+        const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, moment);
+        if (i + 1 < frames) continue;
+        if (World* pw = picture.world()) {  // (for a hunt after a failure: the last frame's view as one number, and how wet)
+          uint32_t sum = 2166136261u;
+          const uint8_t* numbers = reinterpret_cast<const uint8_t*>(&pw->view.constants);
+          for (size_t k = 0; k < sizeof pw->view.constants; ++k) sum = (sum ^ numbers[k]) * 16777619u;
+          printf("render: --side-check %s: the last frame's time %.6f, its view's numbers %08x, wet %.5f\n", opt.sideCheck.c_str(),
+                 static_cast<double>(pw->view.constants.time), sum, static_cast<double>(pw->wet));
+        }
+        bytes.resize(pixels.size() * 4);
+        for (size_t k = 0; k < pixels.size(); ++k) {
+          bytes[k * 4] = static_cast<uint8_t>(pixels[k] >> 16);
+          bytes[k * 4 + 1] = static_cast<uint8_t>(pixels[k] >> 8);
+          bytes[k * 4 + 2] = static_cast<uint8_t>(pixels[k]);
+          bytes[k * 4 + 3] = 255;
+        }
+      }
+      printf("render: --side-check %s: %dx%d %s\n", opt.sideCheck.c_str(), w, h,
+             !bytes.empty() && WritePng(opt.picture, bytes.data(), w, h) ? opt.picture.c_str() : "could not be written");
       break;
     }
     if (!opt.picture.empty() && playing && !liveBusy && frameCount >= 3) {
