@@ -262,6 +262,10 @@ class GameSession {
   // --remasters-mods <folder> (visuals/work_mods): the mods' remastered units, each mod's folder mounted for a game
   // that has that mod on (its MODS.json: mods.<key>.mod_uid; MountModRemasters).
   std::string remastersModsRoot;
+  // Called before the session adds a folder to the file system (MountModRemasters): the host ends whatever of its
+  // own still reads the file system on another thread (main.cpp: the start-up's two reader threads), as the file
+  // system has no lock of its own. Unset: nothing reads beside.
+  std::function<void()> beforeMount;
   std::vector<std::string> scanSkips;
   int scanTicks = 0;
 
@@ -497,6 +501,9 @@ class GameSession {
   bool beatSoundsDecided_ = false;
   std::vector<uint32_t> loopEntities_;
   bool seekingAtBeat_ = false;
+  // The check for running sounds left behind (NoteBeatHere, every tenth beat): the count last said in the log.
+  void CheckLoopEntities();
+  size_t goneLoopsSaid_ = 0;
   // A beat's syncs taken (TakeBeatSync, before the next beat may start) and given to the interface's scripts
   // (GiveBeatSync: in FinishBeat, before it; MOHO64UI_SYNC_AFTER=1 after it has started, which made the scripts wait).
   std::vector<std::string> syncsToGive_;

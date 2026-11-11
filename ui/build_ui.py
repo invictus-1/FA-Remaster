@@ -23,9 +23,11 @@ dialect) are compiled from the same sources with the same flags as tools/build_z
 everything under ui/. The simulation is linked in so that a game launched from the lobby runs
 inside this host; the interface changes nothing in it. On Windows the renderer track's code
 (render/, without its own main program) is linked in too, for the world's picture.
-Incremental: an object is rebuilt when its source or any header is newer.
+Incremental: an object is rebuilt when its source or any header is newer, or when the options it would be compiled
+with are not the ones it was compiled with (kept beside the objects, obj/flags.json: see Flags below).
+    py ui/build_ui.py --dry-run [options]   says how many objects those options would compile, and compiles nothing
 """
-import argparse, concurrent.futures as cf, glob, os, subprocess, sys
+import argparse, concurrent.futures as cf, glob, json, os, subprocess, sys
 
 UI = os.path.abspath(os.path.dirname(__file__))
 ROOT = os.path.dirname(UI)
@@ -33,6 +35,68 @@ ROOT = os.path.dirname(UI)
 
 def zig(*args):
     return [sys.executable, "-m", "ziglang", *args]
+
+
+class Flags:
+    """The options each object was compiled with, kept beside the objects (<out>/obj/flags.json).
+
+    Until 2026-11-10 an object was old by file time alone, so a change of options in the same output folder
+    (--define, --no-debug, --lua-api-check, --sdl, --target, --tracy, --mi-debug) compiled nothing and linked objects
+    made with the old options to whatever the new ones touched: a program that starts and is wrong (the review of
+    2026-11-09, row F). Now each object's whole command line is kept (without the Python that runs zig), and an object
+    whose command line is not the kept one is compiled again: only those the option reaches (--mi-debug: one file;
+    --define: the interface's and the engine's own; --no-debug: all). The compiler's version is kept too: another
+    one compiles everything again.
+    An object's line is taken out of the file BEFORE it is compiled and put back when it compiled, so a build that is
+    stopped half-way leaves no object that passes for one made with the kept options. An output folder from before
+    this file (no flags.json) is compiled again whole, once: nothing says what its objects were made with.
+    """
+
+    def __init__(self, out):
+        self.path = os.path.join(out, "obj", "flags.json")
+        self.known = os.path.exists(self.path)
+        self.lines = {}
+        try:
+            import importlib.metadata
+            self.compiler = "ziglang " + importlib.metadata.version("ziglang")
+        except Exception:  # (no package data: the version is then not part of the rule)
+            self.compiler = "ziglang"
+        if self.known:
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("compiler") == self.compiler:
+                    self.lines = dict(data.get("objects", {}))
+            except (OSError, ValueError, AttributeError):  # (a cut or foreign file: as if nothing were known)
+                self.lines = {}
+
+    @staticmethod
+    def line(job):
+        # (job: (source, object, command). The command from zig's own word on, "c++" or "cc"; without the object's own
+        # place, and the source's by its full name, so that another spelling of the same --out is no other option.)
+        words = list(job[2][3:])
+        if "-o" in words:
+            del words[words.index("-o"):words.index("-o") + 2]
+        if "-c" in words:
+            words[words.index("-c") + 1] = os.path.normcase(os.path.abspath(job[0]))
+        return " ".join(words)
+
+    def differs(self, job):
+        return self.lines.get(os.path.basename(job[1])) != self.line(job)
+
+    def forget(self, jobs):
+        for j in jobs:
+            self.lines.pop(os.path.basename(j[1]), None)
+        self.write()
+
+    def keep(self, job):
+        self.lines[os.path.basename(job[1])] = self.line(job)
+
+    def write(self):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump({"compiler": self.compiler, "objects": self.lines}, f, indent=0, sort_keys=True)
+        os.replace(tmp, self.path)
 
 
 def main():
@@ -48,14 +112,16 @@ def main():
     ap.add_argument("--sdl", action="store_true", help="the window and sound through SDL3 on Windows too (a test build)")
     ap.add_argument("--sdl-lib", help="the folder of the SDL3 library to link to")
     ap.add_argument("--headless", action="store_true", help="elsewhere than Windows: no SDL (no window, no sound)")
+    ap.add_argument("--dry-run", action="store_true", help="say how many objects these options would compile; compile, link and write nothing")
     a = ap.parse_args()
-    if not a.out:  # (the profiler build in its own folder: the objects do not track flags)
+    if not a.out:  # (the profiler build in its own folder still: two whole sets of objects, no compiling again at each switch)
         a.out = os.path.join(ROOT, "build-ui-tracy" if a.tracy else "build-ui")
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
     sdl = (a.sdl or not windows) and not a.headless
-    os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
+    if not a.dry_run:
+        os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
     common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     # The profiler build (--tracy): tools/build_zig.py's TRACY_DEFINES on EVERY file (C and C++, Lua's VM and the
     # shared src/ files included: the settings change Tracy's types' layout), Tracy's headers, its client once below.
@@ -119,7 +185,8 @@ def main():
         commit = "unknown"
     stamp = os.path.join(a.out, "build_commit.cpp")
     text = 'namespace moho::ui {\nextern const char kBuildCommit[] = "' + commit + '";\n}\n'
-    if not os.path.exists(stamp) or open(stamp, encoding="utf-8").read() != text:
+    stamp_changes = not os.path.exists(stamp) or open(stamp, encoding="utf-8").read() != text
+    if stamp_changes and not a.dry_run:
         with open(stamp, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
     add(stamp, ["-std=c++20"], True)
@@ -127,10 +194,25 @@ def main():
     newest_header = max(os.path.getmtime(h)
                         for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h")
                         for h in glob.glob(os.path.join(ROOT, pat), recursive=True))
-    todo = [j for j in jobs if not os.path.exists(j[1]) or
-            os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
+    # What to compile: an object that is not there or older than its source or the newest header (the commit's stamp:
+    # when its text changes), and one compiled with other options than these (Flags).
+    flags = Flags(a.out)
+    by_time = [j for j in jobs if not os.path.exists(j[1]) or (j[0] == stamp and stamp_changes) or
+               os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
+    late = set(j[1] for j in by_time)
+    by_flags = [j for j in jobs if j[1] not in late and flags.differs(j)]
+    todo = by_time + by_flags
+    if by_flags and not flags.known:
+        print(f"build_ui: no record of the options the objects in {a.out} were compiled with (obj/flags.json): "
+              f"{len(by_flags)} compiled again, once")
+    elif by_flags:
+        print(f"build_ui: {len(by_flags)} object(s) compiled with other options than these (obj/flags.json): compiled again")
     print(f"build_ui: {len(todo)} of {len(jobs)} objects to compile, {a.jobs} jobs, target {target or 'native'}")
+    if a.dry_run:
+        print("build_ui: --dry-run: nothing compiled, linked or written")
+        return
     failed = []
+    flags.forget(todo)
     with cf.ThreadPoolExecutor(a.jobs) as ex:
         futs = {ex.submit(subprocess.run, j[2], capture_output=True, text=True): j for j in todo}
         for fu in cf.as_completed(futs):
@@ -138,6 +220,9 @@ def main():
             if r.returncode != 0:
                 failed.append(j[0])
                 sys.stderr.write(f"--- {os.path.relpath(j[0], ROOT)}\n{r.stderr}\n")
+            else:
+                flags.keep(j)
+    flags.write()  # (also when a file failed: the ones that compiled are known)
     if failed:
         sys.exit(f"build_ui: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64ui.exe" if windows else "moho64ui")

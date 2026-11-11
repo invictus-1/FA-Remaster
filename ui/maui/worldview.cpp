@@ -2934,9 +2934,16 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   }
   FollowTargets(L, c);  // (the followed unit's place and turn)
   // A spin (UpdateTargets 0x7a9110, mode 4): the heading's target turns, the zoom's target goes.
+  // OURS, the floor: a spin's zoom rate does not take the target nearer than the nearest zoom (or than it already is,
+  // where a script's MoveTo put it nearer). The original has no floor (0x7a91a2-0x7a91b6 add rate times seconds and
+  // store it), so a cinematic that zooms in for too long (lua/cinematics.lua 191, lua/usercamera.lua 119) takes its
+  // target to 0 and below; its zoom step then takes the logarithm of that (fyl2x at 0x7a962e), the zoom is not a
+  // number, and so stays the picture until the turn ends (there its bounds make it the farthest zoom, 0x7a96de). The
+  // one difference in what worked in the original: a spin that zooms in between the nearest zoom and 0 stops here.
   if (c->mode == 4 && c->moveSeconds <= 0 && (c->spinRate != 0 || c->spinZoomRate != 0)) {
     c->toHeading += c->spinRate * 2 * kPi * seconds;
-    c->targetZoom += c->spinZoomRate * seconds;
+    const float next = c->targetZoom + c->spinZoomRate * seconds;
+    c->targetZoom = next >= kNearZoom ? next : std::max(next, std::min(c->targetZoom, kNearZoom));
   }
   if (c->moveSeconds > 0) {  // a timed command (InterpolateBasis 0x7a9ba0)
     const double t = (c->clockNow - c->moveStart) / c->moveSeconds;
@@ -3023,7 +3030,9 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
       towards = true;
     }
   }
-  if (c->zoom != c->targetZoom && c->zoom > 0) {
+  // (OURS: no step towards a target of 0 or less, which a script's MoveTo or SetZoom may give a held camera: its
+  // logarithm is not a number, and the zoom would be none until the turn ends. The zoom stays where it is.)
+  if (c->zoom != c->targetZoom && c->zoom > 0 && c->targetZoom > 0) {
     float left = std::log2(c->targetZoom) - std::log2(c->zoom);
     float step = std::min(std::fabs(left), (std::fabs(left) * kZoomSpeedLarge + kZoomSpeedSmall) * seconds);
     const float z = c->zoom * std::pow(2.0f, left < 0 ? -step : step);
@@ -3076,12 +3085,16 @@ void AdvanceCamera(lua_State* L, Camera* c, float seconds) {
   }
   // The way back (0x7a99eb): heading and lean go towards north up and the zoom's lean by a tenth
   // of a radian a frame (here: as much in a sixtieth of a second), and it is over when both are there.
+  // The original ends it once both are within a tenth of a radian (0x7a9b27, 0x7a9b4d), which is its step of one
+  // frame. OURS: the step here goes with the frame's time, so that fixed tenth was a jump of up to four steps at 240
+  // frames a second (2.4 at 144); it is over when both have arrived (the two bounds land on their ends exactly), so
+  // no frame turns by more than its step. At 60 frames a second that is at most one frame later than the original.
   if (c->swingBack) {
     float step = 0.1f * kPanFramesPerSecond * seconds;
     float wanted = ZoomPitchOf(c), north = c->heading > 0 ? kPi : -kPi;
     c->turnedPitch = std::max(c->turnedPitch - step, std::min(wanted, c->turnedPitch + step));
     c->heading = std::max(c->heading - step, std::min(north, c->heading + step));
-    if (std::fabs(c->heading - north) < 0.1f && std::fabs(c->turnedPitch - wanted) < 0.1f) {
+    if (c->heading == north && c->turnedPitch == wanted) {
       c->heading = kPi;
       c->turned = c->swingBack = false;
     }
@@ -4046,6 +4059,17 @@ int l_CameraLodScaleForTests(lua_State* L) {
   lua_pushnumber(L, static_cast<Camera*>(it->second.get())->lodScale);
   return 1;
 }
+// moho64ui_CameraStep(name, seconds) -> true: one frame of `seconds` of the camera of that name, beside the program's
+// own frames (the host's own function for tests: a frame of a 144th or a 240th of a second in a run whose own frames
+// are a 60th); nil when there is no such camera.
+int l_CameraStepForTests(lua_State* L) {
+  UserState* user = UserState::From(L);
+  auto it = user->cameras.find(luaL_checkstring(L, 1));
+  if (it == user->cameras.end()) return 0;
+  AdvanceCamera(L, static_cast<Camera*>(it->second.get()), static_cast<float>(luaL_checknumber(L, 2)));
+  lua_pushboolean(L, 1);
+  return 1;
+}
 // moho64ui_CameraShake() -> {max, min, radius, seconds, time, offset} of the main camera's shake
 // now (the host's own function for tests); offset: this frame's shift, its length.
 int l_CameraShakeForTests(lua_State* L) {
@@ -4394,6 +4418,7 @@ void RegisterWorldViewBindings(lua_State* L) {
   lua_register(L, "moho64ui_HandedGhosts", l_HandedGhostsForTests);
   lua_register(L, "moho64ui_OrderEtas", l_OrderEtasForTests);
   lua_register(L, "moho64ui_CameraShake", l_CameraShakeForTests);
+  lua_register(L, "moho64ui_CameraStep", l_CameraStepForTests);
   lua_register(L, "moho64ui_CameraLodScale", l_CameraLodScaleForTests);
   lua_register(L, "moho64ui_CineCamera", l_CineCameraForTests);
   lua_register(L, "moho64ui_PhotoMode", l_PhotoModeState);

@@ -131,5 +131,39 @@ ForkThread(function()
     cam:RevertRotation()
     WaitSeconds(1)
     check("RevertRotation ends the nose camera", near(cam:SaveSettings().Pitch, 0.3, 0.05), false)
+    -- [review N, 2026-11-10] A spin that zooms in for longer than there is zoom (a cinematic's Spin(rate, zoomRate)
+    -- left running): the zoom stays a number and stops at the nearest zoom. (Before: its target went below 0, its
+    -- logarithm was not a number, and neither was the zoom until the turn ended.)
+    WaitSeconds(1.5)
+    cam:Spin(0, -1000)
+    WaitSeconds(0.5)
+    local z = cam:SaveSettings().Zoom
+    LOG("TEST note: the zoom after Spin(0, -1000) for half a second: " .. tostring(z))
+    check("Spin(0, -1000): the zoom is still a number", z == z and z > 0, true)
+    check("and no nearer than the nearest zoom", z == z and z >= cam:GetMinZoom() - 0.001, true)
+    -- The swing back in frames of a 240th of a second (moho64ui_CameraStep: the camera's own frame, beside the run's
+    -- frames of a 60th): no frame turns the heading or the lean by more than the step of its time, the last one
+    -- included. (Before: it ended with a jump once both were within a tenth of a radian, four steps of a 240th.)
+    cam:Spin(0.2, 0)
+    WaitSeconds(1)
+    cam:Spin(0, 0)
+    cam:RevertRotation()
+    local step = 0.1 * 60 / 240
+    local worst, worstAt = 0, 0
+    local s0 = cam:SaveSettings()
+    local h, p = s0.Heading, s0.Pitch
+    LOG(string.format("TEST note: the swing back begins at heading %.3f, pitch %.3f", h, p))
+    for frame = 1, 400 do
+        moho64ui_CameraStep('WorldCamera', 1 / 240)
+        local s = cam:SaveSettings()
+        local dh = math.abs(s.Heading - h)
+        if dh > 3.14159 then dh = math.abs(dh - 2 * 3.14159265) end  -- (north is pi and -pi alike)
+        local d = math.max(dh, math.abs(s.Pitch - p))
+        if d > worst then worst, worstAt = d, frame end
+        h, p = s.Heading, s.Pitch
+    end
+    LOG(string.format("TEST note: the biggest turn of one frame %.4f (frame %d), the step of a 240th %.4f; ends at heading %.4f, pitch %.4f", worst, worstAt, step, h, p))
+    check("the swing back at 240 frames a second: no frame turns by more than its step", worst <= step + 0.0005, true)
+    check("and it ends north up", near(math.abs(h), 3.14159, 0.001), true)
     LOG("TEST done: " .. failed .. " failed")
 end)

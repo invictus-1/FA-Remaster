@@ -96,6 +96,16 @@ class SoundSystem {
     for (const auto& entry : loops_) ids.push_back(entry.first);  // (a std::map: in order already)
     return ids;
   }
+  // The check for running sounds left behind (GameSession::CheckLoopEntities, every tenth beat): how many of the
+  // running sounds here belong to an entity the simulation no longer has, at the last check and the most at any check
+  // of this program's run; and a running sound's name, "bank/cue" ("" when the entity has none), for its log line.
+  void NoteGoneLoops(int count) { goneLoops_ = count, goneLoopsMost_ = count > goneLoopsMost_ ? count : goneLoopsMost_; }
+  int goneLoops() const { return goneLoops_; }
+  int goneLoopsMost() const { return goneLoopsMost_; }
+  std::string LoopName(uint32_t entity) const {
+    auto it = loops_.find(entity);
+    return it == loops_.end() ? std::string() : it->second.bank + "/" + it->second.cue;
+  }
   void StopWorld();
   // The world's sounds off or on (the scripts' DisableWorldSounds / EnableWorldSounds: FAF's score screen switches
   // them off, a game's start on). Off: the ones playing stop, no new one starts, the entities' running sounds are
@@ -213,6 +223,7 @@ class SoundSystem {
   int duckState_ = 0, duckCount_ = 0;
   std::vector<int> ducking_;
   int worldPlayed_ = 0;
+  int goneLoops_ = 0, goneLoopsMost_ = 0;  // (NoteGoneLoops)
   bool worldOn_ = true;  // (SetWorldEnabled)
   std::map<std::string, bool> complained_;
   Mixer mixer_;

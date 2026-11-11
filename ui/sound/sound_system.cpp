@@ -602,6 +602,7 @@ void SoundSystem::StopWorld() {
   for (auto& entry : placed_) Stop(entry.first, true);
   placed_.clear();
   loops_.clear();
+  goneLoops_ = 0;  // (no running sound is left: the most ever counted stays, for the tests)
   listening_ = false;
   worldOn_ = true;  // (a world ended: the next one's sounds are on, whatever a score screen switched off)
 }

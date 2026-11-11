@@ -1974,6 +1974,69 @@ void GameSession::ReadLookOptions(lua_State* L, int options) {
   if (edge == "frame" || edge == "beyond" || edge == "surround") skyNow_.edge = edge;
 }
 
+namespace {
+// What a replay needs before its load may begin, looked at in its header alone (LaunchReplay): "" when it can start,
+// else why not. Until 2026-11-10 only the header's own form was read before the load began: a replay of a map that
+// is not there, or whose lists were damaged, failed later, on the loading thread ("the simulation did not start"),
+// with nothing for the player but the menu coming back; one whose mods are not there played without them, a
+// different game from the first beat. Refused here, LaunchReplaySession answers false and the game's own Replay
+// dialog says so (/lua/ui/dialogs/replay.lua 69, "Unable to launch replay"); the reason goes to the log.
+// The original's own checks before its session begins (VCR_SetupReplaySession 0x8765e0): the file opens (0x87664d);
+// its version line is this exe's own (0x876678-0x8766d7: ours plays 3839 and 3840 and tries any other by 3839's
+// rules with a warning, the engine's rule in Sim::Start, so that is no refusal here); the 13 bytes after it are
+// "Replay v1.9" and its line end (read at 0x8767a1, compared with the text at 0xdfe640 up to 0x87681d). The map, the lists and the mods are OURS: the original starts
+// such a replay and fails or plays wrong in its load (INFERRED: not read there).
+std::string ReplayCannotStart(lua_State* L, const Vfs& vfs, const ReplayHeader& h) {
+  if (h.replayVersion != "Replay v1.9")
+    return "it is a recording of another format (\"" + h.replayVersion + "\"; this game plays \"Replay v1.9\")";
+  const int top = lua_gettop(L);
+  auto text = [&](int table, const char* key) {
+    lua_getfield(L, table, key);
+    std::string v = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+    return v;
+  };
+  // (the scenario: the session's ScenarioInfo, and the files the simulation's start reads by it)
+  if (!PushSerializedLua(L, h.scenario) || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    return "its scenario cannot be read (the file is damaged)";
+  }
+  const std::string save = text(top + 1, "save"), script = text(top + 1, "script");
+  lua_settop(L, top);
+  if (h.map.empty()) return "it names no map";
+  if (!vfs.Exists(h.map)) return "its map " + h.map + " is not installed";
+  for (const std::string& part : {save, script})
+    if (!part.empty() && !vfs.Exists(part)) return "its map's file " + part + " is missing";
+  // (the mods: each one's table as the launch had it, with the folder its files are read from; a game without mods
+  // holds an empty table, or nothing. A mod of the interface alone is no part of the simulation.)
+  if (h.mods.empty()) return "";
+  if (!PushSerializedLua(L, h.mods) || !lua_istable(L, -1)) {
+    lua_settop(L, top);
+    return "its list of mods cannot be read (the file is damaged)";
+  }
+  std::string missing;
+  int count = 0;
+  for (int i = 1;; ++i) {
+    lua_rawgeti(L, top + 1, i);
+    if (!lua_istable(L, -1)) break;
+    const int mod = lua_gettop(L);
+    lua_getfield(L, mod, "ui_only");
+    const bool uiOnly = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    const std::string location = text(mod, "location");
+    if (!uiOnly && !location.empty() && !vfs.Exists(location + "/mod_info.lua")) {
+      std::string name = text(mod, "name");
+      if (name.empty()) name = text(mod, "uid");
+      missing += (count++ ? ", " : "") + name + " (" + location + ")";
+    }
+    lua_pop(L, 1);
+  }
+  lua_settop(L, top);
+  if (count) return std::string(count == 1 ? "its mod " : "its mods ") + missing + (count == 1 ? " is" : " are") + " not installed";
+  return "";
+}
+}  // namespace
+
 bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::string* why) {
   if (sim_ || Loading()) {
     *why = "a session is running already";
@@ -1986,6 +2049,10 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   }
   auto h = ReadReplayHeader(*data, why);
   if (!h) return false;
+  if (const std::string cannot = ReplayCannotStart(L, *vfs_, *h); !cannot.empty()) {
+    *why = "the replay cannot start: " + cannot;
+    return false;
+  }
   SessionDescription session;
   session.header = *h;
   session.replay = true;     // (the simulation's SessionIsReplay)
@@ -2166,6 +2233,7 @@ void GameSession::End() {
   setupSync_.clear();
   foreignLoops_.clear();
   heardLoops_.clear();
+  goneLoopsSaid_ = 0;
   syncsToGive_.clear();
   beatSounds_.clear(), beatSoundsDecided_ = false;
   due_ = 0;
@@ -2251,6 +2319,10 @@ void GameSession::MountModRemasters(const std::vector<std::string>& uids) {
     for (const auto& [key, mod] : json["mods"].members) {
       const std::string modUid = mod["mod_uid"].StringOr("");
       if (modUid.empty() || lower(modUid) != lower(uid) || !modRemastersMounted_.insert(key).second) continue;
+      // (first whoever still reads the file system on another thread is waited for: the mount changes its list, and
+      // a launcher that starts a game at once came here while the start-up's readers ran, the host's own wait for
+      // them being a frame later, at the load: the review's row G, 2026-11-10)
+      if (beforeMount) beforeMount();
       const std::string folder = remastersModsRoot + "/" + key;
       Logf(LogLevel::Info, "moho64ui: remastered units of the mod %s: %d from %s", key.c_str(), render::MountRemasters(vfs_, folder),
            hostfs::DisplayPath(folder).c_str());
@@ -4864,6 +4936,7 @@ void GameSession::NoteBeatHere() {
   } else {
     PlayBeatSounds();
   }
+  CheckLoopEntities();
   Times().soundBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - tsnd).count();
   LongFrames().Note("(beat: its sounds)", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tsnd).count());
   // The beat's camera shakes (the engine's ShakeEvents) go to the world's cameras.
@@ -4888,6 +4961,28 @@ void GameSession::PlayBeatSounds() {
   std::vector<SoundAction> actions;
   DecideBeatSounds(*sim_, &actions);
   ApplyBeatSounds(actions);
+}
+
+// The check for running sounds left behind (the review of 2026-11-09, row C): every tenth beat, once the beat's
+// sounds are done, each running sound the sound system keeps is looked up in the simulation by its entity's id. One
+// whose entity is gone was left by nobody ending it: it would start again whenever the camera comes near its last
+// place, for the rest of the game. The count goes to the sound system (moho64ui_SoundInfo().goneLoops, for the
+// tests) and, whenever it has grown, to the log with the first one's name. Every tenth beat is often enough to see
+// each (an id is given out again only 99 beats after its entity went: Sim::ReleaseId) and costs one look-up a
+// running sound a second.
+void GameSession::CheckLoopEntities() {
+  if (!sounds || !sim_ || sim_->tick() % 10 != 0) return;
+  size_t gone = 0;
+  uint32_t first = 0;
+  for (uint32_t id : sounds->LoopEntities()) {
+    if (sim_->FindEntityById(id)) continue;
+    if (!gone++) first = id;
+  }
+  sounds->NoteGoneLoops(static_cast<int>(gone));
+  if (gone > goneLoopsSaid_)
+    Logf(LogLevel::Warning, "moho64ui: sound: %zu running sound(s) whose entity is gone, at beat %u (the first: entity %u, %s)", gone,
+         static_cast<unsigned>(sim_->tick()), static_cast<unsigned>(first), sounds->LoopName(first).c_str());
+  goneLoopsSaid_ = gone;
 }
 
 // (the simulation is read, the sound system is not: on the beats' thread right after the beat, or here)
@@ -4940,6 +5035,14 @@ void GameSession::DecideBeatSounds(const Sim& sim, std::vector<SoundAction>* out
     } else if (e.bank.empty() || e.cue.empty()) {  // another army's running sound ends
       foreignLoops_.erase(e.entity);
       if (heardLoops_.erase(e.entity)) act(SoundAction::Loop, e.entity, none, none, e.position);
+      // Or one of ours, ended by the simulation because its entity went without its script ending it (a unit given
+      // away, reclaimed, destroyed by a script: Unit.OnDestroy ends no sound). That event names no army (the engine's
+      // SoundEvents, sim/effects.cpp: "a loop ends with its entity", army 0), so it comes here and not to the branch
+      // above; until 2026-11-10 it was dropped and the sound stayed for the rest of the game (the review's row C;
+      // CheckLoopEntities counts such). Ended whenever the sound system has that entity's, or it began in this beat.
+      else if (std::binary_search(loopEntities_.begin(), loopEntities_.end(), e.entity) ||
+               std::find(startedHere.begin(), startedHere.end(), e.entity) != startedHere.end())
+        act(SoundAction::Loop, e.entity, none, none, e.position);
     } else {
       ForeignLoop& loop = foreignLoops_[e.entity];
       if (heardLoops_.erase(e.entity)) act(SoundAction::Loop, e.entity, none, none, e.position);  // it changes: start again below

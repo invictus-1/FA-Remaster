@@ -229,9 +229,21 @@ void AnswerSystemFolders(Options& o) {
 int main(int argc, char** argv) {
   Options o;
   g_opts = &o;
+  // What is wrong with an option's value, the first one found; said once all options are read (the log may be named
+  // after it), and the program does not start, as with an option it does not know.
+  std::string optionError;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
-    auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
+    // An option's value is the next word. A word that begins with "--" is the next option, not a value, and the last
+    // word has none after it: until 2026-11-10 either was taken as it came, so "--log --window" wrote a log named
+    // "--window" and the program stayed without its window (the review's row G).
+    auto next = [&]() -> std::string {
+      if (i + 1 < argc && std::strncmp(argv[i + 1], "--", 2) != 0) return argv[++i];
+      if (optionError.empty())
+        optionError = "the option " + a + " wants a value" +
+                      (i + 1 < argc ? std::string(" (the next word is the option ") + argv[i + 1] + ")" : std::string(" (it is the last word)"));
+      return "";
+    };
     if (a == "--init") o.init = next();
     else if (a == "--drive") {
       std::string v = next();  // c=/path
@@ -287,13 +299,14 @@ int main(int argc, char** argv) {
     else if (a == "--fast-forward") fastForward = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
     else if (a == "--replay-out") replayOut = next();
     else if (a == "--size") {
-      modeGiven = true;
+      // (a size without its x, or of nothing, is said and nothing starts: until 2026-11-10 "--size 1920" kept
+      // 1920x1080 and still counted as the command line's choice of the display mode, modeGiven)
       std::string v = next();  // 1920x1080
       size_t x = v.find('x');
-      if (x != std::string::npos) {
-        width = std::atoi(v.substr(0, x).c_str());
-        height = std::atoi(v.substr(x + 1).c_str());
-      }
+      const int w = x == std::string::npos ? 0 : std::atoi(v.substr(0, x).c_str());
+      const int h = x == std::string::npos ? 0 : std::atoi(v.substr(x + 1).c_str());
+      if (w > 0 && h > 0) width = w, height = h, modeGiven = true;
+      else if (optionError.empty()) optionError = "the option --size wants <width>x<height>, as 1920x1080 (it got \"" + v + "\")";
     } else if (a == "--") {
       while (++i < argc) o.gameArgs.push_back(argv[i]);
     } else {
@@ -302,6 +315,12 @@ int main(int argc, char** argv) {
     }
   }
   if (!o.logFile.empty()) LogOpenFile(o.logFile);
+  if (!optionError.empty()) {  // (to the console as an unknown option is, and to the log when one is named)
+    std::fprintf(stderr, "moho64ui: %s: not started\n", optionError.c_str());
+    LogSetEcho(false);
+    Logf(LogLevel::Error, "moho64ui: %s: not started", optionError.c_str());
+    return 2;
+  }
   ui::AllowTestFileWrites(!o.luaFile.empty() || !gameLuaFile.empty());  // (test runs only: user_state.h)
   InstallCrashHandler();  // (a fatal fault writes its place and frames to the log: src/core/crash.h)
   if (o.quiet) LogSetEcho(false);
@@ -510,6 +529,16 @@ int main(int argc, char** argv) {
   session.scanFolders = o.folders;
   if (!m28Variant.empty()) session.scanMounts.push_back({m28Variant, "/mods/m28-variant"});
   session.remastersModsRoot = remastersModsRoot;
+  // (a mod's remasters are mounted in the launch call itself, a frame before the wait for the two reader threads
+  // at the load below: they are waited for there first, and the wait's length said when there was one)
+  session.beforeMount = [&texturePrefetch, &paintingsAhead] {
+    if (!texturePrefetch.thread.joinable() && !paintingsAhead.thread.joinable()) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    texturePrefetch.Join();
+    paintingsAhead.Join();
+    Logf(LogLevel::Info, "moho64ui: the start-up's reader threads waited for before a mod's remasters are mounted (%.0f ms)",
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+  };
   for (const auto& [folder, at] : modFixes) session.scanMounts.push_back({folder, at});
   session.scanTicks = scanTicks;
   cfg.launchSession = [&session](lua_State* L, int config, std::string* why) { return session.Launch(L, config, why); };

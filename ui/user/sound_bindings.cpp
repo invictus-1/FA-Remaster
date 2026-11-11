@@ -183,6 +183,17 @@ int l_SoundInfo(lua_State* L) {
   lua_pushstring(L, "duck");
   lua_pushnumber(L, s ? s->duck() : 0);
   lua_rawset(L, -3);
+  // (the running sounds whose entity the simulation no longer has: at the game's last check, every tenth beat, and
+  // the most at any check of this run; GameSession::CheckLoopEntities)
+  lua_pushstring(L, "goneLoops");
+  lua_pushnumber(L, s ? s->goneLoops() : 0);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "goneLoopsMost");
+  lua_pushnumber(L, s ? s->goneLoopsMost() : 0);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "loops");  // (the entities' running sounds kept now, heard or not)
+  lua_pushnumber(L, s ? static_cast<double>(s->LoopEntities().size()) : 0);
+  lua_rawset(L, -3);
   return 1;
 }
 // moho64ui_SoundBanks([onThread]) -> {onThread = whether waves are touched on the sound system's

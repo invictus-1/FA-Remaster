@@ -296,6 +296,23 @@ int l_LaunchReplaySession(lua_State* L) {
   return 1;
 }
 
+// moho64ui_WriteFileForTests(file, bytes) -> true: the bytes written as that host file, in a test run only
+// (TestFileWritesAllowed: a run with --lua or --game-lua; elsewhere nothing is written and nil comes back). The host's
+// own function for tests, not the original's: a script's own io.open cannot write (the engine blocks every write of a
+// script, script/script_state.cpp), and replay_play.lua makes damaged copies of a replay to see them refused.
+int l_WriteFileForTests(lua_State* L) {
+  const std::string file = luaL_checkstring(L, 1);
+  size_t n = 0;
+  const char* bytes = luaL_checklstring(L, 2, &n);
+  if (!TestFileWritesAllowed()) {
+    Logf(LogLevel::Warning, "moho64ui_WriteFileForTests: a file is written only in a run with --lua or --game-lua");
+    return 0;
+  }
+  if (!hostfs::WriteFile(file, std::string(bytes, n))) return 0;
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 // LoadSavedGame(filename) -> true, or false and why (FA exe 0x880cc0, read 2026-10-18): the game's
 // load dialog (/lua/ui/dialogs/saveload.lua DoLoad) shows the why from its SaveErrors. The
 // original makes a CSavedGame of the file (0x880330): it opens it (_wfopen "rb" of the name made
@@ -352,6 +369,7 @@ void RegisterSpecialFileBindings(lua_State* L) {
   SetGlobal(L, "CopyCurrentReplay", l_CopyCurrentReplay);
   SetGlobal(L, "LaunchReplaySession", l_LaunchReplaySession);
   SetGlobal(L, "LoadSavedGame", l_LoadSavedGame);
+  lua_register(L, "moho64ui_WriteFileForTests", l_WriteFileForTests);
 }
 
 }  // namespace moho::ui
