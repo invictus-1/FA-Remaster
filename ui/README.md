@@ -85,6 +85,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`moho64ui_WatchMoment(tick, name)`, `GameSession::AskWatchMoment`, the host's session request 3; the hook
   `data/hook/lua/ui/dialogs/hotstats.lua`; `tests/postgame.lua` with `/postgame_watch 1`). A replay that cannot be
   opened brings the menu up with the reason in its notice line.
+- Watch after Defeat (ours; Chris's pick of 2026-11-09; the lobby's option `RemasterWatchAfterDefeat`, On unless
+  chosen): when the player's army is defeated and the game goes on, the view goes free over the whole map by itself
+  once the simulation has taken the player's seat off his army (FAF's ToObserver), where observing is allowed (every
+  single-player game), and a line says so; a click on an army's name in the score list still shows that army. Off:
+  the original's way, nothing changes until the player clicks a name (`data/hook/lua/ui/game/gameresult.lua`;
+  `tests/watch_defeat.lua`, both ways).
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
   keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
   `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own

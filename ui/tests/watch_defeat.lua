@@ -3,6 +3,9 @@
 -- two others play on. FAF's sim then takes the player's command source off every army (ToObserver); nothing changes
 -- the view by itself (the engine's answer to ui 58, read in the exe); a click on an army's name in the score list
 -- (score.lua: the console's SetFocusArmy) now shows that army, and SetFocusArmy(-1) all of them.
+-- Since 2026-11-10 the view goes free by itself at the defeat (ours: the lobby's Watch after Defeat, on unless
+-- chosen; ui/data/hook/lua/ui/game/gameresult.lua); with the option Off in the game's table the original's way is
+-- checked (the lab's session_ai3_watchoff.lua).
 -- Run it as a launched game of three armies without cheats (session_ai3.lua) with --frames 4000.
 local failed = 0
 local function check(what, got, want)
@@ -47,7 +50,21 @@ ForkThread(function()
     check("the player's army is out of the game", GetArmiesTable().armiesTable[own].outOfGame, true)
     WaitSeconds(2)
     check("the game goes on for the others", SessionIsGameOver(), false)
-    check("the view stays the defeated army's until the player asks (the original's)", GetFocusArmy(), own)
+    local watching = import("/lua/ui/game/gameresult.lua").RemasterWatchAfterDefeat
+    if (SessionGetScenarioInfo().Options or {}).RemasterWatchAfterDefeat == 'off' then
+        check("Watch after Defeat off: the view stays the defeated army's until the player asks (the original's)", GetFocusArmy(), own)
+        check("and nothing asked for another", watching and watching.state, 'off')
+    else
+        -- ours, on unless the lobby chose Off: the view goes free by itself once the simulation has taken the
+        -- player's seat off his army
+        waited = 0
+        while watching and watching.state ~= 'watching' and waited < 15 do
+            WaitSeconds(0.5)
+            waited = waited + 0.5
+        end
+        check("Watch after Defeat: the view goes free over the whole map by itself", tostring(watching and watching.state) .. " " .. tostring(GetFocusArmy()), "watching -1")
+        check("which is observing", IsObserver(), true)
+    end
 
     clickName(other)
     WaitSeconds(1)

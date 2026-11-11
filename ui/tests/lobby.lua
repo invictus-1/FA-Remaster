@@ -54,11 +54,13 @@ for _, option in import('/lua/ui/lobby/lobbyOptions.lua').globalOpts do
     options[option.key] = option
 end
 check("the game's own options are there", options.FogOfWar ~= nil and options.Victory ~= nil, true)
-for _, key in {'RemasterDayStart', 'RemasterDayLength', 'RemasterWeather', 'RemasterMapEdge'} do
+for _, key in {'RemasterDayStart', 'RemasterDayLength', 'RemasterWeather', 'RemasterMapEdge', 'RemasterWatchAfterDefeat'} do
     local option = options[key]
     local default = option and option.values[option.default]
     check("the option " .. key .. " is in the list with a default", default ~= nil, true)
 end
+check("Watch after Defeat is on unless chosen (Chris's pick), Off the original's way", options.RemasterWatchAfterDefeat.values[options.RemasterWatchAfterDefeat.default].key .. " " ..
+    options.RemasterWatchAfterDefeat.values[2].key, 'on off')
 check("a game starts in the morning unless chosen (Chris, 2026-10-18)", options.RemasterDayStart.values[options.RemasterDayStart.default].key, 'morning')
 check("and the map's own light is the first choice", options.RemasterDayStart.values[1].key, 'map')
 check("a day takes twenty minutes unless chosen", options.RemasterDayLength.values[options.RemasterDayLength.default], '20')

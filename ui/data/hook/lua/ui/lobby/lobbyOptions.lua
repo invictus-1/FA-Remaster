@@ -83,3 +83,19 @@ table.insert(globalOpts, {
         { text = "Original", help = "The original game's order, one core at a time", key = 'original' },
     },
 })
+
+-- Watch after Defeat (ours; Chris's pick of 2026-11-09): when the player's army is defeated and the game goes on (an
+-- allied AI still fights, or the others fight each other), the view goes free over the whole map by itself, where
+-- observing is allowed (FAF's lobby allows it in every single-player game). The original changes nothing by itself:
+-- the player sees his dead army's fog until he clicks an army's name in the score list; that is Off. The interface
+-- does it (ui/data/hook/lua/ui/game/gameresult.lua); the simulation is the same either way.
+table.insert(globalOpts, {
+    default = 1,
+    label = "Watch after Defeat",
+    help = "What your view does when your army is defeated and the game goes on",
+    key = 'RemasterWatchAfterDefeat',
+    values = {
+        { text = "On", help = "Your view goes free over the whole map by itself; a click on an army's name in the score list shows that army's view", key = 'on' },
+        { text = "Off", help = "As in the original game: the view stays your defeated army's until you click an army's name in the score list", key = 'off' },
+    },
+})
