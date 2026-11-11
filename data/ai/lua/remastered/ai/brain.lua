@@ -92,6 +92,7 @@ local kT1FactoriesWithHQ = kTuning.t1FactoriesWithHQ  -- T1 land factories T1 bu
 local kTechEngineersHQ = kTuning.techEngineersHQ  -- engineers of T2 or above kept at most with a T2 land HQ (13)
 local kUpgradeIncome = 60                     -- mass a second per extra factory upgrade at once (phase 10)
 local kEnergyPerMass = kTuning.energyPerMass  -- energy income kept ahead per mass income after the opening (11)
+local kAllyBase = 150                         -- land travel from an ally's start: its base, whose mass points are its own
 local kNavalAirShare = 1.5                    -- anti-ship aircraft kept per mass of enemy ships shelling our coast (10)
 local kNavalAirFactory = 1500                 -- one air factory more per this much enemy ship mass there
 local kNavalPendingTicks = 600                -- a naval factory ordered counts as under way this long before it starts
@@ -200,14 +201,40 @@ AIBrain = Class(StandardBrain) {
         local R = self.Remaster
         local list = {}
         local info = Remastered.AIMapInfo()
+        -- (2026-11-10, Chris's rule of 2026-11-04, design goal 31: "with allies present, the AI does not build in its
+        -- allies' bases". An ally's base: the zones within kAllyBase of land travel of its start that are nearer to its
+        -- start than to ours. Their mass points are the ally's: left out of our list, so no engineer of ours is sent
+        -- there. With no ally the list is as before.)
+        local allyStarts = {}
+        for i, b in ipairs(ArmyBrains) do
+            if i ~= R.army and IsAlly(R.army, i) and not ArmyIsCivilian(i) then
+                local ax, az = b:GetArmyStartPos()
+                local zone = Remastered.AIZoneAt(ax, az)
+                if zone > 0 then table.insert(allyStarts, zone) end
+            end
+        end
+        local left = 0
         for z = 1, info.zones do
             local d = R.startZone > 0 and Remastered.AIZoneDistance(R.startZone, z, 'land') or -1
+            local allied = false
+            for _, az in ipairs(allyStarts) do
+                local da = Remastered.AIZoneDistance(az, z, 'land')
+                if da >= 0 and da <= kAllyBase and da < d then allied = true end
+            end
             if d >= 0 then
                 local zone = Remastered.AIZone(z)
                 for i, p in ipairs(zone.massPoints) do
-                    table.insert(list, { x = p[1], z = p[2], zone = z, i = i, dist = d })
+                    if allied then
+                        left = left + 1
+                    else
+                        table.insert(list, { x = p[1], z = p[2], zone = z, i = i, dist = d })
+                    end
                 end
             end
+        end
+        if allyStarts[1] then
+            LOG(string.format('aimex %d %d allies: %d mass points in %d allies\' bases are left to them', R.army, R.tick or 0,
+                left, table.getn(allyStarts)))
         end
         table.sort(list, function(a, b)
             if a.dist ~= b.dist then return a.dist < b.dist end
