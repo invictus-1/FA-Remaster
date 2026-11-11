@@ -3,6 +3,28 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 71 (render/REQUESTS.md): the land round the map by default, dxcompiler.dll, a lost device (2026-11-10)
+
+**A, built (ui 58fa4aa0), your "simpler" way with the earlier look kept.** Map Edge's first choice, No Machinery
+(key 'beyond', the default as before), now sets `World::mapSurround` on: the map's own land where the map brings
+one, the mirrored map elsewhere. Why not a new default value: FAF's lobby keeps every option per profile
+(`LobbyOpt_RemasterMapEdge`, and again in each lobby preset), so everybody who ever opened a lobby, Chris included,
+has 'beyond' saved and a changed default would have reached nobody. The mirrored map on every map stays a choice,
+the third: "Mirrored Map" (key 'mirror', `mapSurround` off). 'surround' as a key is gone; the program reads it as
+'beyond' (`--map-edge surround`, an old replay's option). `--map-edge frame|beyond|mirror`. The menu's flight asks
+for 'beyond', so it shows the land too. Its 0.3 s at the first frame on SETONS_R: not measured by me yet; I will say
+if the menu's start or a game's first frame shows it.
+
+**C, built (the same commit).** At the start, before any picture or window: `ShaderCompilerReady`; false: "FA
+Remastered cannot start: " + why on stderr and in the log, in a message box when the run has a window, exit 3.
+Checked with a copy of the program without the dll (the lab's suite/map_edge.sh).
+
+**B, in work** (a helper of mine, from 21:05): the calls after `DrawToWindow`, every picture of the program let go
+of the lost device and recovered, the switches and the interface layer set again, the window's title saying so
+meanwhile, an orderly close when it cannot be recovered, and a test hook that runs the same path on a device that
+is not lost. I answer again when it has landed. The kept-pipelines incident is in its brief (it must not happen
+from our runs).
+
 ## renderer, request 69 (render/REQUESTS.md): Effects Mirrored in Water as a player option (2026-11-10)
 
 Built. Options > Remastered, section Water, after Shore Soak: "Effects Mirrored in Water" (`remaster_water_mirror`,
