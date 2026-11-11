@@ -4852,10 +4852,20 @@ int l_w_SetFireTargetLayerCaps(lua_State* L) {
   w->layerCaps = EnumValue(L, kEnumLayer, luaL_checkstring(L, 2));
   return 0;
 }
+// UnitWeapon:SetTargetEntity 0x6d7f80: when the weapon may take the entity (func_PickTargetPoint 0x6d5590 at
+// 0x6d8052) the binding builds its CAiTarget with CAiTarget::UpdateTarget 0x5d55b0 (0x6d8062), which draws one of
+// the unit's target points (Unit::PickTargetPoint 0x6aaf50: IntRange(#AI.TargetBones)), and hands it to SetTarget
+// 0x6d5f30 (0x6d8075). That pick is never used (SetTarget compares type + entity only, 0x6d31d0, and its
+// PickNewTargetAimSpot draws the aim spot afresh): only the stream moves. Seen: range scene tog_land, tick 404, a
+// weapon with AboveWaterTargetsOnly given a target by its unit's script: the original drew Unit::PickTargetPoint+0x44
+// and then Unit::PickTargetPointAboveWater+0x16a (labrec_wtr_tog_land draws 20658-20659); ours only the second.
 int l_w_SetTargetEntity(lua_State* L) {
   UnitWeapon* w = W(L);
   Unit* t = CheckObject<Unit>(L, 2);
-  if (Targetable(*S(L), w, t)) SetTarget(*S(L), w, EntityTarget(t));
+  if (Targetable(*S(L), w, t)) {
+    TargetPointDraw(*S(L), t);
+    SetTarget(*S(L), w, EntityTarget(t));
+  }
   return 0;
 }
 int l_w_SetTargetGround(lua_State* L) {
