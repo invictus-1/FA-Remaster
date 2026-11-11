@@ -79,6 +79,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   closes each is given the profile's kept value: the new one after OK, the one before after Cancel, also for a
   slider on a tab the player has left (`data/hook/lua/options/options.lua` Preview / RemasterEndPreview, the
   dialog's hook; `tests/options_preview.lua`).
+- From the score screen into the replay (ours; Chris's pick of 2026-11-09): a click on a moment's marker on the
+  post-game graphs asks, and on Yes the game is left for its own replay, opened at that moment: a bookmark with the
+  moment's words is put beside the replay's own and the replay runs ahead to ten seconds before it
+  (`moho64ui_WatchMoment(tick, name)`, `GameSession::AskWatchMoment`, the host's session request 3; the hook
+  `data/hook/lua/ui/dialogs/hotstats.lua`; `tests/postgame.lua` with `/postgame_watch 1`). A replay that cannot be
+  opened brings the menu up with the reason in its notice line.
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
   keys, mouse, pointer, sound and clipboard through the system's SDL3 (`apt install libsdl3-dev`,
   `brew install sdl3`; `app/window_sdl.cpp`, `sound/device_sdl.cpp`), its text from the game's own

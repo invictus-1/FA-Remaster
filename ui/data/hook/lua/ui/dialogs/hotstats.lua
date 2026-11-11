@@ -105,6 +105,25 @@ do
         return bg.Left() + (bg.Right() - bg.Left()) * math.min(1, math.max(0, seconds / gameSeconds))
     end
 
+    -- A click on a moment's marker: the game's own replay opened at that moment (ours; Chris's pick of 2026-11-09,
+    -- the host's moho64ui_WatchMoment: the bookmark is put beside the replay's and it runs ahead to ten seconds
+    -- before the moment). The score screen is left for it, so it asks first. RemasterMoments.asking: the question,
+    -- while it is up (for the tests too).
+    local function AskWatch(m, text)
+        if not rawget(_G, 'moho64ui_WatchMoment') then return false end
+        if RemasterMoments.asking and not IsDestroyed(RemasterMoments.asking) then return true end
+        RemasterMoments.asking = UIUtil.QuickDialog(GetFrame(0),
+            "Watch this moment in the replay?\n" .. text .. "\nThe score screen is left for it.",
+            "<LOC _Yes>", function()
+                local ok, why = moho64ui_WatchMoment(m.tick, text)
+                if not ok then
+                    UIUtil.ShowInfoDialog(GetFrame(0), "The replay cannot be opened: " .. tostring(why) .. ".", "<LOC _Ok>")
+                end
+            end,
+            "<LOC _No>", nil, nil, nil, true, { escapeButton = 2, enterButton = 1, worldCover = false })
+        return true
+    end
+
     local function AddMarker(overlay, bg, m, gameSeconds, timeline)
         local look = timeline.MarkerLooks[m.kind] or timeline.MarkerLooks.CommanderDied
         local mk = Bitmap(overlay)
@@ -149,12 +168,15 @@ do
         mk.HandleEvent = function(self, event)
             if event.Type == 'MouseEnter' then
                 RemasterMoments.hover = text
-                Tooltip.CreateMouseoverDisplay(self, { text = text }, 0, false, nil, true)
+                -- (with the host's moho64ui_WatchMoment a click opens the replay there: the tip says so)
+                Tooltip.CreateMouseoverDisplay(self, { text = rawget(_G, 'moho64ui_WatchMoment') and (text .. "  (click: watch it in the replay)") or text }, 0, false, nil, true)
                 return true
             elseif event.Type == 'MouseExit' then
                 RemasterMoments.hover = false
                 Tooltip.DestroyMouseoverDisplay()
                 return true
+            elseif event.Type == 'ButtonPress' then
+                return AskWatch(m, text)
             end
             return false
         end

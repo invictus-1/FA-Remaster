@@ -172,6 +172,9 @@ class UserState {
     // played scanned from its own replay once it is over; `start`: begin that scan now if it is not); unset, or
     // nullptr from it: none (user/replay_timeline.h, moho64ui_GameMoments).
     std::function<ReplayTimelineSource*(bool start)> gameMoments;
+    // The score screen's "watch this moment" (the host's GameSession::AskWatchMoment; moho64ui_WatchMoment): the
+    // game left for its own replay at that beat. Unset: there is none.
+    std::function<bool(uint32_t tick, const std::string& name, std::string* why)> watchMoment;
     // What is shown where the front end plays its background film (the main menu's): a moving
     // picture of the host's; nullptr: nothing is shown there (the film itself is not decoded).
     BackdropSource* backdrop = nullptr;
@@ -417,6 +420,9 @@ int TakeSessionRequest();
 // The host starts the running game over between two frames, as RestartSession() asks (the replay timeline's jump
 // back: replay_timeline.h).
 void RequestSessionRestart();
+// The host leaves the running game for its replay between two frames (TakeSessionRequest gives 3; the score
+// screen's "watch this moment": GameSession::AskWatchMoment keeps which replay and where).
+void RequestSessionWatch();
 // The world interface provider and a running session's facts (session_bindings.cpp).
 void RegisterSessionBindings(lua_State* L);
 // Units as the interface sees them, selection (user_units.cpp). RefreshUserUnits brings them up

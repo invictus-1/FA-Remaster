@@ -254,6 +254,15 @@ class GameSession {
   // again on such an ask once the game is over. nullptr: no replay of the game (a campaign operation's) or not begun.
   // Its Seek does nothing (no replay plays); it stops with the session (End).
   ReplayTimelineSource* GameMoments(bool start);
+  // The score screen's "watch this moment" (ours; Chris's pick of 2026-11-09: a click on a moment in the post-game
+  // graphs opens that game's replay at that moment, with a bookmark). AskWatchMoment: the replay to open is the one
+  // playing, else the game's own (currentReplay, LastGame); false with the reason when the game has none (a
+  // campaign operation) or its file is not there. The moment is kept and the host is asked to leave the game for it
+  // (ui::TakeSessionRequest gives 3). TakeWatchReplay: that replay's file, once, for the host's LaunchReplay. The
+  // moment waits for that launch: a bookmark of its name is added to the replay's own (unless one is at that beat)
+  // and the replay runs ahead to ten seconds before it, as a forward jump of its timeline does.
+  bool AskWatchMoment(uint32_t tick, const std::string& name, std::string* why);
+  std::string TakeWatchReplay();
   // How the host mounted the game, for the scan's own copy (--init, --folder; the maps are replayMaps), and where the
   // scan stops (0: at the replay's end; --scan-ticks, for tests).
   std::string scanInit;
@@ -597,6 +606,11 @@ class GameSession {
   std::unique_ptr<Timeline> NewScan(const std::string& file, const std::vector<std::string>& uids, uint32_t ticks, int limit,
                                     const char* what);
   std::unique_ptr<Timeline> postgame_;  // (GameMoments' for a game played; its scan read the file at this tick)
+  struct WatchMoment {  // (AskWatchMoment's: the replay to open, the beat and the bookmark's name)
+    std::string file;
+    uint32_t tick = 0;
+    std::string name;
+  } watch_;
   uint32_t postgameAt_ = 0;
   std::vector<std::unique_ptr<Timeline>> stoppingScans_;  // (LetGoOfScan)
   void LetGoOfScan(std::unique_ptr<Timeline> scan);

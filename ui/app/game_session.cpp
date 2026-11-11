@@ -1369,6 +1369,22 @@ ReplayTimelineSource* GameSession::GameMoments(bool start) {
   return postgame_.get();
 }
 
+bool GameSession::AskWatchMoment(uint32_t tick, const std::string& name, std::string* why) {
+  if (!sim_ || Loading()) return *why = "no game runs", false;
+  const std::string file = play_ && timeline_ ? timeline_->file : currentReplay;
+  if (file.empty()) return *why = "this game kept no replay", false;
+  if (!hostfs::IsFile(file)) return *why = "the game's replay is not there (" + hostfs::DisplayPath(file) + ")", false;
+  watch_.file = file;
+  watch_.tick = std::max(1u, tick);
+  watch_.name = name;
+  Logf(LogLevel::Info, "moho64ui: the score screen asks for the replay at beat %u (%u:%02u): %s", watch_.tick, watch_.tick / 600,
+       (watch_.tick / 10) % 60, hostfs::DisplayPath(file).c_str());
+  RequestSessionWatch();
+  return true;
+}
+
+std::string GameSession::TakeWatchReplay() { return std::move(watch_.file); }
+
 void GameSession::SeekReached() {
   if (!seekTo_ || seekBack_ || !sim_ || BeatRunning()) return;
   if (sim_->tick() < seekTo_ && !(play_ && play_->AtEnd())) return;
@@ -2102,6 +2118,21 @@ bool GameSession::LaunchReplay(lua_State* L, const std::string& file, std::strin
   seekBack_ = false;
   back_ = BackClock{};
   StartMomentScan(*h, file, uids);
+  // (the score screen's "watch this moment", AskWatchMoment: its bookmark beside the replay's own, and the replay
+  // runs ahead to ten seconds before it; a moment past the replay's end is its end)
+  if (watch_.tick && timeline_) {
+    Timeline& t = *timeline_;
+    const uint32_t tick = t.ticks ? std::min(watch_.tick, t.ticks) : watch_.tick;
+    std::vector<ReplayBookmark> marks = t.bookmarks;
+    if (std::none_of(marks.begin(), marks.end(), [tick](const ReplayBookmark& b) { return b.tick == tick; })) {
+      marks.push_back({tick, watch_.name});
+      std::string notKept;
+      t.SetBookmarks(marks, &notKept);  // (it says so itself when the file cannot be written)
+    }
+    seekTo_ = tick > 100 ? tick - 100 : 0;
+    Logf(LogLevel::Info, "moho64ui: the replay opens for the moment at beat %u: it runs ahead to beat %u", tick, seekTo_);
+  }
+  watch_ = WatchMoment{};
   last_ = std::make_unique<SessionDescription>(session);
   lastUids_ = uids;
   lastWasReplay_ = true;

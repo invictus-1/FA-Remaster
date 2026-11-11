@@ -26,6 +26,37 @@ local function check(what, got, want)
     end
 end
 local pictures = (GetCommandLineArg("/postgame_pictures", 1) or {})[1]
+-- `/postgame_watch 1` (the game's command line): at the end, in place of Continue, a click on the experimental's
+-- marker and Yes: the game is left for its own replay, opened at that moment (ours: moho64ui_WatchMoment, the hook's
+-- AskWatch). This file then runs again in the replay's game and checks it there; the first part's count of failures
+-- comes over in the preferences, so the last "TEST done" line is the whole run's.
+local watch = (GetCommandLineArg("/postgame_watch", 1) or {})[1]
+if watch and SessionIsReplay() then
+    ForkThread(function()
+        failed = GetPreference('postgame_watch_failed') or 0
+        local tick, name = GetPreference('postgame_watch_tick') or 0, GetPreference('postgame_watch_name') or "?"
+        LOG("TEST note the replay's part: the moment at tick " .. tostring(tick) .. ", " .. tostring(name))
+        check("the game was left for its replay", SessionIsReplay(), true)
+        local found = false
+        for _, b in (moho64ui_ReplayBookmarks() or {}) do
+            if b.tick == tick then found = b.name end
+        end
+        check("the replay has a bookmark at the moment", found ~= false, true)
+        -- (a bookmark's name is kept plain and at most 64 bytes: the moment's words, or their beginning)
+        check("named by the moment's words", found ~= false and string.len(found) > 0 and string.sub(name, 1, string.len(found)) == found, true)
+        local want = tick / 10 - 10
+        local waited = 0
+        while GetGameTimeSeconds() < want - 0.5 and waited < 180 do
+            WaitSeconds(0.5)
+            waited = waited + 0.5
+        end
+        check("the replay runs ahead to ten seconds before the moment", GetGameTimeSeconds() >= want - 0.5, true)
+        WaitSeconds(2)
+        check("and plays on from there, not past the moment at once", GetGameTimeSeconds() < tick / 10 + 20, true)
+        LOG("TEST done: " .. failed .. " failed")
+    end)
+    return
+end
 local function picture(name)
     if not pictures or not moho64ui_GameMomentsCaptureForTests then return end
     WaitSeconds(0.5)
@@ -368,6 +399,34 @@ ForkThread(function()
     WaitSeconds(1.5)
     check("Off: the Kill Stats ACU column as FAF has it", hotstats.RemasterKillStatsAcu, "built")
     setExtras(true)
+
+    if watch then
+        -- the Graph page again with its markers; a click on the experimental's asks, and Yes leaves the game for its
+        -- replay at that moment
+        click(tab.Graph)
+        WaitSeconds(3)
+        check("the markers are back", waitFor(function() return hotstats.RemasterMoments.done end, 60), true)
+        local mk = nil
+        for _, m in hotstats.RemasterMoments.markers do
+            if m.moment.kind == "ExperimentalDied" then mk = m end
+        end
+        check("the experimental's marker is there to click", mk ~= nil, true)
+        if mk then
+            click(mk.control)
+            local asking = hotstats.RemasterMoments.asking
+            check("a click on it asks whether to watch the moment in the replay", asking ~= nil and asking ~= false and not IsDestroyed(asking), true)
+            local yes = asking and (asking._button1 or asking.content and asking.content._button1)
+            check("with a Yes button", yes ~= nil and yes ~= false, true)
+            SetPreference('postgame_watch_failed', failed)
+            SetPreference('postgame_watch_tick', mk.moment.tick)
+            SetPreference('postgame_watch_name', import("/moho64ui/lua/timeline.lua").MomentText(mk.moment))
+            if yes then yes:OnClick() end
+            WaitSeconds(8)
+        end
+        LOG("TEST FAIL the game was not left for its replay")
+        LOG("TEST done: " .. (failed + 1) .. " failed")
+        return
+    end
 
     LOG("TEST done: " .. failed .. " failed")
     if pictures then  -- (a window's run ends itself: its frames follow the screen's rate)

@@ -376,6 +376,7 @@ void UserState::LinkSession(const Config& links) {
   config_.pace = links.pace;
   config_.timeline = links.timeline;
   config_.gameMoments = links.gameMoments;
+  config_.watchMoment = links.watchMoment;
   config_.net = links.net;
   config_.multiplayer = links.multiplayer;
   SetHeadSize(links.width, links.height);

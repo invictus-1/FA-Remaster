@@ -1109,6 +1109,7 @@ int main(int argc, char** argv) {
     gameCfg.pace = &session.pace;
     gameCfg.timeline = session.timeline();  // (a replay's timeline; nullptr in a game played)
     gameCfg.gameMoments = [&session](bool start) { return session.GameMoments(start); };  // (the score screen's)
+    gameCfg.watchMoment = [&session](uint32_t tick, const std::string& name, std::string* why) { return session.AskWatchMoment(tick, name, why); };
     if (prepared.state) {  // (made on the loading thread: given the session's links)
       Logf(LogLevel::Info,
            "moho64ui: the game's state was made on the loading thread: the state %.0f ms, its rules %.0f ms, %s %.0f ms (then %d "
@@ -1272,6 +1273,22 @@ int main(int argc, char** argv) {
     shown = front.get();
     game.reset();
     sounds.StopAll();
+    if (request == 3) {
+      // (ours: the score screen's "watch this moment", GameSession::AskWatchMoment. The game ends, a front end's
+      // state is made anew as for a restart, and the game's replay is launched in it; the session then runs ahead
+      // to the moment. When the replay cannot start the menu comes up and says why in its notice line.)
+      const std::string file = session.TakeWatchReplay();
+      session.End();
+      Logf(LogLevel::Info, "moho64ui: the game is left for its replay: %s", file.c_str());
+      auto fresh = std::make_unique<ui::UserState>(&vfs, cfg);
+      if (fresh->Boot() && fresh->StartMainScript()) front = std::move(fresh), shown = front.get();
+      std::string why = "it has none";
+      if (!file.empty() && session.LaunchReplay(front->L(), file, &why)) return;
+      Logf(LogLevel::Error, "moho64ui: the game's replay could not be opened: %s", why.c_str());
+      ui::AddMenuNotice("The game's replay could not be opened: " + why + ".");
+      freshFrontEnd();
+      return;
+    }
     if (request == 2) {
       // (The loading screen comes up in a front end's state made anew: the old one stood still
       // through the game, its first loading screen's script threads asleep in it, and at the

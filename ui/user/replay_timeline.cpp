@@ -205,6 +205,23 @@ int l_GameMoments(lua_State* L) {
   return 1;
 }
 
+// moho64ui_WatchMoment(tick [, name]) -> true, or false and the reason (ours; Chris's pick of 2026-11-09): the game is
+// left for its own replay, opened at that beat with a bookmark of that name (the score screen's graphs: a click on a
+// moment; /lua/ui/dialogs/hotstats.lua's hook). GameSession::AskWatchMoment.
+int l_WatchMoment(lua_State* L) {
+  const auto& ask = UserState::From(L)->config().watchMoment;
+  const double tick = luaL_checknumber(L, 1);
+  const std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+  std::string why = "no game runs";
+  if (!ask || !ask(tick < 1 ? 1u : static_cast<uint32_t>(tick), name, &why)) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, why.c_str());
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 // moho64ui_GameMomentsCaptureForTests(path): the next frame the window shows saved as a PNG at `path` while there are
 // game moments (the score screen's pictures for Chris; the host's --window-capture way, nothing without a window).
 int l_GameMomentsCaptureForTests(lua_State* L) {
@@ -446,6 +463,7 @@ void RegisterTimelineBindings(lua_State* L) {
   lua_register(L, "moho64ui_ReplayWatchedForTests", l_ReplayWatchedForTests);
   lua_register(L, "moho64ui_ReplayCaptureForTests", l_ReplayCaptureForTests);
   lua_register(L, "moho64ui_GameMoments", l_GameMoments);
+  lua_register(L, "moho64ui_WatchMoment", l_WatchMoment);
   lua_register(L, "moho64ui_GameMomentsCaptureForTests", l_GameMomentsCaptureForTests);
 }
 
