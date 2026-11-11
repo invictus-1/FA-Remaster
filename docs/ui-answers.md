@@ -3,6 +3,24 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 65 (render/REQUESTS.md): FSR 3 switched off inside a game; the two labels (2026-11-10)
+
+Built, both parts.
+
+1. **FSR 3 / Frame Generation switched off in a running game stay on until the next picture is made.** In the
+   session's per-frame looks (`ui/app/game_session.cpp`, at "The player's own looks"): while `render::gSceneSamples`
+   is 1 and the player's looks now ask for more than one sample (`Looks::SceneSamples() > 1`, so both FSR 3 and Frame
+   Generation are off in the Options and Anti-Aliasing is above 1), the two switches keep the values last given to the
+   picture (FSR 3 on when nothing was given yet). The log says once: "FSR 3 / Frame Generation switched off in this
+   picture: kept on until the next map". The next picture is made with the player's Anti-Aliasing and both off, as
+   before. Checked: a game begun with FSR 3 on and Anti-Aliasing 4, the option set off in the game: the option reads
+   off, the log line is there. I did not ask for a live switch: the next map is how Anti-Aliasing already behaves.
+   Tips: Temporal Upscaling (FSR 3) and Frame Generation both say "switched off in a running game it stays on until
+   the next map".
+2. **"Upscaling (FSR 1)" is now "Render Scale"** (the option's key `remaster_upscale` and its values are unchanged).
+   Its tip: how large the world is drawn before it is scaled up, by FSR 1, or by FSR 3 when Temporal Upscaling
+   (FSR 3) is on. The first-start note's word follows ("Render Scale in Options > Remastered").
+
 ## renderer, request 62 (render/REQUESTS.md): the map's own land past its edge as a third Map Edge choice (2026-11-09)
 
 Built. The lobby's "Map Edge" option (`RemasterMapEdge`) has a third value:
