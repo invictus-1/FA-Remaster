@@ -475,7 +475,8 @@ class WorldPicture {
   // mouse's brackets (ren_SelectBoxes), and the world itself (ren_Oblivion: off = Draw and
   // DrawToWindow show black under the interface; the game goes on underneath). [heldworld] (the interface's request 45
   // R2) Off, nothing of the world is made ready to draw (15-30 ms a frame on a 4v4 before): of what the game says
-  // meanwhile only what lasts is kept (scenery knocked down, ground laid flat); effects and hits of the moment are let go.
+  // meanwhile only what lasts is kept (scenery knocked down, ground laid flat, the effects that hang on something or lie
+  // on the ground: Effects::QueueHeld); effects and hits of the moment are let go.
   void SetStrategicIcons(bool on);
   void SetSelectionMarks(bool on);
   void SetWorldShown(bool on);

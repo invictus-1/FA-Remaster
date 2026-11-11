@@ -166,7 +166,21 @@ class Terrain {
   gfx::Buffer sunMaskRows;
   // The map's heights of the grid points [x0, x1] x [z0, z1] have changed (the simulation laid the
   // ground under a structure flat): drawn so from now on. Within a frame.
-  void HeightsChanged(int x0, int z0, int x1, int z1);
+  // [terraform] `atOpen`: the heights as the map's file has them (the caller's copy, as large as the map's), where it has
+  // them: the ground's stored normals then follow the change too (NormalsChanged, below). Without them the normals stay.
+  void HeightsChanged(int x0, int z0, int x1, int z1, const std::vector<uint16_t>* atOpen = nullptr);
+  // [terraform] The ground is lit, its sun masked, its rays bent and its grass leant by the map file's stored normal map
+  // (NormalMap), not by its heights: where the game changed the heights (a hillside laid flat for a factory, a script's
+  // terraforming) the ground was flat to the eye's outline and still shaded as the old slope, for the rest of the game
+  // (review of 2026-11-09, ground 1). With this on (the default) the stored normals follow: where a grid point's height, or
+  // one of its four neighbours', is no longer the file's, the normal there is worked out from the heights as they are now
+  // (central differences, packed as the file packs its own: x in alpha, z in green), fading into the file's over one cell
+  // round such points; everywhere else the file's own blocks stay, bit for bit (they hold finer relief than the heights
+  // give: on SETONS_R four texels a cell). Heights that go back to the file's take the file's normals back (a game begun
+  // again). Only a map whose normal map is one level of DXT5 with sides of whole blocks (every stock map's, SETONS_R's);
+  // any other keeps its normals as they are, said once. False: the stored normals stay the file's, as before.
+  bool normalsFollow = true;
+  int normalBlocksChanged = 0;  // (the texture's 4x4 blocks that are not the file's at this moment: the viewer's last line)
 
   // On-screen size, in pixels, that one quad of the mesh should have: smaller means more triangles.
   float quadPixels = 6;
@@ -250,6 +264,14 @@ class Terrain {
   gfx::Buffer gridVertices_, gridIndices_;
   uint32_t gridIndexCount_ = 0;
   gfx::Texture heightTexture_, normalMap_, maskLow_, maskHigh_, waterMap_, waterRamp_;
+  // [terraform] the file's normal map where it can follow the heights (normalsFollow): its blocks (they lie in the map's
+  // data, MapData::normalMap, which outlives the terrain), its size in texels, and which of the texture's blocks are no
+  // longer the file's (a byte a block; made at the first change)
+  const uint8_t* normalBlocks_ = nullptr;
+  int normalWidth_ = 0, normalHeight_ = 0;
+  std::vector<uint8_t> normalDirty_;
+  bool normalsSaid_ = false;
+  void NormalsChanged(int x0, int z0, int x1, int z1, const std::vector<uint16_t>& atOpen);
 
  public:
   // The ground's normals (x in alpha, z in green, as the terrain's shader reads them), for others (ray_scene.h).

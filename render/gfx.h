@@ -304,6 +304,9 @@ class Device {
   // frame (between BeginFrame and EndFrame), before a draw reads it. An uncompressed texture of one
   // level and one layer (RGBA8, BGRA8, R16, ...). For what changes every frame (an interface drawn on
   // the processor), and the ground's heights where the simulation changes them.
+  // [terraform] A block-compressed texture of one level and one layer too (the map's stored normals where the game
+  // changes the ground, Terrain::HeightsChanged): x, y, width and height still in pixels, all multiples of 4 (whole
+  // blocks), `data` the blocks themselves, a row of blocks every `pitch` bytes.
   virtual void UpdateTexture(Texture texture, int x, int y, int width, int height, const void* data, uint32_t pitch) = 0;
   virtual Texture CreateTarget(const TargetDesc& desc) = 0;
   virtual Pipeline CreatePipeline(const PipelineDesc& desc, std::string* error) = 0;

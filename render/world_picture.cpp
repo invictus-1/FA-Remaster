@@ -1705,8 +1705,9 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
 
   // [heldworld] (the interface's request 45 R2: a replay's jump back holds its last picture while the world is not shown)
   // With the world not shown nothing is made ready to draw: the frame begins black, and of what the game said only what
-  // lasts is kept (the scenery knocked down, the ground laid flat); its effects and hits of the moment are let go, and the
-  // units are where the game has them at the first frame shown again.
+  // lasts is kept (the scenery knocked down, the ground laid flat, and of its effects those that hang on something or lie
+  // on the ground: Effects::QueueHeld); its effects and hits of the moment are let go, and the units are where the game has
+  // them at the first frame shown again.
   if (!m.worldShown) {
     const float black[4] = {0, 0, 0, 1};
     const auto t1 = std::chrono::steady_clock::now();
@@ -1716,6 +1717,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
     m.playingNow = playing;
     if (playing) {
       m.frames.TakeEffectEvents(&m.events);
+      m.world->effects.QueueHeld(std::move(m.events), shown);  // [heldworld] (what lasts of them, for when it is shown again)
       m.events.clear();
       std::vector<FramePropEvent> changed;
       m.frames.TakePropEvents(&changed);
@@ -2999,6 +3001,14 @@ void WorldPicture::DrawViews(int width, int height) {
     m.viewShadowTriangles += w.meshes.shadowTriangles;
     m.viewGroundTriangles += w.terrain.drawnTriangles;
   };
+  // [views] the views of this frame told to the particles (particles.h, frameViews): an emitter is out of the picture
+  // only when it is out of every one of them. View 0's as the world has it (PrepareWorld began it); the others' from their
+  // cameras, as their Begin below will make them (an inset whose turn this frame is not, too: its picture stays up).
+  w.particles.frameViews.clear();
+  w.particles.frameViews.push_back(w.view);
+  for (size_t i = 1; i < m.views.size(); ++i)
+    w.particles.frameViews.push_back(View::Make(m.views[i].camera, std::max(m.views[i].rect.width, 16), std::max(m.views[i].rect.height, 16),
+                                                static_cast<float>(m.lastTick * 0.1)));
   // view 0
   const bool fills = m.Fills(m.views[0].rect, width, height);
   if (fills) {
@@ -3061,6 +3071,7 @@ void WorldPicture::DrawViews(int width, int height) {
     w.meshes.shadowDetail = shadowDetail;
     s.drawn = true;
   }
+  w.particles.frameViews.clear();  // [views] (a frame without views, or a side picture's, is its own view's alone)
   m.viewsCounted = true;
   ++m.viewFrames;
   // [head2] the second window's views and its layer put together in its picture

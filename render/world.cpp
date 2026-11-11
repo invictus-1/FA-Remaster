@@ -145,6 +145,10 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   effects.SetTracks(&tracks);
   effects.SetBlasts(&blasts);
   effects.isProp = [this](uint32_t id) { return IsProp(id); };  // [scars] (a flash made on a prop is no explosion)
+  // [fogbeam] (what hangs on a thing in no list: shown by what the army sees of its place now)
+  effects.seenAt = [this](Vec3 p) {
+    return !haveMap_ || !sight.On() || sight.SeenAt(p.x / static_cast<float>(map.width), p.z / static_cast<float>(map.height));
+  };
   // [whitecaps] (what hangs on a ship's bones follows its hull riding the lifted waves: as the unit's drawing, RideWaves)
   effects.drawnAt = [this](const std::string& blueprint, const FrameUnit& u, const Model* model, Vec3* position, Quat* orientation) {
     const bool building = blueprint.size() > 2 && (blueprint[2] == 'b' || blueprint[2] == 'B');
@@ -1607,7 +1611,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   barAnchors.clear();
   if (heightsRestored_) {  // [restart] (RestartGame: the ground's heights as the map was opened, drawn so; within a frame)
     heightsRestored_ = false;
-    terrain.HeightsChanged(0, 0, map.width, map.height);
+    // ([terraform] with the file's heights: the stored normals back to the file's, or after a lost device changed anew)
+    terrain.HeightsChanged(0, 0, map.width, map.height, heightsAtOpen_.size() == map.heights.size() ? &heightsAtOpen_ : nullptr);
     lights.GroundChanged(0, 0, static_cast<float>(map.width), static_cast<float>(map.height));  // [lightshade]
   }
   // (the scene at a share of the screen's size when FSR brings it up; what is measured on the
@@ -2821,7 +2826,8 @@ void World::ChangeGround(const std::vector<FrameGroundChange>& changes) {
     ++groundChanges;
   }
   for (const Rect& d : dirty) {
-    terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1);
+    // ([terraform] with the file's heights: the ground's stored normals follow the change, terrain.h's normalsFollow)
+    terrain.HeightsChanged(d.x0, d.z0, d.x1, d.z1, heightsAtOpen_.size() == map.heights.size() ? &heightsAtOpen_ : nullptr);
     // [lightshade] (the ground tables kept of lights that reach there are of the ground as it was)
     lights.GroundChanged(static_cast<float>(d.x0), static_cast<float>(d.z0), static_cast<float>(d.x1), static_cast<float>(d.z1));
   }
