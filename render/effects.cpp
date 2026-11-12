@@ -6,7 +6,9 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 
 #include "blasts.h"
 #include "build_effects.h"
@@ -592,9 +594,51 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
         const FrameProjectile& p = frame.projectiles[shot->second];
         if (p.launcher && p.launcher < frame.blueprints->size() && p.blueprint < frame.blueprints->size()) {
           std::string own = models_->ShotEffectByUnit((*frame.blueprints)[p.blueprint], event.blueprint, (*frame.blueprints)[p.launcher]);
+          // ([unitfx] else the unit's own version of the emitter whatever it is on: the trails of the debris a dying
+          // unit throws, its shells' trails without a folder per shell)
+          if (own.empty() && unitEmitters && f != "CreateTrail" && f.compare(0, 10, "CreateBeam") != 0 && f != "AttachBeamEntityToEntity") {
+            own = models_->EmitterByUnit(event.blueprint, (*frame.blueprints)[p.launcher]);
+            if (!own.empty()) ++unitEmittersPlayed;
+          }
           if (!own.empty()) e.blueprint = std::move(own);
         }
       }
+    // [unitfx] an emitter made on or at a unit as that unit has it, where the visuals track made one (ModelCache::
+    // EmitterByUnit): the pieces every unit's death plays, larger for an experimental, its script untouched. Before
+    // the faction's own version of the same name.
+    if (unitEmitters && event.entity != kNone && frame.blueprints &&
+        (f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity")) {
+      auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), event.entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+      if (unit != frame.units.end() && unit->id == event.entity && unit->blueprint < frame.blueprints->size()) {
+        std::string own = models_->EmitterByUnit(event.blueprint, (*frame.blueprints)[unit->blueprint]);
+        if (!own.empty()) {
+          e.blueprint = std::move(own);
+          ++unitEmittersPlayed;
+        }
+      }
+    }
+  }
+  // (MOHO64_DEBUG_FXOWN: each emitter blueprint once per owner, with what it was made on: for telling which file a
+  // unit's own version of it belongs in, [byunit] / [unitfx])
+  if (static const bool say = getenv("MOHO64_DEBUG_FXOWN") != nullptr; say && readsBlueprint && frame.blueprints) {
+    std::string on = "nothing";
+    if (event.entity != kNone) {
+      auto unit = std::lower_bound(frame.units.begin(), frame.units.end(), event.entity, [](const FrameUnit& u, uint32_t id) { return u.id < id; });
+      if (unit != frame.units.end() && unit->id == event.entity && unit->blueprint < frame.blueprints->size()) {
+        on = "unit " + (*frame.blueprints)[unit->blueprint];
+      } else if (auto shot = projectileAt_.find(event.entity); shot != projectileAt_.end()) {
+        const FrameProjectile& p = frame.projectiles[shot->second];
+        on = "projectile " + (p.blueprint < frame.blueprints->size() ? (*frame.blueprints)[p.blueprint] : std::string("?")) + " of " +
+             (p.launcher && p.launcher < frame.blueprints->size() ? (*frame.blueprints)[p.launcher] : std::string("no unit"));
+      } else if (entityAt_.count(event.entity)) {
+        on = "a script's entity";
+      } else {
+        on = "something in no list";
+      }
+    }
+    static std::set<std::string> said;
+    if (said.insert(f + " " + event.blueprint + " " + on).second)
+      printf("render: fxown: %s %s on %s -> %s\n", f.c_str(), event.blueprint.c_str(), on.c_str(), e.blueprint.c_str());
   }
   AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation);  // (the orientation, when the entity is still there)
   e.position = V(event.position);

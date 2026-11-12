@@ -4,6 +4,54 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 142: a unit's own emitters; the stand and scripted impacts (2026-11-12)
+
+**Ask 1, a per-unit lookup for emitters: built** ([unitfx]). The folder is beside the shared emitters:
+`effects/emitters/by_unit/<unit id>/<the emitter's file name>` in the remastered effects folder (file names in lower
+case, the name exactly as the script gives it: `medium_test_fire.bp`, `destruction_explosion_debris_07_emit.bp`).
+When such a file exists it is played instead of the shared one, before a faction's own version, for an emitter made:
+- on or at the unit itself (CreateAttachedEmitter, CreateEmitterOnEntity, CreateEmitterAtBone, CreateEmitterAtEntity);
+- on what the unit fired or threw: a shell, a piece of debris (after that shell's own `projectiles/<id>/by_unit/`
+  folder, which still wins).
+
+Not reached, because the frame does not say whose they are: emitters on an entity a script made (the fire plume's and
+the smoke columns' carriers) and on things in none of the frame's lists. The engine would have to hand over the unit
+such an entity was made for; ask if a death needs them.
+
+What the Fatboy's death plays, and on what (the viewer says it with MOHO64_DEBUG_FXOWN=1 in the environment):
+
+| emitter | made on | a `by_unit/uel0401/` file is played |
+|---|---|---|
+| `small_test_fire`, `_smoke`, `_sonic`, `_random` (.bp) | the unit, at bones | yes |
+| `medium_test_fire`, `_smoke`, `_sonic`, `_random` (.bp) | the unit | yes |
+| `explosion_fire_sparks_01`, `_02` | the unit | yes |
+| `destruction_explosion_debris_07`, `_08`, `_09` | the unit | yes |
+| `dust_emit` | the unit | yes |
+| `destruction_explosion_debris_trail_01` | the debris pieces (DebrisMisc04, 09, 010) it throws | yes |
+| `destruction_explosion_fire_plume_02` | a script's entity | no |
+| `destruction_explosion_smoke_05`, `_06`, `_08` | a script's entity, at a bone | no |
+| `dust_cloud_02`, `_04`, `destruction_explosion_debris_04`, `_05` | something in no list | no |
+
+**In a game the names differ in two ways** (seen in a session, a Fatboy killed by script):
+- The engine's remaster aliases (sim/effect_aliases.h): the bone blasts' fire arrives as
+  `/effects/emitters/remaster/medium_fire_cloud_fire_01_emit.bp`, not `small_test_fire.bp`. An alias without a by_unit
+  file of its own takes the unit's version of the STOCK file: `effects/emitters/by_unit/<unit>/small_test_fire.bp`
+  serves every alias of it, in a game and on the stand. (An alias-named file in
+  `effects/emitters/remaster/by_unit/<unit>/` would win, if one use is to differ.)
+- The fire plume (`destruction_explosion_fire_plume_02`) is on a projectile the unit launched
+  (destructionfireplume01), so in a game it IS reachable; only the stand makes it on a script's entity. The smoke
+  columns (`destruction_explosion_smoke_05`, `_06`, `_08`, `_11`) are on something in none of the lists in a game too.
+
+The world's switch is `World::unitEmitters` (on); the viewer's `--no-unit-emitters` is as before. A second
+`--remasters <root>` whose `_effects/export/moho64` holds only the by_unit folder is mounted beside yours: a trial
+tree needs nothing else.
+
+**Ask 2, does the stand run a projectile's own OnImpact: yes, and it does more now** ([burst], render 9069c948). It
+always called OnImpact when a shot met the ground or the water. The Lobo's shell showed nothing because the stand
+lacked two things its script needs: the blueprint's `DetonateBelowHeight` (the shell bursts 3 over the ground, an
+impact on 'Air') and `CreateChildProjectile` (it did nothing, so no fragment existed). Both are in: on the stand the
+Lobo's shell now bursts over the target with its split's smoke, and five fragments come down round it and hit.
+
 ## To the engine: MOHO64_FREE_DEAD=3 under MOHO64_DEAD_TRAP=1 (batch 149): NO FAULT (2026-11-11)
 
 Built on main 82ca72c5 (render 1bb3f3b6), both variables set, the game's looks with ray tracing on, 1920x1080, a live

@@ -303,6 +303,15 @@ class ModelCache {
   // [byunit] The same folder's version of an emitter or trail a shell makes (`effect`, the path the script names), as a path
   // to read ("/remastered/projectiles/<id>/by_unit/<unit>/<file>"); "" where there is none.
   std::string ShotEffectByUnit(const std::string& blueprintPath, const std::string& effect, const std::string& unit);
+  // [unitfx] An emitter as one unit has it (`unit`, its blueprint id; `effect`, the path the script names), in the
+  // remastered look: the visuals track's file of the same name in a folder by_unit/<unit> beside where the emitter
+  // lies ("/effects/emitters/x_emit.bp" -> "/remastered/effects/emitters/by_unit/<unit>/x_emit.bp"), as a path to
+  // read; "" where there is none. For effects every unit shares (the default death's fire, smoke and debris) that
+  // one unit is to have larger or otherwise its own, the scripts untouched. Asked for emitters made on or at the unit
+  // itself and on what it fired or threw (a shell, a piece of debris), after a shell's own by_unit folder. A remaster
+  // alias of a stock emitter (sim/effect_aliases.h) without a by_unit file of its own takes the unit's version of the
+  // stock file.
+  std::string EmitterByUnit(const std::string& effect, const std::string& unit);
   // A model from a mesh file and an albedo texture named outright, with a shader's name (what the
   // game's interface script places in the world, placed.h). One level; `uniformScale` is its scale.
   const Model* Mesh(const std::string& meshPath, const std::string& albedoPath, const std::string& shader, float uniformScale = 1);
