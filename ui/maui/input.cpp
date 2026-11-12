@@ -134,12 +134,25 @@ bool SendEvent(lua_State* L, Control* c, const UiEvent& e) { return c->HandleEve
 
 bool KeyEvent(lua_State* L, UiManager& ui, UiEvent e) {
   e.x = e.y = -1;
-  // The key map comes first and never keeps the key from the controls (FA exe 0x838d10).
+  // The key map comes first and never keeps the key from the controls (FA exe 0x838d10: the mapped command is run at
+  // once, UI_Lua's text by SCR_LuaDoString in its handler 0x835370, and the event is passed on). But a control that
+  // the key's own action made and gave the keyboard does not get the key press that made it (2026-11-11): Escape on
+  // the main menu runs uimain.EscapeHandler, the menu's exit question comes up as an input-modal dialog whose Escape
+  // means "No" (uiutil.MakeInputModal), and ours handed it the same key down: the question was answered and gone
+  // within the frame, so Escape on the menu seemed to do nothing. In the original the question stays (Chris's picture
+  // of that day). INFERRED how the original keeps the key from the new control (its handlers' order is not read): the
+  // controls that had the keyboard before the key map ran are the ones the key down goes to.
+  const Control* focusBefore = ui.focus && !ui.focus->dead() ? ui.focus : nullptr;
+  const Control* captureBefore = ui.inputCapture.empty() ? nullptr : ui.inputCapture.back();
   if (e.type == EventType::KeyDown) KeyMapKeyDown(L, e.rawKeyCode, e.shift, e.ctrl, e.alt, e.repeat);
   else if (e.type == EventType::KeyUp) KeyMapKeyUp(L, e.rawKeyCode);
-  if (ui.focus && !ui.focus->dead()) return ui.focus->HandleEvent(L, e);
+  if (ui.focus && !ui.focus->dead()) {
+    if (e.type == EventType::KeyDown && ui.focus != focusBefore) return true;  // (focused by the key's own action)
+    return ui.focus->HandleEvent(L, e);
+  }
   if (ui.inputCapture.empty()) return false;
   Control* c = ui.inputCapture.back();
+  if (e.type == EventType::KeyDown && c != captureBefore) return true;  // (made input-modal by the key's own action)
   if (c && !c->dead()) c->HandleEvent(L, e);
   return true;
 }
