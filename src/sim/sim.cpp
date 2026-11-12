@@ -1994,6 +1994,8 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ForgetUnitCommands(u);
+      // ... then the attacker and its weapons (0x6a6c6b), kept for the queue's tasks (their Stop, combat.cpp EndAttack)
+      ReleaseUnitWeapons(*this, u);
       // ~Unit deletes the builder (0x6a6d29..0x6a6d3f, unit+0x554) when no kill did (Unit::KillCleanup 0x6a8834): its
       // dtor 0x59f9c0 clears the rally queue (BuilderClearFactoryCommandQueue 0x59f5a0: RemoveUnit 0x6e8c20 from the
       // back), so the factory lets go of its rally orders, and one no unit holds is deleted at this Sync

@@ -3464,19 +3464,36 @@ int l_aim_SetPrecedence(lua_State* L) {
 // ---- unit kill clean-up and release ---------------------------------------------------------------
 
 namespace {
-// CAiAttackerImpl::WeaponsOnDestroy 0x5d6d30, then the attacker and its weapons are deleted.
-void DestroyWeapons(Sim& sim, Unit* u) {
-  if (u->combatGone) return;
-  u->combatGone = true;
-  for (UnitWeapon* w : u->weapons)
-    if (w->HasLuaObject()) sim.CallMethod(sim.L(), w, "OnDestroy", 0);
+// The attacker and its weapons are deleted (~CAiAttackerImpl 0x5d6bc0: each weapon's dtor at 0x5d6c60).
+void DeleteWeapons(Sim& sim, Unit* u) {
+  u->weaponsHeld = false;
   for (UnitWeapon* w : u->weapons) {
     w->target = AiTarget{};
     w->UnbindLua();
     DropObjectValues(sim.L(), w);  // (its Set<X> values went with the weapon object)
   }
 }
+
+// CAiAttackerImpl::WeaponsOnDestroy 0x5d6d30, then the attacker and its weapons are deleted: at once after a kill
+// (Unit::KillCleanup 0x6a87a5, then 0x6a87e4); without a kill Unit::OnDestroy 0x6a88f4..0x6a8903 calls it in the
+// destroy queue's drain, and the attacker is deleted only by ~Unit (0x6a6c6b) - after the command queue is cleared
+// (0x6a6c66), so the weapons are still there for the tasks' dtors (EndAttack's Stop): untilPurge.
+void DestroyWeapons(Sim& sim, Unit* u, bool untilPurge = false) {
+  if (u->combatGone) return;
+  u->combatGone = true;
+  for (UnitWeapon* w : u->weapons)
+    if (w->HasLuaObject()) sim.CallMethod(sim.L(), w, "OnDestroy", 0);
+  if (untilPurge) {
+    u->weaponsHeld = true;
+    return;
+  }
+  DeleteWeapons(sim, u);
+}
 }  // namespace
+
+void ReleaseUnitWeapons(Sim& sim, Unit* u) {
+  if (u->weaponsHeld) DeleteWeapons(sim, u);
+}
 
 // Unit::KillCleanup 0x6a8790: the beat after a kill, the unit's weapons and commands go.
 void KillCleanupTick(Sim& sim) {
@@ -3540,7 +3557,7 @@ void EndUnitManipulators(Unit* u) {
 }
 
 void ReleaseUnitCombat(Sim& sim, Unit* u) {
-  DestroyWeapons(sim, u);
+  DestroyWeapons(sim, u, true);
   for (AimController* c : u->aimControllers) {
     c->alive = false;
     c->UnbindLua();
@@ -4639,7 +4656,15 @@ void EndAttack(Sim& sim, Unit* u, BuildTask& t) {
   // weapons' OnLostTarget run in its Kill. Seen: MP2 7298, army 0's Corsair 0xe0 (dra0202) shot down while its
   // GroundMissile held a target: that weapon's OnLostTarget sets SetSpeedMult(1.0) (DRA0202_Script.lua 66), and the
   // original's falling Corsair has top speed 15 from 7299; ours skipped the Stop for the dead unit and kept 0.67 x 15.
-  if (!u->destroyQueued && !u->combatGone && !u->weapons.empty()) SetDesiredTarget(sim, u, AiTarget{});
+  // A unit destroyed without a kill keeps its attacker until ~Unit deletes it (0x6a6c6b), after the queue is cleared
+  // (0x6a6c66): its Stop runs then, after the weapons' OnDestroy (the drain) and after the unit's Lua OnDestroy emptied
+  // its Trash (weaponsHeld). A weapon with a target gets OnLostTarget from its DeadState: DefaultProjectileWeapon's
+  // sends an unpacking weapon to WeaponPackingState, whose thread finds the unit's animators and aim controllers
+  // destroyed after its WeaponRepackTimeout. Seen (weapons range, a_air2, the bearing case's end at 371: three
+  // aircraft whose AutoInitiateAttackCommand weapon had ordered them to attack): the original logs "Game object has
+  // been destroyed" at weapon.lua(309) twice at 402 (WeaponRepackTimeout 3) and once at 472 (10); ours none.
+  if ((u->weaponsHeld || (!u->destroyQueued && !u->combatGone)) && !u->weapons.empty())
+    SetDesiredTarget(sim, u, AiTarget{});
   if (u->dead || u->destroyQueued) return;
   u->navIgnoreFormation = false;
 }

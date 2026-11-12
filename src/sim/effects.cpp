@@ -387,6 +387,13 @@ int l_Factory(lua_State* L) {
   return dropped ? 0 : 1;
 }
 int l_LightParticle(lua_State* L) {
+  // cfunc_CreateLightParticleL 0x66fae0 (and the Intel one 0x66fea0) takes its entity with SCR_FromLua_Entity 0x5a8020
+  // (0x66fb55) before anything else: "Expected a game object", "Game object has been destroyed" (0xe098a0, 0x5a805b)
+  // or the wrong class are script errors. Seen (weapons range, m_aeoland1, the cases' ends): ADFTractorClaw's
+  // TractorThread is a bare ForkThread that outlives the destroyed shooter; once its target is gone too it calls
+  // CreateLightParticle(unit, ...) (adftractorclaw.lua 244): the original logs the error there (380, 602, 823 ...,
+  // 19 in the scene) and the thread ends; ours made the flash of a destroyed unit and went on.
+  (void)CheckObject<Entity>(L, 1);
   if (Collecting(L)) RecordCreate(L, lua_toboolean(L, lua_upvalueindex(1)) ? kLightParticleIntel : kLightParticle);
   return 0;
 }
