@@ -2,3 +2,8 @@ build/
 build-*/
 *.log
 __pycache__/
+
+# Claude Code keeps "yes, and don't ask again" approvals here, with the approved command lines word for word
+# (a token typed into a command would be stored too): never part of the repository.
+.claude/settings.local.json
+.claude/worktrees/
