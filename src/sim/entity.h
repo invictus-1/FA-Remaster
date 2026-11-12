@@ -54,6 +54,12 @@ class Entity : public ScriptObject {
  public:
   Entity() { typeBits |= kTypeEntity; }
   ~Entity() override;
+  // MOHO64_DEAD_TRAP: pages of its own (sim/write_trap.cpp); Unit, Projectile and Prop have their own.
+  static void* operator new(size_t n);
+  static void operator delete(void* p);
+  // Its place in Sim::owned_ (0xffffffff: not recorded): the purge deletes an entity that is no unit there, by
+  // its kind's level (Sim::FreeDeadLevel, Sim::ProcessDestroyQueue). Nothing in the simulation reads it.
+  uint32_t ownedSlot = 0xffffffffu;
   enum class Kind { Entity, Unit, Prop, Projectile, Shield, Blip, Beam };
   Kind kind = Kind::Entity;
   uint32_t id = 0;      // the game's entity id (GetEntityId; reused after a 99-beat quarantine)

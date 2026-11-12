@@ -458,7 +458,8 @@ float4 PS(BankOut i, out uint coverage : SV_Coverage) : SV_Target {
 const char kShowers[] = R"hlsl(
 struct Shower {
   float4 at;    // x, z where it meets the sea; its radius; how strong (0..1)
-  float4 look;  // its top (world y); how far it leans per unit of height; 1 = snow; a number of its own
+  float4 look;  // its top (world y); how far it leans per unit of height; 1 = snow, and 2 more = a broad veil ([veils]);
+                // a number of its own
 };
 cbuffer Showers : register(b2) {
   Shower showers[16];
@@ -532,7 +533,8 @@ float4 PS(ShowerOut i, out uint coverage : SV_Coverage) : SV_Target {
   // the column there is no across: the streaks fade)
   float across = (o2.x * d2.y - o2.y * d2.x) * rsqrt(A) / r;
   float streaky = saturate(sqrt(A) * 2.5 - 0.5);
-  bool snowy = s.look.z > 0.5;
+  bool veil = s.look.z > 1.5;  // [veils]
+  bool snowy = s.look.z - (veil ? 2 : 0) > 0.5;
   float fall = snowy ? 1.5 : 7.0;  // (how fast the streaks come down, world units a second)
   float depth = 0;
   const int kSteps = 5;
@@ -545,14 +547,18 @@ float4 PS(ShowerOut i, out uint coverage : SV_Coverage) : SV_Target {
     float ragged = HzNoise(normalize(rel + 1e-4) * 0.11 + float2(s.look.w * 0.37 + h * 0.21, h * 0.13 + hzWind.w * 0.0015)).r;
     float rho = length(rel) / (r * (0.55 + 0.9 * ragged));
     float radial = saturate(1 - rho * rho);
+    // ([veils] a veil hangs from its cloud: whole under the cloud base, thinning toward the sea, where much of it has
+    // not come down or is lost to the eye; the column was thickest at its foot, which stood it on the horizon)
+    float hang = veil ? lerp(snowy ? 0.35 : 0.55, 1, smoothstep(0.0, 0.5, h)) : 1;
     float streak = snowy ? 0.6 + 0.8 * HzNoise(float2(across * 1.3 + s.look.w, (p.y + hzWind.w * fall) * 0.01)).g
                          : 0.45 + 1.1 * smoothstep(0.3, 0.75, HzNoise(float2(across * 3.7 + s.look.w * 3, (p.y + hzWind.w * fall) * 0.005)).g);
     streak = lerp(snowy ? 1.0 : 0.85, streak, streaky);
     // (rain thickest toward the sea, where all of it has come down; both thinning into the cloud base)
-    depth += radial * radial * (1 - smoothstep(0.55, 1.0, h)) * (snowy ? 1.0 : 1.25 - 0.5 * h) * streak * dt;
+    depth += radial * radial * (1 - smoothstep(veil ? 0.8 : 0.55, 1.0, h)) * (snowy ? 1.0 : veil ? 1.0 : 1.25 - 0.5 * h) * streak * hang * dt;
   }
   // (a shower is weather on the horizon: seen from high above, looking down on it, it gives way to its cloud)
-  float a = (1 - exp(-depth * (snowy ? 0.05 : 0.042))) * s.at.w * HzKeep(d, farthest) * (1 - smoothstep(0.45, 0.85, -d.y));
+  // ([veils] a veil is three times as far through as a column was and no thicker to the eye: thinner air)
+  float a = (1 - exp(-depth * (snowy ? 0.05 : 0.042) * (veil ? 0.3 : 1))) * s.at.w * HzKeep(d, farthest) * (1 - smoothstep(0.45, 0.85, -d.y));
   if (a <= 0.002) discard;
   for (uint s2 = 0; s2 < SAMPLES; ++s2)
     if (along[s2] > t0) coverage |= 1u << s2;
@@ -560,6 +566,9 @@ float4 PS(ShowerOut i, out uint coverage : SV_Coverage) : SV_Target {
   float3 p = o + d * ((t0 + t1) * 0.5);
   // rain: grey, the sky's light through it, the sun little under its cloud; snow: whiter, sent more to all sides
   float3 c = snowy ? HzLitAir(p, d, 0.3, 0.8, 1.1) : HzLitAir(p, d, 0.5, 0.25, 0.5);
+  // ([veils] falling snow far off is the haze's own white: it hides the hills behind it and hardly shows against the
+  // sky; darker than the haze it was a grey smudge, smoke. Rain's veil stays grey, a little lighter than its column)
+  if (veil) c = snowy ? max(c, AirColor()) : lerp(c, max(c, AirColor()), 0.35);
   c = BeyondScenery(ThroughAirTo(c, p), p);
   return float4(c * a, a);
 }
@@ -750,11 +759,12 @@ bool Horizon::Begin(const MapData& map, float reach, const Weather& weather, flo
     Shower& s = showers_[showerCount_++];
     s.at[0] = x;
     s.at[1] = z;
-    s.at[2] = (snowy ? 30.0f : 22.0f) + 30.0f * WeatherDraw(seed, 404, n);
+    const float wide = std::clamp(showerVeil, 0.0f, 1.0f);  // [veils]
+    s.at[2] = (snowy ? 30.0f : 22.0f) + 30.0f * WeatherDraw(seed, 404, n) + wide * ((snowy ? 90.0f : 60.0f) + 70.0f * WeatherDraw(seed, 404, n));
     s.at[3] = strength;
     s.look[0] = std::max(level + 60.0f, 150.0f);  // (to the clouds' underside, 150 over the ground's zero: clouds.h)
     s.look[1] = (snowy ? 0.4f : 0.22f) + 0.18f * WeatherDraw(seed, 406, n);
-    s.look[2] = snowy ? 1.0f : 0.0f;
+    s.look[2] = (snowy ? 1.0f : 0.0f) + (wide > 0 ? 2.0f : 0.0f);
     s.look[3] = WeatherDraw(seed, 407, n) * 37.0f;
   }
   showersNow = showerCount_;
@@ -813,7 +823,7 @@ bool Horizon::Begin(const MapData& map, float reach, const Weather& weather, flo
     fprintf(stderr, "render: horizon: ice %.2f, fog %.2f (density %.3f), %d showers, %d icebergs\n", iceAmount, fogAmount, k.fog[0], showerCount_, bergCount_);
     for (int i = 0; i < showerCount_; ++i)
       fprintf(stderr, "render: horizon:   shower at %.0f, %.0f, radius %.0f, strength %.2f%s\n", showers_[i].at[0], showers_[i].at[1], showers_[i].at[2], showers_[i].at[3],
-              showers_[i].look[2] > 0.5f ? " (snow)" : "");
+              std::fmod(showers_[i].look[2], 2.0f) > 0.5f ? " (snow)" : "");
     for (int i = 0; i < bergCount_; ++i)
       fprintf(stderr, "render: horizon:   iceberg at %.0f, %.0f, radius %.1f, height %.1f\n", bergs_[i].at[0], bergs_[i].at[2], bergs_[i].at[3], bergs_[i].shape[0]);
   }
@@ -904,9 +914,10 @@ bool Horizon::Set(const std::string& list, std::string* why) {
     else if (name == "fogheight") fogHeight = value;
     else if (name == "fog") fogThickness = value;
     else if (name == "showerspeed") showerSpeed = value;
+    else if (name == "veil") showerVeil = value;  // [veils]
     else if (name == "shadow") shadowCarry = value;
     else {
-      if (why) *why = "no such number '" + name + "' (floe, drift, fogheight, fog, showerspeed, shadow)";
+      if (why) *why = "no such number '" + name + "' (floe, drift, fogheight, fog, showerspeed, shadow, veil)";
       return false;
     }
   }

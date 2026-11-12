@@ -2108,6 +2108,7 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
     return nullptr;
   }
   BindObject(L, -1, p);
+  p->ownedSlot = static_cast<uint32_t>(owned_.size());
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   lua_settop(L, top);
@@ -2189,6 +2190,7 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   }
   e->id = ReserveId(e->army, shield ? 0x4 : 0x5);  // shields 0x4AAxxxxx, script entities 0x5AAxxxxx
   BindObject(L, t, e);
+  e->ownedSlot = static_cast<uint32_t>(owned_.size());
   owned_.push_back(std::move(owned));
   RegisterEntity(e);
   if (shield) shields.push_back(static_cast<ShieldEntity*>(e));

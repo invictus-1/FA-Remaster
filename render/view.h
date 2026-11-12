@@ -215,7 +215,8 @@ struct ViewConstants {
   // it, not the mirror's own. y [matteye] (World::groundMattEye; terrain.cpp, with GROUND_MATT): 1 = dry ground is matt
   // also where the eye skims the ground's slope, not only where the light does. z [layernormals] (World::layerNormalsOwn;
   // terrain.cpp's RICH): 1 = a remastered layer's small shapes are laid by the share its colour is laid with, not by the
-  // mask's raw value. w unused.
+  // mask's raw value. w [surmatt] (World::surroundMatt with groundMatt; surround.cpp): 1 = the land
+  // outside the map is matt at grazing light as the map's dry ground is.
   float groundLook[4];
   // [edgesea] The world beyond the map's edge, more: x over how many world units past the edge the WATER dims
   // (World::surroundEdgeBandWater; lighting.h's BEYOND_BAND in the water's pipelines, water.cpp's EDGE_SEA), where the land
@@ -287,7 +288,8 @@ cbuffer View : register(b0) {
   float4 snowShadeMore;   // [snowshade] x the snow's cut of the sky deeper; y the hollows' shade; z the reach they are read over;
                           // w the share of the weak sun's light the sky's light is cut by
   float4 groundLook;      // x [puddlesun] 1 = the sun's highlight on still ground water soft; y [matteye] 1 = dry ground matt
-                          // where the eye skims it too; z [layernormals] 1 = a remastered layer's shapes laid as its colour
+                          // where the eye skims it too; z [layernormals] 1 = a remastered layer's shapes laid as its colour;
+                          // w [surmatt] 1 = the land outside the map matt at grazing light too
   float4 beyondMore;      // [edgesea] x over how many world units past the map's edge the water dims (0: as the land, beyondLand.y)
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are

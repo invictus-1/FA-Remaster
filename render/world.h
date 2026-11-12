@@ -898,6 +898,11 @@ class World {
   // like metal, most of all under the moon. On by default; false (the viewer's --ground-matt-light-only): by the light's
   // height alone, as before.
   bool groundMattEye = true;
+  // [surmatt] The same on the sculpted land outside the map (surround.cpp's detail look; view.h's groundLook.w), with
+  // groundMatt: its ground had no such fade at all, and its pale scree and sand lay under the moon as white patches
+  // beside the map's dark ground (the map scan of 2026-11-11, the north-east corner at night). On by default; false
+  // (the viewer's --surround-shine): as before.
+  bool surroundMatt = true;
   // [puddlesun] The sun's highlight on still water on the ground soft (lighting.h's ModernLight, view.h's groundLook.x): a
   // rain puddle, a rut's water and the mud's pools mirror the sky as sharply as before, but the sun's (or the moon's)
   // highlight on them takes a lobe as wide as wind and rain leave it, not the mirror's: no white-hot fill and no dotted
@@ -907,9 +912,9 @@ class World {
   // [layernormals] A remastered ground layer's small shapes laid by the share its colour is laid with (terrain.cpp's RICH,
   // view.h's groundLook.z), not by its mask's raw value pushed by its height: on a map whose masks hold a half where a
   // layer is absent (SETONS_R) that stamped the absent layers' stones on grass and sand, with black hairlines between
-  // them. Off by default, as before, until the look is judged: it changes the fine relief of the whole map (the viewer's
-  // --layer-normals-own turns it on).
-  bool layerNormalsOwn = false;
+  // them. It changes the fine relief of the whole map (sand and scree paler and cleaner, less dark mottling): on by
+  // default since the look was judged (2026-11-11); false (the viewer's --layer-normals-raw): as before.
+  bool layerNormalsOwn = true;
   // [plants] Plants that react (plants.h, `plantLife`; Chris, 2026-10-18): grass and the plants laid over where units drive,
   // rising again over seconds; bushes, ferns, saplings and the like bending under them and springing back; the grass, the
   // plants and the undergrowth burnt black, then brown and lower where explosions and fires were, growing back over

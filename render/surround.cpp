@@ -18,6 +18,9 @@ namespace {
 // The surround's ground: placed by its points, its slopes and shadows from its heights (a texture, the map's own
 // inside the map's square), coloured from the map's ground, lit as the ground is, dimmed and lost with the distance as
 // all that lies beyond the edge.
+// [surmatt] The detail look's shaders take lighting.h's GROUND_MATT as the map's ground does (its two statics set in the
+// pixel shader, below).
+const char kSurMatt[] = "#define GROUND_MATT 1\nstatic float groundGraze = 0;\nstatic float groundDry = 1;\n";
 const char kShader[] = R"hlsl(
 cbuffer Surround : register(b1) {
   float4 surGrid;     // x, y the first sample's place (world x, z); z samples per world unit; w 1 / the samples across
@@ -557,6 +560,13 @@ float4 PS(VOut i) : SV_Target {
     surfaceSnowShare = 1 - 0.35 * woodCrowns;
   }
 #endif
+  // [surmatt] dry ground matt at grazing light, as the map's (terrain.cpp's [leftover] and [matteye]; lighting.h's
+  // GROUND_MATT): by how low the sun or the moon stands over the land's own slope, and how low the eye. Without it
+  // the pale scree and sand out here gave the moon back as white patches beside the map's dark ground.
+  [branch] if (groundLook.w > 0.5) {
+    groundGraze = 1 - smoothstep(0.12, 0.9, dot(base, sunDirection));
+    if (groundLook.y > 0.5) groundGraze = 1 - (1 - groundGraze) * smoothstep(0.12, 0.9, dot(base, normalize(cameraPosition - i.world)));
+  }
   float3 color = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, 0, N, i.world, lit);
   return float4(BeyondMap(color, i.world), 1);
 }
@@ -949,7 +959,7 @@ void Surround::Prepare(gfx::Device* device, bool on, Terrain& terrain, BeyondLan
   if (!masks_.empty() && !blockOut && masksTexture_) {
     if (!detailTried_) {
       detailTried_ = true;
-      const std::string source = std::string("#define SURROUND_DETAIL 1\n") + kViewShaderBlock + kLightingShaderBlock + kShader;
+      const std::string source = std::string("#define SURROUND_DETAIL 1\n") + kSurMatt + kViewShaderBlock + kLightingShaderBlock + kShader;
       gfx::PipelineDesc pd;
       pd.name = "the map's surround, in the map's layers";
       pd.vertexSource = pd.pixelSource = source;
@@ -1182,7 +1192,7 @@ void Surround::Draw(const View& view) {
   if (detailed && view.constants.weather[1] > 0 && terrain_->BindSnow(&snow, kMudSlot, kMudSlot + 1)) {
     if (!detailSnowTried_) {
       detailSnowTried_ = true;
-      const std::string source = std::string("#define SURROUND_DETAIL 1\n#define SURROUND_SNOW 1\n") + Terrain::SnowStatics() + kViewShaderBlock +
+      const std::string source = std::string("#define SURROUND_DETAIL 1\n#define SURROUND_SNOW 1\n") + kSurMatt + Terrain::SnowStatics() + kViewShaderBlock +
                                  kLightingShaderBlock + kShader;
       gfx::PipelineDesc pd;
       pd.name = "the map's surround, in the map's layers, under snow";

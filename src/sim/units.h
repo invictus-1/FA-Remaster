@@ -506,6 +506,8 @@ inline SplineView SeenSpline(const Unit* u) {
 class Prop : public Entity {
  public:
   Prop() { typeBits |= kTypeProp; }
+  static void* operator new(size_t n);  // (MOHO64_DEAD_TRAP: pages of its own, sim/write_trap.cpp)
+  static void operator delete(void* p);
   // For PropEvents (sim/sim_view.h): its place in the map file's prop list (-1: made after the start), and what
   // the host was last told of it.
   int mapIndex = -1;
@@ -565,7 +567,6 @@ class Projectile : public Entity {
   Projectile() { typeBits |= kTypeProjectile; }
   static void* operator new(size_t n);  // (as Unit's: MOHO64_PAR_WRITETRAP; MOHO64_DEAD_TRAP)
   static void operator delete(void* p);
-  uint32_t ownedSlot = 0xffffffffu;  // its place in Sim::owned_ (the purge deletes it there: Sim::ProcessDestroyQueue)
   Entity* launcher = nullptr;
   Vec3 velocity;  // units per second
   LayerString layer = "None";
