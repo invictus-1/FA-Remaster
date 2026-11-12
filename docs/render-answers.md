@@ -32,6 +32,16 @@ What the Fatboy's death plays, and on what (the viewer says it with MOHO64_DEBUG
 | `destruction_explosion_smoke_05`, `_06`, `_08` | a script's entity, at a bone | no |
 | `dust_cloud_02`, `_04`, `destruction_explosion_debris_04`, `_05` | something in no list | no |
 
+**In a game the names differ in two ways** (seen in a session, a Fatboy killed by script):
+- The engine's remaster aliases (sim/effect_aliases.h): the bone blasts' fire arrives as
+  `/effects/emitters/remaster/medium_fire_cloud_fire_01_emit.bp`, not `small_test_fire.bp`. An alias without a by_unit
+  file of its own takes the unit's version of the STOCK file: `effects/emitters/by_unit/<unit>/small_test_fire.bp`
+  serves every alias of it, in a game and on the stand. (An alias-named file in
+  `effects/emitters/remaster/by_unit/<unit>/` would win, if one use is to differ.)
+- The fire plume (`destruction_explosion_fire_plume_02`) is on a projectile the unit launched
+  (destructionfireplume01), so in a game it IS reachable; only the stand makes it on a script's entity. The smoke
+  columns (`destruction_explosion_smoke_05`, `_06`, `_08`, `_11`) are on something in none of the lists in a game too.
+
 The world's switch is `World::unitEmitters` (on); the viewer's `--no-unit-emitters` is as before. A second
 `--remasters <root>` whose `_effects/export/moho64` holds only the by_unit folder is mounted beside yours: a trial
 tree needs nothing else.

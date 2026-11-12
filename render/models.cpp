@@ -19,6 +19,7 @@
 #include "bp_reader.h"
 #include "effect_files.h"
 #include "core/vfs.h"
+#include "sim/effect_aliases.h"
 #include "hitch_log.h"  // [hitches]
 #include "machinery.h"  // [machinery]
 #include "unit_wear.h"
@@ -1002,7 +1003,13 @@ std::string ModelCache::EmitterByUnit(const std::string& effect, const std::stri
     there = byUnitFiles_.emplace(file, vfs_->Exists(file)).first;
     if (there->second) printf("render: %s played %s's way (by_unit)\n", named.c_str(), Lower(unit).c_str());
   }
-  return there->second ? file : std::string();
+  if (there->second) return file;
+  // (a remaster alias of a stock emitter, sim/effect_aliases.h: in a game the scripts name the alias, and the same stock
+  // file has several; the unit's version of the STOCK file serves them all where the alias has none of its own, so that
+  // one file in effects/emitters/by_unit/<unit>/ is that unit's fire in a game and on the stand alike)
+  for (const auto& [alias, stock] : moho::EffectAliases())
+    if (alias == named) return EmitterByUnit(stock, unit);
+  return std::string();
 }
 
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction, bool effect) {
