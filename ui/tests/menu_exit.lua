@@ -2,8 +2,8 @@
 -- key both call ButtonExit, which asks "Are you sure you'd like to exit?"; Yes calls ExitApplication). No test walked
 -- this path (the review of 2026-11-09, section 5: "the Exit button's path").
 --   1. a click on Exit: the question is up; No: it goes, the menu stays;
---   2. Exit again, and Escape answers No (the dialog's escape button); Escape on the bare menu is noted only
---      (see there: before the first game no key map is loaded, so nothing calls the menu's escape handler);
+--   2. Exit again, and Escape answers No (the dialog's escape button); then Escape on the bare menu: the question
+--      comes and stays, as in the original, and Escape again answers No;
 --   3. Exit and Yes: the program ends by itself. The test's last line is logged BEFORE that click; the runner then
 --      checks that the program ended in order: exit code 0, and well before its frames ran out.
 --   moho64ui --init <init.lua> --prefs <a copy> --stage frontend --size 1920x1080 --no-world
@@ -75,14 +75,19 @@ ForkThread(function()
     escape()
     check("Escape on the question answers No", waitFor(3, function() return asked() == nil end), true)
     check("the menu is still there", shownText(kExit) ~= nil, true)
-    -- Escape on the bare menu, noted and not judged: main.lua sets ButtonExit as uimain's escape handler, but that
-    -- handler is called only by the key map's action "escape" (keyactions.lua 1786), and no key map is loaded before
-    -- the first game or lobby launch (the callers of IN_AddKeyMapTable: gamemain.lua 49, lobby.lua 5805, the key
-    -- bindings dialog; the exe holds no name of a key map file). So on a fresh start Escape does nothing here, in
-    -- ours and by that reading in the original; not seen in the original itself.
+    -- 2b. Escape on the bare menu asks too, and the question STAYS. The key map (loaded by the program at its start:
+    -- CUIKeyHandler::LoadKeyMappings, keymapper.GetKeyMappings) has Escape as the action "escape", which calls
+    -- uimain.EscapeHandler, and the menu gave that ButtonExit. In the original the question comes and stays (Chris's
+    -- picture of 2026-11-11). Until that day ours handed the key press that opened the question to the question
+    -- itself, whose Escape is No: it was gone within the frame and Escape seemed to do nothing (ui/maui/input.cpp,
+    -- KeyEvent).
     escape()
-    LOG("TEST note: menu_exit: Escape on the bare menu of a fresh start: the question " .. (asked() and "comes" or "does not come"))
-    if asked() then escape() end
+    check("Escape on the bare menu asks whether to exit", waitFor(3, function() return asked() ~= nil end), true)
+    WaitSeconds(1)
+    check("and the question stays: the key that opened it does not answer it", asked() ~= nil, true)
+    escape()
+    check("Escape again answers No", waitFor(3, function() return asked() == nil end), true)
+    check("the menu is still there after it", shownText(kExit) ~= nil, true)
 
     -- 3. Exit and Yes: the program ends (nothing can be logged after it; the runner reads how it ended)
     check("Exit again", click(shownText(kExit)), true)

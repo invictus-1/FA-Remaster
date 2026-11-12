@@ -645,9 +645,11 @@ struct LookSettings {
   //  - unitDetail (World::unitDetail 1 / 0, render 5ee436a; Chris, a factory's side 'feels too low res'): a grain finer
   //    than a texel in a remastered unit's paint and relief where its textures are magnified (the nearest zoom only;
   //    none at play zoom); off: as before. Console remaster_unit_detail 0|1.
-  //  - cloudMix (World::clouds.mix 1 / 0, render b6e66de, request 56; Chris 2026-11-06): the 3D clouds at random places
-  //    and of mixed sizes (Cloud Layout: Mixed); 0 = Even, in rows, as before. Only with the 3D clouds (Atmosphere).
-  //    Console remaster_cloud_layout 0|1.
+  //  - cloudLayout (World::clouds.mix 0 / 1 / 2; render b6e66de, request 56, Chris 2026-11-06; the third value render
+  //    135feb4a, request 75, Chris 2026-11-11): the 3D clouds' Cloud Layout. 1 Mixed, at random places and of mixed
+  //    sizes (the default; Chris tuned it on 2026-11-09, untouched); 0 Even, in rows of one size, as before; 2 Varied,
+  //    clouds of more sizes in a fair sky (wide masses, middling clouds, few of the smallest, clearer sky between).
+  //    Only with the 3D clouds (Atmosphere). Console remaster_cloud_layout 0|1|2 (or even|mixed|varied).
   //  - stormCells (World::stormCells, render 309e718, request 57; Chris 2026-11-06 "Yes, keep it"): a storm's clouds in
   //    towering cells (Storm Clouds: Cells); off = Plain, the storm as before. Only with the 3D clouds (Atmosphere).
   //    Console remaster_storm_clouds 0|1.
@@ -675,7 +677,8 @@ struct LookSettings {
   //    off: as an ordinary unit. stealthLook (World::stealthLook, ours): the player's own and allied units hidden from
   //    radar in a faint veil; off: as ever. Consoles remaster_cloak_look 0|1, remaster_stealth_veil 0|1.
   bool oceanGlitter = true, shoreSoak = true, remasteredGate = true, ghostLook = true, guideOverGrass = true;
-  bool cloakLook = true, stealthLook = true, seaSparkle = false, unitDetail = true, cloudMix = true;
+  bool cloakLook = true, stealthLook = true, seaSparkle = false, unitDetail = true;
+  int cloudLayout = 1;
   bool stormCells = true, starryNight = true;
   // warpInColours (World::warpInColours, the renderer's request 67): a commander's warp-in in its faction's colours;
   // off: the earlier warp-in. Console remaster_warpin_colours 0|1.

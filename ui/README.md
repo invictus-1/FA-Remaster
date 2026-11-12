@@ -120,6 +120,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   (`WorldPicture::SetRecoveryNotice`), which presents it as soon as the new device exists. `moho64ui_DeviceState()`
   tells the tests its size and when it was on the screen; `MOHO64UI_NOTICE_CAPTURE=<file.png>` saves that frame
   (`tests/device_lost.lua`; in a live window: the lab's `suite/live/live_run.sh`).
+- Escape on the main menu asks "Are you sure you'd like to exit?" and the question stays (2026-11-11; the original:
+  Chris's picture of that day). The key map's action "escape" calls `uimain.EscapeHandler`, which the menu gave its
+  `ButtonExit`; the question is an input-modal dialog whose Escape means No, and ours handed it the very key press
+  that had opened it, so it was gone within the frame. A control that a key's own action makes and gives the
+  keyboard no longer gets that key down (`KeyEvent`, `maui/input.cpp`; INFERRED how the original keeps it away;
+  `tests/menu_exit.lua`).
+- Cloud Layout has a third choice, Varied (2026-11-11, the renderer's request 75, Chris's decision): clouds of more
+  sizes in a fairer sky, `World::clouds.mix` 2; Mixed stays the default and as it was (`LookSettings::cloudLayout`).
 - The start of a run names the test and trial switches set in its environment, one log line (`MOHO64UI_*`,
   `MOHO64_*`; none set: no line), so that a log says what a run really had.
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,

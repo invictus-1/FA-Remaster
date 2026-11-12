@@ -231,6 +231,17 @@ do
         " " .. tostring(l.unitDetail) .. " " .. tostring(l.cloudMix) .. " " .. tostring(l.stormCells) .. " " .. tostring(l.starryNight),
         "true true true true true true true true true true true true")
     check("Shield Bending Subtle, the units' glow 0.75, sharpening 0.5", l.shieldBend .. " " .. l.unitGlow .. " " .. l.sharpen, "1 0.75 0.5")
+    -- Cloud Layout (the renderer's requests 56 and 75): Mixed unless chosen; Varied and Even reach the program
+    check("Cloud Layout starts Mixed", tostring(l.cloudLayout) .. " " .. tostring(l.cloudMix), "1 true")
+    local states = {}
+    for _, s in video.remaster_cloud_layout.custom.states do table.insert(states, s.text .. "=" .. tostring(s.key)) end
+    check("its three choices, Mixed the default", table.concat(states, " ") .. " | " .. tostring(video.remaster_cloud_layout.default), "Even=0 Mixed=1 Varied=2 | 1")
+    video.remaster_cloud_layout.set('remaster_cloud_layout', 2, false)
+    check("Varied is 2 in the program", tostring(moho64ui_Looks().cloudLayout) .. " " .. tostring(moho64ui_Looks().cloudMix), "2 true")
+    video.remaster_cloud_layout.set('remaster_cloud_layout', 0, false)
+    check("Even is 0", tostring(moho64ui_Looks().cloudLayout) .. " " .. tostring(moho64ui_Looks().cloudMix), "0 false")
+    video.remaster_cloud_layout.set('remaster_cloud_layout', 1, false)
+    check("and Mixed 1 again", moho64ui_Looks().cloudLayout, 1)
     check("the haze and mist as made", l.hazeMist, 1)
 end
 video.remaster_ocean_glitter.set('remaster_ocean_glitter', 0, false)

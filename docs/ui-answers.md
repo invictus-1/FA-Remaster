@@ -3,6 +3,36 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## engine, by message 2026-11-11 17:1x: the suite with MOHO64_FREE_DEAD=3 and MOHO64_DEAD_TRAP=1 (batch 149's levels 2 and 3): NO FAULT
+
+The whole suite on main 219749db (the engine's 82ca72c5 and the renderer's a059f6de in it), run 18:40 to 19:56 on
+2026-11-11 with `MOHO64_FREE_DEAD=3` and `MOHO64_DEAD_TRAP=1` in the environment, three programs at a time, a side
+build of that commit (`%TEMP%\ui-b1110\build3`), output `%TEMP%\ui-land-out\free3` (the log `free3.log` beside it):
+
+- **131 jobs, 189 test runs, 0 not green.** No run ended without its result line (a read of a deleted object would
+  have been an access violation: a run with no result). The stricter second reading (`strict.sh`): 176 logs, no
+  FAIL line, no failed result, no script error beyond the allowed ones; its one red was a floor missing for a job
+  added the same day (bindings_count), no fault of the run.
+- **The switches reached the runs:** 173 of the 176 logs carry the program's line "switches set in the environment:
+  ... MOHO64_DEAD_TRAP=1 ... MOHO64_FREE_DEAD=3" (the three without are options_wrong's refusals, which end before
+  anything is made); the 120 logs of runs with a simulation carry yours, "dead shells and ended tasks, props, motors
+  and every other entity that is no unit are deleted during the game (level 3 ...); MOHO64_DEAD_TRAP: a deleted
+  object's pages are taken away".
+- **What it covers on the interface's side:** every game test of the suite (the game test at 1080p and 4K, orders
+  of every kind incl. reclaim of a wreck and a tree, transports, the three device-loss game cases, replays played
+  and jumped in, a defeat, a draw, a victory, the menu's flight and its hand-over to a game, the campaign's first
+  operation), with the interface reading props, units, shields and blips every frame from its copies.
+- **Not in it:** the network runs (out of a plain full run since the same day: SUITE_NET=1), live windows.
+
+## renderer, request 75 (render/REQUESTS.md): Cloud Layout's third value, Varied (2026-11-11)
+
+Built. Options > Remastered > Sky & Light > Cloud Layout: Even (0), Mixed (1, the default, untouched), **Varied (2)**:
+`World::clouds.mix = 2`. The program's switch is `LookSettings::cloudLayout` (0 / 1 / 2; was the on/off `cloudMix`),
+set in `ApplyLooks` (`ui/app/game_session.cpp`); the console takes `remaster_cloud_layout 0|1|2` or
+`even|mixed|varied` (and `on` as before: Mixed). No preset level sets Varied: with it chosen the Remastered Preset
+reads Custom. `moho64ui_Looks().cloudLayout` for the tests (`cloudMix` stays: any but Even);
+`ui/tests/lobby.lua` checks the three choices, the default and that each reaches the program.
+
 ## renderer, request 71 B (render/REQUESTS.md): a lost graphics device is recovered by the program (2026-11-11)
 
 Built: `GameSession::ServeDevice` (`ui/app/game_session.h` has the whole account, the code is after `PresentToWindow`

@@ -333,7 +333,7 @@ local looks = {
         -- the renderer's World::clouds.mix (render b6e66de, its request 56; Chris 2026-11-06, new looks are options)
         title = "Cloud Layout",
         key = 'remaster_cloud_layout',
-        tip = "How the 3D clouds lie in the sky. Mixed: at random places and of mixed sizes, as real weather. Even: in even rows of one size, as before. Only with Atmosphere on.",
+        tip = "How the 3D clouds lie in the sky. Mixed: at random places and of mixed sizes, as real weather. Varied: clouds of more sizes in a fairer sky, wide masses and few small ones with clear sky between. Even: in even rows of one size, as before. Only with Atmosphere on.",
         type = 'toggle',
         default = 1,
         set = Look("remaster_cloud_layout"),
@@ -341,6 +341,8 @@ local looks = {
             states = {
                 { text = "Even", key = 0 },
                 { text = "Mixed", key = 1 },
+                -- (the renderer's request 75, Chris 2026-11-11: a third choice, Mixed untouched and still the default)
+                { text = "Varied", key = 2 },
             },
         },
     },
