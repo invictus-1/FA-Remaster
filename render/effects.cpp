@@ -765,8 +765,22 @@ void Effects::Update(double tick, const Frame& frame) {
     // would only now throw out all it should have thrown over that time
     // ([heldworld] but not one a hold kept, ReleaseHeld: it has let go of those with nothing left to show, and the
     // particles make up no more than an emitter's last 24 ticks)
-    const bool stale = event.kind == FrameEffectEvent::Create && tick - static_cast<double>(event.tick) > 100 && !event.replayed &&
-                       (event.name == "CreateEmitterAtBone" || event.name == "CreateEmitterAtEntity");
+    bool stale = event.kind == FrameEffectEvent::Create && tick - static_cast<double>(event.tick) > 100 && !event.replayed &&
+                 (event.name == "CreateEmitterAtBone" || event.name == "CreateEmitterAtEntity");
+    // [stalelast] (the review of 2026-11-09, effects 10) ... but only what IS over: an emitter left at a place whose
+    // blueprint never ends (a lasting fire or smoke, a structure's lamps and ambient effects made at one of its bones)
+    // is still burning however long ago it began, and one with a long life may have time left. They were dropped with
+    // the rest whenever the picture's clock jumped more than ten seconds past them (a replay's jump forward, the first
+    // frame after a long load or hitch) and stayed missing until their Destroy. Such a one is started as no news (as
+    // a hold's are, ReleaseHeld): without its flash, and the particles make up no more than its last 24 ticks.
+    if (stale && keepLastingStale) {
+      const float shows = particles_->ShowsFor(event.blueprint);  // (ticks; under 0: until it is stopped)
+      if (shows < 0 || tick - static_cast<double>(event.tick) <= static_cast<double>(shows)) {
+        stale = false;
+        event.replayed = true;
+        ++staleKept;
+      }
+    }
     if (!stale) {
       Apply(event, frame);
       Remember(std::move(event));  // [devicelost] (what it made that lasts, for a world made anew: Keep)

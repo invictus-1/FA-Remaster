@@ -851,6 +851,8 @@
 //           the whole shield lit for the second after one, fading, a ring running out from where it struck). By default
 //           the game's own units keep their rest light and mods' units show only hits; --shields-hit-only: no unit
 //           shows a personal shield at rest
+// --effects-drop-stale  [stalelast] emitters left at a place more than ten seconds before the picture's clock are all
+//           dropped, as before (World::effectsKeepLasting off; by default the endless ones and those with time left start)
 // --no-warpin-colours  [warpin] the commanders' warp-in as before (World::warpInColours off): drawn as a personal shield
 //           at rest, the script's light flashes in the game's blue for every faction. Without it, in the modern look
 //           with the remastered effects, a commander warping in is energy of its faction's colour by the visuals
@@ -1310,6 +1312,7 @@ struct Options {
   bool shielded = false;                // --shielded
   int shieldsAtRest = 1;                // --shields-at-rest (2) / --shields-hit-only (0) [shieldhit]
   bool warpInColours = true;            // --no-warpin-colours [warpin]
+  bool effectsKeepLasting = true;       // --effects-drop-stale [stalelast]
   float warpIn = -1;                    // --warp-in [warpin]
   bool hideTurned = false;              // --hide-bone
   float snowLying = -1;                 // --snow-lying
@@ -1607,6 +1610,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--shields-at-rest") o->shieldsAtRest = 2;  // [shieldhit]
     else if (a == "--shields-hit-only") o->shieldsAtRest = 0;
     else if (a == "--no-warpin-colours") o->warpInColours = false;  // [warpin]
+    else if (a == "--effects-drop-stale") o->effectsKeepLasting = false;  // [stalelast]
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--hot-scorch") o->hotScorchOriginal = std::string(v) == "bright";  // [softscorch] soft | bright
@@ -2538,6 +2542,7 @@ int main(int argc, char** argv) {
         pw->photoLook.on = true;  // (photofix) the interface's Photographic Look "Natural" (the eye, today's colours)
         pw->photoLook.Named("plain");
       }
+      if (World* pw = picture.world()) pw->effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast] (the picture's own world)
       printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
       live.onBeat = [&](const moho::Sim& sim) {
@@ -2775,6 +2780,7 @@ int main(int argc, char** argv) {
   world.energyShields = opt.energyShields;
   world.personalShieldsAtRest = opt.shieldsAtRest;  // [shieldhit]
   world.warpInColours = opt.warpInColours;          // [warpin]
+  world.effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast]
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
   if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
     world.hullGlow = world.hullReach = world.hullAir = 1;
@@ -5477,6 +5483,7 @@ int main(int argc, char** argv) {
       if (haveLive && effects.unlistedHidden) printf(" (%d effects on unlisted things hidden in the fog)", effects.unlistedHidden);
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (world.effects.staleKept > 0) printf("; %d lasting emitters started after a jump", world.effects.staleKept);  // [stalelast]
       if (world.horizonWeather)  // [horizon]
         printf("; horizon: ice %.2f, fog %.2f, %d showers, %d icebergs", world.horizon.iceNow, world.horizon.fogNow, world.horizon.showersNow,
                world.horizon.bergsNow);
