@@ -338,6 +338,9 @@ void WeaponsStageDebug(Sim& sim);                                     // (MOHO64
 void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units);  // one army's attacker stage
 // A unit leaves the world.
 void ReleaseUnitCombat(Sim& sim, Unit* u);
+// ~Unit deletes the attacker and its weapons (0x6a6c6b), after the command queue: the weapons a unit destroyed without
+// a kill kept from the drain (Unit::weaponsHeld) lose their targets and their Lua objects.
+void ReleaseUnitWeapons(Sim& sim, Unit* u);
 // The unit is deleted (EntityDb::Purge, after the destroy queue): ~Unit deletes its CAniActor (0x6a714c ->
 // ~CAniActor 0x63a930), and with it every manipulator on the actor; each one's Lua table loses its object then.
 void EndUnitManipulators(Unit* u);
