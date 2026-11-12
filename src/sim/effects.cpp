@@ -290,10 +290,57 @@ void FreeThing(Sim& sim, ThingLists& tl, EngineThing* t) {
   tl.freed.push_back(t);
 }
 
+// Moho::ENTSCR_ResolveBoneIndex 0x692580 (read), as the effect functions call it with "nil allowed" (al = 1 at each
+// call: CreateAttachedEmitter 0x67035c, CreateEmitterAtBone 0x670e0c, CreateBeamEmitterOnEntity 0x65688d,
+// CreateBeamEntityToEntity 0x656a15 / 0x656a7d, AttachBeamEntityToEntity 0x656d65 / 0x656dcd, CreateBeamToEntityBone
+// 0x6709ef / 0x670a57, CreateAttachedBeam 0x670738, CreateTrail 0x67053c, CreateSplatOnBone 0x66f35f,
+// CreateLightParticle 0x66fb83, CreateLightParticleIntel 0x66ff44, AttachBeamToEntity 0x6570d7), after the entity and
+// before the army and the blueprint: a number (lua type 3) truncated (0xa89cc0) must lie in [-2, bone count)
+// (0x6925dd..0x6925f6, else the error at 0x69260b, 0xe28ba0); a string is looked up by name (Entity::ResolveBoneIndex
+// 0x678cc0) and one the entity does not have is the error 'Invalid bone name "%s".' (0x692667, 0xe28bec); nil is -1;
+// anything else 'Invalid bone identifier; must be a string, integer, or nil' (0x6926aa, 0xe27dbc). (BoneOf below keeps
+// the host's copy free of errors; this is the script's side.) Only a unit is held to it here: its skeleton is the
+// original's; another entity's (a shell's, a prop's) is not known to be. Seen: m_cybnav1 (weapons range) 5076,
+// Antares' gmrs402: FAF's Unit.OnStopBeingBuilt -> CreateIdleEffects -> CreateAttachedEmitter(self, 'URS0202', ...)
+// (unit.lua 2399 / 3773): the original's log has 'Invalid bone name "URS0202".' there, so IntelComponent.
+// OnStopBeingBuilt (unit.lua 2402) never runs and the ship's cloak and stealth fields stay off; ours went on, turned
+// its cloak field on, and the target army (no fog: everything in sight but what a cloak field hides) lost its blip
+// of the ship: the new launcher beside it found no target at 5097 (probe P2: the original's GetBlipsInRange list
+// [0x10]) and the streams parted there.
+void CheckScriptBone(lua_State* L, const Entity* e, int arg) {
+  if (!e || e->kind != Entity::Kind::Unit || !e->skeleton) return;
+  const int t = lua_type(L, arg);
+  if (t == LUA_TNUMBER) {
+    const int b = static_cast<int>(lua_tonumber(L, arg));
+    const int n = e->skeleton->Count();
+    if (b < -2 || b >= n)
+      luaL_error(L, "Invalid bone index of %d; must be bettern %d (inclusive) and %d (exclusive)", b, -2, n);
+  } else if (lua_isstring(L, arg)) {
+    const char* name = lua_tostring(L, arg);
+    if (e->skeleton->Find(name) < 0) luaL_error(L, "Invalid bone name \"%s\".", name);
+  } else if (t != LUA_TNIL && t != LUA_TNONE) {
+    luaL_error(L, "Invalid bone identifier; must be a string, integer, or nil");
+  }
+}
+// The entity / bone pairs of a factory's arguments, checked in order ('e' 'b', then 'E' 'B')
+void CheckScriptBones(lua_State* L, const char* args) {
+  if (!args) return;
+  const Entity* e1 = nullptr;
+  const Entity* e2 = nullptr;
+  int arg = 1;
+  for (const char* c = args; *c; ++c, ++arg) {
+    if (*c == 'e') e1 = ToObject<Entity>(L, arg);
+    else if (*c == 'E') e2 = ToObject<Entity>(L, arg);
+    else if (*c == 'b') CheckScriptBone(L, e1, arg);
+    else if (*c == 'B') CheckScriptBone(L, e2, arg);
+  }
+}
+
 int l_Factory(lua_State* L) {
   const Factory& f = kFactories[static_cast<size_t>(lua_tonumber(L, lua_upvalueindex(1)))];
   Sim* sim = Sim::From(L);
   ThingLists& tl = Lists(*sim);
+  CheckScriptBones(L, f.args);
   // The blueprint first: without it the original makes nothing. An emitter's or trail's manager Create* logs a warning
   // and returns null, and the function returns no value, nil (CreateEmitterAtEntity 0x65e731 / cfunc 0x66f860; the
   // other emitters 0x65e2ac, 0x65e416, 0x65e5a6, 0x65e8c6; CreateTrail 0x672176). A beam function raises "Unknown
@@ -394,6 +441,7 @@ int l_LightParticle(lua_State* L) {
   // CreateLightParticle(unit, ...) (adftractorclaw.lua 244): the original logs the error there (380, 602, 823 ...,
   // 19 in the scene) and the thread ends; ours made the flash of a destroyed unit and went on.
   (void)CheckObject<Entity>(L, 1);
+  CheckScriptBones(L, "eb");  // (ENTSCR_ResolveBoneIndex 0x66fb83 / 0x66ff44)
   if (Collecting(L)) RecordCreate(L, lua_toboolean(L, lua_upvalueindex(1)) ? kLightParticleIntel : kLightParticle);
   return 0;
 }
@@ -401,6 +449,7 @@ int l_LightParticle(lua_State* L) {
 int l_AttachBeamToEntity(lua_State* L) {
   auto* t = dynamic_cast<EngineThing*>(GetObject(L, 1));
   Entity* e = ToObject<Entity>(L, 2);
+  CheckScriptBone(L, e, 3);  // (ENTSCR_ResolveBoneIndex 0x6570d7)
   if (t && t->effectId && Collecting(L)) {
     EffectEvent& ev = RecordCall(L, t->effectId, "AttachBeamToEntity");
     ev.bone = BoneOf(L, e, 3);
