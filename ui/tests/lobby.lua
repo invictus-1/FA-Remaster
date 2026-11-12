@@ -105,7 +105,13 @@ do
         end
     end
     check("eight sections under the game's header rows", table.concat(headers, "|"),
-        "Display & Performance|Preset|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
+        "Preset|Display & Performance|Sky & Light|Ground & Weather|Water|Effects & Battle|Units & Readability|Picture & Camera")
+    check("the Preset is the first option of the tab, under its header", items[2].type .. " " .. items[2].title .. " " .. tostring(items[3].key), "header Preset remaster_preset")
+    do
+        local rates = {}
+        for _, s in remaster.remaster_frame_rate.custom.states do table.insert(rates, tostring(s.key)) end
+        check("Frame Rate's choices", table.concat(rates, " "), "vsync uncapped 60 90 120 144 165 240")
+    end
     check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
     check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
     check("54 rows: Go to Section, 8 headers, 45 options", table.getn(items), 54)
@@ -117,11 +123,12 @@ do
     end
     if not remaster.remaster_preset then table.insert(missing, 'remaster_preset') end
     check("every key a preset level sets is on the preset's tab", table.concat(missing, " "), "")
-    -- the six that come before the preset are exactly the ones no level touches
-    local before, touched = {}, {}
+    -- the six of Display & Performance are exactly the ones no level touches
+    local before, touched, inSection = {}, {}, false
     for i = 1, table.getn(items) do
-        if items[i].key == 'remaster_preset' then break end
-        if items[i].type ~= 'header' and items[i].key ~= 'remaster_goto_section' then
+        if items[i].type == 'header' then
+            inSection = items[i].title == "Display & Performance"
+        elseif inSection then
             table.insert(before, items[i].key)
             if O.RemasterPresetValues(4)[items[i].key] ~= nil or O.RemasterPresetValues(0)[items[i].key] ~= nil then
                 table.insert(touched, items[i].key)

@@ -1007,8 +1007,14 @@ int GameSpeedOf(lua_State* L) {
 // CClientBase::Process; a replay's CReplayClient::Process drops it), ApplyIncomingGameSpeedRequest 0x53e810 sets the
 // speed asked for (+0x450) and tells the interface (slot 3: CWldUiInterface, set for every session by DoPreload at
 // 0x88bf86): uimain.NoteGameSpeedChanged(client + 1, rate), handed to the main thread for later (DeliverSpeedNotes).
-// The speed run is then the smaller of it and the clients' maxSP (GamePace::LocalRate). (Those games' +0x454 is always
-// on in the original, whatever the game option GameSpeed; ours keeps the option's gate as before, GamePace::adjustable.)
+// The speed run is then the smaller of it and the clients' maxSP (GamePace::LocalRate). Which games are adjustable
+// (GamePace::adjustable, from SessionDescription::adjustableSpeed), read 2026-11-11: a game launched by a LOBBY, a
+// skirmish with AIs included, gets what the lobby's launch reads from the game option GameSpeed (CLobby's launch,
+// 0x7c49ee: "fast" gives the rate 4, "adjustable" the adjustable byte, anything else neither; both go to
+// CLIENT_CreateClientManager 0x53faf0 at 0x7c4a8e), so with the option at Normal or Fast the speed keys do nothing
+// there, in the original as in ours. A game not launched by a lobby (the campaign, a map from the command line:
+// 0x88bcb9) and a replay (0x876c14) are always adjustable. (The review of 2026-11-09 took the lobby's gate for a
+// deviation of ours, 4.2 item 7: it is the original's.)
 void SetGameSpeedTo(lua_State* L, int rate) {
   UserState* user = UserState::From(L);
   if (NetGameLink* net = user->config().net) return net->RequestSpeed(rate);

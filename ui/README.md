@@ -1483,11 +1483,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   gets exactly one frame before the game, so its scripts run in every test
   (`ui/tests/loading.lua`: WorldIsLoading from the launch call, SetupUI and StartGameUI in the front
   end's state the frame after, the pointer hidden by FAF's StartLoadingDialog).
-- 494 of the 531 engine functions are built (2026-10-16; about 100 of them, the world view's, the
-  cameras' and the units', as a first version); the other 37 are logged stubs, most of them with no
-  caller in the game's scripts (multiplayer's, the path debugger, saving games, a few math and
-  world-mesh functions). (`--list-bindings` counts them; run it with `--session` so that the in-game
-  ones and those the script core adds with a game's blueprints are registered.)
+- 507 of the 531 engine functions are built (counted 2026-11-11 in a running game by the lab's
+  `suite/bindings_count.sh`, a job of the suite: a function that was built and is a stub again is red; it was 494 on
+  2026-10-16). The other 24 are logged stubs: `AITarget`, `AddBlinkyBox`, `CMauiMesh:SetMesh` / `SetOrientation`,
+  the path debugger's two, `CPrefetchSet:Reset` / `Update`, `PrefetchSession`, four `CUIWorldMesh:GetInterpolated*`,
+  `CUIWorldView:GetScreenPos`, `CreateUnitAtMouse`, `EngineStartFrontEndUI`, `EngineStartSplashScreens`,
+  `GetResourceSharing`, `InternalSaveGame`, `LaunchGPGNet`, `PointVector`, `RenderOverlayIntel`,
+  `RenderOverlayMilitary`, `UserUnit:GetFootPrintSize`. Of these FAF's own interface scripts call only the prefetch
+  functions (a hint to load ahead: nothing is lost), the splash screen's and `InternalSaveGame` (saved games: not
+  built; Chris, 2026-11-09: by the replay route, after the factions); the lab's `suite/stub_report.py` lists the
+  callers. (`--list-bindings` counts them; run it with `--session` so that the in-game ones and those the script
+  core adds with a game's blueprints are registered.)
 
 ## Asking the engine track
 

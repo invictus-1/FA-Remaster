@@ -4,6 +4,8 @@ For the ui chat to decide. Chris, 2026-11-08: "eventually we will need to organi
 features we have since its getting kinda big ... keep the same theme/look ... drop down menus that open up different
 remaster options. Or putting everything in remaster into its own tab or something I'll let you decide."
 
+**Changed 2026-11-11 (the review's 4.2 item 11, the ui chat's call):** the section Preset (Remastered Preset, Look) is the FIRST section, before Display & Performance: the one control that sets the rest stood ten rows down. Frame Rate offers 60, 90, 120, 144, 165, 240 beside Vertical Sync and Uncapped. Left as they are, on purpose: Ghost Look and Cloak Look stay On / Off (On shows the ghost / the cloak, which is also the original's way: the tip says so); Battle Effects stays one switch (the renderer's thirteen effects have one cost and one look; a split waits for a wish); Go to Section is the tab's first row and scrolls away with it (the grid cannot hold a row in place).
+
 **As built (2026-11-09, recommendation (a)), measured where this paper estimated:** the textures are 698 (panel)
 and 178 (tab button) wide, not 700 and 180: the game's four tabs end 6 short of the panel's edge, five get **145**
 each (not 146); "Remastered" (105 px in the title font at 16) fits with room to spare, no fallback. FAF's Video tab has
