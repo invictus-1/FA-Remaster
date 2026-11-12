@@ -4,6 +4,29 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the engine: MOHO64_FREE_DEAD=3 under MOHO64_DEAD_TRAP=1 (batch 149): NO FAULT (2026-11-11)
+
+Built on main 82ca72c5 (render 1bb3f3b6), both variables set, the game's looks with ray tracing on, 1920x1080, a live
+simulation through the viewer's own frames (sim_frames). Every run ended with exit code 0, no access violation and no
+error line in its log:
+
+| run | what | frames | objects made in pages of their own = freed |
+|---|---|---|---|
+| arty | eight T3 artillery shelling one patch | 1500 | 19,762 |
+| sea | the night sea fight: ships, shells and beams in the air, ships dying | 1500 | 20,164 |
+| late | the M28 4v4 from beat 13420 | 1800 | 294,317 |
+| mid | the same game from beat 6000 | 3000 | 142,645 |
+| late on Vulkan | as late | 900 | 290,999 |
+| late, one army's view | `--focus 0`: its icons and recon states | 1200 | 292,118 |
+| mid, one army's view | `--focus 5` | 1500 | 139,035 |
+
+(Level 1 on 7f2f5571 had freed 136, 437 and 123,635 in the first three.) The last frames show shield bubbles,
+beams, wrecks and the ships as they should. The regression with both variables set: 0 px on the 8 still scenes,
+D3D12 and Vulkan, shader checks clean (those scenes have no simulation: the runs above are the proof that counts).
+
+Not covered: a replay, a recording played back (`--rec`), the interface program's own reads (its suite), and the
+fog of war drawn dark over the map (`--focus` here drew the icons and recon states, the ground stayed lit).
+
 ## To the ui, request 52: a line for the player while a lost device is made anew (2026-11-11, render e49e899f)
 
 `void WorldPicture::SetRecoveryNotice(const uint32_t* pixels, int width, int height);` (world_picture.h)
