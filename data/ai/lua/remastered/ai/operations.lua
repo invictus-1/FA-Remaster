@@ -36,6 +36,13 @@ local kLostMemory = 3000   -- ticks a zone where we lost our economy stays a pos
 local kBaseZone = 150      -- world units of travel from the start: a zone this near is the base (phase 7b)
 local kRecallMass = 300    -- enemy mass that can come to a base zone that recalls the army from an operation
 local kRecallTicks = 600   -- after a recall, the base's defence takes every free unit this long
+-- (2026-11-07, step 4: hold back, then come back out) the recall counts the enemy mass IN the base zone, not what can
+-- come there; the defence sends 1.5 x the enemy in the zone + this share of the rest that can come
+local kDefendCome = 0.25
+-- (2026-11-07, step 4 second form) a new attack needs the free army's mass >= kEdge x the enemy land army known within
+-- kNearTravel world units of land travel from our start (not only the fog-faded overall ratio)
+local kEdge = 2.5
+local kNearTravel = 600
 local kScoutFresh = 1200  -- a target looked at by our scouts this recently needs no new look before an attack (7b)
 local kScoutWait = 300    -- after sending scouts to a target, the attack waits this long for their look
 local kTradeWindow = 600   -- ticks over which an attack's real trade is judged (phase 9)
@@ -589,7 +596,8 @@ end
 
 -- (Lua 5.0 allows a function 32 upvalues: Think reaches the helpers of 2026-11-03 through this one table)
 local X = { Order = Order, AimPoint = AimPoint, ArmyZone = ArmyZone, Pos3 = Pos3, gatherPerUnit = kGatherPerUnit,
-    gatherExtend = kGatherExtend, allyReach = kAllyReach, UnknownMass = UnknownMass, ExpectedArmy = ExpectedArmy,
+    gatherExtend = kGatherExtend, allyReach = kAllyReach, UnknownMass = UnknownMass, defendCome = kDefendCome,
+    edge = kEdge, nearTravel = kNearTravel, ExpectedArmy = ExpectedArmy,
     HuntZone = HuntZone, huntShare = kHuntShare, ShieldUpkeep = ShieldUpkeep }
 
 function Think(brain)
@@ -649,7 +657,7 @@ function Think(brain)
     local defendedNow = false
     R.raided = R.raided or {}
     -- the units nearest a zone's centre, until 1.5x the enemy mass that can come there (all of them when `all`)
-    local function Defenders(z, theirsMass, all)
+    local function Defenders(z, theirsMass, all, hereMass)
         local zone = Remastered.AIZone(z)
         -- (2026-11-03, perf: sorted natively, Remastered.AISortIndex - distance, then list order as before)
         local near, keys = {}, {}
@@ -663,7 +671,10 @@ function Think(brain)
         end
         local sent, mass = {}, 0
         for _, k in ipairs(Remastered.AISortIndex(keys)) do
-            if not all and mass >= 1.5 * theirsMass + 1 then break end
+            -- (2026-11-07: 1.5 x the enemy in the zone + kDefendCome x the rest that can come; before, 1.5 x all that
+            -- can come within 400: against M28 every unit, every think, chasing one raider at home)
+            local need = hereMass and (1.5 * hereMass + X.defendCome * math.max(0, theirsMass - hereMass)) or 1.5 * theirsMass
+            if not all and mass >= need + 1 then break end
             local u = near[k]
             table.insert(sent, u)
             busy[u:GetEntityId()] = true
@@ -676,17 +687,21 @@ function Think(brain)
         if z ~= R.startZone then R.raided[z] = R.tick end
         local margin, _, _, _, _, theirsMass = Remastered.AIZoneEstimate(R.army, z, kHorizon, false, kDefenceSoak)
         -- (2026-11-04, fog: the contacts of unknown type there count at unknownMass each, UnknownMass above)
-        local unknown = Remastered.AIZoneForces(R.army, z).enemy.land.unknown
+        local zf = Remastered.AIZoneForces(R.army, z)
+        local unknown = zf.enemy.land.unknown
         theirsMass = theirsMass + unknown * unknownMass
+        -- (2026-11-07) the enemy mass known IN the zone (its land units and unknown contacts)
+        local hereMass = math.min(theirsMass, (zf.enemy.land.mass or 0) + unknown * unknownMass)
         -- the base first (phase 7b): an enemy force of kRecallMass or more at a base zone recalls the army from its
         -- operation, and for kRecallTicks the base's defence takes every free unit. The no-cheat duel against M28
         -- was lost with the army away on an attack while M28's army reached the base and killed the commander.
         local base = Remastered.AIZoneDistance(R.startZone, z, 'land') <= kBaseZone
-        if base and theirsMass >= kRecallMass then
+        if base and hereMass >= kRecallMass then
             if R.op then
                 Log(R, 'recall', z, margin, ratio, string.format('the base is attacked (%.0f mass can come): the %s at zone %d is called off',
                     theirsMass, R.op.kind, R.op.zone))
                 R.op = nil
+                R.recalledAt = R.tick
             end
             R.recallUntil = R.tick + kRecallTicks
         end
@@ -697,7 +712,7 @@ function Think(brain)
                 R.defending = z
             end
             -- (2026-11-03: at the enemies the army knows there, not the zone's centre; orders replace, ORDERS above)
-            local sent = Defenders(z, theirsMass, all)
+            local sent = Defenders(z, theirsMass, all, hereMass)
             defendedNow = true
             if sent[1] then
                 local x, zz = X.AimPoint(R, z, sent)
@@ -889,8 +904,24 @@ function Think(brain)
         end
     end
 
-    -- a new ATTACK / PUSH when ahead, by the estimate at the target
+    -- (2026-11-07, step 4) the real edge: the free army against the enemy army known near
+    local edgeOk = true
     if not R.op and ratio >= kAttackRatio and units[1] then
+        local free, near = 0, 0
+        for _, u in ipairs(units) do free = free + MassOf(R, u) end
+        for _, e in ipairs(enemyZones) do
+            local d = Remastered.AIZoneDistance(R.startZone, e.zone, 'land')
+            if d >= 0 and d <= X.nearTravel then near = near + e.army end
+        end
+        edgeOk = free >= X.edge * near
+        if not edgeOk and R.tick - (R.edgeLogged or -10000) >= 600 then
+            Log(R, 'edge', 0, 0, ratio, string.format('ahead overall, but the free army %.0f mass < %.1f x the enemy army known near %.0f: it waits',
+                free, X.edge, near))
+            R.edgeLogged = R.tick
+        end
+    end
+    -- a new ATTACK / PUSH when ahead, by the estimate at the target
+    if not R.op and ratio >= kAttackRatio and units[1] and edgeOk then
         local push = ratio >= kPushRatio
         local target, margin, bestZone = PickTarget(R, enemyZones, push and K.launchPush or K.launch)
         -- scouting before a push (phase 7b): under fog the estimate at the target is only what the army last saw there.
@@ -929,6 +960,10 @@ function Think(brain)
                 local walk = math.max(0, Remastered.AIZoneDistance(from, stage, 'land'))
                 R.op = { kind = 'gather', push = push, zone = target.zone, stage = stage, since = R.tick,
                     limit = kGatherTicks + math.floor(10 * walk / kGatherSpeed), seq = R.opSeq, n0 = table.getn(units) }
+                if R.recalledAt then
+                    Log(R, 'resume', target.zone, margin, ratio, string.format('out again %d s after the recall', math.floor((R.tick - R.recalledAt) / 10)))
+                    R.recalledAt = nil
+                end
                 Log(R, push and 'push' or 'attack', target.zone, margin, ratio, string.format('%s; target: %s; gathering at zone %d (from zone %d)',
                     push and 'far ahead overall: a decisive push' or 'ahead overall and the estimate favours us', what, stage, from))
                 X.Order(R, units, true, (ZonePos(stage)), 'g' .. R.opSeq, 0)
