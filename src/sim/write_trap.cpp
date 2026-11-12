@@ -42,6 +42,16 @@ void Projectile::operator delete(void* p) {
   else if (deadtrap::On()) deadtrap::Free(p);
   else ::operator delete(p);
 }
+void* Entity::operator new(size_t n) { return deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n); }
+void Entity::operator delete(void* p) {
+  if (deadtrap::On()) deadtrap::Free(p);
+  else ::operator delete(p);
+}
+void* Prop::operator new(size_t n) { return deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n); }
+void Prop::operator delete(void* p) {
+  if (deadtrap::On()) deadtrap::Free(p);
+  else ::operator delete(p);
+}
 void* BuildTask::operator new(size_t n) { return deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n); }
 void BuildTask::operator delete(void* p) {
   if (deadtrap::On()) deadtrap::Free(p);

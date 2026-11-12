@@ -966,6 +966,17 @@ void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u) {
   lua_settop(L, top);
 }
 
+void IntelBlipFreed(Sim& sim, Entity* e) {
+  if (e->kind != Entity::Kind::Blip) return;
+  ReconBlip* b = static_cast<ReconBlip*>(e);
+  std::vector<ReconBlip*>& blips = IS(sim).blips;
+  blips.erase(std::remove(blips.begin(), blips.end(), b), blips.end());
+  if (Unit* u = b->source) {  // (a purged unit stays allocated: units are not deleted during a game)
+    if (u->blip == b) u->blip = nullptr;
+    u->fakeBlips.erase(std::remove(u->fakeBlips.begin(), u->fakeBlips.end(), b), u->fakeBlips.end());
+  }
+}
+
 void ReleaseEntityIntel(Sim& sim, Entity* e) {
   IntelState& st = IS(sim);
   if (e->intel) {

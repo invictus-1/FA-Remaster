@@ -1600,8 +1600,11 @@ bool Sim::Start(const SessionDescription& session) {
   if (FreeDeadLevel() == 0)
     Logf(LogLevel::Info, "moho64: MOHO64_KEEP_DEAD: no dead object is deleted before the game ends");
   else
-    Logf(LogLevel::Info, "moho64: dead shells and ended tasks are deleted during the game (level %d; MOHO64_KEEP_DEAD=1 "
-                         "keeps every object to the game's end)%s", FreeDeadLevel(),
+    Logf(LogLevel::Info, "moho64: dead shells and ended tasks%s are deleted during the game (level %d; MOHO64_KEEP_DEAD=1 "
+                         "keeps every object to the game's end)%s",
+         FreeDeadLevel() >= 3 ? ", props, motors and every other entity that is no unit"
+                              : FreeDeadLevel() >= 2 ? ", props and their motors" : "",
+         FreeDeadLevel(),
          deadtrap::On() ? "; MOHO64_DEAD_TRAP: a deleted object's pages are taken away" : "");
   // The game version's rules (replay.h; engine-ref/specs/faf3840.md): the header's, as the original's replay player
   // accepts only its own (VCR_SetupReplaySession 0x876665 compares the file's version with the exe's)
@@ -2055,17 +2058,31 @@ void Sim::ProcessDestroyQueue() {
   // nothing deleted in every beat; a 60-minute AI game (four M28 on Seton's, parallel order, 16 threads) the same,
   // with the trap; the full gate with the deleting on; the renderer's and the interface's own suites with the trap.
   // The owner list keeps the empty place (8 bytes), so its order and every other object's place stay as they were.
-  if (FreeDead() && !done.empty()) AnimatorsDropPurged(*this);  // (an animator on a purged shell lets go)
+  // ... and, at level 2 (class 3, 2026-11-11), the purged props: a purged prop has left sim.props, the handle and id
+  // tables, the entity grid and the occupancy grid; the prop grid is rebuilt before its next use (propGridDirty_);
+  // the fingerprint's list goes by handles; its motor's slot went in MotorsEntityPurged, with its place in the
+  // motors' moved list. Its motor object is deleted by MotorsSweep.
+  // ... and, at level 3 (class 4, 2026-11-11), every other purged entity that is no unit: script entities, shields,
+  // collision beams, recon blips. Each has left its list above (scriptEntities, shields, beams, others_), the
+  // handle and id tables, the grid and the intel sources; what attaches to an entity or targets one holds its
+  // handle. A blip leaves the recon lists first (IntelBlipFreed). Units stay: shells, blips and manipulators point
+  // at them.
+  const bool freeProps = FreeDeadLevel() >= 2, freeOthers = FreeDeadLevel() >= 3;
+  if (FreeDead() && !done.empty()) AnimatorsDropPurged(*this);  // (an animator on a purged entity lets go)
   if (FreeDead())
     for (Entity* e : done) {
-      if (e->kind != Entity::Kind::Projectile) continue;
-      const uint32_t slot = static_cast<Projectile*>(e)->ownedSlot;
+      const Entity::Kind kind = e->kind;
+      if (kind == Entity::Kind::Unit) continue;
+      if (kind == Entity::Kind::Prop ? !freeProps : kind != Entity::Kind::Projectile && !freeOthers) continue;
+      const uint32_t slot = e->ownedSlot;
       if (slot < owned_.size() && owned_[slot].get() == e) {
+        IntelBlipFreed(*this, e);
         owned_[slot].reset();
-        ++shellsFreed;
+        ++(kind == Entity::Kind::Projectile ? shellsFreed : kind == Entity::Kind::Prop ? propsFreed : entitiesFreed);
       }
     }
   if (FreeDead()) SweepTasks();
+  if (freeProps) MotorsSweep(*this);
 }
 
 int Sim::FreeDeadLevel() {
@@ -2170,10 +2187,11 @@ void Sim::ReportOwned(const char* when) const {
   lua_gpg_gcbytes(state_->L(), &heap, &threshold);
   Logf(LogLevel::Info, "moho64 owned %s, beat %u: total %zu owned, %zu dead, %zu places emptied (%llu shells freed); known "
        "object bytes %zu KB, of dead objects %zu KB; process private memory %.0f MB, lua heap %zu KB; units %zu, shells %zu, props %zu; "
-       "tasks freed %llu",
+       "tasks freed %llu, props freed %llu, motors freed %llu, other entities freed %llu",
        when, tick_, owned, dead, empty, static_cast<unsigned long long>(shellsFreed), bytes >> 10, deadBytes >> 10,
        prof::CommittedMB(), heap >> 10, units_.size(), projectiles.size(), props.size(),
-       static_cast<unsigned long long>(tasksFreed));
+       static_cast<unsigned long long>(tasksFreed), static_cast<unsigned long long>(propsFreed),
+       static_cast<unsigned long long>(motorsFreed), static_cast<unsigned long long>(entitiesFreed));
 }
 
 // One beat: the tick counter advances, then the script threads due at that tick run.

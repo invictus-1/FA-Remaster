@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "core/log.h"
 #include "script/fastlib.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
@@ -56,6 +57,7 @@ ScriptState::~ScriptState() {
   if (L_) lua_close(L_);
 }
 ScriptState* ScriptState::From(lua_State* L) { return static_cast<ScriptState*>(lua_getextra(L, 0)); }
+void Logf(LogLevel, const char*, ...) {}  // (core/log.h: the verify switch's line; the test has no log)
 // IsDestroyed's test (script/core_bindings.cpp IsDestroyedValue), without the collector's check
 bool IsDestroyedValue(lua_State* L, int idx, bool) {
   bool destroyed = true;
