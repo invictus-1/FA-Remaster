@@ -991,6 +991,20 @@ std::string ModelCache::ShotEffectByUnit(const std::string& blueprintPath, const
   return there->second ? file : std::string();
 }
 
+std::string ModelCache::EmitterByUnit(const std::string& effect, const std::string& unit) {  // [unitfx] (models.h)
+  if (unit.empty() || effect.empty()) return std::string();
+  const std::string named = moho::Vfs::Normalize(effect);
+  const size_t slash = named.rfind('/');
+  if (slash == std::string::npos) return std::string();
+  const std::string file = std::string(kRemasteredEffects) + named.substr(0, slash + 1) + "by_unit/" + Lower(unit) + named.substr(slash);
+  auto there = byUnitFiles_.find(file);
+  if (there == byUnitFiles_.end()) {
+    there = byUnitFiles_.emplace(file, vfs_->Exists(file)).first;
+    if (there->second) printf("render: %s played %s's way (by_unit)\n", named.c_str(), Lower(unit).c_str());
+  }
+  return there->second ? file : std::string();
+}
+
 const Model* ModelCache::Blueprint(const std::string& blueprintPath, bool original, const std::string& faction, bool effect) {
   std::string path = moho::Vfs::Normalize(blueprintPath);
   // "/units/uel0201/uel0201_unit.bp": the files beside it are named after the blueprint file

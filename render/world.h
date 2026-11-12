@@ -964,6 +964,10 @@ class World {
   // smoke, structures' lamps and ambient effects) and long ones with time left (effects.h, keepLastingStale). False
   // (the viewer's --effects-drop-stale): all of them dropped, as before.
   bool effectsKeepLasting = true;
+  // [unitfx] A unit's own versions of the emitters made on or at it (effects.h, unitEmitters: the visuals track's
+  // effects/emitters/by_unit/<unit>/ files; with the remastered effects). False (the viewer's --no-unit-emitters): the
+  // shared ones for every unit, as before.
+  bool unitEmitters = true;
   // (how long the script keeps the phase mesh on: the warp-in's look is drawn no longer, whatever a script does)
   static constexpr double kWarpInSeconds = 6.0;
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
