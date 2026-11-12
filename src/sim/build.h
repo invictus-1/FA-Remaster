@@ -159,6 +159,9 @@ std::vector<Unit*> Guards(Sim& sim, const Unit* g);
 
 // Missile silos (CAiSiloBuildImpl): queued and automatic missile builds; a unit's beat.
 void SiloTick(Sim& sim, Unit* u);
+// Whether the unit has a silo builder (the original's unit +0x558): only a unit in the category SILO gets one
+// (Unit::Unit 0x6a6237..0x6a629f: IsInCategory("SILO") -> AI_CreateSiloBuilder 0x5cf980).
+bool HasSiloBuilder(Sim& sim, const Unit* u);
 int TickCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 void EndCapture(Sim& sim, lua_State* L, Unit* u, BuildTask& t);
 // Child tasks another task starts for its unit: the repair / build-assist task (CUnitRepairTask::operator new

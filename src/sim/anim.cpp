@@ -305,8 +305,16 @@ int l_CreateAnimator(lua_State* L) {
 }
 int l_PlayAnim(lua_State* L) {  // (anim [, looping]) -> SetAnimationResource 0x63fba0
   Animator* a = A(L);
+  // cfunc_CAnimationManipulatorPlayAnimL 0x6406f0: an animation given as nil (lua_type 0, 0x640747..0x640751) is
+  // nothing: no error, the manipulator unchanged, and NO value returned (eax = 0 results). A value that is no string
+  // is a type error (0x6407c4: LuaObject::TypeError 0x9072d0, "string"); an empty name an error "PlayAnim: Got empty
+  // filename" (0xe220bc). Seen (weapons range m_aeoland2 / m_aeonav1): Antares' ualx401 OnShieldEnabled and gmas308
+  // OnCreate play bp fields that are nil (Display.AnimationOpen, Weapon[i].AnimationOpen); the original logs nothing
+  // and the scripts go on, ours raised "PlayAnim: invalid animation" (59 errors) and cut them short.
+  if (lua_type(L, 2) == LUA_TNIL) return 0;
   const char* path = lua_tostring(L, 2);
-  if (!path || !*path) return luaL_error(L, "PlayAnim: invalid animation");
+  if (!path) return luaL_error(L, "attempt to string a %s value", lua_typename(L, lua_type(L, 2)));
+  if (!*path) return luaL_error(L, "PlayAnim: Got empty filename");
   a->looping = lua_gettop(L) > 2 && lua_toboolean(L, 3);
   const ScaAnim& h = ReadSca(*Sim::From(L), path);
   a->hasAnim = h.ok;

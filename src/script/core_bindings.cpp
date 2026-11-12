@@ -479,12 +479,19 @@ int l_Vector_index(lua_State* L) {
   return 1;
 }
 
-int l_Vector_newindex(lua_State* L) {
-  int axis = VectorAxis(L);
-  lua_pushvalue(L, 3);
-  lua_rawseti(L, 1, axis);
-  return 0;
-}
+// The original's metatable holds a __newindex too (0x4cf9c0: the axis test, then lua_rawseti), but it is never run:
+// luaV_settable 0x929450 is patched (jmp 0x128c5d6, FAF's exe patch; luaV_execute's three stores 0x92a12e / 0x92a1b3 /
+// 0x92a1d9 and lua_settable 0x90d28d all go through it), and the patched settable calls a __newindex only when it is a
+// Lua function (0x128c659: tt == 7; a C function is tt 6, "cfunction" in the type names 0xd474d8, which the stock body
+// 0x9294dd accepted by `or 1`). Any other __newindex is taken as the next table to store into (0x128c65e), and
+// luaT_gettmbyobj 0x928450 hands back a per-type object for a function (G + 0xd4 + tt * 8): no error, and the vector
+// keeps its [1], [2], [3]. The slot luaH_set 0x927560 made for the key stays nil, so v.y still reads [2] (luaV_index
+// 0x929bf0 runs a C __index). So `v.y = n` changes nothing. Seen (weapons range m_aeoland1, BlackOps bal0401
+// BoomWeapon, BAL0401_Script.lua 86-93: pos = GetCurrentTargetPos(); pos.y = pos.y + 200; pos.x / pos.z + Random(-8, 8);
+// Warp(shell, pos)): the original's shells land on the target point in the beat after they are made (the 2000 + 800
+// rings of GoldLaserBombEffectController01 hit the target every time, two beats after each shell), ours went 200 up
+// and fell somewhere near it.
+int l_Vector_newindex(lua_State*) { return 0; }
 
 int l_Vector(lua_State* L) {
   PushVector(L, luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3));

@@ -1192,8 +1192,11 @@ int TargetStatus(Sim& sim, UnitWeapon* w, const AiTarget& t) {
   return SolutionStatus(w, p, nullptr);
 }
 
-bool CheckSilo(UnitWeapon* w) {
-  if (!w->bp->countedProjectile) return true;
+// UnitWeapon::CheckSilo 0x6d5500: a counted weapon (bp +0x124) asks its unit's silo builder (unit +0x558) for the
+// store of its kind (vt+0x14, NukeWeapon bp +0x121); with no silo builder - a unit outside the category SILO, see
+// HasSiloBuilder - there is nothing to ask and the weapon may fire (0x6d551a -> 0x6d5538: true).
+bool CheckSilo(Sim& sim, UnitWeapon* w) {
+  if (!w->bp->countedProjectile || !HasSiloBuilder(sim, w->unit)) return true;
   return w->unit->siloAmmo[w->bp->nukeWeapon ? 1 : 0] > 0;
 }
 
@@ -2081,7 +2084,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   if (b.targetType == 1) {
     // anti-projectile weapons (TrackToTarget 0x5d8000)
     Projectile* bestP = nullptr;
-    if (CheckSilo(w) && !u->stunned && !u->unitStates.Has(US("Busy"))) {
+    if (CheckSilo(sim, w) && !u->stunned && !u->unitStates.Has(US("Busy"))) {
       float reach = WeaponReach(w), bestD = std::numeric_limits<float>::infinity();
       float wl = WaterLevel(sim);
       // The candidates come from the entity grid (EntitiesAroundPoint 0x722350, mask projectiles: the cells of the
@@ -2238,7 +2241,7 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   if (!HasTarget(sim, w->target)) return;
   if (!CanAttackTarget(sim, w, w->target)) return;
   if (!CanFire(sim, w)) return;
-  if (!CheckSilo(w)) return;
+  if (!CheckSilo(sim, w)) return;
   if (TargetStatus(sim, w, w->target) != 0) return;
   if (w->bp->cannotAttackGround && w->target.type == 2) return;
   FireNow(sim, w);
@@ -4473,7 +4476,7 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
         // goal: an idle navigator's AbortMove still brakes the motion (see AbortNavigation; its IgnoreFormation is
         // not called here). READ, not run: order audit D1.4; before, ours stopped only when a goal was set.
         if (mobile) MotionStop(u);
-        if (CheckSilo(w)) {
+        if (CheckSilo(sim, w)) {
           t.state = 2;
           continue;
         }
@@ -4489,7 +4492,7 @@ int TickFireAt(Sim& sim, Unit* u, BuildTask& t) {
         t.state = 1;
         return kTaskRunning;
       case 1:
-        if (CheckSilo(w)) t.state = 2;
+        if (CheckSilo(sim, w)) t.state = 2;
         t.waitUntil = sim.tick() + 9;  // return 10
         return kTaskRunning;
       case 2:
@@ -4740,7 +4743,7 @@ UnitWeapon* W(lua_State* L) {
 int l_w_CanFire(lua_State* L) {
   UnitWeapon* w = W(L);
   Sim& sim = *S(L);
-  bool ok = HasTarget(sim, w->target) && CanFire(sim, w) && CheckSilo(w);
+  bool ok = HasTarget(sim, w->target) && CanFire(sim, w) && CheckSilo(sim, w);
   if (ok) {
     Vec3 p = TargetPos(sim, w->target, true);
     ok = !IsNaN(p) && SolutionStatus(w, p, nullptr) == 0;

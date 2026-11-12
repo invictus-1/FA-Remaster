@@ -5196,6 +5196,8 @@ struct SiloState : public ScriptObject {
   std::shared_ptr<EconRequest> request;
 };
 
+bool HasSiloBuilder(Sim& sim, const Unit* u) { return Cat(sim, u, "SILO"); }
+
 namespace {
 
 float FieldNum(lua_State* L, int t, const char* k, float def) {
@@ -5218,7 +5220,9 @@ SiloState* GetSilo(Sim& sim, Unit* u) {
   lua_State* L = sim.L();
   auto s = std::make_unique<SiloState>();
   int top = lua_gettop(L);
-  for (size_t i = 0; i < u->weapons.size(); ++i) {
+  // (a unit with no silo builder keeps a record with no weapon of either kind: it builds and stores nothing)
+  const size_t nw = HasSiloBuilder(sim, u) ? u->weapons.size() : 0;
+  for (size_t i = 0; i < nw; ++i) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, u->weapons[i]->bpRef);
     int w = lua_gettop(L);
     if (lua_istable(L, w) && FieldBool(L, w, "CountedProjectile")) {
@@ -5323,6 +5327,7 @@ bool SiloQueueAmmo(Sim& sim, Unit* u, int kind) { return SiloAddBuild(sim, u, ki
 
 void SiloNumbers(Sim& sim, const Unit* u, int building[2], int room[2]) {
   building[0] = building[1] = room[0] = room[1] = 0;
+  if (!HasSiloBuilder(sim, u)) return;
   if (const SiloState* s = u->silo) {
     for (int kind : s->queue)
       if (kind == 0 || kind == 1) ++building[kind];
@@ -5472,7 +5477,9 @@ namespace {
 
 template <int Kind>
 int l_GetSiloAmmo(lua_State* L) {
-  lua_pushnumber(L, CheckObject<Unit>(L, 1)->siloAmmo[Kind]);
+  // 0x6cf47c / 0x6cf06c: no silo builder (unit +0x558) -> 0 (0x6cf4a6 fldz)
+  Unit* u = CheckObject<Unit>(L, 1);
+  lua_pushnumber(L, HasSiloBuilder(*S(L), u) ? u->siloAmmo[Kind] : 0);
   return 1;
 }
 template <int Kind>
@@ -5485,15 +5492,16 @@ int l_GiveSiloAmmo(lua_State* L) {
   // to keep a missile's progress when an adjacent structure is finished or lost in mid-build, and when a silo
   // changes its army. (READ, not run: order audit D1.8.)
   if (Kind == 1 && lua_gettop(L) == 3) {
-    SiloState* s = GetSilo(*S(L), u);
-    if (s->weapon[0] >= 0 || s->weapon[1] >= 0) s->progress = static_cast<float>(n);
+    if (HasSiloBuilder(*S(L), u)) GetSilo(*S(L), u)->progress = static_cast<float>(n);
     return 0;
   }
   // 0x6cedf6 / 0x6cf201: the silo's AdjustStorageCount(kind, n) = `stored += n`, with no clamp at the store's
-  // size; a unit without a silo: nothing. (READ, not run: order audit D1.12; before, ours clamped to the store's
-  // size and gave ammo to a unit with no counted weapon too.)
-  SiloState* s = GetSilo(*S(L), u);
-  if (s->weapon[0] < 0 && s->weapon[1] < 0) return 0;
+  // size; a unit without a silo builder (0x6cf1dd / 0x6cedcd: unit +0x558 null, a unit outside the category SILO):
+  // nothing. Seen (weapons range m_aeoair1, Antares uaow1102, whose CruiseMissile is a counted weapon on a unit with
+  // no SILO): the scene's GiveTacticalSiloAmmo(2) left the original's store at 0, so FAF's RackSalvoFiringState
+  // (DefaultProjectileWeapon.lua 1090: GetTacticalSiloAmmoCount() > 0) never made a missile; ours had kept a silo
+  // for any unit with a counted weapon and fired two at 203 / 205. (Before: order audit D1.12, no clamp.)
+  if (!HasSiloBuilder(*S(L), u)) return 0;
   u->siloAmmo[Kind] += n;
   return 0;
 }
@@ -5501,10 +5509,9 @@ template <int Kind>
 int l_RemoveSiloAmmo(lua_State* L) {
   Unit* u = CheckObject<Unit>(L, 1);
   const int n = static_cast<int>(luaL_checknumber(L, 2));
-  // 0x6cef41: AdjustStorageCount(kind, -n), with no floor at 0; a unit without a silo: nothing (order audit
-  // D1.12; before, ours stopped at 0)
-  SiloState* s = GetSilo(*S(L), u);
-  if (s->weapon[0] < 0 && s->weapon[1] < 0) return 0;
+  // 0x6cef41: AdjustStorageCount(kind, -n), with no floor at 0; a unit without a silo builder (0x6cf32d /
+  // 0x6cef1d): nothing (order audit D1.12; before, ours stopped at 0)
+  if (!HasSiloBuilder(*S(L), u)) return 0;
   u->siloAmmo[Kind] -= n;
   return 0;
 }

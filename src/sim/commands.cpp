@@ -1666,10 +1666,15 @@ void PushCommand(lua_State* L, const std::shared_ptr<UnitCommand>& c) {
   lua_rawset(L, -3);
 }
 
-// Commands a factory passes on to what it builds (its rally point, patrols, ...).
+// Commands a factory passes on to what it builds (its rally point, patrols, ...): FilterByCommandCap 0x6eecf0 drops
+// an immobile unit with a factory builder (unit +0x554, vt+4) only for the caps Move 0x1, Guard 0x8, Patrol 0x10
+// (0x6eed25: test al, 0x19) and Ferry 0x2000 (0x6eed29). IssueAttack and IssueFormAttack ask for the cap Attack 0x4
+// (0x6f3763, 0x6f3c76), which that test does not hold: a structure in FACTORY that has RULEUCC_Attack and a weapon
+// takes the Attack itself. Seen (weapons range m_aeostr1, att0 1971: BlackOps' air staging platform bab5205, FACTORY,
+// IssueAttack on a ura0107): the original's unit holds Attack x1 and is Attacking from 1971, its AA guns take the
+// target at 1973 through the attack task; ours dropped the order and the guns found the target by themselves at 1972.
 bool FactoryCommand(CommandType t) {
-  return MoveLike(t) || t == CommandType::Attack || t == CommandType::FormAttack || t == CommandType::Guard ||
-         t == CommandType::Ferry;
+  return MoveLike(t) || t == CommandType::Guard || t == CommandType::Ferry;
 }
 
 // ProcessUnitCommand (ValidateIssue) 0x6ef9e0, before its type switch: a unit being built (vt+0x34, 0x6efabe) takes
