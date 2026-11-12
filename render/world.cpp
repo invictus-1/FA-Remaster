@@ -1585,6 +1585,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   effects.warpInColours = warpInColours && look == Look::Modern && effectsLook == EffectsLook::Remastered;  // [warpin]
   effects.keepLastingStale = effectsKeepLasting;  // [stalelast]
+  effects.unitEmitters = unitEmitters;  // [unitfx]
   decals.battleScars = battleScars;
   decals.SetSettleScars(settledScars);  // [settled]
   decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]

@@ -31,6 +31,12 @@ struct Bone {
   // modelRot with other last digits; they matter where something hangs on such a bone for many beats.
   Vec3 entPos;
   Quat entRot;
+  // The centre of the bone's bounds (CAniSkel::UpdateBoneBounds 0x54a540, bone+0x40..+0x54): the box starts at the
+  // bone's origin (all 0) and takes every vertex whose FIRST bone index is this bone, turned into the bone's space by
+  // the rest-pose inverse (bone+0x24, MultQuadVec 0x452d40, then its translation); model units, no mesh scale. Read
+  // as half of min + max by IAniManipulator::InitPivotFromBoneBounds 0x634700, the pivot of a bone hung on an entity
+  // (Entity:AttachBoneToEntityBone).
+  Vec3 boundsCenter;
 };
 
 class Skeleton {

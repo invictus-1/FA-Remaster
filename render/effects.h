@@ -141,6 +141,11 @@ class Effects {
   // started when its blueprint has not run out (Update's stale rule: endless ones, and long ones with time left);
   // false: every such one is dropped, as before. `staleKept`: how many were kept so (for the check).
   bool keepLastingStale = true;
+  // [unitfx] An emitter made on or at a unit is played as that unit has it where the visuals track made one
+  // (effects/emitters/by_unit/<unit>/<name>, ModelCache::EmitterByUnit); false: never, as before. `unitEmittersPlayed`:
+  // how many were (for the check).
+  bool unitEmitters = true;
+  int unitEmittersPlayed = 0;
   int staleKept = 0;
   int warpInFlashes = 0;  // (how many took a faction's ramp: for the check)
 

@@ -851,6 +851,8 @@
 //           the whole shield lit for the second after one, fading, a ring running out from where it struck). By default
 //           the game's own units keep their rest light and mods' units show only hits; --shields-hit-only: no unit
 //           shows a personal shield at rest
+// --no-unit-emitters  [unitfx] emitters made on or at a unit are the shared ones for every unit, as before (World::
+//           unitEmitters off; by default a unit's own effects/emitters/by_unit/<unit>/<name> is played where there is one)
 // --effects-drop-stale  [stalelast] emitters left at a place more than ten seconds before the picture's clock are all
 //           dropped, as before (World::effectsKeepLasting off; by default the endless ones and those with time left start)
 // --no-warpin-colours  [warpin] the commanders' warp-in as before (World::warpInColours off): drawn as a personal shield
@@ -1313,6 +1315,7 @@ struct Options {
   int shieldsAtRest = 1;                // --shields-at-rest (2) / --shields-hit-only (0) [shieldhit]
   bool warpInColours = true;            // --no-warpin-colours [warpin]
   bool effectsKeepLasting = true;       // --effects-drop-stale [stalelast]
+  bool unitEmitters = true;             // --no-unit-emitters [unitfx]
   float warpIn = -1;                    // --warp-in [warpin]
   bool hideTurned = false;              // --hide-bone
   float snowLying = -1;                 // --snow-lying
@@ -1611,6 +1614,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--shields-hit-only") o->shieldsAtRest = 0;
     else if (a == "--no-warpin-colours") o->warpInColours = false;  // [warpin]
     else if (a == "--effects-drop-stale") o->effectsKeepLasting = false;  // [stalelast]
+    else if (a == "--no-unit-emitters") o->unitEmitters = false;  // [unitfx]
     else if (a == "--bones") o->listBones = true;
     else if (!(v = value())) return false;
     else if (a == "--hot-scorch") o->hotScorchOriginal = std::string(v) == "bright";  // [softscorch] soft | bright
@@ -2781,6 +2785,7 @@ int main(int argc, char** argv) {
   world.personalShieldsAtRest = opt.shieldsAtRest;  // [shieldhit]
   world.warpInColours = opt.warpInColours;          // [warpin]
   world.effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast]
+  world.unitEmitters = opt.unitEmitters;  // [unitfx]
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
   if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
     world.hullGlow = world.hullReach = world.hullAir = 1;
@@ -5484,6 +5489,7 @@ int main(int argc, char** argv) {
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (world.effects.staleKept > 0) printf("; %d lasting emitters started after a jump", world.effects.staleKept);  // [stalelast]
+      if (world.effects.unitEmittersPlayed > 0) printf("; %d emitters played a unit's own way", world.effects.unitEmittersPlayed);  // [unitfx]
       if (world.horizonWeather)  // [horizon]
         printf("; horizon: ice %.2f, fog %.2f, %d showers, %d icebergs", world.horizon.iceNow, world.horizon.fogNow, world.horizon.showersNow,
                world.horizon.bergsNow);
