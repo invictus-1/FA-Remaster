@@ -4822,10 +4822,40 @@ void SetAttachedState(Unit* u) {
 void NotifyAttached(Sim& sim, Unit* u) {
   if (u->motion.air) AirNotifyAttached(sim, u);
 }
+// The entity an entity hangs on (a unit's parentId, any other entity's attachParent): the original's weak link +0x18c
+Entity* AttachParentOf(Sim& sim, const Entity* e) {
+  const uint32_t r = e->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e)->parentId : e->attachParent;
+  return r ? sim.FindEntity(r) : nullptr;
+}
+// Entity::AttachTo 0x679550 refuses (returns false, nothing changed) when the child already hangs on something
+// (0x679554..0x67956d: its +0x18c link holds an entity), when the new parent or anything the parent hangs on is the
+// child itself (0x679585..0x679598), or when the child is already in the parent's attached list (0x67959c..0x6795b9,
+// vt+0x58). cfunc_EntityAttachBoneToL 0x68c090 (0x68c1fe: the child's vt+0x5c, Unit::AttachTo 0x6ab410 for a unit,
+// which calls 0x679550 first and stops at a false, 0x6ab418..0x6ab41f) and cfunc_EntityAttachToL 0x68be10 then raise
+// "Failed to attach entity %s to %s on bone %d" (0xe27f40; the child's and the parent's +0x6c names and the parent's
+// resolved bone, 0x68c23a..0x68c282 / 0x68bfdc). Seen (m_aeoland2, beat 4013): the antares mod's lta3002 has a second
+// tractor weapon grab the air target ura0107 that its first already hangs on its muzzle
+// (hawkeyeweapons.lua(140) TractorThread, target:AttachBoneTo(-1, self.unit, muzzle)); the original logs the error and
+// the thread ends there, ours moved the target to the second muzzle and went on (weapon 2's aim headings from 4015).
+bool AttachRefused(Sim& sim, Entity* child, Entity* parent) {
+  if (AttachParentOf(sim, child)) return true;
+  for (Entity* a = parent; a; a = AttachParentOf(sim, a))
+    if (a == child) return true;
+  return false;
+}
+int AttachFailed(lua_State* L, Entity* child, Entity* parent, int bone) {
+  auto name = [](const Entity* e) { return e->blueprint ? e->blueprint->id.c_str() : ""; };
+  // (LuaState::Error 0x90c1d0: lua_pushvfstring 0x90ce50 and lua_error 0x90d6c0, no luaL_where: the text carries no
+  // script line, as the original's log shows it)
+  lua_pushfstring(L, "Failed to attach entity %s to %s on bone %d", name(child), name(parent), bone);
+  return lua_error(L);
+}
 // entity:AttachBoneTo(selfBone, parent, parentBone)
 int l_AttachBoneTo(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 3);
+  if (Entity* child = ToObject<Entity>(L, 1); child && parent && AttachRefused(*S(L), child, parent))
+    return AttachFailed(L, child, parent, BoneIndex(L, parent, 4));
   if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 4))) return 0;
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)
@@ -4860,6 +4890,8 @@ int l_AttachBoneTo(lua_State* L) {
 int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   Unit* u = ToObject<Unit>(L, 1);
   Entity* parent = ToObject<Entity>(L, 2);
+  if (Entity* child = ToObject<Entity>(L, 1); child && parent && AttachRefused(*S(L), child, parent))
+    return AttachFailed(L, child, parent, BoneIndex(L, parent, 3));  // (0x68bfdc: the same refusal, see above)
   if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)

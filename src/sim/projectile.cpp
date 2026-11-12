@@ -626,7 +626,8 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
         sim.CallMethod(L, p, "OnExitWater", 0);
       }
     }
-    if (p->destroyQueued) return;
+    // (no return when a crossing's script destroyed the shell: CheckCollision 0x69d1d0..0x69d9ef never reads the
+    // destroyed flag +0x1b9 that Entity::Destroy 0x679af0 sets at 0x679b0f; see MotionTick)
   }
   if (p->collideEntity) {
     Entity* target = TargetEntity(sim, p->target);
@@ -732,7 +733,8 @@ void CheckCollision(Sim& sim, Projectile* p, Vec3 p0, Vec3 p1) {
           if (CallMethodBool(sim, L, e, "OnCollisionCheck", 1) == 1) {
             record(d, hit, ImpactTypeOf(sim, e, p0), EntityRef(e));
           }
-          if (p->destroyQueued) return;
+          // (a shell that a candidate's OnCollisionCheck destroyed, or that was destroyed before its step, asks the
+          // remaining candidates too: nothing in CheckCollision reads +0x1b9; see MotionTick)
         }
       }
     } else {
@@ -872,7 +874,15 @@ void MotionTick(Sim& sim, Projectile* p) {
     if (p->velocityAlign) q = TurnToward(q, v, p->turnRate * 0.00174532924f);  // 0x69c11e
   } else {
     UpdateTracking(sim, p, q, v);
-    if (p->destroyQueued) return;
+    // A shell whose Destroy is queued goes on with its step: Projectile::MotionTick 0x69bdd0..0x69c86b,
+    // UpdateTracking 0x69c8f0..0x69d1c1 and CheckCollision 0x69d1d0..0x69d9ef never read the destroyed flag +0x1b9
+    // (set by Entity::Destroy 0x679af0 at 0x679b0f), so after the tracking call (0x69bf7d) it moves, sets its
+    // pending transform (0x69c4fd) and sweeps (0x69c503), and its candidates' OnCollisionCheck run. Seen
+    // (m_aeocmd1, beat 4962): FAF's Flare.KillThread (defaultantiprojectile.lua) kills a redirected Loa missile in
+    // the Lua stage (debris + OnSplit's 3 children); in its step of that beat the dead missile meets the Aeon flare
+    // shell (AIMFlareProjectile.OnCollisionCheck: Damage 200) and OnDamage splits it again: the original's
+    // recording has 3 more shell ctors right after that missile's 3 zig-zag draws (0x69b175.. after 0x51b5c6),
+    // ours returned here and made none.
     v = Add(v, Mul(Forward(q), p->accel * 0.1f));
   }
   if (p->maxSpeed != 0) {  // LimitLengthTo 0x5d1e70 (0x69c183): scaled unless L^2 >= |v|^2 (a NaN scales too)
@@ -907,7 +917,7 @@ void MotionTick(Sim& sim, Projectile* p) {
   p->velocity = v;
   p->warpedInStep = false;
   CheckCollision(sim, p, p0, p1);
-  if (p->destroyQueued) return;
+  // (nor here: 0x69c508 goes on to the lifetime test and the transform with the flag as it is; see above)
   if (sim.tick() >= p->expireTick && p->hitFraction < 0) {
     p->hitFraction = 1;
     p->hitPos = p1;

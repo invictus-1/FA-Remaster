@@ -619,8 +619,8 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   // water or it is not under the water (0x577c7d..0x577c92: type 1), else the water plane by
   // CColHitResult::PlaneIntersection 0x577540 (type 3). The beam takes it when its length so far is longer
   // (0x6d70a7..0x6d70b7): the entity met is let go (0x6d70bc..0x6d70dc), type 3 is Water and type 1 Terrain
-  // (0x6d70e9..0x6d711b); a start under the water leaves the type as it was, and with none its point's type, by
-  // ENT_GetImpactType 0x67b240 without an entity: Underwater below the water, else Air. Ours took the terrain's
+  // (0x6d70e9..0x6d711b); a start under the water leaves the type unset, so it is its point's type, by
+  // ENT_GetImpactType 0x67b240 without an entity: Underwater below the water, else Air (see below). Ours took the terrain's
   // point also under the water, along 0x4fe130's segment, and crossed the water by its own formula, t x |E - P|:
   // Naval's and Economy's beam lines on water and terrain ended a last bit off the original's.
   {
@@ -641,12 +641,19 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
     }
     if (stype >= 0 && D > sdist) {
       D = sdist;
-      const bool hadEntity = target != nullptr;
       target = nullptr;
       impactPos = sh;
       if (stype == 3) type = 2;
       else if (stype == 1) type = 1;
-      else if (!hadEntity) type = wl > sh.y ? 4 : 3;
+      // A start under the water takes the point's type, also when an entity had been met: the helper writes the type
+      // (+0, zeroed at 0x6d6c05) only here, at 0x6d710c / 0x6d7119 (water, terrain) or from 0x6d711d on, by
+      // ENT_GetImpactType 0x67b240 of the entity still held (0x6d7143) or of none (0x6d715a); the entity search
+      // before (0x6d6ea0..0x6d6fb5) writes no type, and 0x6d70d5 has just let the entity go. So: Underwater.
+      // Seen (m_aeonav2, from beat 176): the Left/RightLaser beams of bel0307, whose muzzles lie under the water,
+      // meet a unit; ours kept that unit's type with no entity, OnImpact('UnitUnderwater', nil) went to
+      // CollisionBeam.ShowBeamSource and failed at collisionbeam.lua(259) every check (5556 errors in m_aeonav1/2);
+      // the original logs none.
+      else type = wl > sh.y ? 4 : 3;
     }
   }
   b->length = D;
