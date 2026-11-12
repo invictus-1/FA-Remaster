@@ -51,10 +51,10 @@ __fxVectorMeta.__index = function(v, k)
   if k == 'x' then return rawget(v, 1) elseif k == 'y' then return rawget(v, 2) elseif k == 'z' then return rawget(v, 3)
   elseif k == 'w' then return rawget(v, 4) end
 end
-__fxVectorMeta.__newindex = function(v, k, x)
-  if k == 'x' then rawset(v, 1, x) elseif k == 'y' then rawset(v, 2, x) elseif k == 'z' then rawset(v, 3, x)
-  elseif k == 'w' then rawset(v, 4, x) else rawset(v, k, x) end
-end
+-- [vecfield] a write to a field a vector does not hold raw (v.x = n, v.foo = n, a Vector's v[4] = n) does nothing, as
+-- in the game: there the vector's __newindex is a C function, and the game's patched table write calls a __newindex
+-- only when it is a Lua function. v[1] = n writes, and v.x reads.
+__fxVectorMeta.__newindex = function(v, k, x) end
 function Vector(x, y, z) return setmetatable({x or 0, y or 0, z or 0}, __fxVectorMeta) end
 function Vector2(x, y) return setmetatable({x or 0, y or 0}, __fxVectorMeta) end
 pcall(doscript, '/lua/system/utils.lua')  -- (first: class.lua takes table.empty from it as it loads)
