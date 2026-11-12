@@ -844,7 +844,21 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
     }
   }
   const bool posed = e->poseQ.size() == bones.size();
-  for (int k = n - 1; k >= 0; --k) {
+  int top = n - 1;
+  // A bone hung on an entity (Entity::boneEntityAttaches): its composite is the stored transform itself
+  // (GetCompositeTransform 0x54bec0 with +0x1d set: +0x20..+0x38 copied, no parent), and the bones below it are
+  // placed from it; the deepest such bone of the chain is where the walk starts. (The last one made for a bone wins:
+  // each manipulator writes the bone over in its turn.)
+  if (!e->boneEntityAttaches.empty())
+    for (int k = 0; k < n && top == n - 1; ++k)
+      for (auto it = e->boneEntityAttaches.rbegin(); it != e->boneEntityAttaches.rend(); ++it)
+        if (it->bone == chain[k]) {
+          p = it->pos;
+          r = it->rot;
+          top = k - 1;
+          break;
+        }
+  for (int k = top; k >= 0; --k) {
     const size_t bi = static_cast<size_t>(chain[k]);
     const Bone& b = bones[bi];
     const Vec3 lp = posed ? e->poseP[bi] : Vec3{b.localPos.x * s, b.localPos.y * s, b.localPos.z * s};
@@ -854,6 +868,87 @@ void BoneWorld(const Entity* e, int bone, Vec3* pos, Quat* rot) {
   *pos = p;
   *rot = r;
 }
+
+namespace {
+// CBoneEntityManipulator::MoveManipulator 0x6347e0: the unit's bone a.bone placed on the entity's bone. With the
+// entity still there (its weak pointer, +0x88), the entity's bone world transform (vt+0x48 with +0x90) less the
+// pivot turned by its rotation (MultQuadVec 0x452d40 of +0x94, subtracted per axis 0x6348bd..0x6348f5); with it gone,
+// the rotation 1 and the place (0, -10000, 0) (0x63482d..0x634859). (The pose's radius at +0x88, the farthest such
+// bone from the unit, is for the view and is not kept.)
+void BoneEntityAttachMove(Sim& sim, Entity::BoneEntityAttach& a) {
+  Entity* t = sim.FindEntity(a.target);
+  if (!t) {
+    a.rot = Quat{0.0f, 0.0f, 0.0f, 1.0f};
+    a.pos = Vec3{0.0f, -10000.0f, 0.0f};
+    return;
+  }
+  Vec3 p;
+  Quat q;
+  if (t->kind == Entity::Kind::Unit || a.targetBone >= 0 || !t->blueprint) {
+    BoneWorld(t, a.targetBone, &p, &q);
+  } else {
+    // Entity::GetBoneWorldTransform 0x679ce0, bone -1 of an entity with a blueprint (a shell, a prop): the committed
+    // transform (+0x9c) with the blueprint's centre turned by it and added (0x679d22..0x679dc0)
+    const Vec3& ep = t->shapeHeld ? t->shapePos : t->position;
+    q = t->shapeHeld ? t->shapeOri : t->orientation;
+    const Vec3 c = RotateM(q, t->bpCenter);
+    p = Vec3{ep.x + c.x, ep.y + c.y, ep.z + c.z};
+  }
+  const Vec3 v = RotateM(q, a.pivot);
+  a.rot = q;
+  a.pos = Vec3{p.x - v.x, p.y - v.y, p.z - v.z};
+}
+
+// The unit's pose pass (UnitAimTick, after its other manipulators): each bone hung on an entity follows it again
+// (CAniPose::UpdateBones 0x54b5f0 clears +0x1d each beat and the manipulator sets it once more in its turn).
+void BoneEntityAttachesTick(Sim& sim, Unit* u) {
+  for (auto& a : u->boneEntityAttaches) BoneEntityAttachMove(sim, a);
+  if (!u->boneEntityAttaches.empty()) ++u->poseVersion;
+}
+
+// unit:AttachBoneToEntityBone(bone, entity, entityBone, flag) 0x634f00: the unit (SCR_FromLua_Unit 0x5936c0), its
+// bone, the entity and its bone (0x692580 with -1 allowed), and a new CBoneEntityManipulator (0x634460) on the unit's
+// pose, whose constructor takes the pivot from the bone's bounds (InitPivotFromBoneBounds 0x634700) and moves the bone
+// AT ONCE (0x6345cf: MoveManipulator 0x6347e0). So a bone read right after, or one of its children, already stands
+// where the entity puts it. Seen: uefstr1 5208, FAF's CreateUnitDestructionDebris on uxl0021 0x19 makes a
+// DebrisBoneAttachLow01 at 'Turret' and hangs 'Turret' on it, then makes the next at 'Turret_Barrel', the child: the
+// original's shell 0x1000001e starts at (260, 40.2031, 909.865) = the first shell's place + its centre (0, 0.5, 0)
+// - Turret's pivot (0, 0.60681, 0.18513) + the barrel's offset; ours, with the call a stub, at the unmoved barrel
+// (260, 40.31, 910.05): its whole flight 0.107 higher, the ground met a beat later (an OnImpact Random a beat late).
+// (The flag, argument 5, marks the pose bone +0x49 for the view only.)
+int l_AttachBoneToEntityBone(lua_State* L) {
+  Unit* u = ToObject<Unit>(L, 1);
+  Entity* t = ToObject<Entity>(L, 3);
+  if (!u || !t || !u->skeleton) return 0;
+  auto boneOf = [L](const Entity* e, int arg) {
+    if (lua_type(L, arg) == LUA_TNUMBER) return static_cast<int>(lua_tonumber(L, arg));
+    if (lua_isstring(L, arg) && e->skeleton) return e->skeleton->Find(lua_tostring(L, arg));
+    return -1;
+  };
+  const int bone = boneOf(u, 2);
+  if (bone < 0 || bone >= u->skeleton->Count()) return 0;
+  Entity::BoneEntityAttach a;
+  a.bone = bone;
+  a.target = EntityRef(t);
+  a.targetBone = boneOf(t, 4);
+  a.pivot = u->skeleton->bones()[static_cast<size_t>(bone)].boundsCenter;
+  static const bool dbg = getenv("MOHO64_DEBUG_BONEATTACH") != nullptr;
+  Vec3 before;
+  Quat beforeQ;
+  if (dbg) BoneWorld(u, bone, &before, &beforeQ);
+  BoneEntityAttachMove(*S(L), a);
+  u->boneEntityAttaches.push_back(a);
+  ++u->poseVersion;
+  if (dbg)
+    Logf(LogLevel::Info,
+         "boneattach %u unit %u bone %d (%s) on %u bone %d: was %.9g %.9g %.9g, entity at %.9g %.9g %.9g q %.9g %.9g %.9g "
+         "%.9g centre %.9g %.9g %.9g, pivot %.9g %.9g %.9g -> %.9g %.9g %.9g",
+         S(L)->tick(), u->id, bone, u->skeleton->bones()[static_cast<size_t>(bone)].name.c_str(), t->id, a.targetBone,
+         before.x, before.y, before.z, t->position.x, t->position.y, t->position.z, a.rot.x, a.rot.y, a.rot.z, a.rot.w,
+         t->bpCenter.x, t->bpCenter.y, t->bpCenter.z, a.pivot.x, a.pivot.y, a.pivot.z, a.pos.x, a.pos.y, a.pos.z);
+  return 0;
+}
+}  // namespace
 
 // CAniPose::UpdateBones 0x54b5f0: every bone back to the skeleton's rest transform
 void PoseReset(Entity* e) {
@@ -2683,6 +2778,7 @@ void UnitAimTick(Sim& sim, Unit* u) {
   if (u->aimControllers.empty() && u->rotators.empty() && u->builderArms.empty() && u->sliders.empty() &&
       u->slavers.empty() && u->footPlants.empty() && u->thrusters.empty() && !anims) {
     if (!u->colliders.empty()) CollidersTick(sim, u);
+    if (!u->boneEntityAttaches.empty()) BoneEntityAttachesTick(sim, u);
     return;
   }
   if (!u->skeleton) {
@@ -2719,6 +2815,7 @@ void UnitAimTick(Sim& sim, Unit* u) {
   }
   PoseReset(u);
   UnitAimTickManipulators(sim, u, anims);
+  if (!u->boneEntityAttaches.empty()) BoneEntityAttachesTick(sim, u);  // (bones hung on an entity: last)
 }
 
 // Where each aim controller's muzzle stood in last beat's pose (actor+8: last beat's transform and rotations),
@@ -5790,6 +5887,7 @@ int l_thrust_Destroy(lua_State* L) {
 }  // namespace
 
 void RegisterCombatBindings(lua_State* L) {
+  SetMethod(L, "Entity", "AttachBoneToEntityBone", l_AttachBoneToEntityBone);
   SetGlobal(L, "CreateAimController", l_CreateAimController);
   SetGlobal(L, "CreateRotator", l_CreateRotator);
   SetGlobal(L, "CreateBuilderArmController", l_CreateBuilderArmController);

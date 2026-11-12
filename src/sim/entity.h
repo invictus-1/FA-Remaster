@@ -120,6 +120,19 @@ class Entity : public ScriptObject {
   // transferred unit's copy): a result made ahead from the pose (core/speculate.h) notes it instead of the bones.
   uint32_t poseVersion = 0;
   std::vector<Vec3> poseP;
+  // Unit bones hung on another entity (Entity:AttachBoneToEntityBone 0x634f00: a CBoneEntityManipulator, ctor
+  // 0x634460): the bone's composite IS the stored world transform (CAniPoseBone +0x1d, GetCompositeTransform
+  // 0x54bec0), its children are placed from it. Made at once by the constructor's MoveManipulator 0x6347e0 and made
+  // again in the unit's pose pass (combat.cpp, BoneEntityAttachesTick).
+  struct BoneEntityAttach {
+    int bone = -1;
+    uint32_t target = 0;  // entity handle (EntityRef); the manipulator's weak pointer
+    int targetBone = -1;
+    Vec3 pivot;           // the bone's bounds centre (Bone::boundsCenter)
+    Vec3 pos;             // the composite (+0x30) and its rotation (+0x20)
+    Quat rot;
+  };
+  std::vector<BoneEntityAttach> boneEntityAttaches;
   Vec3 attachOffset;          // Entity:SetParentOffset: where it sits relative to the bone it is attached to
   uint32_t attachParent = 0;  // entity attached to (beams to their unit; sim/combat.cpp)
   int attachBone = -1;

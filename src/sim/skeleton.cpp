@@ -96,6 +96,8 @@ std::unique_ptr<Skeleton> Skeleton::FromScm(const std::string& d) {
     return nullptr;
   auto sk = std::make_unique<Skeleton>();
   sk->bones_.resize(total);
+  std::vector<Quat> restInvQ(static_cast<size_t>(total));  // bone+0x24 as the exe keeps it (not inverted)
+  std::vector<Vec3> restInvP(static_cast<size_t>(total));
   for (int i = 0; i < total; ++i) {
     size_t at = boneOffset + static_cast<size_t>(i) * 108 + 64;  // after the rest-pose inverse
     Bone& b = sk->bones_[i];
@@ -128,8 +130,35 @@ std::unique_ptr<Skeleton> Skeleton::FromScm(const std::string& d) {
       const Quat iq{-0.0f - q[1], -0.0f - q[2], -0.0f - q[3], q[0]};
       b.entRot = iq;
       b.entPos = vm::RotateM(iq, Vec3{-0.0f - ip.x, -0.0f - ip.y, -0.0f - ip.z});
+      restInvQ[static_cast<size_t>(i)] = Quat{q[1], q[2], q[3], q[0]};
+      restInvP[static_cast<size_t>(i)] = ip;
     }
     sk->byName_.emplace(Lower(b.name), i);
+  }
+  // CAniSkel::UpdateBoneBounds 0x54a540 (called last by CAniSkel::CAniSkel 0x54a335): every bone's box zeroed
+  // (0x54a5a0..0x54a5fa), then for each vertex (0x44 bytes) the bone at its byte +0x40: the vertex's place turned by
+  // that bone's +0x24 rotation (0x54a653) plus its translation (0x54a658..0x54a678), min (0x54a661..0x54a6a6: kept
+  // unless the point is not greater) and max (0x54a6ab..0x54a6ec). A bone index past the bones is the original's
+  // error (0x54a716); here that vertex is passed over.
+  {
+    const int32_t vertexOffset = Read<int32_t>(d, 16), vertexCount = Read<int32_t>(d, 24);
+    std::vector<Vec3> mn(static_cast<size_t>(total)), mx(static_cast<size_t>(total));
+    if (vertexOffset >= 48 && vertexCount > 0 &&
+        static_cast<size_t>(vertexOffset) + static_cast<size_t>(vertexCount) * 68 <= d.size()) {
+      for (int v = 0; v < vertexCount; ++v) {
+        const size_t at = static_cast<size_t>(vertexOffset) + static_cast<size_t>(v) * 68;
+        const int bi = static_cast<unsigned char>(d[at + 64]);
+        if (bi >= total) continue;
+        const size_t b = static_cast<size_t>(bi);
+        const Vec3 r = vm::RotateM(restInvQ[b], Vec3{Read<float>(d, at), Read<float>(d, at + 4), Read<float>(d, at + 8)});
+        const Vec3 l{restInvP[b].x + r.x, restInvP[b].y + r.y, restInvP[b].z + r.z};
+        mn[b] = {l.x > mn[b].x ? mn[b].x : l.x, l.y > mn[b].y ? mn[b].y : l.y, l.z > mn[b].z ? mn[b].z : l.z};
+        mx[b] = {l.x > mx[b].x ? l.x : mx[b].x, l.y > mx[b].y ? l.y : mx[b].y, l.z > mx[b].z ? l.z : mx[b].z};
+      }
+    }
+    // (InitPivotFromBoneBounds 0x634777..0x6347b2: (min + max) x 0.5 per axis)
+    for (size_t b = 0; b < static_cast<size_t>(total); ++b)
+      sk->bones_[b].boundsCenter = {(mn[b].x + mx[b].x) * 0.5f, (mn[b].y + mx[b].y) * 0.5f, (mn[b].z + mx[b].z) * 0.5f};
   }
   return sk;
 }
