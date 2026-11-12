@@ -2324,6 +2324,7 @@ void Sim::AddUnitToLists(Unit* u) {
   dirtyOrderDirty_ = true;
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
+  if (entityPassOpen_) madeInEntityPass_.push_back(u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   gridDirty_ = true;
@@ -3034,6 +3035,8 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kThreads);
   MOHO_LAP(lap, "entitypass");
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
+  entityPassOpen_ = true;  // (the units made from here on take their first turn at the pass's end: see the shells)
+  madeInEntityPass_.clear();
   coordsPending = true;
   // MOHO64_PAR_MOTION: the units' contact searches of this pass made ahead on the worker pool, each taken at its
   // unit's turn only if nothing it read has changed by then (core/speculate.h)
@@ -3537,7 +3540,43 @@ void Sim::Tick() {
   {
     std::optional<wtrap::Phase> trapShells;  // (MOHO64_PAR_WRITETRAP: the shells' steps after the pass)
     if (wtrap::On()) trapShells.emplace(tick_, "shells");
-    ProjectilesTick(*this);
+    // A unit made while the entity stage runs (a shell's OnImpact, CreateUnitHPR from a death) gets its entity task
+    // thread in stage sim+0x930 (Entity::StandardInit 0x678466..0x678477), linked at the run list's end, and the stage
+    // runs its run list until it is empty (CTaskStage 0x409ac0: 0x409af8 takes the head, 0x409b2b runs it, 0x409b78
+    // ends only on an empty list): the unit takes its first turn in that same pass, after everything made before it,
+    // shells included. Ours took it a beat later. Seen: m_sernav1 (weapons range) 1445, a BlackOps SeraDreadCannon01
+    // shell's OnImpact makes the energy being BSL0404 (SeraDreadCannon01_script.lua 33); the original's recording has
+    // it hovering in that beat (ms 0.1, y 18, moved 0.009) with its two wobble draws (CalcMoveHover 0x6c2d07 /
+    // 0x6c2d5c) right after the shell's Lua Random; ours stood it still until 1446 and the streams parted there.
+    size_t madeAt = 0;
+    auto unitsMadeBefore = [&](uint32_t handle) {
+      while (madeAt < madeInEntityPass_.size() && madeInEntityPass_[madeAt]->handle < handle) {
+        Unit* u = madeInEntityPass_[madeAt++];
+        if (u->lastPosTick == tick_) continue;  // (had its turn: a unit of the pass sent to its end)
+        motionOrder.push_back(u);
+        Quat prevOri;
+        int how = turnMotion(motionOrder.size() - 1, &prevOri);
+        if (how == kTurnReordered) how = turnMotion(motionOrder.size() - 1, &prevOri);  // (its turn at the new end)
+        if (how == kTurnReordered) continue;
+        if (how == kTurnMoved) {
+          if (order == SimOrder::kParallel && !u->aimControllers.empty()) AimTargetsAhead(*this, u);
+          turnPose(u, prevOri);
+        }
+        turnEconomy(u, how);
+      }
+    };
+    // (ProjectilesTick, with the units made in the pass; a shell such a unit makes in its turn steps after it)
+    for (size_t i = 0;;) {
+      if (i < projectiles.size()) {
+        unitsMadeBefore(projectiles[i]->handle);
+        ProjectileStep(*this, projectiles[i++]);
+        continue;
+      }
+      unitsMadeBefore(0xffffffffu);
+      if (i == projectiles.size()) break;
+    }
+    entityPassOpen_ = false;
+    if (order == SimOrder::kParallel) SumUnitEconomy();  // (their additions, as after phase D)
   }
   // A unit that hangs on a shell (a wreck on FAF's sinker) takes the shell's layer (0x6ba1ad), and it does so
   // after the shell's step of this beat: a unit attached to a parent that has not had its turn takes its own turn

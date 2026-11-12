@@ -2590,6 +2590,35 @@ void KeepUnitsWithCap(lua_State* L, std::vector<Unit*>& units, uint32_t cap) {
               units.end());
 }
 
+// The error of the script Issue functions whose target must be a point or an entity (read): after SCR_GetTarget
+// 0x6eef60 and CAiTarget::EncodeToSSTITarget 0x5e27d0, IsValid_Vector3f 0x5657f0 (no coordinate __isnan 0xa83f03)
+// and the SSTI type != 0, else luaL_error 0x90c1d0 with the function's own text: IssueMove 0x6f2857 (0xe2ed0c),
+// IssueFormMove 0x6f2f79 (0xe2ed98), IssueGuard 0x6f324e (0xe2ed50: GPG's text says "IssueMoveOffFactory"),
+// IssuePatrol 0x6f4afb (0xe2ee80), IssueFormPatrol 0x6f4f9a (0xe2eec0), IssueAggressiveMove 0x6f51f7 (0xe2ef08),
+// IssueFormAggressiveMove 0x6f56c9 (0xe2ef58). A nil target gives SSTI type 0 (SCR_GetTarget 0x6eef98) and an entity
+// type 1 with a zero point (0x5e2838), so the error is a nil target or a position with a NaN in it. IssueAttack and
+// the others have no such test. Seen: m_serair2 / m_sernav2 (weapons range) 161, BlackOps' drone bsa0001 spawned
+// without a carrier: its GuardCarrier (BSA0001_Script.lua 190-191) runs IssueClearCommands then IssueGuard({self},
+// nil); the original's log shows this error from IssueGuard and the drone stays idle (it moves with the other
+// aircraft from 163); ours gave it a Guard with no target, which held it still until 174.
+constexpr const char* InvalidTargetPointError(CommandType t) {
+  switch (t) {
+    case CommandType::Move: return "IssueMove: Passed in an invalid target point.";
+    case CommandType::FormMove: return "IssueFormMove: Passed in an invalid target point.";
+    case CommandType::Guard: return "IssueMoveOffFactory: Passed in an invalid target point.";
+    case CommandType::Patrol: return "IssuePatrol: Passed in an invalid target point.";
+    case CommandType::FormPatrol: return "IssueFormPatrol: Passed in an invalid target point.";
+    case CommandType::AggressiveMove: return "IssueAggressiveMove: Passed in an invalid target point.";
+    case CommandType::FormAggressiveMove: return "IssueFormAggressiveMove: Passed in an invalid target point.";
+    default: return nullptr;
+  }
+}
+bool ScriptTargetPointValid(lua_State* L, int idx, const Entity* te) {
+  if (te) return true;
+  Vec3 p;
+  return PosArg(L, idx, &p) && !std::isnan(p.x) && !std::isnan(p.y) && !std::isnan(p.z);
+}
+
 template <CommandType T>
 int l_IssueTarget(lua_State* L) {
   // SCR_GetTarget 0x6eef60 converts the target first: an entity target picks a target point (one draw,
@@ -2613,6 +2642,18 @@ int l_IssueTarget(lua_State* L) {
   if (kGetTarget) CheckScriptTarget(L, 2);
   Entity* te = ToObject<Entity>(L, 2);
   TargetPointDraw(*S(L), te);
+  constexpr const char* kBadPoint = InvalidTargetPointError(T);
+  constexpr bool kForm = T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
+                         T == CommandType::FormAggressiveMove;
+  if (kBadPoint && kTargetFirst && !ScriptTargetPointValid(L, 2, te)) luaL_error(L, "%s", kBadPoint);
+  // (IssueMove 0x6f27c4 and the Form* ones: units first; the test comes only when FilterByCommandCap 0x6eecf0 kept
+  // one, and that leaves out immobile factories for the Move / Patrol caps, which ours drops later in Issue)
+  auto validateKeptOne = [&] {
+    Sim& sim = *S(L);
+    return std::any_of(units.begin(), units.end(), [&](const Unit* u) { return !IsImmobileFactory(sim, u); });
+  };
+  if (kBadPoint && !kTargetFirst && !kForm && !ScriptTargetPointValid(L, 2, te) && validateKeptOne())
+    luaL_error(L, "%s", kBadPoint);
   if (!kGetTarget || kTargetFirst) {
     units = UnitsArg(L, 1);
     KeepUnitsWithCap(L, units, kCap);
@@ -2624,13 +2665,13 @@ int l_IssueTarget(lua_State* L) {
   if (T == CommandType::Reclaim)
     units.erase(std::remove_if(units.begin(), units.end(), [&](Unit* u) { return !ReclaimOrderValid(L, u, te); }),
                 units.end());
-  constexpr bool kForm = T == CommandType::FormMove || T == CommandType::FormAttack || T == CommandType::FormPatrol ||
-                         T == CommandType::FormAggressiveMove;
   int formIndex = -1;
   if (kForm) {  // IssueForm*: the formation name -> script index; nothing is issued for an unknown one
     std::string name = lua_isstring(L, 3) ? lua_tostring(L, 3) : "";
     formIndex = FormationScriptIndex(L, name, units);
     if (formIndex < 0) return 0;
+    // (IssueFormMove 0x6f2f79 and its kin: the point test comes after the formation lookup)
+    if (kBadPoint && !ScriptTargetPointValid(L, 2, te) && validateKeptOne()) luaL_error(L, "%s", kBadPoint);
   }
   Vec3 targetAt{};  // (the target as ProcessUnitCommand tests it: RefusesTargetOutside)
   const bool hasTarget = te ? (targetAt = te->position, true) : PosArg(L, 2, &targetAt);

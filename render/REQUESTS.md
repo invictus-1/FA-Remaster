@@ -56,7 +56,7 @@ deliver.
 
 **Answer:** (none yet)
 
-## 75. To the INTERFACE track: a third Cloud Layout, "Varied" (2026-11-11; Chris's decision; not blocking)
+## 75. To the INTERFACE track: a third Cloud Layout, "Varied" (2026-11-11; Chris's decision; not blocking) - DONE
 
 **What:** the Cloud Layout option gets a third value beside Even and Mixed: "Varied" sets `world.clouds.mix = 2`
 (Even 0, Mixed 1 as today; `Sunlight`'s cloudMix stays as you set it for Mixed: it is clamped to 1). The default
@@ -70,7 +70,7 @@ more sizes: wide masses some 550 units across, a middling size of 250 that the f
 heaps, and few of the two smallest; the same share of the sky covered. More of the three-times heaps too (the
 existing rule for mix above 1). Viewer: `--clouds-mix 2`.
 
-**Answer:** (none yet)
+**Answer:** done 2026-11-11 (ui 46d24645, on main; docs/ui-answers.md): Cloud Layout has Even (0), Mixed (1, the default, untouched) and Varied (2); the console takes `remaster_cloud_layout 0|1|2` or `even|mixed|varied`; no preset level sets Varied.
 
 ## 74. To the VISUALS track: smaller, softer patches of rock, scree and soil in the first 150 units outside the map (2026-11-11; not blocking)
 
