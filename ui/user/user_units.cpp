@@ -1751,9 +1751,13 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   }
   // An order given with a factory selected is the factory's rally order: what the units it builds
   // are told to do (the command stream's IssueFactoryCommand, FA exe 0x6f14d0), kept in a queue
-  // of its own. INFERRED: which units count (here: buildings that are factories; a carrier moves
-  // itself) and that every order of the world's clicks but a building order goes that way; where
-  // the original's interface decides is not read.
+  // of its own. Which units count, READ 2026-11-11: the units of the category RALLYPOINT. The original splits the
+  // selection by that category's name (SplitSelectionByRallyPointCategory 0x81e610, called at 0x82069a, 0x82095e and
+  // 0x820f49 of SCommandModeData::HandleEvent) and gives the RALLYPOINT units ISSUE_FactoryCommand (0x8b0b30; its
+  // calls at 0x8208f9, 0x820d64, 0x820da7, 0x820dcb, 0x820fd9), the others ISSUE_Command. (Until then ours took
+  // "FACTORY and STRUCTURE", inferred: the same units in the game's and FAF's 607 blueprints, every one of which
+  // has RALLYPOINT exactly when it is both; a mod's unit may differ.) INFERRED still: that every order of the
+  // world's clicks but a building order goes that way (which of the five calls each order takes is not read).
   // A Guard of a structure (SCommandModeData::HandleEvent's Guard case 0x82012f..0x820367, READ 2026-10-21): when the
   // unit under the cursor has a blueprint and is in STRUCTURE (0x82018e), the selection is split by the category
   // REBUILDER (SplitSelectionByRebuilderCategory 0x81e9e0): the others get the Guard of the unit, the REBUILDERs a
@@ -1776,8 +1780,7 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
       continue;
     }
     guarding.push_back(u);
-    (type != CommandType::BuildMobile && InCategory(L, u, "FACTORY") && InCategory(L, u, "STRUCTURE") ? factories : others)
-        .push_back(u->view.id);
+    (type != CommandType::BuildMobile && InCategory(L, u, "RALLYPOINT") ? factories : others).push_back(u->view.id);
   }
   if (structure) d.blueprint = rally.blueprint = structure->view.blueprint;
   // (remembered until the queues show it: SiteMeetsOrdered; an order without units is in no queue)
