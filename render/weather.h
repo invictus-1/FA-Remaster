@@ -94,6 +94,9 @@ class Precipitation {
   // [rainunder] how much of the fall keeps to under the clouds (the world sets it: a storm's, World::stormCells): none
   // where the clouds' shadow (view.h, CloudShadow) shows open sky above; 0: everywhere, as before
   float underClouds = 0;
+  // [rainover] ... and by the clouds straight above a place, not by where their shadow falls (the world sets it:
+  // World::rainUnderClouds); false: by their shadow, as before
+  bool underOverhead = true;
   // [fallsize] (Chris's test, 2026-11-09: with FSR 1 on "white trails that follow the snow", the snow looked faster) how many
   // of this picture's pixels make one of the window's, up and down, when an upscaler brings the picture up (the share it is
   // drawn at; 1 without one, and for whoever wants the widths in the picture's own pixels, as before): a flake's and a

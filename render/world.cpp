@@ -5373,6 +5373,7 @@ void World::Render() {
   }();
   falling.pixelScale = photoPixel;  // (photofix: in a photo's frame as the window shows it; else 1, 1)
   falling.underClouds = stormSunNow_;  // [rainunder] a storm's rain from under its cover (its pockets of sun dry)
+  falling.underOverhead = rainUnderClouds;  // [rainover]
   falling.pictureShare = photoShare;
   // [fallsize] (under an upscaler the widths in the window's pixels) [fallpace]
   falling.windowShare = fallWindowSize && screenHeight_ > view.height ? static_cast<float>(view.height) / static_cast<float>(screenHeight_) : 1.0f;

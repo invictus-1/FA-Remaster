@@ -1667,6 +1667,10 @@ class World {
   // grain, colour fringe), at the end of the finishing in place of the plain tone curve. Modern look; off by default.
   PhotoLook photoLook;
   bool stormCells = true;  // [stormcells] a storm's clouds in towering cells (clouds.h, Clouds::storm); off: as before
+  // [rainover] A storm's rain falls under its clouds themselves (weather.h's underOverhead; view.h's CloudOver), not where
+  // their shadow lies: with a low sun that was hundreds of units from the cloud, and at dusk, when the moon takes the
+  // sun's place, every patch of rain moved at once. On by default; false (the viewer's --rain-under-shadow): as before.
+  bool rainUnderClouds = true;
   bool starryNight = true;  // [starry] the night sky deep, starry, the band and the moon's halo (sky.h, Sky::starry); off: as before
   float stormSunNow_ = 0;  // [stormcells] this frame's storm, for the sun pockets (World::Begin)
   PhotoFinish photoFinish;
