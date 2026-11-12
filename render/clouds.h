@@ -68,7 +68,8 @@ class Clouds {
   float shapeSize = 600;     // the shapes' noise repeats every this many world units
   float detailSize = 110;    // the detail's
   // [cloudmix] the heaps placed at random and of mixed sizes (clouds.cpp, CloudShape; Chris 2026-11-06); 0: in rows, of
-  // one size, as before; above 1 more of the big ones
+  // one size, as before; above 1 more of the big ones, and ([cloudwide]) up to 2 the clouds of more sizes: wide masses
+  // and middling ones among the heaps, few of the smallest
   float mix = 1;
   // [stormcells] how much of a storm there is (0..1; the world sets it from the rain: World::rain over 0.6): a few wide,
   // towering cells with dark flat bases, fewer heaps between (visuals' section 94, Chris 2026-11-06); the layer up to 4

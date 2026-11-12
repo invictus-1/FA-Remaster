@@ -1819,6 +1819,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (beyondLand && sculpted && surroundEdgeBand > 0) c.beyondLand[1] = std::max(surroundEdgeBand, 0.01f);
     // [edgesea] the water's surface over a band of its own (never narrower than the land's)
     if (beyondLand && sculpted && surroundEdgeBandWater > 0) c.beyondMore[0] = std::max(surroundEdgeBandWater, c.beyondLand[1]);
+    if (sculpted) c.beyondMore[1] = std::clamp(surroundFarForm, 0.0f, 1.0f);  // [farform]
   }
   set(c.sunDirection, sunDirection);
   set(c.sunColor, haveMap_ ? map.lighting.sunColor : Vec3{1, 1, 1});

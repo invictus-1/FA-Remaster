@@ -568,6 +568,7 @@ float4 PS(VOut i) : SV_Target {
     if (groundLook.y > 0.5) groundGraze = 1 - (1 - groundGraze) * smoothstep(0.12, 0.9, dot(base, normalize(cameraPosition - i.world)));
   }
   float3 color = ModernLight(ToLinear(albedo.rgb), 0, roughness, creases, 0, N, i.world, lit);
+  beyondForm = 1;  // [farform] (lighting.h)
   return float4(BeyondMap(color, i.world), 1);
 }
 #else
@@ -597,6 +598,7 @@ float4 PS(VOut i) : SV_Target {
   float own = surLook.z > 0 ? 1 - smoothstep(0, surLook.z, OutsideMap(i.world)) : 0;
   [branch] if (own > 0) c = lerp(c, mapColours.SampleLevel(samplerLinearClamp, MirrorUv(i.world.xz / beyond.xy), 0).rgb, own);
   float3 lit = ModernLight(ToLinear(c), 0, 0.92, 0.75 + 0.25 * saturate(N.y), 0, N, i.world, i.lit);
+  beyondForm = 1;  // [farform] (lighting.h)
   return float4(BeyondMap(lit, i.world), 1);
 }
 #endif
