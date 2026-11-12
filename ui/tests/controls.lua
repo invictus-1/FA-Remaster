@@ -17,8 +17,10 @@ local function check(what, got, want)
     end
 end
 
+-- (the run's size: 1920x1080 unless the run names another after "--": `-- /size 3840 2160`, the suite's 4K runs)
+local size = GetCommandLineArg("/size", 2) or { "1920", "1080" }
 local root = GetFrame(0)
-check("root frame covers the head", root.Left() .. "," .. root.Top() .. " " .. root.Right() .. "," .. root.Bottom(), "0,0 1920,1080")
+check("root frame covers the head", root.Left() .. "," .. root.Top() .. " " .. root.Right() .. "," .. root.Bottom(), "0,0 " .. size[1] .. "," .. size[2])
 check("root depth", root.Depth(), 0)
 check("one root frame", GetNumRootFrames(), 1)
 
