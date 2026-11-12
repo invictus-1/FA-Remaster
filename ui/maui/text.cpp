@@ -11,6 +11,9 @@ class Text : public Control {
   const char* ClassName() const override { return "text"; }
   void Describe(std::string& out) const override {
     out += "\"" + text + "\" " + family + " " + std::to_string(pointSize) + (color.empty() ? "" : " " + color);
+    // (clipped to its width and its words are wider: some of them are not drawn. For the lab's layout check.)
+    float w = 0;
+    if (clipToWidth && !family.empty() && !text.empty() && width.TryGet(&w) && StringAdvance(family, pointSize, text) > w + 0.5f) out += " cut";
   }
 
   // Draw (FA exe 0x7a3040). The pen starts at Left, or with horizontal centring at
