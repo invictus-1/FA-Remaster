@@ -282,8 +282,17 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
     if (b.meshScaleVelRange != 0 || b.meshScaleVel != 0) p->scaleVel = {sv, sv, sv};
     p->drawSize = {sc, sc, sc};
   }
+  // The ctor's two Destroy paths (a tracking shell with no target, 0x69bc08; one made in the water that is
+  // DestroyOnWater, 0x69bd1c) call Entity::Destroy 0x679af0 and then pop the entity's own motion task (entity+0x34,
+  // the task StandardInit 0x678477 put on its thread) off that thread (0x69bc0f..0x69bc3a / 0x69bd23..0x69bd45: thread
+  // = [entity+0x40], top = thread+0x10, thread+0x10 = top+0x10, top+0x10 = top+0xc = 0, deleted only if owned +0x14):
+  // the shell never runs a MotionTick, unlike one a script destroys later, which takes its step until the beat's
+  // destroy queue (ProjectilesTick). Seen: m_uefnav2 (weapons range) 176, BattlePack's wel0416 fires its first
+  // DragoniteMissiles (DestroyOnWater, ZigZag) from a muzzle 1.8 below the water: the original makes no zig-zag draws
+  // for it at 176; ours stepped it (UpdateTracking: three FRand), the first draw apart.
   if (p->trackTarget && !HasTarget(*this, target)) {
     QueueDestroy(p);
+    p->noMotionTask = true;
     return p;
   }
   // The layer test runs only for a shell that tracks from birth (0x69bb52: +0x2aa clear jumps to 0x69bbe9, past it);
@@ -314,6 +323,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   CallMethod(L, p, "OnLayerChange", 2);
   if (inWater && p->destroyOnWater) {
     QueueDestroy(p);
+    p->noMotionTask = true;  // (0x69bd23: its motion task popped, as above)
     return p;
   }
   lua_pushboolean(L, inWater);
@@ -980,7 +990,7 @@ void ProjectilesTick(Sim& sim) {
 }
 
 void ProjectileStep(Sim& sim, Projectile* p) {
-  if (!p->HasLuaObject() || p->steppedTick == sim.tick()) return;
+  if (!p->HasLuaObject() || p->noMotionTask || p->steppedTick == sim.tick()) return;
   wtrap::Turn trapTurn(p);  // (MOHO64_PAR_WRITETRAP: the shell's own pages writable for its step)
   p->steppedTick = sim.tick();
   PurgeShooters(sim, p);

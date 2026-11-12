@@ -1985,6 +1985,23 @@ void MotionTick(Sim& sim, Unit* u) {
   }
   if (!m.bp || !m.bp->mobile() || u->dead) {
     m.lastMove = {};
+    // A dead unit that is not held (MotionTick 0x6b9f77: no IsDead test before the dispatch) in a layer other than
+    // Land / Seabed takes CalcMoveWater 0x6c3480: IsDead (vt+0x28, 0x6c3491) skips only CalcMoveCommon (no move, bl =
+    // 0); HandleDivingAndSurfacing 0x6c3220 still runs (0x6c34ab) and, while it dives or surfaces (al, 0x6c3523) or the
+    // dive pitch is still there (|m+0x68|^2 > 1e-6, 0x6c3527..0x6c355a), SnapToWater 0x6c1cb0 sets it at its new depth
+    // and tilt (0x6c355c); then ProcessCommonMotionState (0x6c3598). Seen: m_sernav2 (weapons range) 5430, the scene
+    // kills BlackOps' bss0306 submarines (units 3 and 4) while they surface (MovingUp): the original's go on rising
+    // 0.06 to 0.1 a beat and pitching (y 15.08 -> 16.07 by 5441), ours stopped where they died, and the streams parted
+    // at 5446.
+    if (m.bp && m.bp->mobile() && u->dead && m.bp->motionType != kMotionHover && u->layer != "Land" &&
+        u->layer != "Seabed" && !u->immobile && !u->unitStates.Has(US("Immobile")) && !u->stunned) {
+      const Vec3 s0 = u->position;
+      m.committedOri = u->orientation;  // (CalcRollHack reads the committed transform, as below)
+      const bool diving = HandleDivingAndSurfacing(sim, u);
+      const Vec3& C = m.diveTilt;
+      if (diving || ((C.x * C.x + C.y * C.y) + C.z * C.z) > 9.99999997e-07f) SnapUnit(sim, u);
+      m.lastMove = {u->position.x - s0.x, u->position.y - s0.y, u->position.z - s0.z};
+    }
     if (m.bp && m.bp->mobile() && u->dead) ProcessCommonMotionState(sim, u, false);  // (CalcMoveLand 0x6c3212)
     // MotionTick 0x6b9d10 has no IsDead test: a dead unit takes the held test like a live one (0x6b9eb5 / 0x6b9f10:
     // vt+0x3c(1) Immobile, u+0x29c stunned) and, held, ends on 0x6ba00d without MoveTo (no blend frame) or on

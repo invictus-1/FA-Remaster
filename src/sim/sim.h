@@ -842,6 +842,10 @@ class Sim {
   uint64_t entSeqNext_ = 0;
   uint64_t attachSeqNext_ = 0;
   bool motionOrderDirty_ = true;
+  // the units made while the entity pass runs (a shell's OnImpact, a unit's death), in creation order: their tasks
+  // are linked at the stage's run list's end and take their first turn in that same pass (Sim tick, entity pass)
+  bool entityPassOpen_ = false;
+  std::vector<Unit*> madeInEntityPass_;
   std::vector<Unit*> armyOrder_;
   bool armyOrderDirty_ = true;
   std::vector<Unit*> dirtyOrder_;

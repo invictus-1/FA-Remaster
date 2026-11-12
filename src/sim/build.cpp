@@ -5016,6 +5016,14 @@ int l_IssueMoveOffFactory(lua_State* L) {
   auto units = UnitList(L, 1);
   CheckScriptTarget(L, 2);  // SCR_GetTarget 0x6eef60, after the unit list (0x6f2ae6)
   Vec3 p;
+  // 0x6f2b57: IsValid_Vector3f (no NaN) and an SSTI type != 0 (no nil target), else luaL_error (0xe2ed50) - reached
+  // only when FilterByCommandCap 0x6eecf0 (RULEUCC_Move, 0x6f2a73; immobile factories left out) kept a unit
+  // (0x6f2ac4); the same test as IssueMove's (commands.cpp InvalidTargetPointError)
+  if (!ToObject<Entity>(L, 2) &&
+      !(PosArg(L, 2, &p) && !std::isnan(p.x) && !std::isnan(p.y) && !std::isnan(p.z)) &&
+      std::any_of(units.begin(), units.end(),
+                  [&](const Unit* u) { return (LiveCommandCaps(L, u) & 0x1u) && !IsImmobileFactory(*S(L), u); }))
+    return luaL_error(L, "IssueMoveOffFactory: Passed in an invalid target point.");
   if (!PosArg(L, 2, &p)) return 0;
   Sim* sim = S(L);
   auto c = std::make_shared<UnitCommand>();
