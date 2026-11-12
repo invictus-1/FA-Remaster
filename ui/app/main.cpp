@@ -127,6 +127,8 @@ bool menuFlightHeadless = false;
 // sculpted land past its edges where it brings one; "mirror": the map laid out again mirrored, the earlier look).
 ui::GameSession::Sky sky;
 // --maps <folder> (may be given more than once): more map folders, beside the game's own at /maps
+// --mods-folder <folder> (may be given more than once; --mods is the file of mod uids above): more mod folders, beside the game's own at /mods: each folder in it
+//   that holds a mod_info.lua is a mod the mods manager lists (2026-11-12; for the tests' own UI mod, ui/tests/uimod)
 // (maps in the making). --remasters <folder> (may be given more than once): the remastered units' own files, one
 // folder per unit (render/remasters.h), each root mounted in turn: the stock units' (visuals/work) and, by the
 // launchers of games with a mod, that mod's own (visuals/work_mods/<mod>: Chris, 2026-10-20, item 22: no mod unit
@@ -134,7 +136,7 @@ ui::GameSession::Sky sky;
 // the ZEB95xx / ZEB96xx support factories: visuals/work_mods/faf_base), mounted only when the game's files are
 // FAF's (Chris, 2026-10-21: "only appear when its connected to faf"). --own <folder>: this program's own files
 // (ui/data); without it they are looked for beside the program.
-std::vector<std::string> moreMaps, remastersFolders, fafRemastersFolders;
+std::vector<std::string> moreMaps, moreMods, remastersFolders, fafRemastersFolders;
 // --remasters-mods <folder> (visuals/work_mods): the mods' remastered units, each mod's folder mounted only for a game
 // with that mod on (its MODS.json: GameSession::MountModRemasters).
 std::string remastersModsRoot;
@@ -299,6 +301,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-weather") sky.weather = "none";
     else if (a == "--map-edge") sky.edge = next();
     else if (a == "--maps") moreMaps.push_back(next());
+    else if (a == "--mods-folder") moreMods.push_back(next());
     else if (a == "--remasters") remastersFolders.push_back(next());
     else if (a == "--remasters-faf") fafRemastersFolders.push_back(next());
     else if (a == "--remasters-mods") remastersModsRoot = next();
@@ -448,6 +451,9 @@ int main(int argc, char** argv) {
   }
   for (const std::string& folder : moreMaps) {
     if (!vfs.Mount(folder, "/maps")) Logf(LogLevel::Warning, "moho64ui: --maps %s: no such folder", folder.c_str());
+  }
+  for (const std::string& folder : moreMods) {
+    if (!vfs.Mount(folder, "/mods")) Logf(LogLevel::Warning, "moho64ui: --mods-folder %s: no such folder", folder.c_str());
   }
   // This program's own files: what it adds to the game's scripts (ui/data/hook, taken as one more
   // hook folder, so the game's files stay as they are). Beside the program, or in its source tree.

@@ -128,6 +128,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `tests/menu_exit.lua`).
 - Cloud Layout has a third choice, Varied (2026-11-11, the renderer's request 75, Chris's decision): clouds of more
   sizes in a fairer sky, `World::clouds.mix` 2; Mixed stays the default and as it was (`LookSettings::cloudLayout`).
+- A mod of the interface alone (a "UI mod", `ui_only = true`) that the player switched on takes effect in a game, as in the original: the choice is the preference `active_mods`, and a new session's `/lua/SessionInit.lua` adds `mods.GetUiMods()` to `__active_mods`, whose hooks are read after the game's own files. Under test since 2026-11-12 (`tests/uimod.lua` with the test's own mod `tests/uimod/remaster_test_uimod`: found, switched on, a skirmish launched from the lobby, its hook ran in the game's interface, and it is no mod of the simulation). `--mods-folder <folder>` mounts more mod folders at `/mods`, as `--maps` does maps (`--mods` is the older file of mod uids).
 - The start of a run names the test and trial switches set in its environment, one log line (`MOHO64UI_*`,
   `MOHO64_*`; none set: no line), so that a log says what a run really had.
 - Linux and Mac (2026-10-16, Chris: "download what you need"): the same program, its window,
