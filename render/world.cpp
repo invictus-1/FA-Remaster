@@ -1584,6 +1584,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   air.amount = sunlight.amount = distantLand.hazeAmount = hazeAmount;
   particles.remastered = ribbons.remastered = decals.remastered = effectsLook == EffectsLook::Remastered;
   effects.warpInColours = warpInColours && look == Look::Modern && effectsLook == EffectsLook::Remastered;  // [warpin]
+  effects.keepLastingStale = effectsKeepLasting;  // [stalelast]
   decals.battleScars = battleScars;
   decals.SetSettleScars(settledScars);  // [settled]
   decals.SetModernRelief(markRelief && look == Look::Modern);  // [scars]
