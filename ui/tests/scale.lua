@@ -12,12 +12,13 @@
 --            runs), the mean of 30
 --   a draw   the interface's picture drawn once (moho64ui_PixelAt draws the head: a run without a window draws
 --            nothing by itself), the mean of five, the least of three rounds
---   a beat   a beat's worth of the running game (six frames, one beat of the simulation and what is copied for the
---            interface after it), the least of three rounds
+--   a beat   the interface's share of a beat's worth of the running game: the PC's time for the beats run, less the
+--            simulation's own time in them (moho64ui_BeatTimes): six frames and what the program does for the
+--            interface after a beat. The mean over six beats. (Without that split the measure is the simulation's:
+--            with a thousand tanks pushing through four thousand its beats swing from 30 ms to 2.5 s.)
 -- A state's cost is each of the three OVER the same with nothing selected. The budgets are three times and more what
 -- was measured on the day this was written (2026-11-12: docs/ui-benchmarks.md has the numbers, and every run's log):
--- they catch a cost that has grown by its order, not a slow afternoon. (The clock these are read from goes in
--- milliseconds, so a beat's worth is good to half a millisecond and the idle beat itself swings by some ten.)
+-- they catch a cost that has grown by its order, not a slow afternoon.
 -- Units made by the game's cheat callback. Run it as the suite's job `scale` does (a launched game with
 -- CheatsEnabled = "true", session_ai_cheats.lua, --no-world, --frames 4000).
 local COUNT = 5000
@@ -27,8 +28,8 @@ local BUDGET = {  -- milliseconds over the idle state: {a frame, a draw, a beat}
     selected = {8, 25, 60},
     build = {8, 25, 60},
     economy = {8, 25, 60},
-    moving = {8, 40, 150},  -- (measured: 51 ms a beat: the one cost here that is large; see docs/ui-benchmarks.md)
-    shift = {8, 40, 150},
+    moving = {8, 40, 60},
+    shift = {8, 40, 60},
 }
 local BUDGET_IDLE_FRAME = 8   -- a paused frame with nothing selected
 local BUDGET_SELECT = 400     -- the change of the selection itself
@@ -71,15 +72,14 @@ local function draw()
     end
     return least
 end
+local simNow = 0  -- (the simulation's own time a beat in the last measure: for the notes)
 local function beat()
-    local least
-    for i = 1, 3 do
-        local t0 = wall()
-        WaitSeconds(0.2)
-        local t = (wall() - t0) / 2
-        if not least or t < least then least = t end
-    end
-    return least
+    local t0, b0 = wall(), moho64ui_BeatTimes()
+    WaitSeconds(0.6)
+    local b1 = moho64ui_BeatTimes()
+    local ran = math.max(1, b1.beats - b0.beats)
+    simNow = (b1.simMs - b0.simMs) / ran
+    return (wall() - t0) / ran - simNow
 end
 
 ForkThread(function()
@@ -89,6 +89,7 @@ ForkThread(function()
     local p = cdr:GetPosition()
     local spot = {p[1] + 40, p[2], p[3] + 40}
     local before = beat()
+    local simBefore = simNow
     SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = spot, bpId = "uel0201", count = COUNT, yaw = 0}})
     WaitSeconds(8)
     local tanks = made("uel0201", "LAND")
@@ -103,14 +104,15 @@ ForkThread(function()
 
     -- the idle state: nothing selected
     local idleBeat = beat()
+    local simIdle = simNow
     SessionRequestPause()
     WaitFrames(10)
     check("the game is paused for the frames' measure", SessionIsPaused(), true)
     local idleFrame, idleDraw = frame(), draw()
     SessionResume()
     WaitSeconds(0.3)
-    LOG(string.format("TEST note idle, %d units: a frame %.2f ms, a draw %.2f ms, a beat's worth %.1f ms (before the units: %.1f)",
-        COUNT, idleFrame, idleDraw, idleBeat, before))
+    LOG(string.format("TEST note idle, %d units: a frame %.2f ms, a draw %.2f ms, the interface's share of a beat %.1f ms (before the units: %.1f); the simulation's beat %.1f ms (before: %.1f)",
+        COUNT, idleFrame, idleDraw, idleBeat, before, simIdle, simBefore))
     check("idle: a paused frame stays inside " .. BUDGET_IDLE_FRAME .. " ms", idleFrame < BUDGET_IDLE_FRAME, true)
 
     -- a state: entered, measured running (a beat) and paused (a frame, a draw), left
@@ -118,6 +120,7 @@ ForkThread(function()
         enter()
         WaitSeconds(0.3)
         local b = beat()
+        local sim = simNow
         SessionRequestPause()
         WaitFrames(10)
         local f, d = frame(), draw()
@@ -125,11 +128,11 @@ ForkThread(function()
         if leave then leave() end
         SelectUnits(nil)
         WaitSeconds(0.3)
-        LOG(string.format("TEST note %s, %d units: a frame %.2f ms over idle, a draw %.2f ms over idle, a beat's worth %.1f ms over idle",
-            what, COUNT, f - idleFrame, d - idleDraw, b - idleBeat))
+        LOG(string.format("TEST note %s, %d units: a frame %.2f ms over idle, a draw %.2f ms over idle, the interface's share of a beat %.1f ms over idle (the simulation's beat meanwhile: %.1f ms)",
+            what, COUNT, f - idleFrame, d - idleDraw, b - idleBeat, sim))
         check(what .. ": a frame stays inside " .. BUDGET[name][1] .. " ms over idle", f - idleFrame < BUDGET[name][1], true)
         check(what .. ": the picture stays inside " .. BUDGET[name][2] .. " ms over idle", d - idleDraw < BUDGET[name][2], true)
-        check(what .. ": a beat's worth stays inside " .. BUDGET[name][3] .. " ms over idle", b - idleBeat < BUDGET[name][3], true)
+        check(what .. ": the interface's share of a beat stays inside " .. BUDGET[name][3] .. " ms over idle", b - idleBeat < BUDGET[name][3], true)
     end
 
     -- the change of the selection itself, the least of three

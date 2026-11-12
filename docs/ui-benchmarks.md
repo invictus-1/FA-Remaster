@@ -5,44 +5,54 @@ commit, hardware, scenario, numbers). Newest first.
 
 **Hardware (all rows):** AMD Ryzen 9 9950X3D, NVIDIA RTX 4090, the screen at 240 Hz, vertical sync on.
 
-## 2026-11-12: the interface with 5,000 units (the scale gate, ui/tests/scale.lua, on 063c2698)
+## 2026-11-12: the interface with 5,000 units (the scale gate, ui/tests/scale.lua)
 
-A measure, nothing changed ("optimise at the end"). One scene: the suite's session_ai_cheats.lua (SCMP_009, 4 armies), 5,000 UEF light tanks made
-by the cheat callback, all in view; a run without a window, 1920x1080, pinned to CPUs 16-31 (the half without the big
-cache), nothing else running. The test is the suite's job `scale`; it holds each number inside a budget of three
-times and more, and logs each as a "TEST note".
+A measure, nothing changed ("optimise at the end"). One scene: the suite's session_ai_cheats.lua (SCMP_009, 4
+armies), 5,000 UEF light tanks made by the cheat callback, all in view; a run without a window, 1920x1080, pinned to
+CPUs 16-31 (the half without the big cache), nothing else running. The test is the suite's job `scale`; it holds
+each number inside a budget of three times and more, and logs each as a "TEST note". Two runs, the same to within
+the spread shown.
 
 **The interface alone (`--no-world`: no picture of the world is made):**
 
-| State | A frame, game paused | The interface drawn once | A beat's worth (6 frames + the beat) |
-|---|---|---|---|
-| Before the units | | | 1.0 ms |
-| Idle, nothing selected | 3.2 ms | 5.8 ms | 40 ms (30 to 40 between runs) |
-| All 5,000 selected | +0.8 | +4.4 | +0 to +7.5 |
-| Build mode (commander selected) | +0 | +5.6 | +0 |
-| The economy overlay | +0 | +0 | +0 |
-| All selected, 1,000 of them moving | +0.7 | +4.4 | **+51** |
-| The same with Shift held | +0.3 | +4.0 | +38 (the command graph itself: 1.3 ms) |
+| State | A frame, game paused | The interface drawn once | The interface's share of a beat (*) | The simulation's beat meanwhile |
+|---|---|---|---|---|
+| Before the units | | | 0.8 to 1.2 ms | 0.3 ms |
+| Idle, nothing selected | 2.2 ms | 5.5 to 6.1 ms | 17 ms | 18 ms |
+| All 5,000 selected | +1.2 | +4.0 to +5.1 | +1.4 to +2.4 | 18 ms |
+| Build mode (commander selected) | +0.3 to +0.7 | +4.4 to +6.1 | +0 | 18 ms |
+| The economy overlay | +0 | +0 | +0 | 19 to 21 ms |
+| All selected, 1,000 of them moving | +0.8 to +1.5 | +3.1 to +4.3 | +6.0 | 2,500 to 2,900 ms |
+| The same with Shift held | +0.6 to +1.3 | +1.9 to +4.5 | +5.5 to +6.4 (the command graph itself: 1.0 ms) | 45 to 49 ms |
 
-Selecting the 5,000 (the call and the two frames after): 72 ms.
+(*) The PC's time for the beats run, less the simulation's own time in them (`moho64ui_BeatTimes`): six frames and
+what the program does for the interface after a beat.
 
-What it says: nothing here grows by the square of the count any more (the command graph, 1.3 ms, was the Shift
-freeze). The one large number is a big selection whose units move: about 40 to 50 ms more in every beat's worth,
-with or without Shift, so it is not the order lines' working out. LIKELY (the code was not read for it today) it
-is the selected units' state taken for the interface after each beat: the review's 4.2 item 16 (a unit read by the
-interface is copied again after the next beats). Where the 40 to 50 ms go is the first thing to read there. The review's reasoned 3.5 to 5 ms a frame for the economy overlay did not show
-(tanks have no economy numbers to show: with 5,000 extractors it may); its 2.5 to 4 ms for build mode shows as
-5.6 ms in the drawn frame.
+Selecting the 5,000 (the call and the two frames after): 62 to 67 ms.
+
+What it says: nothing in the interface grows by the square of the count any more (the command graph, 1 ms, was the
+Shift freeze), and no state costs more than a few milliseconds over idle. The idle cost itself, 2.2 ms a frame with
+5,000 units and nothing selected against next to nothing before, is the largest single number and is not attributed
+yet. The review's reasoned 3.5 to 5 ms a frame for the economy overlay did not show (tanks have no economy numbers:
+with 5,000 extractors it may); its 2.5 to 4 ms for build mode shows as 4 to 6 ms in the drawn frame.
+
+**A correction (the first version of this section, on 3301700f, was wrong):** it gave "a beat's worth" as the PC's
+whole time for a beat and read +40 to +51 ms for a big moving selection as the interface's cost. That time is the
+simulation's: with a thousand tanks pushing through four thousand standing ones its beats swing from 30 ms to
+2.5 s, and the rounds measured with the selection happened to fall on slower beats. With the simulation's time
+taken out (the table above) the selection costs 6 ms a beat. The test measures the share now, not the whole.
 
 **With the world's picture (the suite's usual way for a game: the picture made and read back):** a frame of the same
-idle scene, game paused, takes 21 to 28 ms, of which the picture's own making ("the picture's scene: Draw" in the
-binding profile) is 16.3 ms a frame; a beat's worth 155 to 220 ms. That is the read-back way of a run without a
-window, not a live window's, and the renderer's work, not the interface's: told to the renderer as a number, not
-measured further here.
+idle scene, game paused, takes 21 to 28 ms, of which "the picture's scene: Draw" in the binding profile is 16.3 ms.
+The renderer's answer the same day: that is the read-back way's wait, not drawing work (Draw waits there for the
+card to finish the frame and for the pixels to come back, on the slower cores); in a live window (his viewer,
+SETONS_R, Chris's looks with ray tracing, 1920x1080, no vertical sync) the same 5,000 tanks cost about 4.3 ms a frame
+over one tank, nearly all of it the card (2,995,000 triangles), under 1 ms of processor.
 
-**A move order for all 5,000 at once:** one beat of 50 s, then 250 ms a beat's worth (with the world's picture). The
-click and its two frames took 115 ms, so the time is in the beat, the simulation's side (LIKELY the formation
-for a group of 5,000: FAF's formation script runs there; not read). Told to the engine as a number. The scale gate moves 1,000.
+**The simulation with this crowd (the engine's, told to him as numbers):** ONE move order for all 5,000 tanks made
+one beat take 50 s (measured with the world's picture, by the PC's clock; the click and its two frames 115 ms); with
+1,000 of the 5,000 on a move order, the beats while they push through the others take 2.5 to 2.9 s each over six
+beats. LIKELY the formation and the tanks' way through each other; not read.
 
 ## 2026-11-07: a skirmish's first beats inside the load (helper "startfreeze", on adf1c5d4 + its patch)
 

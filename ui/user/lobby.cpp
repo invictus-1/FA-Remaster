@@ -696,10 +696,27 @@ void RegisterLobbyBindings(lua_State* L) {
   SetMethod(L, "CDiscoveryService", "Reset", l_DiscoveryReset);
   SetMethod(L, "CDiscoveryService", "Destroy", l_DiscoveryDestroy);
   // moho64ui_WallSeconds(): the PC's clock in seconds (ours, for tests: a run without a window steps its frames as
-  // fast as it can, so its scripts' clocks say nothing of how long another program has had)
+  // fast as it can, so its scripts' clocks say nothing of how long another program has had). Counted from the first
+  // state's making (2026-11-12): the scripts' numbers are 32-bit floats, and the clock's own count, the seconds since
+  // the PC started, left them a step of 1 ms after two hours and of 8 ms after a day; from the program's start the
+  // step is under a tenth of a millisecond for a quarter of an hour.
+  static const auto wallStart = std::chrono::steady_clock::now();
   lua_register(L, "moho64ui_WallSeconds", [](lua_State* L) {
-    lua_pushnumber(L, static_cast<lua_Number>(
-                          std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count()));
+    lua_pushnumber(L, static_cast<lua_Number>(std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStart).count()));
+    return 1;
+  });
+  // moho64ui_BeatTimes() -> {beats = the game's beats run so far in this program, simMs = the simulation's own time
+  // in them, in all}: for tests that measure the interface's share of a beat (the PC's time less the simulation's;
+  // ui/tests/scale.lua). The window's log has the same numbers (FrameTimes).
+  lua_register(L, "moho64ui_BeatTimes", [](lua_State* L) {
+    const FrameTimes& t = Times();
+    lua_newtable(L);
+    lua_pushstring(L, "beats");
+    lua_pushnumber(L, t.beats);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "simMs");
+    lua_pushnumber(L, static_cast<lua_Number>(t.simBeats * 1000.0));
+    lua_rawset(L, -3);
     return 1;
   });
 }
