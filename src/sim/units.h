@@ -560,6 +560,10 @@ class CollisionBeam : public Entity {
   float length = 0;
   bool enabled = true;
   int counter = 0;
+  // Whether its checks are heard by the weapon (ReTargetOnMiss): the attacker's impact listener (+0x270) is hung on
+  // the beam at its FIRST Enable, after the script's OnEnable (EnableCollisionCheck 0x6731f0, flag +0x295; see
+  // l_beam_Enable), and stays for good.
+  bool listening = false;
 };
 
 class Projectile : public Entity {

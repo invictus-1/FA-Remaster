@@ -670,8 +670,11 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   if (credit) sim.impactShot = b;
   sim.CallMethod(L, b, "OnImpact", 2);
   if (credit) sim.impactShot = shotBefore;
-  // 0x673337: the weapon hears whether the beam met its target (ReTargetOnMiss)
-  if (!owner->destroyQueued && !owner->combatGone &&
+  // 0x673337: the weapon hears whether the beam met its target (ReTargetOnMiss), through the listener at beam+0x270
+  // (0x673348 / 0x673379 / 0x67338e: no listener, no event). It is hung there only by the beam's first Enable, after
+  // its OnEnable (l_beam_Enable): the check a continuous beam's OnEnable makes (CollisionBeam.CreateBeamEffects ->
+  // SetBeamFx(fx, true) -> 0x674104) at its first Enable goes unheard.
+  if (b->listening && !owner->destroyQueued && !owner->combatGone &&
       std::find(owner->weapons.begin(), owner->weapons.end(), w) != owner->weapons.end())
     WeaponImpactEvent(sim, w, ShotEvent(sim, type, w->target, target, false));
 }
@@ -726,9 +729,17 @@ static void BeamSwitchLog(lua_State* L, const CollisionBeam* b, const char* what
 int l_beam_Enable(lua_State* L) {
   CollisionBeam* b = B(L);
   BeamSwitchLog(L, b, "Enable");
+  // cfunc_CollisionBeamEntityEnableL 0x6742d0: the script's OnEnable (0x67435f), then EnableCollisionCheck(true)
+  // 0x6731f0 (0x674366): the flag +0x294, the counter +0x298 = the interval +0x27c, and on the first call only (+0x295
+  // clear) with a weapon (+0x28c), its unit (+0xa0) and that unit's attacker (+0x544): the attacker's vt+0x68 hangs
+  // the weapon's impact listener on the beam (0x673299) and +0x295 is set; Disable 0x6741a0 clears only +0x294.
+  // Seen (weapons range, m_cybland2 cell 5, brmt3exbm's mainredlaser1, ReTargetOnMiss, four continuous beams): the
+  // beams' first Enable at 417 checks four times inside OnEnable; ours counted those four misses too and dropped the
+  // target at 419, the original fired again at 420 and dropped it at 421 (its aim line '-' at 422).
   S(L)->CallMethod(L, b, "OnEnable", 0);
   b->enabled = true;
   b->counter = b->interval;
+  if (b->weapon && b->weapon->unit) b->listening = true;
   return 0;
 }
 int l_beam_Disable(lua_State* L) {

@@ -1471,7 +1471,17 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
         found = true;
       }
     if (!found) w->blacklist.push_back({ref, 10});
-    SetTarget(sim, w, AiTarget{});
+    // ... and the weapon is handed an ENTITY target without an entity (0x5d9786..0x5d97bd: type 1 at +0, the weak
+    // pointer null, PickTargetPoint 0x5e28f0 finds nothing to pick, then SetTarget 0x6d5f30), not "no target". So
+    // SetTarget sees a target before and after: no OnLostTarget (0x6d5f6a..0x6d5f78 only for had and not has), and
+    // the next real target brings no OnGotTarget (0x6d616b..0x6d6181 only for not had and has). HasTarget is false
+    // (no entity), WeaponHasTarget true (it reads the type only, 0x6d8e7c). Seen (weapons range, m_cybland1 cell 1,
+    // brmt3mcm4's laserbodyweapon, ReTargetOnMiss): the 11th miss at 265; ours raised OnLostTarget, the state machine
+    // went Idle and the FireReady wait begun at 265 (to 298) was killed; the original's ran on to 298, its
+    // ResetTarget's Idle cleared the unit's Busy at 298 and three weapons fired at 299 (ours: 300 and 301).
+    AiTarget none;
+    none.type = 1;
+    SetTarget(sim, w, none);
     return;
   }
   PickNewTargetAimSpot(sim, w);
@@ -3345,7 +3355,21 @@ int l_CreateAimController(lua_State* L) {
     Vec3 f = Forward(q);
     c->hCenter = dmath::Atan2(f.x, f.z) + (w->bp ? w->bp->headingArcCenter : 0) * kDeg2Rad;
     c->hHalf = (w->bp ? w->bp->headingArcRange : 180) * kDeg2Rad;
-    c->yawVertical = std::fabs(f.y) > 0.707f;
+    // +0xe1 (Track 0x630760 turns the pitch first when yaw and pitch are one bone and this is set): the ctor
+    // 0x63061f..0x63065a takes |2 (z y - x w)| > 0.707 of the skeleton record's +0x24 quaternion, the one made of the
+    // file's rest-pose INVERSE matrix (CAniSkel 0x54a0a0; ours Bone::entRot is its conjugate: e.y e.z = y z,
+    // e.x e.w = -(x w)), not of the bones' local rotations. The two differ in a mesh whose inverse matrices hold a
+    // turn the local rotations do not: Total Mayhem's brnt1bt (every bone's inverse turns 90 degrees about x, so the
+    // flag is set for all), whose dual-manipulator rockets and grenades (yaw and pitch on rl01 / gl01) the original
+    // pitches first. Seen: weapons range m_uefland1 cell 22 and m_uefland2 cell 36, fire 173 R0 b000: the shells'
+    // orientation z +1.47e-5 in ours (yaw first), -1.47e-5 in the original, the y's last digits with it.
+    // (hCenter's ctor value comes from that quaternion too, 0x6305a7..0x630604, but SetFiringArc 0x630cb0 overwrites
+    // it, which FAF's weapon.lua calls for every controller it makes: left as it was.)
+    {
+      const Quat e = u->skeleton->bones()[static_cast<size_t>(yaw)].entRot;
+      const float v = (e.z * e.y + e.x * e.w) * 2.0f;  // ((z y) - (x w)) x 2 of the record's quaternion
+      c->yawVertical = std::fabs(v) > 0.707f;
+    }
   }
   w->onTarget = false;
   if (w->projBp) {
