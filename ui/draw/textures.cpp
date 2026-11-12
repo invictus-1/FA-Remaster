@@ -365,6 +365,13 @@ bool DecodeTga(const std::string& d, Image& img) {
     if (kind != 1) return colour(v, kind == 3 ? 8u : static_cast<uint32_t>(bpp));
     return v >= mapFirst && v - mapFirst < palette.size() ? palette[v - mapFirst] : 0xff000000u;
   };
+  // Before any memory is asked for (the review of 2026-11-09, toolkit L14): TGA has no magic number and is tried last,
+  // on every file the other decoders refuse, so a wrong file with a plausible header asked for up to 65,535 x 65,535
+  // pixels (16 GB) before its length was looked at. The sides are capped as the other decoders cap theirs, and the
+  // file must be long enough for what its header says: every pixel when unpacked, and when packed (run-length: a
+  // packet of one count byte and one pixel stands for 128 pixels at most) at least that many packets.
+  if (w > 16384 || h > 16384 || at > d.size()) return false;
+  if (type < 8 ? at + count * bytes > d.size() : (count + 127) / 128 * (1 + bytes) > d.size() - at) return false;
   std::vector<uint32_t> pixels;  // in the file's order
   pixels.reserve(count);
   if (type < 8) {

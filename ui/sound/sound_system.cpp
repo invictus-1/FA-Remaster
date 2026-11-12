@@ -205,9 +205,14 @@ SoundSystem::WaveBank* SoundSystem::LoadWaveBank(const std::string& key, const s
 std::shared_ptr<WaveData> SoundSystem::GetWave(WaveBank* bank, int index) {
   if (index < 0 || index >= static_cast<int>(bank->info.entries.size())) return nullptr;
   const WaveEntry& e = bank->info.entries[static_cast<size_t>(index)];
-  if (e.tag != 0 || e.bits != 16 || e.channels < 1 || e.channels > 2) {
+  // (a rate under 1000 or no samples at all, the review of 2026-11-09, toolkit M6: a damaged or odd bank of a mod. The
+  // mixer steps through a wave by its rate; with a rate of 0 or 1 its loop never ended, under the mixer's lock: the
+  // game stood still. Such a wave is refused here, said once, and the sound stays silent.)
+  if (e.tag != 0 || e.bits != 16 || e.channels < 1 || e.channels > 2 || e.rate < 1000 || e.length < 2u * static_cast<uint32_t>(e.channels)) {
     std::string key = bank->info.name + "#" + std::to_string(index);
-    if (!complained_[key]) Logf(LogLevel::Warning, "moho64ui: sound: wave %s has a format that is not built (tag %d, %d bits)", key.c_str(), e.tag, e.bits);
+    if (!complained_[key])
+      Logf(LogLevel::Warning, "moho64ui: sound: wave %s has a format that is not built or is damaged (tag %d, %d bits, %d channels, %d samples a second, %u bytes)",
+           key.c_str(), e.tag, e.bits, e.channels, e.rate, e.length);
     complained_[key] = true;
     return nullptr;
   }

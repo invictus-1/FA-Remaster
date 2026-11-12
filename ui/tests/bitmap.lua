@@ -126,5 +126,20 @@ ForkThread(function()
     b:Stop()
     b:SetTexture(four)
     check("a new texture: back to the start", b:GetFrame(), 0)
+    -- A file that is no picture but has a plausible TGA header (65,535 x 65,535 at 32 bits, then 64 bytes; the review
+    -- of 2026-11-09, toolkit L14: TGA has no magic number and is tried last, on every file the other decoders refuse,
+    -- and its decoder asked for the header's 16 GB before it looked at the file's length). With the suite's
+    -- --maps ui/tests/maps the file is at /maps/bad_pictures/huge_header.tga; without, this part is left out.
+    local bad = "/maps/bad_pictures/huge_header.tga"
+    if exists(bad) then
+        local huge = Bitmap(GetFrame(0))
+        local ok = pcall(function() huge:SetTexture(bad) end)
+        WaitFrames(3)
+        check("a file with a TGA header of 65,535 x 65,535 and 64 bytes: the program goes on", ok or true, true)
+        check("and a real texture is still drawn after it", pcall(function() huge:SetTexture(four) end), true)
+        huge:Destroy()
+    else
+        LOG("TEST note: bitmap: no " .. bad .. " (run with --maps ui/tests/maps): the bad picture is left out")
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)
