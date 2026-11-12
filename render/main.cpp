@@ -189,6 +189,8 @@
 // --clouds-mix n  [cloudmix] the 3D clouds' heaps placed at random and of mixed sizes (1, the default; 0: in rows and of
 //           one size, as before; above 1 more big ones)
 // --plain-night  [starry] the night sky as before (not deep and starry, with the band in colour, the moon's halo, shooting stars)
+// --rain-under-shadow  [rainover] a storm's rain keeps to where its clouds' shadow lies, as before (World::rainUnderClouds
+//           off; by default it falls under the clouds themselves)
 // --no-storm-cells  [stormcells] a storm's 3D clouds as before (not in a few towering cells with dark bases)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
 //           camera rises through the cloud layer as it zooms out, the clouds then lie below it, thinning the higher it is;
@@ -1203,6 +1205,7 @@ struct Options {
   bool clouds3d = false;                // --clouds-3d
   float cloudsMix = -1;                 // [cloudmix] --clouds-mix
   bool stormCells = true;               // [stormcells] --no-storm-cells
+  bool rainUnderClouds = true;          // [rainover] --rain-under-shadow
   bool starryNight = true;              // [starry] --plain-night
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
   bool cloudZoom = false;               // --cloud-zoom (cloudzoom)
@@ -1553,6 +1556,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds-3d") o->clouds3d = true;
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--no-storm-cells") o->stormCells = false;  // [stormcells]
+    else if (a == "--rain-under-shadow") o->rainUnderClouds = false;  // [rainover]
     else if (a == "--plain-night") o->starryNight = false;  // [starry]
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
     else if (a == "--picture-window") o->pictureWindow = true;
@@ -2831,6 +2835,7 @@ int main(int argc, char** argv) {
   if (opt.cloudsFull) world.clouds.shrink = 1;
   if (opt.cloudsMix >= 0) world.clouds.mix = opt.cloudsMix;  // [cloudmix]
   world.stormCells = opt.stormCells;  // [stormcells]
+  world.rainUnderClouds = opt.rainUnderClouds;  // [rainover]
   world.starryNight = opt.starryNight;  // [starry]
   if (opt.photoLook) {  // (photolook)
     std::string why;

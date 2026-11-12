@@ -466,10 +466,9 @@ float DriftHeaps(float2 q) {
   return smoothstep(-cloudDrift.z, cloudDrift.z, field - lerp(0.63, 0.37, skyClouds.x));
 }
 Texture2D<float> cloudShadowPicture : register(t31);  // (clouds.h: what comes through the clouds toward the sun, at their underside)
-float CloudShadow(float3 world) {
+// (the clouds' share of the light at the place `q` of their layer: CloudShadow's, and CloudOver's)
+float CloudShadowAt(float2 q) {
   if (skyZenith.w < 0.5 || skyClouds.x <= 0) return 1;
-  float under = cloudShadow.x > 0 ? cloudShadow.x : 150;
-  float2 q = world.xz + sunDirection.xz * ((under - world.y) / max(sunDirection.y, 0.2));
   // [sunlight] (drifting cloud shadows, sunlight.h) their own strength and their own soft edge: from this frame's picture
   // of them (Sunlight::Drift, at kCloudShadowSlot: with the volumetric clouds their own shadows in it too) where it
   // reaches; before it is drawn, and beyond it, from the field (soft over cloudDrift.z of it either side of the value that
@@ -487,6 +486,14 @@ float CloudShadow(float3 world) {
   }
   return 1 - 0.75 * CloudFrom(CloudField(q));
 }
+float CloudShadow(float3 world) {
+  float under = cloudShadow.x > 0 ? cloudShadow.x : 150;
+  return CloudShadowAt(world.xz + sunDirection.xz * ((under - world.y) / max(sunDirection.y, 0.2)));
+}
+// [rainover] How open the sky is straight above a place (1: open, as CloudShadow's): the clouds' layer read where it
+// stands over the place, not where the sun's or the moon's light comes through it. What falls from a cloud falls
+// under the cloud; its shadow lies hundreds of units off with a low sun, and elsewhere again when the moon takes over.
+float CloudOver(float3 world) { return CloudShadowAt(world.xz); }
 // The map's pictures (masks, normals, the water's depth) read beyond the map's edge: the map laid
 // out again mirrored, so that land and sea go on without a seam. Inside the map: as it is.
 float2 MirrorUv(float2 uv) { return 1 - abs(1 - frac(uv * 0.5) * 2); }

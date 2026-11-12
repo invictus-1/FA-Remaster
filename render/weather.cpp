@@ -71,7 +71,8 @@ cbuffer Fall : register(b1) {
   float4 velocity;  // xyz: how it falls, world units a second; w: a drop's length in seconds of fall (0: a flake)
   float4 shape;     // x: half its width in pixels; y: world units per pixel at distance 1; z: how see-through; w: how much it sways
   float4 tint;      // its colour, linear
-  float4 under;     // [rainunder] x: how much the fall keeps under the clouds (0: everywhere, as before; 1: none in their gaps)
+  float4 under;     // [rainunder] x: how much the fall keeps under the clouds (0: everywhere, as before; 1: none in their gaps);
+                    // [rainover] 2 more: under the clouds themselves (view.h's CloudOver), not under their shadow
                     // [rainladder] y: how many of this box's drops show; z: over how many of them the last ones fade out
                     // [falltrail] w: in the TRAIL variant, each drawn as its path of late, that many of the picture's pixels back
 #if LIT
@@ -161,7 +162,12 @@ VOut VS(uint id : SV_VertexID) {
   o.fade = saturate((1 - max(edge.x, max(edge.y, edge.z))) * 6) * (0.5 + 0.5 * Hash1(n + 5.5));
   // [rainunder] (Chris, through visuals' section 99/100: rain that follows the storm's cells) where the clouds' shadow
   // says the sky above is open, less of it: the storm's rain falls from its cover, its pockets of sun dry
-  [branch] if (under.x > 0) o.fade *= lerp(1, saturate((1 - CloudShadow(p)) * 1.8), under.x);
+  // [rainover] under the clouds themselves: by the clouds' shadow the rain stood where the low sun's light came through
+  // the cover, far from the cloud it fell from, and all of it moved at once when the moon took the sun's place
+  [branch] if (under.x > 0) {
+    bool over = under.x >= 2;
+    o.fade *= lerp(1, saturate((1 - (over ? CloudOver(p) : CloudShadow(p))) * 1.8), over ? under.x - 2 : under.x);
+  }
   // [rainladder] one of two boxes on the ladder of sizes: its last drops fade as its share of the fall goes to the other
   if (under.z > 0) o.fade *= saturate((under.y - n) / under.z);
 #if LIT
@@ -687,6 +693,7 @@ void Precipitation::Fall(const View& view, const Camera& camera, float rain, flo
     f.tint[2] = light[2] * bright;
     f.tint[3] = 1;
     f.under[0] = std::clamp(underClouds, 0.0f, 1.0f);  // [rainunder]
+    if (underOverhead && f.under[0] > 0) f.under[0] += 2;  // [rainover]
     f.under[1] = count * share * (1 + kBand);  // [rainladder]
     f.under[2] = std::max(count * kBand, 1.0f);
     f.under[3] = trail;  // [falltrail]
