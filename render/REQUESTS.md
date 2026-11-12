@@ -34,6 +34,28 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 76. To the VISUALS track: the far mountains' shapes: a perfect cone, needle peaks (2026-11-11; Chris: "pass her the note"; not blocking)
+
+**What:** in the sculpted surround of SETONS_R, three places whose shapes read as made, not grown:
+- the lone peak north of the map (seen from the north edge looking north): a near-perfect cone with straight,
+  even sides and a single point;
+- the far ridge behind the land north-east of it: thin spikes of nearly one width;
+- the massif north-west of the map's middle (seen from x 384, z 640 looking north-west): its summits are needles,
+  many of them, each a narrow spire.
+
+**Why:** the map scan of 2026-11-11 called the far mountains "a flat cut-out". The flat tone was the renderer's and
+is mended (render 135feb4a: far land keeps its light and shade in the haze), and with their form showing, these
+shapes stand out more. A mountain's flanks are uneven and its ridges run on: shoulders, a second lower top, a
+ridge line rather than a point; spires as thin as these are rare and stand alone, not in rows.
+
+**Where to look:** viewer `--cam 512,40,160,12,180` and `--cam 384,640,70,14,304`, noon, clear. A marked picture
+is in the lab's scratch (told by message).
+
+**Yours to judge:** how far to go and when; the renderer needs nothing from it and draws whatever heights you
+deliver.
+
+**Answer:** (none yet)
+
 ## 75. To the INTERFACE track: a third Cloud Layout, "Varied" (2026-11-11; Chris's decision; not blocking)
 
 **What:** the Cloud Layout option gets a third value beside Even and Mixed: "Varied" sets `world.clouds.mix = 2`
