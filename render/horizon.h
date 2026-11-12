@@ -78,8 +78,13 @@ class Horizon {
   float fogHeight = 14;       // how high a bank's middle stands over the water (world units)
   float fogThickness = 1;     // what the banks' density is multiplied by
   float showerSpeed = 1.2f;   // how fast the showers pass (world units a second)
+  // [veils] (the map scan of 2026-11-11: "smoke columns on the horizon") How much the showers are broad veils hanging
+  // from the clouds, wider than they are high, thin, and in snow of the haze's own tone, so that they hide what stands
+  // behind them; 0: the narrow columns they were, some forty units across and grey, which from the map read as plumes
+  // of smoke standing on the horizon. Set's "veil".
+  float showerVeil = 1;
   float shadowCarry = 0.4f;   // how much of the clouds' shadow is carried over the far sea where its own shading is lost
-  // Sets those named in a list "floe=11,fog=1,..." (floe, drift, fogheight, fog, showerspeed, shadow); false and why.
+  // Sets those named in a list "floe=11,fog=1,..." (floe, drift, fogheight, fog, showerspeed, shadow, veil); false and why.
   bool Set(const std::string& list, std::string* why);
 
   // Of the frame last begun, for the viewer to print: how much ice, fog and how many showers and icebergs.

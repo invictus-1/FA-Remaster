@@ -1704,6 +1704,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   c.groundLook[0] = puddleSunSoft ? 1.0f : 0.0f;    // [puddlesun]
   c.groundLook[1] = groundMattEye ? 1.0f : 0.0f;    // [matteye]
   c.groundLook[2] = layerNormalsOwn ? 1.0f : 0.0f;  // [layernormals]
+  c.groundLook[3] = groundMatt && surroundMatt ? 1.0f : 0.0f;  // [surmatt]
   std::fill(std::begin(c.snowShade), std::end(c.snowShade), 0.0f);  // [snowshade] (set with the weather, below)
   std::fill(std::begin(c.snowShadeMore), std::end(c.snowShadeMore), 0.0f);
   // wet shorelines and caustics
