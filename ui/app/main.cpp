@@ -1514,6 +1514,19 @@ int main(int argc, char** argv) {
 #endif
       Logf(LogLevel::Info, "moho64ui: without a window, at the PC's clock (MOHO64UI_REAL_TIME)");
     }
+    // The frame watchdog (2026-11-12, the review of 2026-11-09, section 6: "a frame over 100 ms goes unnoticed in
+    // tests"): each frame's own work is timed by the PC's clock, the interface's frame (its scripts, the program's
+    // per-frame work, the world's picture where one is made) and what is done for the interface round a beat (the
+    // beats' step less the simulation's own time). A frame over 100 ms is logged, and the run's end says how many
+    // there were and the longest. Loads are not in it: the game's start and its end are steps of their own below, and
+    // a game's first five frames (the world's picture opens in them: 5 s in a run that reads it back) are logged as
+    // such and not counted.
+    // A run without a window only: a window's long frames are MOHO64UI_LONG_FRAMES' (run_window.cpp). The lab's
+    // suite reads the lines (long_frames.sh).
+    int longFrames = 0, gameFrom = -1000;
+    bool wasInGame = false;
+    double longestFrameMs = 0;
+    auto msBetween = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
       double seconds = 1.0 / 60.0;
       if (realTime) {
@@ -1523,7 +1536,9 @@ int main(int argc, char** argv) {
       }
       if (session.RewindArrived()) finishRewind();
       if (session.Rewinding() && game) heldUiSeconds += seconds;
+      const auto frameFrom = Clock::now();
       if (!(session.Rewinding() && !game)) shown->Frame(seconds);  // (a jump back held: not the front end from before)
+      const double frameMs = msBetween(frameFrom, Clock::now());
       // (--menu-flight: the main menu's battle while no game is there, as the window's menu would show it; its end
       // starts it over at once, nothing to cover)
       if (menuFlight && !game && !session.Loading() && !session.running() && !startingUp) {
@@ -1533,7 +1548,20 @@ int main(int argc, char** argv) {
         menuFlight->Advance(seconds, true);
         if (menuFlight->state() == FS::Ended) menuFlight->Restart();
       }
+      const auto beatsFrom = Clock::now();
+      const double simBefore = ui::Times().simBeats;
       session.Advance(seconds);
+      const double roundBeatMs = (std::max)(0.0, msBetween(beatsFrom, Clock::now()) - (ui::Times().simBeats - simBefore) * 1000.0);
+      const bool inGame = static_cast<bool>(game);
+      if (inGame && !wasInGame) gameFrom = done;
+      wasInGame = inGame;
+      if (frameMs + roundBeatMs > 100.0) {
+        const bool first = inGame && done - gameFrom <= 5;
+        if (!first) ++longFrames, longestFrameMs = (std::max)(longestFrameMs, frameMs + roundBeatMs);
+        Logf(LogLevel::Info, "moho64ui: a long frame: %.0f ms (frame %d: the interface's frame %.0f ms, round the beat %.0f ms%s)", frameMs + roundBeatMs,
+             done, frameMs, roundBeatMs,
+             first ? "; a game's first frames, not counted" : inGame ? (session.Loading() ? "; a game loading" : "; in a game") : "; in the front end");
+      }
       listen();
       sounds.Update(static_cast<float>(seconds));
       leaveOrRestart();
@@ -1541,6 +1569,7 @@ int main(int argc, char** argv) {
       session.ServeDevice();  // (the frame's end: a picture drawn in it found the graphics device lost, GameSession::ServeDevice)
       if (realTime) std::this_thread::sleep_until(last + std::chrono::microseconds(16667));
     }
+    Logf(LogLevel::Info, "moho64ui: long frames (over 100 ms of the interface's work): %d, the longest %.0f ms", longFrames, longestFrameMs);
   }
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
   // (the program closes: CScApp::Destroy writes the preferences; in a jump back held before the new interface is there,
