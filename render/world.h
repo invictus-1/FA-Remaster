@@ -959,6 +959,11 @@ class World {
   // and the glow on the ground both (Effects::warpInColours). False: both as before. The original look and the
   // original effects never have either.
   bool warpInColours = true;
+  // [stalelast] After a jump of the picture's clock (a replay's jump forward, a long load or hitch) the emitters left
+  // at a place in the time jumped over are started when they have not run out: the endless ones (lasting fires and
+  // smoke, structures' lamps and ambient effects) and long ones with time left (effects.h, keepLastingStale). False
+  // (the viewer's --effects-drop-stale): all of them dropped, as before.
+  bool effectsKeepLasting = true;
   // (how long the script keeps the phase mesh on: the warp-in's look is drawn no longer, whatever a script does)
   static constexpr double kWarpInSeconds = 6.0;
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as

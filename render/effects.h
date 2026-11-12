@@ -137,6 +137,11 @@ class Effects {
   // textures, /remastered/textures/particles/warpin/<faction>_<ramp>.dds (her section 119, ask 3: ramp_blue_13 for the
   // Aeon, the Cybran and the Seraphim; the UEF keeps the game's blue). The light and the glow on the ground both.
   bool warpInColours = false;
+  // [stalelast] An emitter left at a place that the picture's clock has jumped more than ten seconds past is still
+  // started when its blueprint has not run out (Update's stale rule: endless ones, and long ones with time left);
+  // false: every such one is dropped, as before. `staleKept`: how many were kept so (for the check).
+  bool keepLastingStale = true;
+  int staleKept = 0;
   int warpInFlashes = 0;  // (how many took a faction's ramp: for the check)
 
  private:
