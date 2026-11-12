@@ -780,9 +780,10 @@ class Sim {
     return owned_.back().get();
   }
   // Which dead objects are deleted during the game (read once): 0 = none, everything stays to the Sim's end
-  // (MOHO64_KEEP_DEAD=1: the way it was until 2026-11-11); 1 = purged shells and ended tasks (the default);
-  // MOHO64_FREE_DEAD=<n> asks for level n, a class that is not the default yet: 2 = also purged props and their
-  // motors; 3 = also every other purged entity that is no unit (script entities, shields, beams, recon blips).
+  // (MOHO64_KEEP_DEAD=1: the way it was until 2026-11-11); 1 = purged shells and ended tasks; 2 = also purged
+  // props and their motors; 3 = also every other purged entity that is no unit (script entities, shields, beams,
+  // recon blips): the default. MOHO64_FREE_DEAD=<n> asks for level n (1 or 2: a lower level; a class above 3,
+  // when one is added, starts there).
   static int FreeDeadLevel();
   static bool FreeDead() { return FreeDeadLevel() >= 1; }
   void NoteOwned(ScriptObject* o);

@@ -2089,9 +2089,10 @@ int Sim::FreeDeadLevel() {
   static const int level = [] {
     const char* keep = getenv("MOHO64_KEEP_DEAD");
     if (keep && *keep && strcmp(keep, "0")) return 0;
+    // (level 3 is the default since 2026-11-11, batch 152; MOHO64_FREE_DEAD=1 or 2 asks for a lower level)
     const char* more = getenv("MOHO64_FREE_DEAD");
     const int n = more ? atoi(more) : 0;
-    return n > 1 ? n : 1;
+    return n >= 1 ? n : 3;
   }();
   return level;
 }
