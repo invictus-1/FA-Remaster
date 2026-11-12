@@ -1889,6 +1889,10 @@ void Sim::CollectorStep() {
     if (ms > lim[i]) ++g.over[i];
 }
 
+void Sim::KillEventWaiters(const ScriptObject* o) {
+  if (threads_) threads_->KillWaitersOn(o);
+}
+
 void Sim::SignalEvent(const ScriptObject* o) {
   // (parallel order's phases: the threads that wait on it are woken in the phase's commit, in key order; the run
   // list they go to is the Lua threads' own, docs/parallel-mode.md 3.6)
@@ -1966,7 +1970,7 @@ void Sim::ProcessDestroyQueue() {
     if (e->kind == Entity::Kind::Unit) {
       Unit* u = static_cast<Unit*>(e);
       ReleaseUnitCombat(*this, u);
-      UnitEconomyRelease(u);
+      UnitEconomyRelease(*this, u);
       RemoveUnitFromLists(u);
     }
     if (e->kind == Entity::Kind::Unit && e->army) e->army->unitCost -= static_cast<Unit*>(e)->capCost;

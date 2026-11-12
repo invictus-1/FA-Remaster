@@ -452,6 +452,15 @@ void ThreadScheduler::Signal(const ScriptObject* o) {
   }
 }
 
+void ThreadScheduler::KillWaitersOn(const ScriptObject* o) {
+  if (!o) return;
+  for (Thread* w : waiters_) {
+    // (a woken thread is off the event's waiter list already, EventSetSignaled 0x406dfc: it lives on)
+    if (w->dead || w->waitRef == LUA_NOREF || w->woken || w == current_) continue;
+    if (WaitObject(*w) == o) w->dead = true;
+  }
+}
+
 void ThreadScheduler::RunTick(uint32_t tick) {
   tick_ = tick;
   WakeSignalled();

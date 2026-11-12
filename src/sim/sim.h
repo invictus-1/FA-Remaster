@@ -359,6 +359,8 @@ class Sim {
   // an engine event (a manipulator) has just been signalled: its waiting threads go to the run order's end now
   // (ThreadScheduler::Signal, CTaskEvent::EventSetSignaled 0x406d90)
   void SignalEvent(const ScriptObject* o);
+  // an engine event is deleted: the threads still waiting on it die with it (ThreadScheduler::KillWaitersOn)
+  void KillEventWaiters(const ScriptObject* o);
   // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;

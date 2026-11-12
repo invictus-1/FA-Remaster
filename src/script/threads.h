@@ -38,6 +38,9 @@ class ThreadScheduler {
   // CTaskEvent::EventSetSignaled 0x406d90: event `o` has just been signalled; the threads waiting on it go to the
   // end of the run order now (see threads.cpp).
   void Signal(const ScriptObject* o);
+  // ~CTaskEvent 0x406c70: event `o` is deleted; every thread still waiting on it (on its waiter list: not signalled
+  // since it began to wait) is destroyed with it (0x406cd0: 0x409190 pops and deletes the thread's tasks).
+  void KillWaitersOn(const ScriptObject* o);
   void PushCurrent(lua_State* L);        // the running thread object, or nil
   lua_State* Current() const { return current_ ? current_->co : nullptr; }
   size_t Count() const { return threads_.size(); }

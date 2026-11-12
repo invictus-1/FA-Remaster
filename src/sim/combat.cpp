@@ -3910,8 +3910,7 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
         // SetWeaponGoal 0x5f2ce0 around the unit's adjusted place
         const int R = static_cast<int>(fw->bp->maxRadius);
         const int x0 = static_cast<int>(std::nearbyint(ax - R * 0.5f)), z0 = static_cast<int>(std::nearbyint(az - R * 0.5f));
-        if (R < 1) AttackSetPosGoal(sim, u, Vec3{ax, 0, az});
-        else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
+        AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);  // (no R < 1 case: see below)
       } else if (FormationGoalOfForm(*fc, u, &cell)) {
         AttackSetPosGoal(sim, u, cell);  // (SetPosGoal 0x5f2d90 at its formation cell)
       }
@@ -3974,8 +3973,14 @@ void AttackUpdate(Sim& sim, Unit* u, BuildTask& t, const AiTarget& target) {
              sim.tick(), u->id, w->bp->label.c_str(), R, target.type, e ? static_cast<int>(e->id) : -1, p.x, p.y, p.z, x0,
              z0);
     }
-    if (R < 1) AttackSetPosGoal(sim, u, p);
-    else AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
+    // (SetWeaponGoal has no case for a weapon shorter than one cell: R = cvttss2si(MaxRadius) 0x5f2d00 may be 0,
+    // and the navigator's SetGoal (vt+8, 0x5f2d7d) is handed the EMPTY rect (x0, z0)..(x0, z0) at fistp(p): not 1 x 1,
+    // so no free-spot spiral, and no cell is ever in it: the path search ends at the nearest cell it reaches and
+    // the unit stands ProblemGettingToGoal. Seen (weapons range m_cybland2 cell 35, BlackOps brl0110, whose first
+    // weapon is a DummyWeapon of MaxRadius 0.01, R0 appr 3321): the original's recording has ProblemGettingToGoal
+    // from 3323 and the unit heading +0.014 toward (663.5, 673); ours sent a 1 x 1 goal at the target's footprint
+    // cell (662, 674), the spiral moved it to (661, 673) and the unit turned -0.043.)
+    AttackSetGoalRect(sim, u, x0, z0, x0 + R, z0 + R);
   } else if (d.trackMobile && has && e && !e->destroyQueued) {
     // 0x5f32e3..0x5f3325: a mobile target goes to the navigator's SetDestUnit (vt+0xc) whenever HasTarget says so,
     // with the target's own entity (+0x64): for a blip-held target that is the blip, which outlives its unit. No

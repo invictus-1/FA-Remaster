@@ -97,7 +97,7 @@ void EconomyBeginBeat(Sim& sim);
 // consumption and production (Unit::HandleResourceManagement).
 void UnitEconomyTick(Sim& sim, Unit* u);
 // A unit leaves the world: its requests, storage and events go.
-void UnitEconomyRelease(Unit* u);
+void UnitEconomyRelease(Sim& sim, Unit* u);
 // Unit creation: build rate, regeneration and the like from the blueprint.
 void UnitEconomyInit(lua_State* L, Unit* u);
 // Add `delta` (fraction of the whole) to a unit being built (Unit::Materialize): health grows with

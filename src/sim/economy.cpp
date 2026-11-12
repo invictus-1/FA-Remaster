@@ -440,18 +440,30 @@ void UnitEconomyInit(lua_State* L, Unit* u) {
   u->buildAllowed.assign(static_cast<size_t>(CategoryWordCount(L)), ~uint64_t(0));
 }
 
-void UnitEconomyRelease(Unit* u) {
+void UnitEconomyRelease(Sim& sim, Unit* u) {
   SiloRelease(u);
   if (u->request) {
     u->request->live = false;
     u->request.reset();
   }
   DropStorage(u);
+  // ~Unit 0x6a6bf0 deletes every CEconomyEvent on the unit's list (+0x574, 0x6a6dbb..0x6a6ddf: vt[0](1), each
+  // node at event+0x48), and with it its Lua object. ~CTaskEvent 0x406c70 destroys every thread still on the event's
+  // waiter list (0x406ca7..0x406cd8: the node freed, 0x409190 on its thread), so a wait on an unfinished event never
+  // returns; a thread whose event finished was taken off that list when it was signalled and runs on: FAF's
+  // DefaultProjectileWeapon.EconomyDrainThread then calls RemoveEconomyEvent on the deleted event
+  // (defaultprojectileweapon.lua 426) and raises "Game object has been destroyed" (see l_RemoveEconomyEvent).
+  // Seen (weapons range m_cybland1, the range destroying each shooter at the end of a case): the original logs that
+  // error at 597, 822, 1047, 1947, 2847 and 3972, each the beat after a brmt3snake whose drain had JUST finished was
+  // destroyed; at 372 (brmt3snake 9's drain 9 of 12 beats short) none. Ours kept every event bound and woke its
+  // waiters: no error at all.
   for (EconomyEvent* ev : u->econEvents) {
+    if (!ev->done) sim.KillEventWaiters(ev);
     if (ev->request) ev->request->live = false;
     ev->request.reset();
     ev->unit = nullptr;
     ev->done = true;
+    ev->UnbindLua();
   }
   u->econEvents.clear();
 }
@@ -737,11 +749,13 @@ int l_CreateEconomyEvent(lua_State* L) {
   S(L)->Own(std::move(ev));
   return 1;
 }
-// RemoveEconomyEvent(unit, event): its unused grant goes back to the army
+// RemoveEconomyEvent(unit, event): its unused grant goes back to the army. cfunc_RemoveEconomyEventL 0x775990 takes
+// the event (argument 2) with func_GetCEconomyEvent 0x775ec0, which raises "Expected a game object..." (0xe09860),
+// "Game object has been destroyed" (0xe098a0) or "Incorrect type of game object..." (0xe098c0), and deletes it
+// (vt[0](1)); the unit argument is not read.
 int l_RemoveEconomyEvent(lua_State* L) {
   Unit* u = ToObject<Unit>(L, 1);
-  EconomyEvent* ev = ToObject<EconomyEvent>(L, 2);
-  if (!ev) return 0;
+  EconomyEvent* ev = CheckObject<EconomyEvent>(L, 2);
   if (ev->request) {
     if (u && u->army)
       for (int i = 0; i < 2; ++i) u->army->econ.income[i] += ev->request->granted[i];
