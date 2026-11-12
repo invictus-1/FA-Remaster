@@ -179,7 +179,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the beat's sounds are decided on the beats' thread too (what to play, which running sounds start, stop or follow
   their units: read from the simulation; the window's thread only plays them), its sync still goes to the scripts
   before the next beat begins (given while it ran, the scripts' handlers waited on it: 3.7 -> 66.9 ms a beat late;
-  `MOHO64UI_SYNC_AFTER=1` measures that order), and a beat may start up to a whole beat early (was 80 ms; the
+  measured with a switch that is gone since, docs/ui-switches.md), and a beat may start up to a whole beat early (was 80 ms; the
   picture keeps six beats).
   `MOHO64UI_SHOW_ONLY_DURING_BEATS=1`: frames during a beat
   only show the picture; `MOHO64UI_BEATS_HERE=1`: the beats on the main thread, as at first.

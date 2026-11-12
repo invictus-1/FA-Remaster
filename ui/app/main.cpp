@@ -37,7 +37,6 @@
 #include "core/crash.h"
 #include "core/hostfs.h"
 #include "core/log.h"
-#include "core/placement.h"
 #include "core/trace.h"
 #include "core/vfs.h"
 #include "maui/control.h"
@@ -1415,17 +1414,9 @@ int main(int argc, char** argv) {
     };
     hooks.statsLines = [&](std::vector<std::string>* lines) { session.StatsLines(lines); };
     hooks.frameGenerationOn = [&]() { return session.FrameGenerationOn(); };
-#ifdef _WIN32
-    // On trial (the engine, 2026-11-04): the window's frame thread on the big-cache processors, as the sim's beat
-    // thread is (core/placement.h). Off unless MOHO64UI_PIN_FRAME=1, until the frame times on Chris's game decide.
-    if (const char* pin = std::getenv("MOHO64UI_PIN_FRAME"); pin && std::strcmp(pin, "1") == 0) {
-      const uint64_t mask = place::BigCacheMask();
-      if (mask && SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(mask)))
-        Logf(LogLevel::Info, "moho64ui: the frame thread on the big-cache processors (%d of them)", place::BigCacheCount());
-      else
-        Logf(LogLevel::Info, "moho64ui: MOHO64UI_PIN_FRAME: no big-cache processors here; the frame thread stays where it is");
-    }
-#endif
+    // (The window's frame thread is not pinned to the big-cache processors, where the sim's beat thread is: tried on
+    // 2026-11-04 with a switch MOHO64UI_PIN_FRAME, it LOST, 11.20 -> 16.40 ms a frame in the middle at 4K, the two
+    // threads sharing that half; docs/ui-benchmarks.md. The switch went on 2026-11-12, docs/ui-switches.md.)
     done = ui::RunWindow([&]() -> ui::UserState& { return *shown; }, width, height, o.frames,
                          [&](double seconds, ui::SoftwareTarget& target) {
                            // (MOHO64UI_LONG_FRAMES: the host step's parts, for the log of a long frame)

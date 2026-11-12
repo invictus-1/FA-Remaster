@@ -573,7 +573,7 @@ class GameSession {
   void CheckLoopEntities();
   size_t goneLoopsSaid_ = 0;
   // A beat's syncs taken (TakeBeatSync, before the next beat may start) and given to the interface's scripts
-  // (GiveBeatSync: in FinishBeat, before it; MOHO64UI_SYNC_AFTER=1 after it has started, which made the scripts wait).
+  // (GiveBeatSync: in FinishBeat, before it; given after it had started, the scripts waited on the beat).
   std::vector<std::string> syncsToGive_;
   void TakeBeatSync();
   void GiveBeatSync();

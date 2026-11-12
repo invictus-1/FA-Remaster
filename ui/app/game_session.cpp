@@ -5385,11 +5385,10 @@ void GameSession::FinishBeat() {
   const double took = (workerSimSeconds_ + workerPictureSeconds_ + workerFingerprintSeconds_ + workerSoundSeconds_) * speed;
   leadBeats_ = std::max(took * 1.3, leadBeats_ * 0.9);
   // (A beat starts only in a frame: one frame's time more, or it starts up to a frame late.)
-  // MOHO64UI_LEAD_BEATS=2 (on trial, 2026-10-28): up to two beats, so a heavy beat may begin as soon as the last is
-  // through, though the picture has not reached it (in the late game at 4K the frames take 30-40 ms and a beat
-  // began a frame late about once a beat); the picture then shows up to two beats behind the newest, and orders wait
-  // up to a beat longer, in a heavy game only (the lead is learnt as before).
-  static const double maxLead = std::getenv("MOHO64UI_LEAD_BEATS") && std::atoi(std::getenv("MOHO64UI_LEAD_BEATS")) >= 2 ? 0.2 : 0.1;
+  // At most one beat. (A lead of up to two beats was tried on 2026-10-28, a switch MOHO64UI_LEAD_BEATS=2: it did not
+  // help, held frames 7,203 -> 6,612 within the swing between spans, docs/ui-benchmarks.md; the switch went on
+  // 2026-11-12, docs/ui-switches.md.)
+  const double maxLead = 0.1;
   lead_ = std::min(maxLead, leadBeats_ + lastFrameSeconds_ * speed);
   static const bool beatLog = std::getenv("MOHO64UI_BEAT_LOG") != nullptr;
   const auto tHere = std::chrono::steady_clock::now();
@@ -5403,10 +5402,9 @@ void GameSession::FinishBeat() {
   TakeBeatSync();
   // The sync goes to the interface's scripts here, before the next beat may begin: given while that beat ran, the
   // scripts' sync handlers waited on it (they ask the simulation: UserState::LiveSim), 3.7 -> 66.9 ms a beat at
-  // 4,000 units (measured 2026-10-28, docs/ui-benchmarks.md). MOHO64UI_SYNC_AFTER=1: after it is begun (Advance,
-  // GiveBeatSync), to measure that again.
-  static const bool syncAfter = std::getenv("MOHO64UI_SYNC_AFTER") != nullptr;
-  if (!syncAfter) GiveBeatSync();
+  // 4,000 units (measured 2026-10-28, docs/ui-benchmarks.md; the switch that brought the old order back for
+  // measuring, MOHO64UI_SYNC_AFTER, went on 2026-11-12).
+  GiveBeatSync();
 }
 
 // The player's orders while a replay plays: only his pause and resume count (the messages
