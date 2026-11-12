@@ -10,12 +10,20 @@
 #include "sim/entity_grid.h"
 #include "sim/sim.h"
 #include "sim/terrain.h"
+#include "sim/write_trap.h"
 
 namespace moho {
 
 namespace {
 
 struct Motor : ScriptObject {
+  // (MOHO64_DEAD_TRAP: pages of its own; level 2: its place in Sim::owned_ and the sweep a slot last held it in)
+  static void* operator new(size_t n) { return deadtrap::On() ? deadtrap::Alloc(n) : ::operator new(n); }
+  static void operator delete(void* p) {
+    if (deadtrap::On()) deadtrap::Free(p);
+    else ::operator delete(p);
+  }
+  uint32_t ownedSlot = 0xffffffffu, heldSweep = 0;
   bool sink = false;
   float heading = 0, theta = 0, omega = 0;
   bool broken = false;
@@ -43,6 +51,11 @@ struct MotorState {
   bool added = false;
   uint64_t destroysSeen = ~uint64_t(0);
   std::vector<Entity*> moved;     // moved this beat (for the grid at step 13)
+  // Level 2 (MotorsSweep): every motor made and not deleted yet; a sweep is due when a motor lost its slot or its
+  // Lua object since the last one
+  std::vector<Motor*> all;
+  bool sweepDue = false;
+  uint32_t sweep = 0;
 };
 
 namespace {
@@ -66,6 +79,7 @@ void SetMotor(Sim& sim, Entity* e, Motor* m) {
   for (auto& s : motors)
     if (s.ref == EntityRef(e)) {
       if (s.m) s.m->UnbindLua();  // the old motor is deleted
+      MS(sim).sweepDue = true;
       s.m = m;
       return;
     }
@@ -79,6 +93,10 @@ Motor* NewMotor(lua_State* L, Entity* e, bool sink) {
   m->sink = sink;
   m->owner = e;
   CreateObject(L, m, "MotorFallDown");  // pushed
+  if (Sim::FreeDeadLevel() >= 2) {
+    m->ownedSlot = S(L)->OwnedCount();
+    MS(*S(L)).all.push_back(m);
+  }
   S(L)->Own(std::move(o));
   return m;
 }
@@ -241,10 +259,15 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
 
 void MotorsEntityPurged(Sim& sim, const Entity* e) {
   if (!sim.motorState) return;
+  // (the moved list of this beat: MotorsAdvanceCoords skips an entity whose Destroy() was called, as every purged
+  // one's was, so taking it out changes nothing; at level 2 the entity may be deleted before that walk)
+  std::vector<Entity*>& moved = MS(sim).moved;
+  if (!moved.empty()) moved.erase(std::remove(moved.begin(), moved.end(), e), moved.end());
   std::vector<MotorSlot>& motors = MS(sim).motors;
   for (size_t i = 0; i < motors.size(); ++i)
     if (motors[i].ref == EntityRef(e)) {
       if (motors[i].m) motors[i].m->UnbindLua();
+      MS(sim).sweepDue = true;
       motors.erase(motors.begin() + static_cast<std::ptrdiff_t>(i));
       return;
     }
@@ -284,6 +307,29 @@ void MotorsAdvanceCoords(Sim& sim) {
 }
 
 void MotorsNoteMoved(Sim& sim, Entity* e) { MS(sim).moved.push_back(e); }
+
+// A motor is alive while a slot of the motor list holds it or a script can still reach it (its Lua object). One
+// that lost both (its entity was purged: MotorsEntityPurged; another motor took its slot: SetMotor) is deleted.
+// One whose slot went while its entity only waited to be destroyed (MotorsTick's erase pass) keeps its Lua object
+// and stays, as before.
+void MotorsSweep(Sim& sim) {
+  if (!sim.motorState) return;
+  MotorState& ms = MS(sim);
+  if (!ms.sweepDue || ms.all.empty()) return;
+  ms.sweepDue = false;
+  const uint32_t sweep = ++ms.sweep;
+  for (const MotorSlot& s : ms.motors)
+    if (s.m) s.m->heldSweep = sweep;
+  size_t keep = 0;
+  for (Motor* m : ms.all) {
+    if (m->heldSweep == sweep || m->HasLuaObject() || !sim.FreeOwned(m->ownedSlot, m)) {
+      ms.all[keep++] = m;
+      continue;
+    }
+    ++sim.motorsFreed;
+  }
+  ms.all.resize(keep);
+}
 
 void MotorsForget(Sim& sim) { sim.motorState.reset(); }
 

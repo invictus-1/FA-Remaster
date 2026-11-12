@@ -460,6 +460,37 @@ bool MenuFlight::StartView(render::Camera* camera) const {
 #endif
 }
 
+// (MenuFlight::PushInfo's costOf, for tests)
+static int FlightCostOf(lua_State* S) {
+  luaL_checktype(S, 1, LUA_TTABLE);
+  FlightCost cost;
+  double mean = 0;
+  bool known = false;
+  for (int i = 1;; ++i) {
+    lua_rawgeti(S, 1, i);
+    if (!lua_istable(S, -1)) {
+      lua_pop(S, 1);
+      break;
+    }
+    lua_rawgeti(S, -1, 1);
+    lua_rawgeti(S, -2, 2);
+    lua_rawgeti(S, -3, 3);
+    const double dt = lua_tonumber(S, -3), ms = lua_tonumber(S, -2);
+    const bool drawn = lua_isnil(S, -1) || lua_toboolean(S, -1);
+    lua_pop(S, 4);
+    if (drawn && cost.Frame(dt, ms, &mean)) known = true;
+  }
+  if (known) {
+    lua_pushnumber(S, mean);
+    lua_pushnumber(S, cost.frames);
+  } else {
+    lua_pushnil(S);
+    lua_pushnil(S);
+  }
+  lua_pushnumber(S, cost.shown);
+  return 3;
+}
+
 void MenuFlight::PushInfo(lua_State* L) const {
   static const char* const kStates[] = {"idle", "loading", "ready", "running", "ended", "failed"};
   lua_newtable(L);
@@ -485,6 +516,12 @@ void MenuFlight::PushInfo(lua_State* L) const {
   num("units", sim_ && sim() ? static_cast<double>(sim_->units().size()) : 0);
   lua_pushstring(L, "paused");
   lua_pushboolean(L, !shownLast_);
+  lua_rawset(L, -3);
+  // costOf(frames) -> the mean (ms a frame) and the frames counted, or nil; then the seconds shown. For tests: the
+  // host's own FlightCost played over a list of frames, each {dt, the card's ms, drawn (false: a frame that did
+  // not draw the flight: not given to it, as GameSession gives none)}.
+  lua_pushstring(L, "costOf");
+  lua_pushcfunction(L, FlightCostOf);
   lua_rawset(L, -3);
 }
 

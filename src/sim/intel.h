@@ -53,6 +53,10 @@ void InitIntelGrids(Sim& sim, lua_State* L);
 void CreateUnitIntel(Sim& sim, lua_State* L, Unit* u);
 // An entity leaves: its circles are removed, its blips lose their source.
 void ReleaseEntityIntel(Sim& sim, Entity* e);
+// Level 3 of Sim::FreeDeadLevel (Sim::ProcessDestroyQueue, before a purged blip is deleted): the blip leaves the
+// list of live blips and its unit's own pointers, should any still name it (the recon database took it out of all
+// of them when it queued the Destroy; a script's own Destroy() of a blip does not).
+void IntelBlipFreed(Sim& sim, Entity* blip);
 // End of a beat: army (tick % N) runs its recon tick; moved sources move their circles.
 void ReconBeat(Sim& sim);
 void AdvanceIntelCoords(Sim& sim);

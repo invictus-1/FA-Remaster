@@ -82,4 +82,6 @@ ForkThread(function()
     gamemain.OnQueueChanged = own
     ClearCurrentFactoryForQueueDisplay()
     LOG("TEST done: " .. failed .. " failed")
+    -- (`-- /exit 1`: the run ends here; in a live window no frame count fits the test's seconds)
+    if GetCommandLineArg("/exit", 1) then ExitApplication() end
 end)

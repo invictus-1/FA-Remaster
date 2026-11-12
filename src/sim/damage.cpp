@@ -551,8 +551,14 @@ void BeamCheck(Sim& sim, lua_State* L, CollisionBeam* b) {
   Entity* best = nullptr;
   float bestD = std::numeric_limits<float>::infinity();
   Vec3 bestHit;
+  // (No test of the entity's Destroy() flag, entity+0x1b9: none in the grid's query 0x7229c0, its gather 0x722e30
+  // nor in the choice 0x6d6a00, and Entity::Destroy 0x679af0 only sets the flag and queues the entity: it stays in
+  // the grid until the queue is drained at the end of the beat. So a beam still meets, and its script still
+  // damages, what was destroyed earlier in the beat. Seen (weapons range, the last beat of every case, where the
+  // range destroys shooter and targets in the script threads' stage): the original's Monkeylord laser (scene
+  // cybland, url0402: 400), the Colossus' eye (aeoland, ual0401: 250) and the Seraphim destroyer's beam (sernav,
+  // xss0201: 45, 26) damage their target once more in that beat; ours' beams went through it.)
   auto consider = [&](Entity* e) {
-    if (e->destroyQueued) return;
     WorldShape ws;
     Vec3 hit;
     float d;
@@ -761,7 +767,13 @@ int l_IsCollisionBeam(lua_State* L) {
 // CollisionBeamEntity::MotionTick 0x6735c0 for one beam
 void BeamTick(Sim& sim, CollisionBeam* b) {
   lua_State* L = sim.L();
-  if (b->destroyQueued || !b->HasLuaObject()) return;
+  // (No test of the beam's OWN Destroy() flag either: Entity::TaskTick 0x679c40 calls the motion tick (vt+0x50,
+  // 0x679cc6..0x679cd2) without one, MotionTick 0x6735c0 tests only the two weak pointers and the enabled flag
+  // +0x294, and Entity::Destroy 0x679af0 sets +0x1b9 and queues the entity (0x67b870) without taking its task out of
+  // the stage. So a beam its script destroyed earlier in the beat still makes its check. Seen: range scene tog_land,
+  // R0 death 5205, ers0302's MicrowaveCannon: the range kills the shooter in the script threads' stage, its script
+  // destroys the two beams, and the original's still damage the target (2 x 20) in that beat; ours stopped.)
+  if (!b->HasLuaObject()) return;
   UnitWeapon* w = b->weapon;
   // 0x6735c6..0x6735ee: the beam's turn ends only when its weapon (the weak pointer +0x28c) or the entity it rides
   // (+0x18c) is gone, i.e. deleted with the unit at the end of the beat its Destroy() was called in (ours: the

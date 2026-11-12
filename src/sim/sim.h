@@ -412,6 +412,7 @@ class Sim {
   // Register an engine-created entity (collision beams): owned by the sim, found by id.
   void AddEntity(std::unique_ptr<Entity> e) {
     RegisterEntity(e.get());
+    e->ownedSlot = static_cast<uint32_t>(owned_.size());
     owned_.push_back(std::move(e));
   }
   // A new entity becomes findable: its handle (EntityRef) and its game id.
@@ -778,11 +779,26 @@ class Sim {
     if (FreeDead()) NoteOwned(owned_.back().get());  // (a task: its place, for SweepTasks)
     return owned_.back().get();
   }
-  static bool FreeDead();  // MOHO64_FREE_DEAD set (read once): dead shells and tasks are deleted during the game
+  // Which dead objects are deleted during the game (read once): 0 = none, everything stays to the Sim's end
+  // (MOHO64_KEEP_DEAD=1: the way it was until 2026-11-11); 1 = purged shells and ended tasks (the default);
+  // MOHO64_FREE_DEAD=<n> asks for level n, a class that is not the default yet: 2 = also purged props and their
+  // motors; 3 = also every other purged entity that is no unit (script entities, shields, beams, recon blips).
+  static int FreeDeadLevel();
+  static bool FreeDead() { return FreeDeadLevel() >= 1; }
   void NoteOwned(ScriptObject* o);
-  // MOHO64_FREE_DEAD: the tasks no holder reaches any more are deleted (sim.cpp; the end of ProcessDestroyQueue)
+  // The tasks no holder reaches any more are deleted (sim.cpp; the end of ProcessDestroyQueue); FreeDead()
   void SweepTasks();
   uint64_t tasksFreed = 0;  // (for the stats lines only)
+  uint64_t propsFreed = 0, motorsFreed = 0;  // (the same; props: ProcessDestroyQueue, motors: MotorsSweep)
+  uint64_t entitiesFreed = 0;  // (the same: script entities, shields, beams, blips; level 3)
+  // For a file that owns a class of objects through Own and deletes its dead ones (prop_motor.cpp, level 2): the
+  // place the next owned object will take, and the deletion of the object at a place (only if it is `o`).
+  uint32_t OwnedCount() const { return static_cast<uint32_t>(owned_.size()); }
+  bool FreeOwned(uint32_t slot, const ScriptObject* o) {
+    if (slot >= owned_.size() || owned_[slot].get() != o) return false;
+    owned_[slot].reset();
+    return true;
+  }
 
  private:
   Vfs* vfs_;
@@ -803,7 +819,7 @@ class Sim {
   bool hasGauss_ = false;
   uint32_t tick_ = 0;
   std::vector<std::unique_ptr<ScriptObject>> owned_;
-  std::vector<BuildTask*> tasks_;  // (MOHO64_FREE_DEAD: the tasks owned_ holds; SweepTasks)
+  std::vector<BuildTask*> tasks_;  // (FreeDead(): the tasks owned_ holds; SweepTasks)
   uint32_t taskSweep_ = 0;
   std::map<uint32_t, Entity*> others_;  // (otherEntities(): the fingerprint walks it)
   // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity

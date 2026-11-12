@@ -37,6 +37,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/log.h"
 #include "script/fastlib.h"
 #include "script/script_handle.h"
 #include "script/script_state.h"
@@ -201,11 +202,27 @@ struct CellCache {
 // put the same table at 16 addresses); tests/reclaim_state_cache_test.cpp forces the addresses and shows it.
 // A state runs on one thread at a time and the Lua API is never called from a pool task, so there is no lock.
 using CellMap = std::unordered_map<const void*, CellCache>;
-CellMap* Cells(lua_State* L) {
+// What a state owns here: its cells' caches, and MOHO64_VERIFY_RECLAIM's counts for this state (a session), written
+// to the log when the state goes: a program that plays several games (the interface) gets one line a game.
+struct StateCells {
+  CellMap cells;
+  uint64_t verifyCalls = 0, verifyEntries = 0, verifyLeft = 0;
+  ~StateCells() {
+    if (verifyCalls)
+      Logf(LogLevel::Info, "moho64 verify reclaim totals: this session: %llu calls checked, all equal to the full re-sum "
+           "(%llu entries re-summed, %llu calls left to the Lua)", static_cast<unsigned long long>(verifyCalls),
+           static_cast<unsigned long long>(verifyEntries), static_cast<unsigned long long>(verifyLeft));
+  }
+};
+StateCells* StateOf(lua_State* L) {
   ScriptState* st = ScriptState::From(L);
   if (!st) return nullptr;  // (a state the engine did not make: no cache, the full re-sum)
-  if (!st->reclaimCells) st->reclaimCells = std::make_shared<CellMap>();
-  return static_cast<CellMap*>(st->reclaimCells.get());
+  if (!st->reclaimCells) st->reclaimCells = std::make_shared<StateCells>();
+  return static_cast<StateCells*>(st->reclaimCells.get());
+}
+CellMap* Cells(lua_State* L) {
+  StateCells* s = StateOf(L);
+  return s ? &s->cells : nullptr;
 }
 
 // The box of the handle the value at idx carries (IsDestroyedValue's reads, without the collector's check: the full
@@ -411,6 +428,11 @@ int l_ReclaimCellTotals(lua_State* L) {
   const int nc = CachedCellTotals(L);
   ++g_verify.calls;
   if (!nf) ++g_verify.left;
+  if (StateCells* s = StateOf(L)) {  // (the session's own counts: its line at the state's end)
+    ++s->verifyCalls;
+    if (!nf) ++s->verifyLeft;
+    else s->verifyEntries += static_cast<uint64_t>(f[0]);
+  }
   bool same = nf == nc;
   for (int i = 0; i < nc && same; ++i) {
     const lua_Number c = lua_tonumber(L, -nc + i);

@@ -122,7 +122,10 @@ def main():
     sdl = (a.sdl or not windows) and not a.headless
     if not a.dry_run:
         os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
-    common = ["-O2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
+    # -mcpu=x86_64_v2, as the engine's own build has it since 2026-11-09 (tools/build_zig.py; Chris's word, the README
+    # names it): SSE4.2 and POPCNT, every processor since about 2009. The interface compiles its own copy of the
+    # simulation (src/): with the same level it is the same code the engine's gate proves against the original.
+    common = ["-O2", "-mcpu=x86_64_v2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
     # The profiler build (--tracy): tools/build_zig.py's TRACY_DEFINES on EVERY file (C and C++, Lua's VM and the
     # shared src/ files included: the settings change Tracy's types' layout), Tracy's headers, its client once below.
     if a.tracy:
@@ -195,7 +198,7 @@ def main():
     # a crash's "crash: build" line): this build's commit, "-dirty" with uncommitted changes. Without the build's
     # time, unlike tools/build_zig.py's: the option would then differ at every build and the object be compiled each
     # time (Flags); the exe's own time says when it was built.
-    add(os.path.join(ROOT, "src", "core", "build_stamp.cpp"), cxxflags + ['-DMOHO64_BUILD_STAMP="' + commit + ', moho64ui"'], True)
+    add(os.path.join(ROOT, "src", "core", "build_stamp.cpp"), cxxflags + ['-DMOHO64_BUILD_STAMP="' + commit + ', moho64ui, x86-64-v2"'], True)
 
     newest_header = max(os.path.getmtime(h)
                         for pat in ("src/**/*.h", "src/**/*.inc", "third_party/**/*.h", "ui/**/*.h", "ui/**/*.inc", "render/*.h")

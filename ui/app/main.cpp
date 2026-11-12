@@ -479,6 +479,24 @@ int main(int argc, char** argv) {
 #endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
   Logf(LogLevel::Info, "moho64ui: built from commit %s", ui::kBuildCommit);
+  // The test and trial switches set in this run's environment (MOHO64UI_*, the engine's and the renderer's MOHO64_*),
+  // one line (the review of 2026-11-09, gates: a switch left on in a launcher changed a game without a word; the
+  // lab's launch_check.sh reads the launchers, this line says what a run really had). None set: no line.
+  {
+#ifdef _WIN32
+    char** env = _environ;
+#else
+    extern char** environ;
+    char** env = environ;
+#endif
+    std::string set;
+    for (; env && *env; ++env) {
+      if (std::strncmp(*env, "MOHO64", 6) != 0) continue;
+      if (!set.empty()) set += ", ";
+      set += *env;
+    }
+    if (!set.empty()) Logf(LogLevel::Info, "moho64ui: switches set in the environment: %s", set.c_str());
+  }
   // The interface's texture sizes taken ahead, on a thread of their own (maui/texture_info.h; ours, only about time):
   // waited for before a launch changes the game's preferences file in the file system (startGameInterface), and at
   // the end.

@@ -11,6 +11,34 @@
 -- view is free), 'kept' (it could not be freed, or the game was over first).
 RemasterWatchAfterDefeat = { state = 'off' }
 
+-- The defeat's Score button stays (found 2026-11-11 by the suite's draw_together, the first full run after this
+-- option landed). FAF's tabs.lua takes every mode text away when the focus army changes before the game is over
+-- (FocusArmyChanged, called by the sync that tells of the change): right for a player who clicks another army's
+-- name, but our own freeing of the view comes a moment after the defeat has put the Score button up, and the player,
+-- who asked for nothing, had lost his way to the score screen (for good when the game ended seconds later). So the
+-- one change WE make is not passed on to that handler; every other change is, as before. (Set up before the view
+-- is asked for: the sync that tells of the change may come in the same half second.)
+local RemasterOwnChange = false   -- our own freeing of the view is asked for and its sync has not come yet
+local RemasterTabsWrapped = false
+local function RemasterKeepScoreButton()
+    RemasterOwnChange = true
+    if RemasterTabsWrapped then return end
+    RemasterTabsWrapped = true
+    local tabs = import("/lua/ui/game/tabs.lua")
+    local fafChanged = tabs.FocusArmyChanged
+    if type(fafChanged) ~= 'function' then
+        WARN("FA Remastered: Watch after Defeat: tabs.lua has no FocusArmyChanged: the Score button may go when the view is freed")
+        return
+    end
+    tabs.FocusArmyChanged = function()
+        if RemasterOwnChange and GetFocusArmy() == -1 then
+            RemasterOwnChange = false
+            return
+        end
+        fafChanged()
+    end
+end
+
 local RemasterGameDoGameResult = DoGameResult
 
 local function RemasterWatchOn()
@@ -27,6 +55,7 @@ function DoGameResult(armyIndex, result)
     if not mine or word ~= 'defeat' or RemasterWatchAfterDefeat.state ~= 'off' then return end
     if not RemasterWatchOn() or SessionIsReplay() or not SessionIsObservingAllowed() then return end
     RemasterWatchAfterDefeat.state = 'waiting'
+    RemasterKeepScoreButton()
     ForkThread(function()
         local waited = 0
         while waited < 15 and not SessionIsGameOver() and GetFocusArmy() ~= -1 do
@@ -46,6 +75,7 @@ function DoGameResult(armyIndex, result)
             if not announced then print("You now watch the whole map") end
         else
             RemasterWatchAfterDefeat.state = 'kept'
+            if GetFocusArmy() ~= -1 then RemasterOwnChange = false end  -- (the view was not freed: nothing of ours to keep back)
         end
     end)
 end

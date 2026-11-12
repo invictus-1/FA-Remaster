@@ -180,8 +180,15 @@ inline Quat FromRotVec(Vec3 r) {
 
 constexpr float kPi = 3.14159265358979f;
 constexpr float kDeg2Rad = 0.017453292f;  // 0xdff090
-inline float WrapPi(float x) {  // 0x62fb50 (the remainder is taken with the double 2 pi, 0xe4f780)
-  float r = static_cast<float>(std::fmod(static_cast<double>(x), 6.283185307179586));
+// 0x62fb50 and its inline copies (CheckTracking 0x630bbf / 0x630c46, SetFiringArc 0x630cc5 / 0x630d36): fld the
+// angle, fld qword [0xe4f780], fmod (0xa8e06a), then the two float tests. The qword at 0xe4f780 is 0x401921FB60000000
+// = 6.2831854820251465, the double of the FLOAT 2 pi (0xdff08c), not the double 2 pi (the exe holds no double 2 pi at
+// all): -2 pi_f wraps to -0, not to -1.75e-07. Seen: weapons range cybnav, urs0103's back AA turret (rest rotation
+// half a turn) at heading +pi_f with its target dead ahead: when the goal sank below the gun line its target heading
+// became -pi_f; the original's heading stays +3.14159274 (delta = wrap(-2 pi_f) = -0), ours crept to 3.1415925 and
+// over to -pi_f.
+inline float WrapPi(float x) {
+  float r = static_cast<float>(std::fmod(static_cast<double>(x), static_cast<double>(6.28318548f)));
   if (r < -3.14159265f) r += 6.28318531f;
   else if (r > 3.14159265f) r -= 6.28318531f;
   return r;

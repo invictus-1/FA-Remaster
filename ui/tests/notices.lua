@@ -63,6 +63,17 @@ else
     local box = main.RemasterMenuNotice.box
     check("and the menu shows it without being asked", box ~= false and not IsDestroyed(box) and has(main.RemasterMenuNotice.texts, "The game could not start: "), true)
     check("the box is the menu's own child (it goes with the menu)", box and box:GetParent() ~= GetFrame(0), true)
-    -- (the box is left up: the run's --screenshot shows it)
-    LOG("TEST done: " .. failed .. " failed")
+    -- a notice that comes while the menu is up is shown by itself, with the one already there
+    ForkThread(function()
+        moho64ui_AddNoticeForTests("A second thing went wrong while the menu was up.")
+        local waited = 0
+        while waited < 8 and not has(main.RemasterMenuNotice.texts, "A second thing went wrong") do
+            WaitSeconds(0.5)
+            waited = waited + 0.5
+        end
+        check("a notice that comes while the menu is up is shown by itself", has(main.RemasterMenuNotice.texts, "A second thing went wrong"), true)
+        check("with the one already there", has(main.RemasterMenuNotice.texts, "The game could not start: "), true)
+        -- (the box is left up: the run's --screenshot shows it)
+        LOG("TEST done: " .. failed .. " failed")
+    end)
 end

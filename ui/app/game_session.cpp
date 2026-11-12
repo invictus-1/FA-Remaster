@@ -738,6 +738,31 @@ void GiveLayer(render::WorldPicture& picture, const SoftwareTarget& target, cons
   if (part.empty()) part = IntRect{};
   picture.SetInterfaceLayer(target.pixels().data(), w, h, w, part.x0, part.y0, part.x1 - part.x0, part.y1 - part.y0);
 }
+// The line the player reads while a lost graphics device is made anew (ui request 52 to the renderer, Chris's yes of
+// 2026-11-11: the window's title said it, and full screen has no title): a small panel, "Restoring the picture ..."
+// and under it why, drawn as the interface draws its own notes (DrawHeld) and handed to the renderer, which presents
+// it once in the middle of a dark frame as soon as the new device exists and keeps it until the game's first frame
+// (WorldPicture::SetRecoveryNotice: SetInterfaceLayer's pixels; copied at the call). Its size follows the window's
+// height, as the interface's texts do at 1440p and 4K. Returns the panel's size.
+void GiveRecoveryNotice(render::WorldPicture& picture, int windowHeight, int* width, int* height) {
+  const float scale = std::min(2.5f, std::max(1.0f, static_cast<float>(windowHeight) / 1080.0f));
+  const char* const title = "Restoring the picture ...";
+  const char* const why = "The graphics device was lost. The game itself goes on.";
+  const int titleSize = static_cast<int>(std::lround(24 * scale)), whySize = static_cast<int>(std::lround(15 * scale));
+  const FontMetrics tm = GetFontMetrics("Arial", titleSize), wm = GetFontMetrics("Arial", whySize);
+  const float tw = StringAdvance("Arial", titleSize, title), ww = StringAdvance("Arial", whySize, why);
+  const float padX = std::round(30 * scale), padY = std::round(22 * scale), gap = std::round(10 * scale);
+  const int w = static_cast<int>(std::ceil(std::max(tw, ww) + 2 * padX)), h = static_cast<int>(std::ceil(2 * padY + tm.height + gap + wm.height));
+  SoftwareTarget target(w, h);
+  target.Clear(0);
+  const float W = static_cast<float>(w), H = static_cast<float>(h);
+  target.FillRect(Rect{0, 0, W, H}, 0xff4a586cu);          // (a one-pixel edge, then the panel)
+  target.FillRect(Rect{1, 1, W - 1, H - 1}, 0xff141a24u);
+  DrawString(target, "Arial", titleSize, title, std::floor((W - tw) * 0.5f), padY + tm.ascent, 0xffe0e8f0u);
+  DrawString(target, "Arial", whySize, why, std::floor((W - ww) * 0.5f), padY + tm.height + gap + wm.ascent, 0xff9aa8b8u);
+  picture.SetRecoveryNotice(target.pixels().data(), w, h);
+  *width = w, *height = h;
+}
 // The lighting bundles as a picture starts (world_picture.h: off, the world's own switches as at first; the hidden
 // outlines on). While the picture holds looks (HoldLooks) they are only kept for the map opening behind.
 void StartBundles(render::WorldPicture& p) {
@@ -3714,17 +3739,15 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
           flightLogFrom_ = now, flightLogGpu_ = 0, flightLogFrames_ = 0, flightLogFrameMax_ = 0, flightLogBeatMax_ = 0;
         }
       }
-      // (the card's time of the flight's frames, from 10 s to 15 s after it first showed: over the threshold, Dusk for
-      // the run)
-      if (world && !flightCostChecked_ && flightShownAt_ != std::chrono::steady_clock::time_point{}) {
-        const double since = std::chrono::duration<double>(now - flightShownAt_).count();
-        if (since >= 10 && since < 15) flightGpuMs_ += wp.picture.LastStats().gpuMs, ++flightGpuFrames_;
-        if (since >= 15 && flightGpuFrames_ > 0) {
-          flightCostChecked_ = true;
+      // (the card's time of the flight's frames, over the 10th to the 15th second in which it was DRAWN, FlightCost:
+      // over the threshold, Dusk for the run. Only frames that draw it are given: a screen over the menu, the loop's
+      // cover or a hidden window stop the count, they do not use it up)
+      if (world && flightShows_ && !flightCost_.decided && flightShownAt_ != std::chrono::steady_clock::time_point{}) {
+        double ms = 0;
+        if (flightCost_.Frame(dt, wp.picture.LastStats().gpuMs, &ms)) {
           static const double limit = std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS") ? std::atof(std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS")) : 12.0;
-          const double ms = flightGpuMs_ / flightGpuFrames_;
-          Logf(LogLevel::Info, "moho64ui: the menu's flight: the card's time %.2f ms a frame over %d frames (10 to 15 s after it showed; the limit %.1f)",
-               ms, flightGpuFrames_, limit);
+          Logf(LogLevel::Info, "moho64ui: the menu's flight: the card's time %.2f ms a frame over %d frames (its 10th to 15th second drawn; the limit %.1f)",
+               ms, flightCost_.frames, limit);
           if (ms > limit) {
             char why[96];
             std::snprintf(why, sizeof why, "its frames cost the card %.1f ms, over %.1f", ms, limit);
@@ -3831,6 +3854,8 @@ void GameSession::RecoverPictures() {
   DeviceResult result;
   // (checks, "fail": no device is asked for at all, and each round counts as one that found none)
   const bool pretendNone = deviceAsk_ == DeviceAsk::Fail;
+  // (checks, "nomap": the menu background's own map is taken to be gone once its device is back)
+  const bool pretendNoMenuMap = deviceAsk_ == DeviceAsk::NoMap;
   result.mode = deviceLoseDone_ ? "lose" : pretendNone ? "fail" : deviceAsk_ == DeviceAsk::Check ? "check" : "";
   deviceAsk_ = DeviceAsk::None, deviceLoseDone_ = false;
   // The reason, logged once: the next frames find no picture lost (or the program is closing).
@@ -3858,13 +3883,26 @@ void GameSession::RecoverPictures() {
   std::vector<Mine> mine;
   if (windows) mine.push_back({"the window's picture", windows});
   if (own) mine.push_back({"the game's own picture", own});
+  // (the player's line for the seconds that follow, on the picture the window shows: GiveRecoveryNotice. Handed in at
+  // every recovery, so it has the window's size of now; the renderer copies it)
+  if (windows) {
+    const int windowHeight = windowPicture_->layerH > 0 ? windowPicture_->layerH : 1080;
+    GiveRecoveryNotice(*windows, windowHeight, &result.noticeWidth, &result.noticeHeight);
+  }
+  // (checks, MOHO64UI_NOTICE_CAPTURE=<file.png>: the notice's frame as the renderer puts it on the screen, read back
+  // and saved, to look at the panel a player sees: WorldPicture::CaptureRecoveryNotice, filled by RecoverDevice)
+  static const char* const noticeCapture = std::getenv("MOHO64UI_NOTICE_CAPTURE");
+  std::vector<uint8_t> noticeShot;
+  const int shotW = windowPicture_ ? windowPicture_->layerW : 0, shotH = windowPicture_ ? windowPicture_->layerH : 0;
+  if (windows && noticeCapture && *noticeCapture) windows->CaptureRecoveryNotice(&noticeShot);
   for (Mine& m : mine) m.picture->LetGoOfLostDevice();
   bool behindOwed = menuBackdrop && menuBackdrop->LetGoOfLostDevice();  // (on its thread, waited for)
   const double letGoSeconds = since(t0);
 
   // 2. Each made anew. No device yet (DeviceLost stays true): the round ends there and is tried again after a pause,
   // kDeviceTries times in all (INFERRED numbers, game_session.h). A device but no map again: the program closes.
-  bool stillLost = false, mapGone = false;
+  bool stillLost = false, mapGone = false, menuGone = false;
+  std::string menuError;
   bool loadBegunAgain = false;
   for (int attempt = 1; attempt <= kDeviceTries; ++attempt) {
     result.tries = attempt;
@@ -3883,8 +3921,14 @@ void GameSession::RecoverPictures() {
       one.name = m.name, one.ok = ok;
       one.seconds = n.seconds, one.deviceSeconds = n.deviceSeconds, one.mapSeconds = n.mapSeconds, one.deviceTries = n.deviceTries;
       one.props = n.props, one.effects = n.effects, one.looks = n.looks, one.world = n.world, one.loadBegunAgain = n.loadBegunAgain;
+      one.noticeSeconds = n.noticeSeconds, one.noticeWidth = n.noticeWidth, one.noticeHeight = n.noticeHeight;
       result.pictures.push_back(one);
       if (!ok) {  // (DeviceLost false and no world: the map could not be opened again)
+        // (the menus' map on the window's picture: the menu goes on without it, below; a game's map: the program closes)
+        if (m.picture == windows && windowPicture_->shows == WindowPicture::Kind::Menu) {
+          menuGone = true, menuError = error, m.done = true;
+          continue;
+        }
         mapGone = true, result.error = error;
         continue;
       }
@@ -3895,9 +3939,30 @@ void GameSession::RecoverPictures() {
            "%d effects' events, %d blueprints' looks%s)",
            m.name, n.seconds, n.deviceSeconds, n.deviceTries, n.deviceTries == 1 ? "try" : "tries", n.mapSeconds, n.world ? "" : ", none was shown",
            n.props, n.effects, n.looks, n.loadBegunAgain ? "; the map opening behind begun again" : "");
+      if (m.picture == windows && !noticeShot.empty()) {
+        if (shotW > 0 && shotH > 0 && noticeShot.size() == static_cast<size_t>(shotW) * shotH * 4) {
+          std::vector<uint32_t> px(static_cast<size_t>(shotW) * shotH);
+          for (size_t i = 0; i < px.size(); ++i)  // (RGBA bytes -> 0xAARRGGBB, opaque: a picture of the screen)
+            px[i] = 0xff000000u | (static_cast<uint32_t>(noticeShot[i * 4]) << 16) | (static_cast<uint32_t>(noticeShot[i * 4 + 1]) << 8) | noticeShot[i * 4 + 2];
+          if (SavePngPixels(noticeCapture, px.data(), shotW, shotH))
+            Logf(LogLevel::Info, "moho64ui: the graphics device: the notice's frame saved as %s (%dx%d)", noticeCapture, shotW, shotH);
+        } else {
+          Logf(LogLevel::Warning, "moho64ui: the graphics device: the notice's frame read back has %zu bytes, the window is %dx%d: not saved",
+               noticeShot.size(), shotW, shotH);
+        }
+        noticeShot.clear();
+      }
+      if (m.picture == windows) {
+        if (n.noticeSeconds >= 0)
+          Logf(LogLevel::Info, "moho64ui: the graphics device: the player's notice (%dx%d) was on the screen %.2f s into the recovery", n.noticeWidth,
+               n.noticeHeight, n.noticeSeconds);
+        else
+          Logf(LogLevel::Info, "moho64ui: the graphics device: the player's notice (%dx%d) was handed in and not shown (no window shows this picture)",
+               result.noticeWidth, result.noticeHeight);
+      }
     }
     if (behindOwed && !stillLost && !mapGone) {
-      const Backdrop::Recovered r = menuBackdrop->RecoverDevice();  // (on its thread, waited for; the evening laid on there)
+      const Backdrop::Recovered r = menuBackdrop->RecoverDevice(pretendNoMenuMap);  // (on its thread, waited for; the evening laid on there)
       if (!r.own) {
         behindOwed = false;  // (its thread ended meanwhile: no picture of its own any more)
       } else if (!r.ok && r.lost) {
@@ -3912,8 +3977,9 @@ void GameSession::RecoverPictures() {
           behindOwed = false;
           Logf(LogLevel::Info, "moho64ui: the graphics device: the menu background's own picture made anew in %.2f s (the device %.2f s, %d %s; the map %.2f s)",
                r.seconds, r.deviceSeconds, r.deviceTries, r.deviceTries == 1 ? "try" : "tries", r.mapSeconds);
-        } else {
-          mapGone = true, result.error = r.error;
+        } else {  // (its map could not be opened again: its thread has ended; the menu goes on without it, below)
+          behindOwed = false;
+          menuGone = true, menuError = r.error;
         }
       }
     }
@@ -3938,6 +4004,19 @@ void GameSession::RecoverPictures() {
     if (closeProgram) closeProgram(sentence);
     else Logf(LogLevel::Error, "moho64ui: %s", sentence.c_str());
     return;
+  }
+
+  // The MENU's map could not be opened again (Chris, 2026-11-11: the menu goes on without its background rather than
+  // the program closing; a game's map gone closes it, above: a game has no picture left). The menu says so in its
+  // notice line. The window's picture then shows no world, as when a menu's map would not open in the first place
+  // (MenuMapGone); the background's own picture has ended its thread (Backdrop::ServeDevice).
+  if (menuGone) {
+    result.menuWithoutMap = true, result.error = menuError;
+    Logf(LogLevel::Warning, "moho64ui: the graphics device: the menu's background could not be opened again (%s): the menu goes on without it",
+         menuError.c_str());
+    AddMenuNotice("The menu's background could not be restored after the graphics device was lost (" + menuError + ").");
+    if (windowPicture_ && windowPicture_->shows == WindowPicture::Kind::Menu && !windowPicture_->picture.world())
+      MenuMapGone(*windowPicture_, menuError);
   }
 
   // 3. This program's part afterwards, as after SwapMap: what it sets on the world itself, and what it hands the card.
@@ -4020,17 +4099,36 @@ void GameSession::RedressGameWorld(Picture& pic) {
 }
 #endif
 
+// The menus' map on the window's picture is gone (a recovery of the device could not open it again): the picture shows
+// no world, and the menu goes on as when its map would not open at the start (ServeWindowMap's failure): the flight
+// has failed (the background falls back to the still map, FollowMenuMode), any other menu map is not tried again.
+// NOT RUN: no check can make a map fail to open again on the window's picture (INFERRED from that failure's code).
+void GameSession::MenuMapGone(WindowPicture& wp, const std::string& error) {
+  using Kind = WindowPicture::Kind;
+  const std::string map = wp.shownMap;
+  wp.shows = Kind::None;
+  wp.shownMap.clear();
+  if (menuFlight && map == MenuFlight::kMap) {
+    menuFlight->Fail("its map could not be opened again after the graphics device was lost (" + error + ")");
+    flightGiven_ = flightShows_ = flightCovering_ = false;
+    failedMenuMap_.clear();
+  } else {
+    failedMenuMap_ = map;
+  }
+}
+
 bool GameSession::AskDeviceRecovery(const std::string& mode, std::string* why) {
 #ifdef MOHO64UI_WORLD_PICTURE
   if (deviceClosing_) return *why = "the program is closing after a recovery that failed", false;
-  if (mode != "check" && mode != "lose" && mode != "fail") return *why = "the mode is \"check\", \"lose\" or \"fail\"", false;
+  if (mode != "check" && mode != "lose" && mode != "fail" && mode != "nomap")
+    return *why = "the mode is \"check\", \"lose\", \"fail\" or \"nomap\"", false;
   if (!windowPicture_ && !(picture_ && picture_->own) && !(menuBackdrop && menuBackdrop->OwnPicture()))
     return *why = "no picture of the world is open", false;
   // (the renderer's first loss test wrote a short pipelines file over the player's: a loss on purpose only where the
   // run keeps its shaders and pipelines in a folder of its own)
   if (mode == "lose" && shaderCache.empty())
     return *why = "losing the device on purpose needs --shader-cache <a folder of the test's own> (the player's kept pipelines are not risked)", false;
-  deviceAsk_ = mode == "lose" ? DeviceAsk::Lose : mode == "fail" ? DeviceAsk::Fail : DeviceAsk::Check;
+  deviceAsk_ = mode == "lose" ? DeviceAsk::Lose : mode == "fail" ? DeviceAsk::Fail : mode == "nomap" ? DeviceAsk::NoMap : DeviceAsk::Check;
   return true;
 #else
   (void)mode;
@@ -4076,11 +4174,14 @@ void GameSession::PushDeviceState(lua_State* L) {
     const DeviceResult& r = deviceLast_;
     boolean("ok", r.ok);
     boolean("wasLost", r.wasLost);
+    boolean("menuWithoutMap", r.menuWithoutMap);
     str("mode", r.mode);
     str("reason", r.reason);
     str("error", r.error);
     num("seconds", r.seconds);
     num("tries", r.tries);
+    num("noticeWidth", r.noticeWidth);  // (the player's notice as this program made it; 0: none, no window's picture)
+    num("noticeHeight", r.noticeHeight);
     lua_pushstring(L, "pictures");
     lua_newtable(L);
     for (size_t i = 0; i < r.pictures.size(); ++i) {
@@ -4097,6 +4198,9 @@ void GameSession::PushDeviceState(lua_State* L) {
       num("looks", o.looks);
       boolean("world", o.world);
       boolean("loadBegunAgain", o.loadBegunAgain);
+      num("noticeSeconds", o.noticeSeconds);  // (the renderer's: when the notice's frame was on the screen; -1: not shown)
+      num("noticeWidth", o.noticeWidth);
+      num("noticeHeight", o.noticeHeight);
       lua_rawseti(L, -2, static_cast<int>(i) + 1);
     }
     lua_rawset(L, -3);

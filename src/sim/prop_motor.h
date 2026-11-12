@@ -21,5 +21,8 @@ void MotorsNoteMoved(Sim& sim, class Entity* e);
 void MotorsEntityPurged(Sim& sim, const class Entity* e);
 // Sim::~Sim: drops the sim's motor list (its entity handles and motors).
 void MotorsForget(Sim& sim);
+// Level 2 of Sim::FreeDeadLevel (Sim::ProcessDestroyQueue's end): the motors no slot holds and no Lua object names
+// are deleted.
+void MotorsSweep(Sim& sim);
 
 }  // namespace moho
