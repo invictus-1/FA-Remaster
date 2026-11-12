@@ -323,6 +323,21 @@ static float TerrainBlockMax(const TerrainMap* map, int L, int bx, int bz) {
 // curZ stays 640, then (637,640) at level 0: the cell is the pedestal's flat top, P0 = (638, 41.6807289, 638) is
 // under 42: Terrain hit there, in the air two cells before the slope. Ours hit the slope a beat later, at
 // (638, 41.7131157, 639.856567).
+// A ray with no dz that runs exactly along a block's edge in x (its z the same at both ends, on a multiple of the
+// block size, so z1 = curZ) is the mirror case, met in the halving instead: the take-back is right (the corner test
+// is 0 > 0, so the x move goes back), but of the halving's two tests (0x40da40..0x40da9c) the first, "(curX - x1) dz
+// < ((step + curZ) - z1) dx" (0x40da6d; not below: curZ += step at 0x40da72), keeps curZ (0 < step dx), and the
+// second, "(curZ - z1) dx < ((step + curX) - x1) dz" (0x40da91; not below: curX += step at 0x40da96), is 0 < 0:
+// false, so curX moves on by the half step although the ray enters the block's first half. Again the
+// cells of that half are never tested and the first cell tested gets P0 = the ray at the coarse block's entry.
+// Seen (weapons range, scene f_sernav, FAF 3840; probe w8_sernav): two sanheavycavitationtorpedo03 children
+// (0x100000ae / 0x100000af) run west along z = 820 at y 14.63 toward the ridge outside the flattened plate (the
+// samples at x 16 at 10, at x 15 at 29.2). Step of 0x100000ae at 1781, x 17.44 -> 15.94: level 1, block (16, 820)
+// passed above, block (14, 820) (max 30.08) gone down into: curX back to -16 (mirrored), then the halving moves it to
+// -15, so cell (14, 820) is tested with P0 = the ray at x 16 (the block's entry), under that cell's plane: Terrain
+// hit at (16, 14.62667, 820), Impact at 1782; 0x100000af's step at 1782 the same at x 16. The original's Impact
+// 0x69dec0: exactly these two places and beats. Ours (the cells' walk) found the slope in cell (15, 820) at
+// x 15.76 in the 1782 step for both (both Impacts at 1783, one OnImpact Random late).
 // Read besides: the level it starts at = bsr(ceil((far - near) max(|D.x|, |D.z|) 2.0 [0xdfeb0c])), at most the
 // number of pyramid levels, at least 0 (0x4770f4..0x4771b9); the clip against the map's highest sample before it
 // (0x477830..0x4778b9 in 0x4776e0: the top level's entry (0, 0); a ray going down starts where it comes under it,
@@ -457,14 +472,15 @@ static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, 
   const float x0 = mx ? -0.0f - xN : xN, x1 = mx ? -0.0f - xF : xF;
   const float z0 = mz ? -0.0f - zN : zN, z1 = mz ? -0.0f - zF : zF;
   const float dx = x1 - x0, dz = z1 - z0;
-  // A ray with no dx: the exe's own walk (TerrainLineHitPyramid above: only such a ray can run along a block's edge).
-  // MOHO64_DEBUG_TERRAINWALK=1 logs each such ray whose answer the cells' walk below would not have given; =2 also
-  // walks every other ray both ways and logs a difference (the answer stays the cells').
+  // A ray with no dx or no dz: the exe's own walk (TerrainLineHitPyramid above: only such a ray can run along a
+  // block's edge). MOHO64_DEBUG_TERRAINWALK=1 logs each such ray whose answer the cells' walk below would not have
+  // given; =2 also walks every other ray both ways and logs a difference (the answer stays the cells').
   static const int dbgWalk = getenv("MOHO64_DEBUG_TERRAINWALK") ? atoi(getenv("MOHO64_DEBUG_TERRAINWALK")) : 0;
   static thread_local bool inDbg = false;
+  const bool alongAxis = dx == 0.0f || dz == 0.0f;
   if (!inDbg) {
-    if (dx == 0.0f && !dbgWalk) return TerrainLineHitPyramid(map, O, D, nearT, farT, dist);
-    if (dbgWalk && (dx == 0.0f || dbgWalk >= 2)) {
+    if (alongAxis && !dbgWalk) return TerrainLineHitPyramid(map, O, D, nearT, farT, dist);
+    if (dbgWalk && (alongAxis || dbgWalk >= 2)) {
       float tp = 0.0f, tc = 0.0f;
       const bool hp = TerrainLineHitPyramid(map, O, D, nearT, farT, &tp);
       inDbg = true;
@@ -473,17 +489,18 @@ static bool TerrainLineHit(const TerrainMap* map, const Vec3& O, const Vec3& D, 
       static std::atomic<uint64_t> nRays{0}, nNoDx{0}, nDiffer{0};
       const bool differ = hp != hc || (hp && std::memcmp(&tp, &tc, sizeof tp) != 0);
       const uint64_t n = ++nRays;
-      if (dx == 0.0f) ++nNoDx;
+      if (alongAxis) ++nNoDx;
       if (differ) {
         ++nDiffer;
         Logf(LogLevel::Info, "terrainwalk: %s ray O %.9g %.9g %.9g D %.9g %.9g %.9g t %.9g..%.9g: pyramid %d %.9g, cells %d %.9g",
-             dx == 0.0f ? "z" : "any", O.x, O.y, O.z, D.x, D.y, D.z, nearT, farT, hp ? 1 : 0, tp, hc ? 1 : 0, tc);
+             dx == 0.0f ? "z" : dz == 0.0f ? "x" : "any", O.x, O.y, O.z, D.x, D.y, D.z, nearT, farT, hp ? 1 : 0, tp,
+             hc ? 1 : 0, tc);
       }
       if ((n & (n - 1)) == 0 || n % 100000 == 0)
-        Logf(LogLevel::Info, "terrainwalk: count %llu rays walked both ways, %llu of them with no dx, %llu differ",
+        Logf(LogLevel::Info, "terrainwalk: count %llu rays walked both ways, %llu of them with no dx or no dz, %llu differ",
              static_cast<unsigned long long>(n), static_cast<unsigned long long>(nNoDx.load()),
              static_cast<unsigned long long>(nDiffer.load()));
-      const bool usePyramid = dx == 0.0f;
+      const bool usePyramid = alongAxis;
       if (usePyramid ? hp : hc) *dist = usePyramid ? tp : tc;
       return usePyramid ? hp : hc;
     }
