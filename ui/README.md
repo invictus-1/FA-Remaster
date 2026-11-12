@@ -110,6 +110,7 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   `tabs.lua` clears its mode texts whenever the focus army changes before the game is over, which took the button
   away a moment after the defeat had put it up; the one change the hook makes itself is not passed on to that
   handler (`tests/draw.lua` case together, `tests/watch_defeat.lua`).
+- A transport's Unload and Ferry buttons give their orders (2026-11-11). Both buttons, and their keys, gave NO order until then: the table an order mode's click is issued from (`IssueOrder`, `user/user_units.cpp`) had neither `Transport` (the button's name for the order to unload: the command type TransportUnloadUnits, `UnitCommandCapToCommandType` 0x821f50) nor `Ferry`. Found by the first test that pressed them (`tests/orders_air.lua`, written with `orders_work.lua` and `orders_missiles.lua` for the eight orders no test gave: reclaim, sacrifice, overcharge, unload, ferry, nuke, tactical missile, teleport; `tests/orders_sim.lua` makes their units in the simulation). The other six worked. Both are orders for a place: a unit under the cursor is not their target (INFERRED).
 - A lost graphics device (a driver reset, the card taken away for a moment): every picture is made anew and the game
   goes on (`GameSession::ServeDevice`, the renderer's request 71 B). While that takes its seconds the player reads a
   small panel in the middle of a dark screen, "Restoring the picture ..." and under it "The graphics device was

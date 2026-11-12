@@ -1624,6 +1624,13 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
                  {"Tactical", CommandType::Tactical, false},
                  {"Nuke", CommandType::Nuke, false},
                  {"Teleport", CommandType::Teleport, false},
+                 // (a transport's two buttons, by the button's name: RULEUCC_Transport is the order to UNLOAD, as a
+                 // command type TransportUnloadUnits, and RULEUCC_Ferry is Ferry: UnitCommandCapToCommandType
+                 // 0x821f50, READ; the mode's click gives the mapped type with the place under the mouse,
+                 // 0x8202cb..0x820327. Until 2026-11-11 both were missing here: the two buttons and their keys gave
+                 // no order at all, found by ui/tests/orders_air.lua, the first test to press them.)
+                 {"Transport", CommandType::TransportUnloadUnits, false},
+                 {"Ferry", CommandType::Ferry, false},
                  {"Sacrifice", CommandType::Sacrifice, true},
                  {"Guard", CommandType::Guard, true},
                  {"Repair", CommandType::Repair, true},
@@ -1640,6 +1647,8 @@ bool IssueOrder(lua_State* L, const std::string& order, float x, float y, float 
   for (const auto& o : kOrders)
     if (same(order, o.name) && (entity != 0xffffffffu || !o.atUnit)) name = o.name, type = o.type;
   if (!name) return false;
+  // (the script hears the command type's name, not the button's: OnCommandIssued's CommandType)
+  if (type == CommandType::TransportUnloadUnits) name = "TransportUnloadUnits";
   std::vector<uint32_t> ids;
   std::vector<UserUnit*> units;
   for (UserUnit* u : Store(L).selection)

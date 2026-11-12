@@ -1890,7 +1890,11 @@ class WorldView : public Control {
     // An order chosen by its button or key: for the unit under the cursor when there is one
     // (attack it, guard it, repair, reclaim, capture it), else for the place. (INFERRED: the
     // original's rule for which of the two an order mode takes is not read.)
-    if (leftUnder_ != 0xffffffffu && order != "Move" && order != "Patrol" && IssueToSelectionAt(L, order, leftUnder_, clear, leftCtrl_)) return true;
+    // (a transport's Unload and Ferry are orders for a place: a unit under the cursor there is not their target.
+    // INFERRED with the rule above.)
+    if (leftUnder_ != 0xffffffffu && order != "Move" && order != "Patrol" && order != "Transport" && order != "Ferry" &&
+        IssueToSelectionAt(L, order, leftUnder_, clear, leftCtrl_))
+      return true;
     // Reclaim by its button on what is not a unit: the tree, rock or wreck nearest the click,
     // with more room than a right click gets (the player has said what is meant). With nothing
     // there the order still goes out with the place, as the original sends it; the simulation
