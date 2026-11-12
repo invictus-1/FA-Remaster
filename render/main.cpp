@@ -804,6 +804,8 @@
 //           past the edge a sculpted surround dims (World::surroundEdgeBand, 12; 0: the soft edge's own 60, as before);
 //           --surround-edge-band-water <n>: [edgesea] over how many the water's surface dims there (World::
 //           surroundEdgeBandWater, 192: no line across open sea; 0: over the land's band, as before);
+//           --surround-far-form <0..1>: [farform] how much of its light and shade the sculpted land far out keeps in
+//           the far distance's tone (World::surroundFarForm, 0.7; 0: none, a flat outline, as before);
 //           --surround-ice-from <share>: [snowsur] beside a sculpted surround the far sea's winter floes (--horizon) begin
 //           that share of the surround's reach out (World::surroundIceFrom, 0.55; 0: a few units past the edge, as before)
 // --sun, --sky, --exposure, --reflection  the modern look's strengths (for tuning it by eye)
@@ -1282,6 +1284,7 @@ struct Options {
   int surroundForestFloor = -1;         // --surround-forest-floor
   float surroundEdgeBand = -1;          // --surround-edge-band [edgeband] (-1: the world's own)
   float surroundEdgeBandWater = -1;     // --surround-edge-band-water [edgesea] (-1: the world's own)
+  float surroundFarForm = -1;           // --surround-far-form [farform] (-1: the world's own)
   float surroundIceFrom = -1;           // --surround-ice-from [snowsur] (-1: the world's own)
   bool beyondLand = false;              // --beyond-land (beyondland)
   std::string beyondLandLook;           // --beyond-land-look (beyondland)
@@ -2073,6 +2076,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround-forest-floor") o->surroundForestFloor = atoi(v);                           // (surround)
     else if (a == "--surround-edge-band") o->surroundEdgeBand = static_cast<float>(atof(v));             // [edgeband]
     else if (a == "--surround-edge-band-water") o->surroundEdgeBandWater = static_cast<float>(atof(v));  // [edgesea]
+    else if (a == "--surround-far-form") o->surroundFarForm = static_cast<float>(atof(v));  // [farform]
     else if (a == "--surround-ice-from") o->surroundIceFrom = static_cast<float>(atof(v));               // [snowsur]
     else if (a == "--surround-hand-over") o->surroundHandOver = static_cast<float>(atof(v));             // [edgehand]
     else if (a == "--surround-grain") o->surroundGrain = static_cast<float>(atof(v));                    // [surgrain]
@@ -2927,6 +2931,7 @@ int main(int argc, char** argv) {
   world.surroundForestFloor = opt.surroundForestFloor;
   if (opt.surroundEdgeBand >= 0) world.surroundEdgeBand = opt.surroundEdgeBand;  // [edgeband]
   if (opt.surroundEdgeBandWater >= 0) world.surroundEdgeBandWater = opt.surroundEdgeBandWater;  // [edgesea]
+  if (opt.surroundFarForm >= 0) world.surroundFarForm = opt.surroundFarForm;  // [farform]
   if (opt.surroundIceFrom >= 0) world.surroundIceFrom = opt.surroundIceFrom;     // [snowsur]
   if (opt.surroundSceneryLod > 0) world.surroundSceneryLod = opt.surroundSceneryLod;
   if (opt.surroundSceneryReach[0] >= 0) {

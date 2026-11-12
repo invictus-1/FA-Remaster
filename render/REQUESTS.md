@@ -34,6 +34,22 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 75. To the INTERFACE track: a third Cloud Layout, "Varied" (2026-11-11; Chris's decision; not blocking)
+
+**What:** the Cloud Layout option gets a third value beside Even and Mixed: "Varied" sets `world.clouds.mix = 2`
+(Even 0, Mixed 1 as today; `Sunlight`'s cloudMix stays as you set it for Mixed: it is clamped to 1). The default
+stays Mixed.
+
+**Why:** the map scan of 2026-11-11 found the fair sky's cloud puffs all one size. Chris saw a before / after and
+chose it as a third choice rather than a change of Mixed (which he tuned on 2026-11-09).
+
+**What it does** ([cloudwide], render, this commit): above 1 the volumetric clouds' cover spreads its weight over
+more sizes: wide masses some 550 units across, a middling size of 250 that the field did not have, the 120-unit
+heaps, and few of the two smallest; the same share of the sky covered. More of the three-times heaps too (the
+existing rule for mix above 1). Viewer: `--clouds-mix 2`.
+
+**Answer:** (none yet)
+
 ## 74. To the VISUALS track: smaller, softer patches of rock, scree and soil in the first 150 units outside the map (2026-11-11; not blocking)
 
 **What:** in the surround's ground shares, within the first 150 units past the map's edges, make the patches of scree,

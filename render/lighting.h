@@ -570,6 +570,9 @@ float4 AirOver(float3 world) {
 #ifndef BEYOND_BAND
 #define BEYOND_BAND beyondLand.y
 #endif
+// [farform] 1: what is drawn is land whose form the far distance keeps (the sculpted surround's shaders set it before
+// BeyondMap; view.h's beyondMore.y says how much). Everything else: 0, as before.
+static float beyondForm = 0;
 float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   float t = saturate(outside * beyond.z);
   float3 airAdds = 0;
@@ -601,7 +604,18 @@ float3 BeyondFar(float3 color, float3 world, float outside, float pixel) {
   }
   color += airAdds;  // ([weather] the air before it again)
   [branch] if (beyondSea.x > 0.5 && t <= 0) return color;  // ((sky) the far sea is dearer: what it is lost in only where it is)
-  return lerp(color, BeyondBack(normalize(world - cameraPosition)), t * t * (3 - 2 * t));
+  float3 back = BeyondBack(normalize(world - cameraPosition));
+  // [farform] (the map scan of 2026-11-11: "far mountains a flat cut-out") Land far out went over into the far
+  // distance's one tone by how far out it lies, and its light and shade went with its colour: a ridge near the end
+  // was a paper outline. Hills far off lose their colour to the haze, not their form: the tone they go over into is
+  // darker where the land is in shade and lighter where the sun is on it, by how the land's own light stands to that
+  // tone (held between a half and a little over it), less and less toward the very end, where the land must be gone
+  // without a rim.
+  [branch] if (beyondForm > 0 && beyondMore.y > 0 && t > 0) {
+    float form = clamp(dot(color, float3(0.3, 0.6, 0.1)) / max(dot(back, float3(0.3, 0.6, 0.1)), 1e-4), 0.5, 1.15);
+    back *= lerp(1, form, beyondMore.y * beyondForm * (1 - smoothstep(0.8, 1.0, t)));
+  }
+  return lerp(color, back, t * t * (3 - 2 * t));
 }
 float3 BeyondMap(float3 color, float3 world) {
   float outside = OutsideMap(world);

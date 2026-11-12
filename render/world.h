@@ -517,6 +517,10 @@ class World {
   // saw as a line (1.04, from 230 up) - and 0.14 / 0.09 from 230 up (96 / 192). 0: over the land's band, as before
   // (viewer --surround-edge-band-water 0).
   float surroundEdgeBandWater = 192;
+  // [farform] How much of its form the sculpted land far out keeps where it goes over into the far distance (view.h's
+  // beyondMore.y; lighting.h's BeyondFar): its light and shade stay in the haze's tone, so that a far ridge is a hill
+  // in haze, not a flat outline. 0 (the viewer's --surround-far-form 0): none, as before.
+  float surroundFarForm = 0.7f;
   // [snowsur] The surround under lying snow (Chris, 2026-11-10: from far up the land past the edge lay under a flat
   // grey snow beside the map's own white, and the far sea's floes stood as hard-edged cells right beside the map):
   //   - its ground holds the snow as the map's ground does (surround.h: the ground's own snow rule, materials and

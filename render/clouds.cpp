@@ -150,6 +150,18 @@ float StormBlanket(float2 xz) {
       float2 again = float2(p.x * 0.28 + p.y * 0.96, p.y * 0.28 - p.x * 0.96);
       float mixed = CloudNoise(float3(p * 0.45 + 17.3, t * 0.45 + 17.3)) * 0.36 + CloudNoise(float3(turned * 2.1 + 7.1, t + 7.1)) * 0.46 +
                     CloudNoise(float3(again * 4.7 + 3.3, t * 1.2 + 3.3)) * 0.12 + CloudNoise(float3(turned.yx * 11.3 + 1.7, t * 1.5 + 1.7)) * 0.06;
+      // [cloudwide] (the map scan of 2026-11-11: "the cloud puffs are all one size") above 1 (Clouds::mix up to 2):
+      // nearly half of the Mixed field's weight lies on one size, heaps some 120 units across, so that is the size of
+      // most clouds in a fair sky. Here the weight is spread: wide masses of 550 units, a size between of 250 that the
+      // field did not have, the 120 heaps, and little of the two finest; the same share of the sky covered.
+      float wide = saturate(coverAt.w - 1);
+      [branch] if (wide > 0) {
+        float2 third = float2(p.x * 0.96 - p.y * 0.28, p.x * 0.28 + p.y * 0.96);
+        float varied = CloudNoise(float3(p * 0.45 + 17.3, t * 0.45 + 17.3)) * 0.40 + CloudNoise(float3(third * 1.0 + 12.9, t * 0.7 + 12.9)) * 0.27 +
+                       CloudNoise(float3(turned * 2.1 + 7.1, t + 7.1)) * 0.23 + CloudNoise(float3(again * 4.7 + 3.3, t * 1.2 + 3.3)) * 0.07 +
+                       CloudNoise(float3(turned.yx * 11.3 + 1.7, t * 1.5 + 1.7)) * 0.03;
+        mixed = lerp(mixed, varied, wide);
+      }
       field = lerp(field, mixed, saturate(coverAt.w));
     }
     float cover = saturate((field - lerp(0.63, 0.37, skyClouds.x)) * 6 + 0.6);

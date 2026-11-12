@@ -221,7 +221,8 @@ struct ViewConstants {
   // [edgesea] The world beyond the map's edge, more: x over how many world units past the edge the WATER dims
   // (World::surroundEdgeBandWater; lighting.h's BEYOND_BAND in the water's pipelines, water.cpp's EDGE_SEA), where the land
   // dims over beyondLand.y: 0 as the land does
-  // (as before); y, z, w unused.
+  // (as before); y [farform] how much of its form (its light and shade) the sculpted land far out keeps in the far
+  // distance's tone (World::surroundFarForm; lighting.h's BeyondFar; 0: none, as before); z, w unused.
   float beyondMore[4];
 };
 
@@ -290,7 +291,8 @@ cbuffer View : register(b0) {
   float4 groundLook;      // x [puddlesun] 1 = the sun's highlight on still ground water soft; y [matteye] 1 = dry ground matt
                           // where the eye skims it too; z [layernormals] 1 = a remastered layer's shapes laid as its colour;
                           // w [surmatt] 1 = the land outside the map matt at grazing light too
-  float4 beyondMore;      // [edgesea] x over how many world units past the map's edge the water dims (0: as the land, beyondLand.y)
+  float4 beyondMore;      // [edgesea] x over how many world units past the map's edge the water dims (0: as the land, beyondLand.y);
+                          // y [farform] how much of its form the sculpted land far out keeps in the far distance's tone
 };
 // (every texture read with Sample takes the temporal upscaler's bias: textures with levels - the art's - are
 // read as finely as the screen's size wants; pictures drawn by the renderer have one level and do not change)
