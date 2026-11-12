@@ -76,9 +76,11 @@ if not __fxVectorMeta then
   VMeta.__index = function(v, k)
     if k == 'x' then return rawget(v, 1) elseif k == 'y' then return rawget(v, 2) elseif k == 'z' then return rawget(v, 3) end
   end
-  VMeta.__newindex = function(v, k, x)
-    if k == 'x' then rawset(v, 1, x) elseif k == 'y' then rawset(v, 2, x) elseif k == 'z' then rawset(v, 3, x) else rawset(v, k, x) end
-  end
+  -- [vecfield] a write to a field a vector does not hold raw (v.x = n, v.foo = n, v[4] = n) does nothing, as in the
+  -- game: there the vector's __newindex is a C function, and the game's patched table write calls a __newindex only
+  -- when it is a Lua function. v[1] = n writes, and v.x reads. (It honoured the write here: a script that writes a
+  -- field moved something on the stand that the game leaves where it is.)
+  VMeta.__newindex = function(v, k, x) end
 end
 function Vector(x, y, z) return setmetatable({x or 0, y or 0, z or 0}, VMeta) end
 VMeta.__add = VMeta.__add or function(a, b) return Vector(a[1] + b[1], a[2] + b[2], a[3] + b[3]) end
@@ -266,7 +268,8 @@ for _, name in ipairs({'SetCollision', 'SetCollideSurface', 'SetCollideEntity', 
                 'StayUnderwater', 'PassData', 'PassDamageData', 'SetNewTarget', 'SetNewTargetGround', 'ChangeMaxZigZag',
                 'ChangeZigZagFrequency', 'SetVizToAllies', 'SetVizToEnemies', 'SetVizToNeutrals',
                 'AttachTo', 'AttachBoneTo', 'DetachFrom', 'SetBoneVisibility', 'SetDamage', 'CreateChildProjectile',
-                'DetachAll', 'SetLocalAngularVelocity'}) do
+                'DetachAll', 'SetLocalAngularVelocity',
+                'ShakeCamera'}) do  -- (ShakeCamera: the Seraphim strategic nuke's controller calls it; without it its thread stopped there)
   methods[name] = quiet
 end
 __fxNullShell = Class(methods)
