@@ -273,6 +273,20 @@ for _, name in ipairs({'SetCollision', 'SetCollideSurface', 'SetCollideEntity', 
   methods[name] = quiet
 end
 __fxNullShell = Class(methods)
+-- [burst] a shell's child (CreateChildProjectile: the fragments of a shell that bursts): made where the shell is,
+-- flying its way until its script says otherwise, a weapon's shot as its parent is (it meets the ground and its own
+-- OnImpact runs), fired by the unit that fired the parent. (It did nothing and gave back the shell itself: the
+-- script then set the SHELL's speed, and no fragment was ever seen.)
+methods.CreateChildProjectile = function(self, bp)
+  local vx, vy, vz = __fxVelocityOf(self.__id)
+  local unit = rawget(self, '__launcher')
+  local child = __fxCreate(bp, self, 0, 0, 0, vx or 0, vy or 0, vz or 0, nil, unit and {0, 0, 0, false} or nil)
+  if unit then
+    rawset(child, '__launcher', unit)
+    rawset(child, 'Launcher', unit)
+  end
+  return child
+end
 __fxProjectileMethods = methods
 local trails = {}
 for k, v in pairs(methods) do trails[k] = v end
@@ -323,7 +337,8 @@ function __fxCreate(bp, parent, ox, oy, oz, dx, dy, dz, bone, shot)
                    physics.MaxSpeed or 0, display.Mesh ~= nil, bone, meshName, display.MeshBlueprint or '',
                    physics.UseGravity ~= false, physics.CollideSurface ~= false, physics.DestroyOnWater == true,
                    true, physics.TrackTarget == true, physics.TurnRate or 0, physics.Acceleration or 0,
-                   shot[1] or 0, shot[2] or 0, shot[3] or 0, shot[4] and true or false)
+                   shot[1] or 0, shot[2] or 0, shot[3] or 0, shot[4] and true or false,
+                   physics.DetonateBelowHeight or 0)  -- [burst]
   else
     id = __fxSpawn(bp, Id(parent), ox or 0, oy or 0, oz or 0, dx or 0, dy or 0, dz or 0, dx ~= nil, speed,
                    physics.Lifetime or (__fxPhysics and 15 or 0), physics.VelocityAlign ~= false, spin, display.UniformScale or 1,
@@ -1041,6 +1056,7 @@ struct Ent {
   // a weapon's shot: it flies as the engine's projectiles do (gravity, thrust along its nose, homing on its
   // target at its turn rate, degrees a second), not as the effect entities above
   bool shot = false, track = false, hasTarget = false;
+  float detonateBelow = 0;  // [burst] its blueprint's Physics.DetonateBelowHeight: it bursts that high over the ground (0: not)
   float turnRate = 0;
   Vec3 target, tickFrom;  // (tickFrom: where it was at the last tick)
   // a weapon's collision beam (CollisionBeamEntity): from the muzzle bone of its unit along the bone's way,
@@ -1908,6 +1924,7 @@ int SpawnEntity(lua_State* L) {
     e.acceleration = Num(L, 26);
     e.target = {Num(L, 27), Num(L, 28), Num(L, 29)};
     e.hasTarget = lua_toboolean(L, 30) != 0;
+    e.detonateBelow = Num(L, 31);  // [burst]
     e.tickFrom = e.position;
     e.shotBlueprint = bp;
   }
@@ -3302,6 +3319,18 @@ void FxEntities::Advance(double now) {
         const float ground = m.Ground(e.position.x, e.position.z);
         const bool overWater = m.water && ground < m.waterLevel;
         const char* with = nullptr;
+        // [burst] a shot that bursts over the ground (its blueprint's DetonateBelowHeight: the Lobo's shell and its
+        // like): on its way down, once it is lower than that over the ground or the water, an impact on nothing,
+        // 'Air', as the engine's (where its way since the last tick crossed that height, no less than a tenth of
+        // the way). It keeps its speed for the call: the script takes its fragments' way from it.
+        if (e.shot && e.detonateBelow > 0 && e.position.y < e.tickFrom.y &&
+            e.position.y - std::max(ground, overWater ? m.waterLevel : ground) < e.detonateBelow) {
+          const float f = std::clamp((e.detonateBelow + ground - e.tickFrom.y) / (e.position.y - e.tickFrom.y), 0.1f, 1.0f);
+          e.position = Lerp(e.tickFrom, e.position, f);
+          e.hit = true;
+          hits.emplace_back(e.id, "Air");
+          continue;
+        }
         if (overWater && i < before.size() && before[i] > m.waterLevel && e.position.y <= m.waterLevel) with = "Water";
         else if (e.position.y <= ground) with = "Terrain";
         if (!with) continue;
@@ -3350,6 +3379,12 @@ void FxEntities::Advance(double now) {
           lua_pop(L, 2);
         }
         impact(*e, h.second);
+        if (std::string(h.second) == "Air")  // [burst] (it stays where it burst, should its script leave it; found again: the call made more)
+          if (Ent* burst = m.Find(h.first)) {
+            burst->velocity = {};
+            burst->ballistic = {};
+            burst->acceleration = 0;
+          }
       }
     }
     // the driven units move on along their loops: each tick to its place on the loop, telling the
