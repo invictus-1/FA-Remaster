@@ -248,6 +248,34 @@ int l_SoundPlace(lua_State* L) {
   lua_pushnumber(L, right);
   return 2;
 }
+// moho64ui_SoundCategory(name) -> {limit = sounds of it at a time (255: none), replace = whether a new sound takes
+// the oldest one's place when it is full (else it is not played), behaviour = the file's own number for that,
+// sounds = how many of its sounds sound or wait now, voices = how many voices those are}; nil: no such category
+int l_SoundCategory(lua_State* L) {
+  sound::SoundSystem* s = System(L);
+  const std::string name = luaL_checkstring(L, 1);
+  int index = -1;
+  for (size_t i = 0; s && i < s->categories().size(); ++i)
+    if (s->categories()[i].name == name) index = static_cast<int>(i);
+  if (index < 0) return 0;
+  const sound::Category& cat = s->categories()[static_cast<size_t>(index)];
+  int voices = 0;
+  const int sounds = s->mixer().CountOf(index, nullptr, &voices);
+  lua_newtable(L);
+  auto field = [&](const char* name, double value) {
+    lua_pushstring(L, name);
+    lua_pushnumber(L, value);
+    lua_rawset(L, -3);
+  };
+  field("limit", cat.maxInstances);
+  field("behaviour", cat.fullBehaviour);
+  field("sounds", sounds);
+  field("voices", voices);
+  lua_pushstring(L, "replace");
+  lua_pushboolean(L, cat.replaceOldest);
+  lua_rawset(L, -3);
+  return 1;
+}
 // moho64ui_SoundVoices() -> a text: one line for every voice that plays or waits
 int l_SoundVoices(lua_State* L) {
   sound::SoundSystem* s = System(L);
@@ -369,6 +397,7 @@ void RegisterSoundBindings(lua_State* L) {
   lua_register(L, "moho64ui_SoundListener", l_SoundListener);
   lua_register(L, "moho64ui_SoundAt", l_SoundAt);
   lua_register(L, "moho64ui_SoundVoices", l_SoundVoices);
+  lua_register(L, "moho64ui_SoundCategory", l_SoundCategory);
   lua_register(L, "moho64ui_SoundPlace", l_SoundPlace);
   lua_register(L, "moho64ui_SoundMix", l_SoundMix);
   lua_register(L, "moho64ui_SoundDevice", l_SoundDevice);

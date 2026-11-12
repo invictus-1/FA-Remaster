@@ -435,12 +435,16 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
   // A category that is full: the new sound takes the oldest one's place, or is not played. The
   // old one goes over the category's fade out (the music's 200 ms; none: at once). (The new one's
   // fade in is not built: only the Ambient category has one, and it has no limit.)
+  // The limit is on the category's SOUNDS, and the oldest sound goes with all of its tracks (until 2026-11-12 the
+  // voices were counted, so a category of sounds with two tracks was full at half its limit, and only one voice of
+  // the oldest sound went). A category's own sounds only: the sounds of the categories inside it are not counted
+  // toward it (whether the sound library counts them there was not read).
   if (category >= 0) {
     const Category& cat = categories_[static_cast<size_t>(category)];
     int oldest = 0;
     if (cat.maxInstances < 255 && mixer_.CountOf(category, &oldest) >= cat.maxInstances) {
       if (!cat.replaceOldest) return 0;
-      mixer_.FadeOut(oldest, static_cast<float>(cat.fadeOutMs));
+      mixer_.FadeOutSound(oldest, static_cast<float>(cat.fadeOutMs));
     }
   }
 
@@ -486,7 +490,8 @@ int SoundSystem::PlayCue(const std::string& bankName, const std::string& cueName
     float decibels = sound.volume + between(e.volumeMin, e.volumeMax);
     if (position && IsHumCategory(category)) decibels += kHumTrim;  // (set by ear: see kHumTrim)
     float cents = static_cast<float>(sound.pitch) + between(static_cast<float>(e.pitchMin), static_cast<float>(e.pitchMax));
-    int voice = mixer_.Add(wave, Linear(decibels), std::pow(2.0f, cents / 1200.0f), e.loops == 255 ? -1 : e.loops, category, e.timeMs);
+    int voice = mixer_.Add(wave, Linear(decibels), std::pow(2.0f, cents / 1200.0f), e.loops == 255 ? -1 : e.loops, category, e.timeMs,
+                           voices.empty() ? 0 : voices.front());
     if (!voice) continue;
     if (auto t = timeCurves(e)) mixer_.SetTimeCurves(voice, std::move(t));
     if (position) mixer_.Place(voice, left, right);

@@ -64,6 +64,29 @@ PauseSound("Music", false)
 check("and it goes on after", moho64ui_SoundMix(500) > 0.01, true)
 local battle = PlaySound(Sound({Bank = "Music", Cue = "Battle"}))
 check("a second piece of music plays", battle ~= nil, true)
+-- a category's limit (SupCom.xgs; the review of 2026-11-09, toolkit M7): what a full category does with a new sound
+-- is the byte's bits above the low three (Music 0x11: the oldest goes; World 0x01: the new one is not played), and
+-- the limit counts sounds, a sound of several tracks once
+do
+    local m, w = moho64ui_SoundCategory("Music"), moho64ui_SoundCategory("World")
+    check("the Music category: one sound at a time, a new one takes the oldest one's place", m.limit .. " " .. tostring(m.replace), "1 true")
+    check("the second piece is its one sound (the first, going, counts no more)", m.sounds, 1)
+    check("the World category: 200 sounds, one more is not played", w.limit .. " " .. tostring(w.replace), "200 false")
+    check("Weapons: 150, not played", moho64ui_SoundCategory("Weapons").limit .. " " .. tostring(moho64ui_SoundCategory("Weapons").replace), "150 false")
+    check("no such category: nil", moho64ui_SoundCategory("NoSuchCategory"), nil)
+    -- a sound of two tracks: the one such sound among the 404 cues of twelve of the game's banks played through on
+    -- 2026-11-12 (the Cybran missile defence's shot, in Weapons)
+    local seen = {}
+    for i = 1, 4 do
+        local before = moho64ui_SoundCategory("Weapons")
+        local two = PlaySound(Sound({Bank = "URLWeapon", Cue = "URB4201_Anti_Missile"}))
+        local after = moho64ui_SoundCategory("Weapons")
+        table.insert(seen, (after.voices - before.voices) .. "/" .. (after.sounds - before.sounds))
+        if two then StopSound(two, true) end
+        moho64ui_SoundMix(20)
+    end
+    check("a sound of two tracks is two voices and ONE sound of its category, each time", table.concat(seen, " "), "2/1 2/1 2/1 2/1")
+end
 moho64ui_SoundMix(500)  -- the first one fades out
 StopSound(battle, true)
 moho64ui_SoundMix(50)

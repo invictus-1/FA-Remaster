@@ -602,7 +602,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   and `uimain.StartFrontEndUI()` run without script errors, also with mods' hooks active.
 - Step 2, first part: the control tree exists without drawing. Frame, Group, Bitmap, Text, Border,
   ItemList, Scrollbar, Edit and Histogram are built as far as scripts can see them (state, layout,
-  callbacks that need no input). Movie: see "Movies" below. Mesh and the map preview are plain controls (they
+  callbacks that need no input). (Since then ItemList, Scrollbar and Edit draw and take input. The Histogram still
+  draws nothing: no script of the game as FAF ships it makes one, so its drawing was never read; 2026-11-12.) Movie: see "Movies" below. Mesh and the map preview are plain controls (they
   lay out; their own methods are still stubs). The main menu script builds
   its whole screen: 67 controls (logo, borders, the eight menu buttons with their labels) with
   rectangles from the real texture sizes; controls that ask for frame updates get `OnFrame`. Without

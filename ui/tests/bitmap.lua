@@ -132,14 +132,25 @@ ForkThread(function()
     -- --maps ui/tests/maps the file is at /maps/bad_pictures/huge_header.tga; without, this part is left out.
     local bad = "/maps/bad_pictures/huge_header.tga"
     if exists(bad) then
-        local huge = Bitmap(GetFrame(0))
-        local ok = pcall(function() huge:SetTexture(bad) end)
-        WaitFrames(3)
-        check("a file with a TGA header of 65,535 x 65,535 and 64 bytes: the program goes on", ok or true, true)
+        local huge = place(Bitmap(GetFrame(0)), 300, 800)
+        pcall(function() huge:SetTexture(bad) end)
+        -- (a run without a window draws nothing by itself: moho64ui_PixelAt draws the head, which reads the file)
+        check("a file with a TGA header of 65,535 x 65,535 and 64 bytes: nothing drawn, the program goes on", moho64ui_PixelAt(320, 810), "00000000")
         check("and a real texture is still drawn after it", pcall(function() huge:SetTexture(four) end), true)
         huge:Destroy()
     else
         LOG("TEST note: bitmap: no " .. bad .. " (run with --maps ui/tests/maps): the bad picture is left out")
+    end
+    -- A plain DDS whose red mask is all 32 bits (toolkit L13: the loop that counts a mask's bits shifted by 32 and
+    -- never ended for this mask: the program hung on the file).
+    local mask = "/maps/bad_pictures/all_bits_mask.dds"
+    if exists(mask) then
+        local odd = place(Bitmap(GetFrame(0)), 500, 800)
+        odd:SetTexture(mask, 0)
+        check("a DDS with a bit mask of all 32 bits: its size", odd.BitmapWidth() .. "x" .. odd.BitmapHeight(), "1x1")
+        -- (its one pixel is the bytes 10 20 30 40: red by the mask ffffffff is the top 8 bits, 40; green 20; blue 10)
+        check("drawn, the program goes on: its pixel", moho64ui_PixelAt(520, 810), "ff402010")
+        odd:Destroy()
     end
     LOG("TEST done: " .. failed .. " failed")
 end)

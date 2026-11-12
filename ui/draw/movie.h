@@ -14,6 +14,14 @@ struct plm_t;
 
 namespace moho::ui {
 
+// Where a decoded picture goes (the decoder's callback): pictures before `skipBefore` (the film's seconds) are
+// decoded but not turned into pixels.
+struct MoviePictureSink {
+  Image* to = nullptr;
+  double skipBefore = -1;
+  int converted = 0;  // pictures turned into pixels so far
+};
+
 class MovieDecoder {
  public:
   MovieDecoder() = default;
@@ -32,11 +40,16 @@ class MovieDecoder {
   // Moves the movie on by `seconds`: the pictures due in that time are decoded, the last of them
   // is Picture(). True when it changed. At the end it stops on the last picture (Ended), or starts
   // again from the first with SetLoop.
+  // Only the last picture due is turned into pixels (2026-11-12, the review's toolkit L15): after a stall of some
+  // seconds (a load, the window dragged) a step holds a hundred pictures and more, and every one of them was
+  // converted although only the last is shown. They are all still decoded (each needs the one before); the film's
+  // clock, its end and what it shows are the same.
   // A big movie (the loading screen's, kAheadPixels and more) is decoded on a thread of its own: Advance hands the
   // step to it and shows what the step before decoded, so its picture comes a frame later than it is decoded (a
   // loading screen's frame at 4K kept some 5 ms shorter). Ended, Rewind and SetLoop wait for the step under way. This
   // program's own; only about time (the movie's clock, its end and its pictures are the same).
   bool Advance(double seconds);
+  int Converted() const { return sink_.converted; }  // (pictures turned into pixels so far: tests)
   bool Ended();
   void SetLoop(bool loop);
   void Rewind();
@@ -46,6 +59,8 @@ class MovieDecoder {
   static constexpr long long kAheadPixels = 640 * 480;
   void Collect();  // (the step under way finished, its newest picture taken as Picture)
   void Worker();
+  void Step(double seconds);  // (on the thread that decodes)
+  MoviePictureSink sink_;
   std::thread worker_;
   std::mutex lock_;
   std::condition_variable wake_;

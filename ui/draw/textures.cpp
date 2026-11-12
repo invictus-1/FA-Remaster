@@ -109,7 +109,10 @@ uint32_t Channel(uint32_t v, uint32_t mask) {
   if (!mask) return 0;
   int shift = 0, bits = 0;
   while (!((mask >> shift) & 1)) ++shift;
-  while ((mask >> (shift + bits)) & 1) ++bits;
+  // (shift + bits reaches 32 for every mask that holds bit 31, the usual alpha mask 0xff000000 among them: a shift by
+  // 32 is undefined, and with the processor's wrapped count a mask 0xffffffff never left this loop. The review of
+  // 2026-11-09, toolkit L13.)
+  while (shift + bits < 32 && ((mask >> (shift + bits)) & 1)) ++bits;
   uint32_t c = (v & mask) >> shift;
   return bits >= 8 ? c >> (bits - 8) : c * 255 / ((1u << bits) - 1);
 }

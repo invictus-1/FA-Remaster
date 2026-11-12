@@ -89,7 +89,9 @@ class Mixer {
   // A new voice; it waits until it is started. `gain` is its own loudness (1 = as recorded),
   // `pitch` a factor on its speed, `loops` how often it plays again (-1: without end),
   // `delayMs` how long after its start it begins to sound. Returns its number (never 0).
-  int Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs);
+  // `sound`: the first voice of the same sound (a sound of several tracks is several voices; 0: this voice is its
+  // sound's first, or only, one). A category's limit counts sounds.
+  int Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs, int sound = 0);
   void Start(int voice);
   // A voice's curves by time (TimeCurves); set before it is started.
   void SetTimeCurves(int voice, std::shared_ptr<const TimeCurves> curves);
@@ -100,6 +102,7 @@ class Mixer {
   // Fading out over `ms` (at least the few milliseconds of an immediate stop): a sound whose place
   // a new one of its category takes.
   void FadeOut(int voice, float ms);
+  void FadeOutSound(int sound, float ms);  // every voice of a sound (its first voice's number, as CountOf gives it)
   void StopAll();
   bool Alive(int voice);
   // Whether a voice's wave may be read now (WaveData::Ready); true for a voice that is no more.
@@ -108,9 +111,10 @@ class Mixer {
   // top of its own loudness (a sound of the world, as the listener moves; 1 and 1 at first).
   void Place(int voice, float left, float right);
   bool PlaceOf(int voice, float* left, float* right);  // (false: no such voice)
-  // How many voices of a category sound or wait, and the oldest of them (0: none). Those being
-  // stopped are not counted.
-  int CountOf(int category, int* oldest);
+  // How many SOUNDS of a category sound or wait (a sound of several tracks is one: the sound library's limit is on
+  // a category's sounds, not on their tracks), and the oldest of them (its first voice's number; 0: none). Those
+  // being stopped are not counted. `voices`: how many voices those sounds are.
+  int CountOf(int category, int* oldest, int* voices = nullptr);
 
   // The loudness and the pause of each category, as the sound system worked them out.
   void SetCategories(const std::vector<float>& gains, const std::vector<bool>& paused);
@@ -124,6 +128,7 @@ class Mixer {
  private:
   struct Voice {
     int id = 0, category = 0;
+    int sound = 0;  // its sound's first voice (its own number when it is that)
     std::shared_ptr<WaveData> wave;
     double position = 0, step = 1;  // in the wave's frames
     float gain = 1;

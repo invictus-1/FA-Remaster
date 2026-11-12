@@ -64,7 +64,7 @@ void FileWave::Read(int64_t frame, int count, int16_t* out) {
   }
 }
 
-int Mixer::Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs) {
+int Mixer::Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loops, int category, int delayMs, int sound) {
   if (!wave || wave->frames <= 0 || wave->channels < 1) return 0;
   Voice v;
   v.wave = std::move(wave);
@@ -75,6 +75,7 @@ int Mixer::Add(std::shared_ptr<WaveData> wave, float gain, float pitch, int loop
   v.delay = static_cast<int64_t>(delayMs) * kRate / 1000;
   std::lock_guard<std::mutex> lock(mutex_);
   v.id = nextId_++;
+  v.sound = sound ? sound : v.id;
   voices_.push_back(std::move(v));
   return voices_.back().id;
 }
@@ -117,6 +118,22 @@ void Mixer::FadeOut(int voice, float ms) {
       return;
     }
     v.fadeStep = std::max(v.fadeStep, 1.0f / (kRate * std::max(0.005f, ms / 1000.0f)));
+  }
+}
+
+void Mixer::FadeOutSound(int sound, float ms) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const float step = 1.0f / (kRate * std::max(0.005f, ms / 1000.0f));
+  for (size_t i = 0; i < voices_.size();) {
+    Voice& v = voices_[i];
+    if (v.sound != sound) {
+      ++i;
+    } else if (!v.started || v.delay > 0) {
+      voices_.erase(voices_.begin() + static_cast<long>(i));  // it never sounded
+    } else {
+      v.fadeStep = std::max(v.fadeStep, step);
+      ++i;
+    }
   }
 }
 
@@ -163,14 +180,20 @@ bool Mixer::Ready(int voice) {
   return true;
 }
 
-int Mixer::CountOf(int category, int* oldest) {
+// (The voices lie in the order they were added and a sound's voices are added together, so a sound's number, its
+// first voice's, never goes down along the list: a new number is a new sound.)
+int Mixer::CountOf(int category, int* oldest, int* voices) {
   std::lock_guard<std::mutex> lock(mutex_);
-  int n = 0;
+  int n = 0, last = 0, count = 0;
   if (oldest) *oldest = 0;
   for (const Voice& v : voices_) {
     if (v.category != category || v.fadeStep > 0 || v.releasing >= 0) continue;
-    if (n++ == 0 && oldest) *oldest = v.id;
+    ++count;
+    if (v.sound == last) continue;
+    last = v.sound;
+    if (n++ == 0 && oldest) *oldest = v.sound;
   }
+  if (voices) *voices = count;
   return n;
 }
 

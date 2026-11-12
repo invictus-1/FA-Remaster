@@ -76,6 +76,7 @@ struct Category {
   float volume = 0;  // decibels
   int maxInstances = 255;      // sounds of it at a time (255: no limit)
   bool replaceOldest = false;  // at the limit a new sound takes the oldest one's place (else it is not played)
+  int fullBehaviour = 0;       // the file's own number for that (see ParseGlobalSettings)
   int fadeInMs = 0, fadeOutMs = 0;  // over how long the new one comes in and the old one goes when it takes its place
 };
 bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>* out);

@@ -107,6 +107,10 @@ int l_Border_SetSolidColor(lua_State* L) {
 }
 
 // --- Histogram: line graphs over a growing x axis (the score screen's graphs) ---
+// NOT DRAWN: the control keeps what the scripts set and shows nothing. No script of the game as FAF ships it makes
+// one (looked for on 2026-11-12 in every .lua of the frozen FAF files: only the class's own /lua/maui/histogram.lua
+// names it; the score screen's graphs are FAF's hotstats, drawn with bitmaps), so the original's drawing was not
+// read. A mod that makes one gets an empty rectangle.
 
 class Histogram : public Control {
  public:
@@ -396,6 +400,19 @@ int l_Movie_GetNumFrames(lua_State* L) {
   return 1;
 }
 
+// moho64ui_MovieStep(movie, seconds) -> pictures turned into pixels by the step, whether the picture changed: the
+// film's clock moved on by hand, whatever the control's state (tests: a step of some seconds, as after a stall).
+int l_MovieStep(lua_State* L) {
+  Movie* c = CheckControl<Movie>(L, 1);
+  const int before = c->decoder.Converted();
+  const uint64_t serial = c->decoder.Picture().serial;
+  c->decoder.Advance(luaL_checknumber(L, 2));
+  c->decoder.Ended();  // (a big film's step runs on its own thread: waited for)
+  lua_pushnumber(L, c->decoder.Converted() - before);
+  lua_pushboolean(L, c->decoder.Picture().serial != serial);
+  return 2;
+}
+
 // SetMovieVolume(v) / GetMovieVolume() (FA exe 0x875020 / 0x875180): the original keeps
 // trunc(-10000 + 10000 * v) (hundredths of a decibel, v brought into 0..1) and nothing reads it; Get
 // gives that number back. No script of the game calls either.
@@ -431,6 +448,7 @@ void RegisterSimpleControlBindings(lua_State* L) {
   SetMethod(L, "CMauiMovie", "Stop", l_Movie_Stop);
   SetMethod(L, "CMauiMovie", "GetFrameRate", l_Movie_GetFrameRate);
   SetMethod(L, "CMauiMovie", "GetNumFrames", l_Movie_GetNumFrames);
+  lua_register(L, "moho64ui_MovieStep", l_MovieStep);
   SetGlobal(L, "SetMovieVolume", l_SetMovieVolume);
   SetGlobal(L, "GetMovieVolume", l_GetMovieVolume);
 }

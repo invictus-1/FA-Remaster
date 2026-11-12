@@ -19,6 +19,19 @@ check("its frames, from the Sofdec header", m:GetNumFrames(), 150)
 check("its frame rate (29.97)", math.abs(m:GetFrameRate() - 29.97) < 0.01, true)
 local bad = Movie(GetFrame(0))
 check("a movie that is not there does not load", bad:InternalSet("/movies/no_such_movie.sfd"), false)
+-- A step of some seconds, as after a stall (the review of 2026-11-09, toolkit L15): the film moves on by all of it,
+-- and only the last picture due is turned into pixels (before: every one, 90 for 3 s).
+do
+    local late = Movie(GetFrame(0), "/movies/Brackman.sfd")
+    local one, changed = moho64ui_MovieStep(late, 1 / 30)
+    check("an ordinary step: at most one picture", one <= 1, true)
+    local many, changedMany = moho64ui_MovieStep(late, 3)
+    check("a step of 3 s: one picture turned into pixels", many, 1)
+    check("and the film's picture changed", changedMany, true)
+    local last = moho64ui_MovieStep(late, 60)
+    check("a step past the film's end: at most one picture", last <= 1, true)
+    late:Destroy()
+end
 local stopped, finished = nil, nil
 m.OnStopped = function(self) stopped = GetSystemTimeSeconds() end
 m.OnFinished = function(self) finished = GetSystemTimeSeconds() end

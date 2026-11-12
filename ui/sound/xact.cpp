@@ -352,7 +352,15 @@ bool ParseGlobalSettings(const uint8_t* data, size_t size, std::vector<Category>
     cat.maxInstances = c.U8();
     cat.fadeInMs = c.U16();
     cat.fadeOutMs = c.U16();
-    cat.replaceOldest = (c.U8() & 1) != 0;
+    // The byte after the fades: its low three bits say how the fades run, the bits above them what becomes of a
+    // new sound when the category is full: 0 it is not played, 1 it waits, 2 it takes the oldest one's place, 3 the
+    // quietest's, 4 the lowest priority's (the sound library's layout as FNA's FACT has it, from memory; the game's
+    // own SupCom.xgs agrees: Music, limit 1, holds 0x11, World, limit 200, holds 0x01, every other category 0, and a
+    // category of one sound that did not replace could never change its music). Until 2026-11-12 bit 0 was read as
+    // "takes the oldest one's place", which was right for Music by chance and wrong for World. The game's file
+    // holds only 0 and 2; here 3 and 4 are taken as 2 and 1 as 0. The review of 2026-11-09, toolkit M7.
+    cat.fullBehaviour = c.U8() >> 3;
+    cat.replaceOldest = cat.fullBehaviour >= 2;
     cat.parent = c.S16();
     cat.volume = VolumeByteToDecibels(c.U8());
     if (c.bad) return false;

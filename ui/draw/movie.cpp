@@ -11,12 +11,15 @@ namespace {
 // (0xAARRGGBB: pl_mpeg's BGRA bytes are those little-endian), with a new serial so a picture drawn
 // before counts as changed.
 void OnPicture(plm_t*, plm_frame_t* frame, void* user) {
-  auto* movie = static_cast<Image*>(user);
+  auto* sink = static_cast<MoviePictureSink*>(user);
+  if (frame->time < sink->skipBefore) return;  // (a picture the step passes over: MovieDecoder::Step)
+  Image* movie = sink->to;
   movie->width = static_cast<int>(frame->width), movie->height = static_cast<int>(frame->height);
   movie->pixels.resize(static_cast<size_t>(movie->width) * static_cast<size_t>(movie->height));
   plm_frame_to_bgra(frame, reinterpret_cast<uint8_t*>(movie->pixels.data()), movie->width * 4);
   for (uint32_t& p : movie->pixels) p |= 0xff000000u;  // (pl_mpeg writes the colours only: opaque)
   movie->serial = NewImageSerial();
+  ++sink->converted;
 }
 // The frame count the Sofdec header gives (the first MPEG private-stream-2 packet, 00 00 01 BF:
 // its data holds "SofdecStream"; the duration in ms at +0xaa, the frames at +0xae, u32 LE;
@@ -56,11 +59,26 @@ void MovieDecoder::Worker() {
     stepDue_ = false;
     const double seconds = stepSeconds_;
     lock.unlock();
-    plm_decode(plm_, seconds);  // (its pictures to decoded_: OnPicture)
+    Step(seconds);  // (its pictures to decoded_: OnPicture)
     lock.lock();
     stepping_ = false;
     wake_.notify_all();
   }
+}
+
+// A step of the film's clock. Its pictures are decoded one after the other, each from the one before; the last one
+// due is the one shown, so only that one is turned into pixels. pl_mpeg's plm_decode goes on while the video's clock
+// (the pictures decoded so far over the frame rate, so a picture's own time plus one picture) is under the film's
+// clock plus the step: the last picture is the one whose time plus one picture reaches that, and every picture before
+// it is passed over. (An ordinary step holds no picture or one. A step that runs over the film's end counts from the
+// end: its last picture is the film's last.)
+void MovieDecoder::Step(double seconds) {
+  double end = plm_get_time(plm_) + seconds;
+  const int frames = Frames();
+  if (frameRate_ > 0 && frames > 0 && end > frames / frameRate_) end = frames / frameRate_;
+  sink_.skipBefore = frameRate_ > 0 ? end - 1.0 / frameRate_ - 1e-6 : -1;
+  plm_decode(plm_, seconds);
+  sink_.skipBefore = -1;
 }
 
 void MovieDecoder::Collect() {
@@ -90,9 +108,11 @@ bool MovieDecoder::Open(std::string bytes) {
   duration_ = plm_get_duration(plm_);
   frames_ = SofdecFrames(bytes_);
   // The first picture at once, so the control shows something before its first step.
-  if (plm_frame_t* first = plm_decode_video(plm_)) OnPicture(plm_, first, &picture_);
+  sink_.to = &picture_, sink_.skipBefore = -1;
+  if (plm_frame_t* first = plm_decode_video(plm_)) OnPicture(plm_, first, &sink_);
   ahead_ = static_cast<long long>(width_) * height_ >= kAheadPixels;
-  plm_set_video_decode_callback(plm_, OnPicture, ahead_ ? &decoded_ : &picture_);
+  sink_.to = ahead_ ? &decoded_ : &picture_;
+  plm_set_video_decode_callback(plm_, OnPicture, &sink_);
   if (ahead_) {
     if (!worker_.joinable()) worker_ = std::thread([this] { Worker(); });
   }
@@ -112,7 +132,7 @@ bool MovieDecoder::Advance(double seconds) {
     }
     wake_.notify_all();
   } else {
-    plm_decode(plm_, seconds);
+    Step(seconds);
   }
   return picture_.serial != before;
 }
