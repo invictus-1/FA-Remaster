@@ -106,7 +106,8 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.water.ocean.glitter = looks.oceanGlitter ? 1 : 0;  // (Ocean Glitter)
   w.water.ocean.nearSparkle = looks.seaSparkle ? 0.3f : 0.0f;  // (Sea Sparkle, render 03fc92c; 0.3 on: render 7617828)
   w.unitDetail = looks.unitDetail ? 1.0f : 0.0f;  // (Close-up Detail, render 5ee436a)
-  w.clouds.mix = looks.cloudMix ? 1.0f : 0.0f;    // (Cloud Layout: Mixed / Even, render b6e66de, request 56)
+  // (Cloud Layout: Even 0, Mixed 1, Varied 2; render b6e66de, request 56, and 135feb4a, request 75)
+  w.clouds.mix = static_cast<float>(std::min(2, std::max(0, looks.cloudLayout)));
   w.stormCells = looks.stormCells;                // (Storm Clouds: Cells / Plain, render 309e718, request 57)
   w.starryNight = looks.starryNight;              // (Night Sky: Starry / Plain, render acf9384, request 58)
   w.water.shoreSoak = looks.shoreSoak;                // (Shore Soak)

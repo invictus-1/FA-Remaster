@@ -401,9 +401,12 @@ int l_LooksForTests(lua_State* L) {
                            looks.weatherEffects, looks.groundDetail, looks.frameGeneration, looks.waterRipples, looks.lens,
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
                            looks.softScorch, looks.oceanGlitter, looks.shoreSoak, looks.remasteredGate, looks.ghostLook,
-                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudMix, looks.stormCells, looks.starryNight, looks.warpInColours, looks.waterFxMirror};
+                           looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudLayout != 0, looks.stormCells, looks.starryNight, looks.warpInColours, looks.waterFxMirror};
   lua_pushstring(L, "shieldBend");
   lua_pushnumber(L, looks.shieldBend);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "cloudLayout");  // (0 Even, 1 Mixed, 2 Varied; "cloudMix" above: any but Even)
+  lua_pushnumber(L, looks.cloudLayout);
   lua_rawset(L, -3);
   lua_pushstring(L, "unitGlow");
   lua_pushnumber(L, looks.unitGlow);
@@ -1481,7 +1484,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         key == "REMASTER_WARPIN_COLOURS" || key == "REMASTER_WATER_MIRROR" ||
         key == "REMASTER_GHOST_LOOK" || key == "REMASTER_GUIDE" || key == "REMASTER_CLOAK_LOOK" ||
         key == "REMASTER_STEALTH_VEIL" || key == "REMASTER_SEA_SPARKLE" || key == "REMASTER_UNIT_DETAIL" ||
-        key == "REMASTER_CLOUD_LAYOUT" || key == "REMASTER_STORM_CLOUDS" ||
+        key == "REMASTER_STORM_CLOUDS" ||
         key == "REMASTER_NIGHT_SKY") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
@@ -1504,11 +1507,17 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_STEALTH_VEIL"     ? looks.stealthLook
                  : key == "REMASTER_SEA_SPARKLE"      ? looks.seaSparkle
                  : key == "REMASTER_UNIT_DETAIL"      ? looks.unitDetail
-                 : key == "REMASTER_CLOUD_LAYOUT"     ? looks.cloudMix
                  : key == "REMASTER_STORM_CLOUDS"     ? looks.stormCells
                  : key == "REMASTER_NIGHT_SKY"        ? looks.starryNight
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
+      return;
+    }
+    if (key == "REMASTER_CLOUD_LAYOUT") {  // (Cloud Layout: even, mixed or varied; 0 / 1 / 2 too; "on" as before: mixed)
+      const std::string v = Upper(value);
+      if (v.rfind("EVEN", 0) == 0 || v == "0" || v.rfind("OFF", 0) == 0 || v.rfind("FALSE", 0) == 0) looks.cloudLayout = 0;
+      else if (v.rfind("MIXED", 0) == 0 || v == "1" || v.rfind("ON", 0) == 0 || v.rfind("TRUE", 0) == 0) looks.cloudLayout = 1;
+      else if (v.rfind("VARIED", 0) == 0 || v == "2") looks.cloudLayout = 2;
       return;
     }
     if (key == "REMASTER_SHIELD_BEND") {  // (Shield Bending: off, subtle or full; 0 / 1 / 2 too)
