@@ -4664,6 +4664,7 @@ int main(int argc, char** argv) {
         }
         World* pw = picture.world();
         const int madeBefore = pw ? pw->MadeProps() : 0, decalsBefore = pw ? pw->decals.Count() : 0;
+        const int madePropsBefore = madeBefore, mapGoneBefore = pw ? pw->MapPropsGone() : 0;
         const int particlesBefore = pw ? pw->particles.liveEmitters : 0;
         const int effectsBefore = pw ? pw->effects.live : 0;  // [heldworld]
         const auto t0 = std::chrono::steady_clock::now();
@@ -4724,6 +4725,9 @@ int main(int argc, char** argv) {
           printf("render: --picture-restart%s: at the moment drawn, the first game / the game again: effects alive %d / %d, marks on the ground %d / %d, emitters %d / %d\n",
                  opt.pictureRestartHeld ? "-held" : "", effectsBefore, pw ? pw->effects.live : 0, decalsBefore, pw ? pw->decals.Count() : 0, particlesBefore,
                  pw ? static_cast<int>(pw->particles.liveEmitters) : 0);
+          if (pw)  // (the scenery too: the props made in the game that stand, and the map's own that are gone)
+            printf("render: --picture-restart%s: after the game again: %d props made in the game stand (%d before), %d of the map's own gone (%d before)\n",
+                   opt.pictureRestartHeld ? "-held" : "", pw->MadeProps(), madePropsBefore, pw->MapPropsGone(), mapGoneBefore);
         }
       }
       break;
@@ -5488,6 +5492,7 @@ int main(int argc, char** argv) {
       if (haveLive && effects.unlistedHidden) printf(" (%d effects on unlisted things hidden in the fog)", effects.unlistedHidden);
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
+      if (haveLive) printf("; scenery: %d props made in the game stand, %d of the map's own gone", world.MadeProps(), world.MapPropsGone());
       if (world.effects.staleKept > 0) printf("; %d lasting emitters started after a jump", world.effects.staleKept);  // [stalelast]
       if (world.effects.unitEmittersPlayed > 0) printf("; %d emitters played a unit's own way", world.effects.unitEmittersPlayed);  // [unitfx]
       if (world.horizonWeather)  // [horizon]

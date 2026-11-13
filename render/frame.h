@@ -149,6 +149,7 @@ struct FramePropEvent {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float scale[3] = {1, 1, 1};  // the engine's scale x draw scale
+  bool superseded = false;     // [propqueue] (SimFrames' own: a newer change of the prop waits behind it; never handed out)
 };
 
 // A weapon's beam while it is on.

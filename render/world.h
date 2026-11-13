@@ -260,6 +260,11 @@ class World {
   int groundChanges = 0;                // the simulation's changes of the ground's heights taken in (ChangeGround)
   int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
   int MadeProps() const { return static_cast<int>(madeProps_.size()); }  // props made in the game that stand now
+  int MapPropsGone() const {  // (checks) the map's own props that stand no more
+    int n = 0;
+    for (const PlacedProp& p : props_) n += p.model == nullptr;
+    return n;
+  }
   // Where wreckage lies now (at most `most` places): for looking at it in the viewer.
   std::vector<Vec3> WreckPlaces(size_t most) const;
   void Render();
