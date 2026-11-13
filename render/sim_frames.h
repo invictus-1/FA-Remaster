@@ -152,6 +152,7 @@ class SimFrames {
   std::vector<FrameGroundChange> groundChanges_;  // not yet taken
   size_t groundSeen_ = 0;  // how many of the map's height changes have been read (the simulation's thread only)
   std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
+  size_t propSuperseded_ = 0;                   // [propqueue] how many of them a newer change took the place of
   FrameCombat combat_;                                 // not yet taken
   bool combatKept_[3] = {false, false, false};         // the simulation's collectHits, collectImpacts, collectHealth
   std::unordered_map<uint32_t, size_t> healthWaiting_;  // an entity's place in combat_.health

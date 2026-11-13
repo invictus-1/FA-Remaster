@@ -754,19 +754,37 @@ void SimFrames::Beat(const moho::Sim& sim) {
   }
   // (a change of a prop that has one waiting, not yet taken, takes its place: a fallen tree sinks a
   // little every beat, and whoever draws only now and then needs where it is, not where it was)
+  // [propqueue] ... its place in what is told, not in the list: the newer change goes to the list's end and the one
+  // waiting is dropped (TakePropEvents leaves it out), so that the list stays in the order of the beats. Written over
+  // the waiting one where that stood, a change of the newest beat stood among the events of an early one, and the
+  // world, which takes the list in order up to the moment it shows, stopped there: after a long stretch without a
+  // frame (a run ahead, a jump) the frame of the moment before the newest beat had less than half of the scenery's
+  // changes (2821 of 5188 props made in the game at beat 1201 of a test game), until the clock passed that beat.
   for (FramePropEvent& f : propEvents) {
     if (f.kind == FramePropEvent::Change) {
       auto waiting = propWaiting_.find(f.id);
       if (waiting != propWaiting_.end() && waiting->second < propEvents_.size() && propEvents_[waiting->second].id == f.id &&
           propEvents_[waiting->second].kind == FramePropEvent::Change) {
-        propEvents_[waiting->second] = std::move(f);
-        continue;
+        propEvents_[waiting->second].superseded = true;
+        ++propSuperseded_;
       }
       propWaiting_[f.id] = propEvents_.size();
     } else {
       propWaiting_.erase(f.id);
     }
     propEvents_.push_back(std::move(f));
+  }
+  // (nobody took the list for a long while, a game run ahead without a frame: the dropped ones leave it, so that it
+  // grows with the props that changed and not with the beats)
+  if (propSuperseded_ > 4096 && propSuperseded_ * 2 > propEvents_.size()) {
+    propEvents_.erase(std::remove_if(propEvents_.begin(), propEvents_.end(), [](const FramePropEvent& e) { return e.superseded; }),
+                      propEvents_.end());
+    propSuperseded_ = 0;
+    propWaiting_.clear();
+    for (size_t i = 0; i < propEvents_.size(); ++i) {
+      if (propEvents_[i].kind == FramePropEvent::Change) propWaiting_[propEvents_[i].id] = i;
+      else propWaiting_.erase(propEvents_[i].id);
+    }
   }
   beats_.push_back(std::move(beat));
   while (beats_.size() > kBeatsKept) beats_.pop_front();
@@ -957,6 +975,9 @@ void SimFrames::TakePropEvents(std::vector<FramePropEvent>* out) {
   out->clear();
   out->swap(propEvents_);
   propWaiting_.clear();
+  propSuperseded_ = 0;
+  // [propqueue] (the changes a newer one of the same prop took the place of)
+  out->erase(std::remove_if(out->begin(), out->end(), [](const FramePropEvent& e) { return e.superseded; }), out->end());
 }
 
 void SimFrames::TakeCombat(FrameCombat* out) {
