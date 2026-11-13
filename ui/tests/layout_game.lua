@@ -20,5 +20,12 @@ ForkThread(function()
     local units = GetArmiesTable().focusArmy and UISelectionByCategory("COMMAND", false, false, false, false)
     WaitSeconds(1)
     check("the commander is selected", table.getn(GetSelectedUnits() or {}) >= 1, true)
+    -- `-- /screen score`: the game ended the menu's way and the score screen left up instead
+    if (GetCommandLineArg("/screen", 1) or {})[1] == "score" then
+        WaitSeconds(50)  -- (a minute of game first: the graphs of a game with no score yet are all 0 / 0)
+        import("/lua/ui/game/tabs.lua").EndGame()
+        WaitSeconds(6)
+        check("the score screen is up", import("/lua/ui/dialogs/score.lua").scoreScreenActive, true)
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

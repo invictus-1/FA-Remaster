@@ -152,5 +152,19 @@ ForkThread(function()
         check("drawn, the program goes on: its pixel", moho64ui_PixelAt(520, 810), "ff402010")
         odd:Destroy()
     end
+    -- a bitmap whose top is no number (a script's 0 / 0, as the score screen's graph makes them): nothing is drawn of
+    -- it and the program goes on (toolkit L11)
+    do
+        local zero = 0
+        local lost = place(Bitmap(GetFrame(0)), 700, 800)
+        lost:SetSolidColor("ffff0000")
+        check("a solid bitmap is drawn", moho64ui_PixelAt(720, 810), "ffff0000")
+        lost.Top:Set(zero / zero)
+        check("its top no number: nothing is drawn of it, the program goes on", moho64ui_PixelAt(720, 810), "00000000")
+        lost.Top:Set(800)
+        lost.Width:Set(1e30)
+        check("a width far beyond any screen: drawn where the screen is", moho64ui_PixelAt(720, 810), "ffff0000")
+        lost:Destroy()
+    end
     LOG("TEST done: " .. failed .. " failed")
 end)

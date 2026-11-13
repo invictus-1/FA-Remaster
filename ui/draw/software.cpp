@@ -41,7 +41,18 @@ inline void Blend(uint32_t& dst, uint32_t r, uint32_t g, uint32_t b, uint32_t a)
 }
 
 // The whole pixels whose centres lie in [a, b).
-inline int FirstPixel(float a) { return static_cast<int>(std::ceil(a - 0.5f)); }
+// (A side that is no number, or lies outside what an int holds, has no defined cast: on x86 it came out as the
+// smallest int, elsewhere as something else. Scripts do hand such sides over: a graph of a game with no score yet
+// divides nothing by nothing, 2,264 bitmaps on the score screen of a ten-second game; the mini bars of a replay's
+// score panel. No number: 0, so a rectangle with such a side is empty, as it came out before; too large: the nearest
+// of +-2^30. The review of 2026-11-09, toolkit L11; found in the wild by the layout check, 2026-11-13.)
+inline int FirstPixel(float a) {
+  const float c = std::ceil(a - 0.5f);
+  if (!(c == c)) return 0;
+  if (c > 1073741824.0f) return 1 << 30;
+  if (c < -1073741824.0f) return -(1 << 30);
+  return static_cast<int>(c);
+}
 
 #if defined(__SSE2__)
 // Blend and Mul for two pixels at a time, their channels (B, G, R, A) in 16-bit lanes: the same integers as one at a

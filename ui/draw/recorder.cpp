@@ -14,7 +14,18 @@ namespace moho::ui {
 namespace {
 
 // The whole pixels whose centres lie in [a, b) (as draw/software.cpp counts them).
-inline int FirstPixel(float a) { return static_cast<int>(std::ceil(a - 0.5f)); }
+// (A side that is no number, or lies outside what an int holds, has no defined cast: on x86 it came out as the
+// smallest int, elsewhere as something else. Scripts do hand such sides over: a graph of a game with no score yet
+// divides nothing by nothing, 2,264 bitmaps on the score screen of a ten-second game; the mini bars of a replay's
+// score panel. No number: 0, so a rectangle with such a side is empty, as it came out before; too large: the nearest
+// of +-2^30. The review of 2026-11-09, toolkit L11; found in the wild by the layout check, 2026-11-13.)
+inline int FirstPixel(float a) {
+  const float c = std::ceil(a - 0.5f);
+  if (!(c == c)) return 0;
+  if (c > 1073741824.0f) return 1 << 30;
+  if (c < -1073741824.0f) return -(1 << 30);
+  return static_cast<int>(c);
+}
 
 inline uint64_t Mix(uint64_t h, uint64_t v) {
   h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
