@@ -256,6 +256,8 @@ class UserState {
     float drag[2] = {0, 0};
     float wheel = 0;
     bool taking = false;
+    // (whose photo is being made: the photo mode's, or the console's remaster_photo; for the console's lines)
+    const char* takingFor = "remaster_photo_mode";
   };
   PhotoModeState photoMode;
   // The follow camera (ours, Chris's approval of 2026-10-23: worldview.cpp FollowCamFrame, its frame
@@ -566,8 +568,21 @@ struct DisplayMode {
   // The screen the live window is on (its middle), as last looked at (after it opened and after each change of
   // mode); -1 without a window.
   int windowScreen = -1;
+  // The framed window's place in the preferences (ours, Chris 2026-11-13: "a remembered window place"; the keys are
+  // the original's, Windows.Main.x / y / width / height / maximized, of which it writes the size and "maximized",
+  // 0x8cdd40, and only reads the corner, 0x8d0bdc). `placeKept`: this run opens its window by them and writes them
+  // when the window goes (a live window whose mode the command line left free: main.cpp; run_window.cpp).
+  bool placeKept = false, placeKnown = false, placeMaximized = false;
+  int placeX = 0, placeY = 0;
 };
 DisplayMode& Display();
+// The window's place from the preferences into Display(): Windows.Main.width / height (both there: the window's
+// size, the original's read at 0x8d09ee; else what it was), x / y (placeKnown when both are there), maximized.
+void ReadWindowPlace(lua_State* L);
+// Alt+Enter (ours, Chris 2026-11-13): the other display mode, as if the player had chosen it as the Options'
+// Primary Adapter: a full screen on screen `screen` of Display()'s list (the one the window is on), or a window.
+// The profile's option follows (and the Secondary Adapter's list), unless the command line chose the mode.
+void TogglePrimaryMode(lua_State* L, bool toFull, int screen);
 // A screen mode's key ("width,height,rate" or "width,height,rate,N", see DisplayMode): the screen it names (its
 // adapter), `ownAdapter` when the key has no fourth number; -1 when it is no such key (windowed, disabled,
 // overridden).

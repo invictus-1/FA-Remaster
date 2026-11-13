@@ -475,6 +475,32 @@ check("a mode asks for a full screen", moho64ui_Looks().displayRequest, 2)
 ConExecute("SC_PrimaryAdapter overridden")
 check("and Command Line Override asks nothing new", moho64ui_Looks().displayRequest, 2)
 
+-- The window's place (ours, Chris 2026-11-13; the original's keys Windows.Main.*): read at the start for a live window
+-- the command line left free (here by the test's call); its size from width / height, a corner only when both x and
+-- y are there, "maximized" by itself (the original writes it without a corner)
+moho64ui_WindowPlaceRead()
+check("no place kept: no corner known, not maximized, the size as it was",
+    moho64ui_Looks().placeKnown .. " " .. moho64ui_Looks().placeMaximized .. " " .. moho64ui_Looks().windowedWidth .. "x" .. moho64ui_Looks().windowedHeight, "0 0 1024x768")
+SetPreference('Windows.Main.width', 1600)
+SetPreference('Windows.Main.height', 900)
+SetPreference('Windows.Main.maximized', true)
+moho64ui_WindowPlaceRead()
+check("a size and maximized kept: taken, still no corner",
+    moho64ui_Looks().placeKnown .. " " .. moho64ui_Looks().placeMaximized .. " " .. moho64ui_Looks().windowedWidth .. "x" .. moho64ui_Looks().windowedHeight, "0 1 1600x900")
+SetPreference('Windows.Main.x', -1200)
+SetPreference('Windows.Main.y', 40)
+SetPreference('Windows.Main.maximized', false)
+moho64ui_WindowPlaceRead()
+check("a corner kept (left of the main screen too): known",
+    moho64ui_Looks().placeKnown .. " " .. moho64ui_Looks().placeX .. "," .. moho64ui_Looks().placeY .. " " .. moho64ui_Looks().placeMaximized, "1 -1200,40 0")
+-- Alt+Enter (ours): the other mode, as if chosen as the Primary Adapter; the profile's option follows
+local function primaryKept() return (import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}).primary_adapter end
+moho64ui_AltEnter(false)
+check("Alt+Enter in a full screen asks for a window, and the option follows", moho64ui_Looks().displayRequest .. " " .. tostring(primaryKept()), "1 windowed")
+moho64ui_AltEnter(true, 0)
+check("Alt+Enter in a window asks for a full screen on its screen, and the option follows",
+    moho64ui_Looks().displayRequest .. " " .. tostring(primaryKept()), "2 " .. tostring(adapter[2] and adapter[2].key))
+
 -- The camera's options and the strategic icons (other tabs of the menu): each does what it says
 local all = {}
 for _, section in import('/lua/options/options.lua').options do

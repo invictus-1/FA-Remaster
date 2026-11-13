@@ -15,6 +15,8 @@
 namespace moho::ui {
 namespace {
 
+Window* g_mainWindow = nullptr;  // (the program's own window, for the tests' moho64ui_WindowProbe / Poke)
+
 UiEvent MouseEvent(WPARAM wp, LPARAM lp) {
   UiEvent e;
   e.x = static_cast<float>(GET_X_LPARAM(lp));
@@ -62,10 +64,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     else if ((w->buttonsHeld &= ~bit) == 0) ReleaseCapture();
     if (w->callbacks.mouseButton) w->callbacks.mouseButton(e, pressed, dbl);
   };
+  // Mouse buttons 4 and 5 (ours, Chris 2026-11-13; the original's window library hands neither on): keys, as the
+  // game's own key names have them (/lua/keymap/keynames.lua: Windows' codes 05 "XButton1" and 06 "XButton2"), so the
+  // key bindings dialog can give them an action. No character, no mouse capture.
+  auto extraButton = [&](EventType type) {
+    const WPARAM vk = GET_XBUTTON_WPARAM(wp) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;
+    key(KeyEventOf(type, static_cast<int>(vk), vk));
+  };
   switch (msg) {
     case WM_CLOSE:
       w->closed = true;
       return 0;
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONDBLCLK: extraButton(EventType::KeyDown); return TRUE;
+    case WM_XBUTTONUP: extraButton(EventType::KeyUp); return TRUE;
+    // A framed window's smallest size (minWidth x minHeight inside), for the player's drag and for a size set.
+    case WM_GETMINMAXINFO:
+      if (!w->fullScreen && w->minWidth > 0 && w->minHeight > 0) {
+        RECT rc{0, 0, w->minWidth, w->minHeight};
+        AdjustWindowRect(&rc, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE);
+        MINMAXINFO* m = reinterpret_cast<MINMAXINFO*>(lp);
+        m->ptMinTrackSize.x = rc.right - rc.left, m->ptMinTrackSize.y = rc.bottom - rc.top;
+        return 0;
+      }
+      break;
+    case WM_MOVE:
+      w->NoteWindowed();
+      break;
     // Alt alone, F10, or Alt and a letter no menu has: Windows' DefWindowProc turns them into SC_KEYMENU, which in a
     // framed window opens its (empty) menu mode: the game stood still until the next key or click, with a beep for a
     // letter (the review of 2026-11-09, row A; Alt is a modifier of the game's keys). Not taken here: Alt+Space, the
@@ -126,6 +151,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // swallows its character.
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
+      // Alt+Enter: the other mode (Callbacks::toggleFullScreen); not a key for the game, and not again while held.
+      if (msg == WM_SYSKEYDOWN && wp == VK_RETURN && (lp & (1 << 29)) && w->callbacks.toggleFullScreen) {
+        if (!(lp & (1 << 30))) w->callbacks.toggleFullScreen();
+        return 0;
+      }
       int code = KeyCodeOf(wp);
       UiEvent down = KeyEventOf(EventType::KeyDown, code ? code : static_cast<int>(wp), wp);
       down.repeat = (lp & (1 << 30)) != 0;  // the key was already down: Windows repeats it
@@ -147,6 +177,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       else key(KeyEventOf(EventType::Char, static_cast<int>(wp), wp));
       return 0;
     case WM_SIZE:
+      w->NoteWindowed();
       if (wp != SIZE_MINIMIZED && w->callbacks.resized && LOWORD(lp) > 0 && HIWORD(lp) > 0)
         w->callbacks.resized(LOWORD(lp), HIWORD(lp));
       return 0;
@@ -171,10 +202,91 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }  // namespace
 
 Window::~Window() {
+  if (g_mainWindow == this) g_mainWindow = nullptr;
   if (fullScreen) ClipCursor(nullptr);
   if (hwnd_) DestroyWindow(static_cast<HWND>(hwnd_));
   for (auto& entry : pointers_)
     if (entry.second) DestroyIcon(static_cast<HICON>(entry.second));
+  for (void* icon : icons_)
+    if (icon) DestroyIcon(static_cast<HICON>(icon));
+}
+
+namespace {
+// A framed window's outer corner kept on a screen: the whole window inside the work area of the screen nearest to
+// where it would stand, as far as it fits (its top left first).
+void KeepOnScreen(int* x, int* y, int w, int h) {
+  RECT want{*x, *y, *x + w, *y + h};
+  MONITORINFO screen{};
+  screen.cbSize = sizeof screen;
+  if (!GetMonitorInfoW(MonitorFromRect(&want, MONITOR_DEFAULTTONEAREST), &screen)) return;
+  const RECT& work = screen.rcWork;
+  *x = std::max(static_cast<int>(work.left), std::min(*x, static_cast<int>(work.right) - w));
+  *y = std::max(static_cast<int>(work.top), std::min(*y, static_cast<int>(work.bottom) - h));
+}
+// (EnumResourceNamesW's callback: the first icon group's name, a number or a text.)
+struct IconName {
+  bool found = false, number = false;
+  WORD id = 0;
+  std::wstring text;
+};
+BOOL CALLBACK FirstIcon(HMODULE, LPCWSTR, LPWSTR name, LONG_PTR to) {
+  IconName* out = reinterpret_cast<IconName*>(to);
+  out->found = true;
+  out->number = IS_INTRESOURCE(name);
+  if (out->number) out->id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
+  else out->text = name;
+  return FALSE;  // (the first is the program's own icon, the one the system shows for the file)
+}
+}  // namespace
+
+void Window::NoteWindowed() {
+  if (!hwnd_ || fullScreen) return;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return;
+  windowed_.maximized = IsZoomed(hwnd) != 0;
+  if (windowed_.maximized) return;  // (the corner and the size stay those of before)
+  RECT outer{}, inner{};
+  GetWindowRect(hwnd, &outer);
+  GetClientRect(hwnd, &inner);
+  if (inner.right <= 0 || inner.bottom <= 0) return;
+  windowed_.known = true;
+  windowed_.x = outer.left, windowed_.y = outer.top;
+  windowed_.width = inner.right, windowed_.height = inner.bottom;
+}
+
+void Window::RememberPlace(bool corner, int x, int y, bool maximized) {
+  windowed_.maximized = maximized;
+  if (!corner) return;
+  windowed_.known = true;
+  windowed_.x = x, windowed_.y = y;
+}
+
+bool Window::SetIconFromExe(const std::string& path) {
+  if (!hwnd_) return false;
+  wchar_t wpath[1024];
+  if (!MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath, 1024)) return false;
+  // (as data only: nothing of the file runs)
+  HMODULE file = LoadLibraryExW(wpath, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+  if (!file) return false;
+  IconName name;
+  EnumResourceNamesW(file, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, FirstIcon, reinterpret_cast<LONG_PTR>(&name));
+  HICON made[2] = {nullptr, nullptr};
+  if (name.found) {
+    const LPCWSTR which = name.number ? MAKEINTRESOURCEW(name.id) : name.text.c_str();
+    // (the sizes the system shows them at on this screen: the group's nearest picture is taken, a copy of ours)
+    made[0] = static_cast<HICON>(LoadImageW(file, which, IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+    made[1] = static_cast<HICON>(LoadImageW(file, which, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
+  }
+  FreeLibrary(file);
+  if (!made[0] && !made[1]) return false;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  if (made[0]) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(made[0]));
+  if (made[1]) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(made[1]));
+  for (int i = 0; i < 2; ++i) {
+    if (icons_[i]) DestroyIcon(static_cast<HICON>(icons_[i]));
+    icons_[i] = made[i];
+  }
+  return true;
 }
 
 bool Window::SetPointer(const uint32_t* pixels, int width, int height, int hotX, int hotY) {
@@ -336,7 +448,7 @@ void Window::SetMode(bool full, int width, int height, const Screen* on) {
     RECT now;
     GetWindowRect(hwnd, &now);
     if (fullScreen && now.left == r.left && now.top == r.top && now.right == r.right && now.bottom == r.bottom) return;
-    if (!fullScreen) windowedX_ = now.left, windowedY_ = now.top, windowedKnown_ = true;
+    if (!fullScreen) NoteWindowed();  // (where it stands as a window, for the way back)
     fullScreen = true;
     SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
     SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
@@ -344,17 +456,20 @@ void Window::SetMode(bool full, int width, int height, const Screen* on) {
     return;
   }
   if (fullScreen) ClipCursor(nullptr);
+  const bool wasFull = fullScreen;
+  const bool toMaximized = wasFull && windowed_.maximized;  // (it was maximized before the full screen)
   fullScreen = false;
+  if (!wasFull && IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);  // (a size set for a maximized window: a plain one first)
   SetWindowLongPtrW(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
-  RECT rc{0, 0, width, height};
+  RECT rc{0, 0, std::max(width, minWidth), std::max(height, minHeight)};
   AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
   const RECT& work = screen.rcWork;
   const int w = rc.right - rc.left, h = rc.bottom - rc.top;
-  int x = windowedKnown_ ? windowedX_ : static_cast<int>(work.left) + (static_cast<int>(work.right - work.left) - w) / 2;
-  int y = windowedKnown_ ? windowedY_ : static_cast<int>(work.top) + (static_cast<int>(work.bottom - work.top) - h) / 2;
-  x = std::max(static_cast<int>(work.left), std::min(x, static_cast<int>(work.right) - w));  // (kept on the screen)
-  y = std::max(static_cast<int>(work.top), std::min(y, static_cast<int>(work.bottom) - h));
+  int x = windowed_.known ? windowed_.x : static_cast<int>(work.left) + (static_cast<int>(work.right - work.left) - w) / 2;
+  int y = windowed_.known ? windowed_.y : static_cast<int>(work.top) + (static_cast<int>(work.bottom - work.top) - h) / 2;
+  KeepOnScreen(&x, &y, w, h);
   SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, w, h, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+  if (toMaximized) ShowWindow(hwnd, SW_MAXIMIZE);
 }
 
 void Window::ClientSize(int* width, int* height) const {
@@ -423,20 +538,33 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   wchar_t wtitle[256];
   MultiByteToWideChar(CP_UTF8, 0, title, -1, wtitle, 256);
   const int fullX = on ? on->x : 0, fullY = on ? on->y : 0;  // (the main screen's top left is the desktop's 0, 0)
+  // (a framed window: where it last stood when that is known, RememberPlace, kept on a screen; else where the system
+  // puts a new window)
+  int ownX = CW_USEDEFAULT, ownY = CW_USEDEFAULT;
+  if (!full) windowed_.width = width, windowed_.height = height;  // (its size as a window, should it open maximized)
+  if (!full && windowed_.known && !owner) {
+    ownX = windowed_.x, ownY = windowed_.y;
+    KeepOnScreen(&ownX, &ownY, rc.right - rc.left, rc.bottom - rc.top);
+  }
   // ([head2] the second head's: owned by the main window, never activated; see `owner`, `noActivate`)
-  HWND hwnd = CreateWindowExW(noActivate ? WS_EX_NOACTIVATE : 0, wc.lpszClassName, wtitle, style, full ? fullX : CW_USEDEFAULT,
-                              full ? fullY : CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, static_cast<HWND>(owner), nullptr,
+  HWND hwnd = CreateWindowExW(noActivate ? WS_EX_NOACTIVATE : 0, wc.lpszClassName, wtitle, style, full ? fullX : ownX,
+                              full ? fullY : ownY, rc.right - rc.left, rc.bottom - rc.top, static_cast<HWND>(owner), nullptr,
                               inst, nullptr);
   if (!hwnd) return false;
   hwnd_ = hwnd;
   arrow_ = wc.hCursor;
+  if (!owner) g_mainWindow = this;
   SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-  if (show) ShowWindow(hwnd, noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
+  if (show) Show();
   return true;
 }
 
 void Window::Show() {
-  if (hwnd_) ShowWindow(static_cast<HWND>(hwnd_), noActivate ? SW_SHOWNOACTIVATE : SW_SHOW);
+  if (!hwnd_) return;
+  // (a framed window that was maximized when it was last open opens so: RememberPlace)
+  const bool maximized = !fullScreen && !noActivate && windowed_.maximized;
+  ShowWindow(static_cast<HWND>(hwnd_), noActivate ? SW_SHOWNOACTIVATE : maximized ? SW_SHOWMAXIMIZED : SW_SHOW);
+  NoteWindowed();
 }
 
 // (On the window's own thread the system draws the new title at once, inside this call: it shows also while that
@@ -494,6 +622,9 @@ void Window::KeepMouseInside(bool) {}
 bool Window::InFront() const { return false; }
 void Window::LockMouse(bool lock) { lockMouse = lock; }
 void Window::SetMode(bool full, int, int, const Screen*) { fullScreen = full; }
+void Window::NoteWindowed() {}
+void Window::RememberPlace(bool, int, int, bool) {}
+bool Window::SetIconFromExe(const std::string&) { return false; }
 void Window::ClientSize(int* width, int* height) const { *width = *height = 0; }
 void Window::Middle(int* x, int* y) const { *x = *y = 0; }
 bool Window::Pump() { return false; }
@@ -521,7 +652,72 @@ size_t Window::ProcessMemory() {
 
 #ifndef MOHO64UI_SDL
 namespace moho::ui {
-void RegisterWindowTestBindings(lua_State*) {}  // (the SDL build's only: window_sdl.cpp)
+#ifdef _WIN32
+namespace {
+// moho64ui_WindowProbe() -> nil in a run without a window, else the live window as the system has it: {x, y (its
+// outer corner on the desktop), width, height (its inside), full, maximized, icon (it has one of its own), minWidth,
+// minHeight}. For the lab's window check (ui/tests/window_live.lua).
+int l_WindowProbe(lua_State* L) {
+  Window* w = g_mainWindow;
+  if (!w || !w->Handle()) return 0;
+  HWND hwnd = static_cast<HWND>(w->Handle());
+  RECT outer{}, inner{};
+  GetWindowRect(hwnd, &outer);
+  GetClientRect(hwnd, &inner);
+  lua_newtable(L);
+  auto number = [&](const char* key, int value) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, value);
+    lua_rawset(L, -3);
+  };
+  auto boolean = [&](const char* key, bool value) {
+    lua_pushstring(L, key);
+    lua_pushboolean(L, value);
+    lua_rawset(L, -3);
+  };
+  number("x", outer.left), number("y", outer.top), number("width", inner.right), number("height", inner.bottom);
+  number("minWidth", w->minWidth), number("minHeight", w->minHeight);
+  boolean("full", w->fullScreen), boolean("maximized", IsZoomed(hwnd) != 0);
+  boolean("icon", SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0) != 0);
+  return 1;
+}
+// moho64ui_WindowPoke(what [, a, b]): the live window handled as a player's hand or the system would: "size" (its
+// inside set to a x b), "move" (its corner to a, b), "maximize", "restore", "altenter" (the key's own messages),
+// "xbutton" (mouse button 4, or 5 with a = 2, pressed and let go). Nothing in a run without a window.
+int l_WindowPoke(lua_State* L) {
+  Window* w = g_mainWindow;
+  if (!w || !w->Handle()) return 0;
+  HWND hwnd = static_cast<HWND>(w->Handle());
+  const std::string what = luaL_checkstring(L, 1);
+  const int a = static_cast<int>(luaL_optnumber(L, 2, 0)), b = static_cast<int>(luaL_optnumber(L, 3, 0));
+  if (what == "size") {
+    RECT rc{0, 0, a, b};
+    AdjustWindowRect(&rc, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE);
+    SetWindowPos(hwnd, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  } else if (what == "move") {
+    SetWindowPos(hwnd, nullptr, a, b, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  } else if (what == "maximize") {
+    ShowWindow(hwnd, SW_MAXIMIZE);
+  } else if (what == "restore") {
+    ShowWindow(hwnd, SW_RESTORE);
+  } else if (what == "altenter") {
+    SendMessageW(hwnd, WM_SYSKEYDOWN, VK_RETURN, static_cast<LPARAM>(1) << 29);
+    SendMessageW(hwnd, WM_SYSKEYUP, VK_RETURN, static_cast<LPARAM>(0xE0000000u));
+  } else if (what == "xbutton") {
+    const WPARAM which = MAKEWPARAM(0, a == 2 ? XBUTTON2 : XBUTTON1);
+    SendMessageW(hwnd, WM_XBUTTONDOWN, which, 0);
+    SendMessageW(hwnd, WM_XBUTTONUP, which, 0);
+  }
+  return 0;
+}
+}  // namespace
+void RegisterWindowTestBindings(lua_State* L) {
+  lua_register(L, "moho64ui_WindowProbe", l_WindowProbe);
+  lua_register(L, "moho64ui_WindowPoke", l_WindowPoke);
+}
+#else
+void RegisterWindowTestBindings(lua_State*) {}  // (no window system here; the SDL build's own: window_sdl.cpp)
+#endif
 std::vector<std::string> Window::SurfaceExtensions() const { return {}; }  // (the renderer takes the HWND here)
 uint64_t Window::CreateSurface(void*) const { return 0; }
 }  // namespace moho::ui

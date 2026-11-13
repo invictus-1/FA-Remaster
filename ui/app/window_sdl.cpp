@@ -215,6 +215,14 @@ bool Window::Create(int width, int height, const char* title, Callbacks cb, bool
   }
   sdl_ = w;
   SdlWindows()[SDL_GetWindowID(w)] = this;
+  // (ours, Chris 2026-11-13, as window.cpp: a framed window's smallest size, where it last stood, maximized. UNTESTED
+  // on Linux and Mac: no such PC here.)
+  if (minWidth > 0 && minHeight > 0) SDL_SetWindowMinimumSize(w, minWidth, minHeight);
+  if (!full) {
+    windowed_.width = width, windowed_.height = height;
+    if (windowed_.known && !noActivate) SDL_SetWindowPosition(w, windowed_.x, windowed_.y);
+    if (windowed_.maximized && !noActivate) SDL_MaximizeWindow(w);
+  }
   if (display) {
     SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
     SDL_SetWindowFullscreenMode(w, nullptr);
@@ -315,10 +323,7 @@ void Window::SetMode(bool full, int width, int height, const Screen* on) {
   const SDL_DisplayID display = on ? DisplayOf(*on) : 0;
   if (full == fullScreen && full && (!display || display == SDL_GetDisplayForWindow(w))) return;
   if (full) {
-    if (!fullScreen) {
-      SDL_GetWindowPosition(w, &windowedX_, &windowedY_);
-      windowedKnown_ = true;
-    }
+    if (!fullScreen) NoteWindowed();  // (where it stands as a window, for the way back)
     if (display && display != SDL_GetDisplayForWindow(w)) {  // (to another screen: out of full screen, moved, back)
       if (fullScreen) SDL_SetWindowFullscreen(w, false);
       SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED_DISPLAY(display), SDL_WINDOWPOS_CENTERED_DISPLAY(display));
@@ -332,10 +337,37 @@ void Window::SetMode(bool full, int width, int height, const Screen* on) {
   KeepMouseInside(false);
   fullScreen = false;
   SDL_SetWindowFullscreen(w, false);
-  SDL_SetWindowSize(w, width, height);
-  if (windowedKnown_) SDL_SetWindowPosition(w, windowedX_, windowedY_);
+  SDL_SetWindowSize(w, width > minWidth ? width : minWidth, height > minHeight ? height : minHeight);
+  if (windowed_.known) SDL_SetWindowPosition(w, windowed_.x, windowed_.y);
   else SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+  if (windowed_.maximized) SDL_MaximizeWindow(w);
 }
+
+// (As window.cpp's: the framed window's corner, inside size and whether maximized, as it last was one.)
+void Window::NoteWindowed() {
+  if (!sdl_ || fullScreen) return;
+  SDL_Window* w = Sdl(sdl_);
+  const SDL_WindowFlags flags = SDL_GetWindowFlags(w);
+  if (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED | SDL_WINDOW_FULLSCREEN)) return;
+  windowed_.maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+  if (windowed_.maximized) return;
+  int x = 0, y = 0, width = 0, height = 0;
+  SDL_GetWindowPosition(w, &x, &y);
+  SDL_GetWindowSizeInPixels(w, &width, &height);
+  if (width <= 0 || height <= 0) return;
+  windowed_.known = true;
+  windowed_.x = x, windowed_.y = y, windowed_.width = width, windowed_.height = height;
+}
+
+void Window::RememberPlace(bool corner, int x, int y, bool maximized) {
+  windowed_.maximized = maximized;
+  if (!corner) return;
+  windowed_.known = true;
+  windowed_.x = x, windowed_.y = y;
+}
+
+// (The game's exe is a Windows program file: its icon is read by Windows' own calls, window.cpp. Here: none.)
+bool Window::SetIconFromExe(const std::string&) { return false; }
 
 void Window::ClientSize(int* width, int* height) const {
   *width = *height = 0;
@@ -473,6 +505,12 @@ bool Window::Pump() {
         e.left = ev.button.button == SDL_BUTTON_LEFT;  // for a button event: the button it is about
         e.middle = ev.button.button == SDL_BUTTON_MIDDLE;
         e.right = ev.button.button == SDL_BUTTON_RIGHT;
+        // Mouse buttons 4 and 5: keys (Windows' codes 5 and 6, the game's "XButton1" / "XButton2"), as window.cpp.
+        if (ev.button.button == SDL_BUTTON_X1 || ev.button.button == SDL_BUTTON_X2) {
+          const int vk = ev.button.button == SDL_BUTTON_X1 ? 5 : 6;
+          key(KeyEventOf(pressed ? EventType::KeyDown : EventType::KeyUp, vk, vk));
+          break;
+        }
         if (!e.left && !e.middle && !e.right) break;
         SDL_CaptureMouse(pressed);
         if (w.callbacks.mouseButton) w.callbacks.mouseButton(e, pressed, pressed && ev.button.clicks == 2);
@@ -489,6 +527,11 @@ bool Window::Pump() {
       case SDL_EVENT_KEY_DOWN: {
         const int vk = VirtualKeyOf(ev.key.scancode);
         if (!vk) break;
+        // Alt+Enter: the other mode (Callbacks::toggleFullScreen); not a key for the game, and not again while held.
+        if (vk == 13 && (ev.key.mod & SDL_KMOD_ALT) && w.callbacks.toggleFullScreen) {
+          if (!ev.key.repeat) w.callbacks.toggleFullScreen();
+          break;
+        }
         const int code = KeycodeMSWToMaui(vk);
         UiEvent down = KeyEventOf(EventType::KeyDown, code ? code : vk, vk);
         down.repeat = ev.key.repeat;
@@ -516,7 +559,13 @@ bool Window::Pump() {
         for (int ch : Characters(ev.text.text)) key(KeyEventOf(EventType::Char, ch, ch));
         break;
       case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        w.NoteWindowed();
         if (w.callbacks.resized && ev.window.data1 > 0 && ev.window.data2 > 0) w.callbacks.resized(ev.window.data1, ev.window.data2);
+        break;
+      case SDL_EVENT_WINDOW_MOVED:
+      case SDL_EVENT_WINDOW_MAXIMIZED:
+      case SDL_EVENT_WINDOW_RESTORED:
+        w.NoteWindowed();
         break;
       case SDL_EVENT_WINDOW_FOCUS_GAINED:  // in front: the mouse stays inside a full screen (if the player locks it)
         if (w.fullScreen) w.KeepMouseInside(w.lockMouse);

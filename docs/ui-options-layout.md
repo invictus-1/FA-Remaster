@@ -323,3 +323,19 @@ Variant: also move our Interface 4 and Gameplay 1 into the Remastered tab as two
 "Game". Technically the same (flat prefs, no preset involved); then `colorvision.lua` 50, `pathpreview.lua` 62 and
 `keybind_import.lua` 67 read `options.remaster` instead of `options.ui`. Not recommended: a colour-blind or FAF
 player looks for Colour Vision and the key import in Interface, and that tab is not crowded.
+
+## 5. "Tab Defaults" (built 2026-11-13; Chris: "lets add them")
+
+The review of 2026-11-09 (section 5, "In the options"): FAF's one Reset puts every option of every tab back at once
+(`optionslogic.ResetToDefaults`), the sound's and the gameplay's with the graphics', after a question, and closes the
+dialog. Ours adds a fifth button left of it, "Tab Defaults" (`ui/data/hook/lua/ui/dialogs/options.lua`,
+`RemasterTabDefaults`): each row of the tab SHOWN is changed to its default the way a hand changes it (the dialog's own
+`item.change`: the control, the dialog's working set, and the option's own `update`, a slider's preview). So nothing
+is kept until OK or Apply, Cancel leaves the options as they were, and no question is asked. Headers and button rows
+have nothing to put back. On the Remastered tab the preset goes to its default (Ultra) and each look to its own.
+
+The game's four buttons fill the row (170 wide each, 6 over the next, 15 from the panel's right edge), so a fifth would
+stand 143 outside the panel on the left: the five get 138 each, the textures drawn narrower, as the tab buttons
+(section 4). Tooltip: `options_tab_defaults` (ui/data/hook/lua/ui/help/tooltips.lua). Test: `ui/tests/options_tabs.lua`
+(every option of the tab at its default in the working set, another tab's option untouched, nothing kept before OK,
+Cancel leaves all, every button's label inside its button; at 1920x1080 and 3840x2160).

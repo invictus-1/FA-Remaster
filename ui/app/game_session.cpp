@@ -399,6 +399,15 @@ struct GameSession::Picture : WorldSource {
     photoAsked = true, photoDropped = false;
     return true;
   }
+  bool StartPhotoFrom(const WorldCamera& game, int width, int height) override {
+    if (width <= 0 || height <= 0) return false;
+    if (!cineGround) cineGround = picture.CineGround();
+    render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
+    camera.lodScale = game.lodScale;  // (the cinematic camera's views start at 1)
+    if (!picture.StartPhoto(camera, width, height, FrameMoment(), 0)) return false;  // (0: the renderer's supersampling)
+    photoAsked = true, photoDropped = false;
+    return true;
+  }
   float PhotoProgress() const override { return photoDropped ? 1.0f : picture.PhotoProgress(); }
   bool TakeDonePhoto(std::vector<uint32_t>* pixels, int* width, int* height) override {
     if (photoDropped) {  // (lost with the graphics device: done, and nothing to hand over)

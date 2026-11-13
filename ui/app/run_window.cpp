@@ -233,10 +233,41 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   Window::Screen startScreen;
   const bool onScreen = fullScreen && ScreenOf(Display().screen, &startScreen);
   static const char* const kTitle = "FA Remastered - interface";
+  // Ours (Chris 2026-11-13): a framed window is never smaller than 1024x768 inside (the original's smallest mode and
+  // its window's first size; a run that asks for a smaller one keeps its own size as the limit: tests); it opens
+  // where the player's last one stood (DisplayMode::placeKept); Alt+Enter asks for the other mode (taken up in the
+  // frame, below).
+  window.minWidth = std::min(1024, width), window.minHeight = std::min(768, height);
+  if (Display().placeKept) window.RememberPlace(Display().placeKnown, Display().placeX, Display().placeY, Display().placeMaximized);
+  bool toggleOwed = false;
+  cb.toggleFullScreen = [&]() { toggleOwed = true; };
   if (!window.Create(width, height, kTitle, cb, fullScreen, !hooks.opened, onScreen ? &startScreen : nullptr)) {
     Logf(LogLevel::Error, "moho64ui: cannot open a window");
     return -1;
   }
+  for (const std::string& from : hooks.iconFrom) {
+    if (!window.SetIconFromExe(from)) continue;
+    Logf(LogLevel::Info, "moho64ui: window: its icon is %s's", from.c_str());
+    break;
+  }
+  // The framed window's place into the preferences (Windows.Main.*, DisplayMode::placeKept), and with `previous` its
+  // size as the original keeps it for a full screen's way back (Windows.Main.Previous.width / height).
+  auto keepPlace = [&](bool previous) {
+    Window::Place p = window.Windowed();
+    if (p.width <= 0 || p.height <= 0) window.ClientSize(&p.width, &p.height);
+    if (p.width <= 0 || p.height <= 0) return;
+    std::string keep;
+    auto set = [&keep](const char* key, const std::string& value) { keep += std::string("SetPreference('Windows.Main.") + key + "', " + value + ") "; };
+    if (Display().placeKept) {
+      set("width", std::to_string(p.width)), set("height", std::to_string(p.height)), set("maximized", p.maximized ? "true" : "false");
+      if (p.known) set("x", std::to_string(p.x)), set("y", std::to_string(p.y));
+    }
+    if (previous) set("Previous.width", std::to_string(p.width)), set("Previous.height", std::to_string(p.height));
+    if (keep.empty()) return;
+    current().RunString(keep + "SavePreferences()", "=(the window's place)");
+    Logf(LogLevel::Info, "moho64ui: window: its place kept: %dx%d%s%s", p.width, p.height,
+         p.known ? (" at " + std::to_string(p.x) + "," + std::to_string(p.y)).c_str() : "", p.maximized ? ", maximized" : "");
+  };
   if (hooks.opened) {
     hooks.opened(window.Handle());
     window.Show();
@@ -499,6 +530,11 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       // window's size as a window in the preferences, as the original keeps it
       // (Windows.Main.Previous.width / height), for the way back.
       DisplayMode& display = Display();
+      if (toggleOwed) {  // (Alt+Enter: the other mode, on the screen the window is on)
+        toggleOwed = false;
+        NoteWindowScreen(window);
+        TogglePrimaryMode(current().L(), !window.fullScreen, display.windowScreen);
+      }
       if (display.request != DisplayMode::kNone) {
         const bool toFull = display.request == DisplayMode::kFullScreen;
         display.request = DisplayMode::kNone;
@@ -508,14 +544,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
           Logf(LogLevel::Info, "moho64ui: display mode: full screen on screen %d", display.screen + 1);
           window.SetMode(true, 0, 0, &screen);
         } else if (toFull && !window.fullScreen) {
-          int w = 0, h = 0;
-          window.ClientSize(&w, &h);
-          if (w > 0 && h > 0) {
-            UserState& user = current();
-            const std::string keep = "SetPreference('Windows.Main.Previous.width', " + std::to_string(w) +
-                                     ") SetPreference('Windows.Main.Previous.height', " + std::to_string(h) + ") SavePreferences()";
-            user.RunString(keep, "=(the window's size)");
-          }
+          keepPlace(true);
           Logf(LogLevel::Info, "moho64ui: display mode: full screen on screen %d", display.screen + 1);
           window.SetMode(true, 0, 0, chosen ? &screen : nullptr);
         } else if (!toFull && window.fullScreen) {  // (a window already: it stays as it is)
@@ -778,6 +807,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     window.partner = nullptr;
   }
   if (hooks.title) hooks.title(nullptr);  // (the window goes with this function: nobody sets its title any more)
+  if (Display().placeKept && !window.fullScreen) keepPlace(false);  // (a full screen: kept when it left the window)
   LogDrawProfile();
   return frames;
 }

@@ -787,11 +787,15 @@ int main(int argc, char** argv) {
     if (windowed && !modeGiven) {
       ui::ExecuteConsoleCommand(front->L(), "SC_PrimaryAdapter " + primary);
       fullScreen = display.request != ui::DisplayMode::kWindowed;
+      // (ours, Chris 2026-11-13: the window opens where and as large as the player's last one, never under 1024x768)
+      display.placeKept = true;
+      ui::ReadWindowPlace(front->L());
       const ui::DisplayScreen& on = display.screens[static_cast<size_t>(fullScreen ? display.screen : 0)];
       if (fullScreen) {
         width = on.width, height = on.height;
       } else {
-        width = (std::min)(display.windowedWidth, on.width), height = (std::min)(display.windowedHeight, on.height);
+        width = (std::min)((std::max)(display.windowedWidth, 1024), on.width);
+        height = (std::min)((std::max)(display.windowedHeight, 768), on.height);
       }
       display.request = ui::DisplayMode::kNone;
       front->SetHeadSize(width, height);
@@ -1376,6 +1380,11 @@ int main(int argc, char** argv) {
     // on the card (no picture read back and copied again): the renderer track's way, with Chris's
     // go-ahead (2026-10-15). --gdi: the old way (see directWindow).
     ui::WindowHooks hooks;
+    {  // (the window's icon: the game's own, from its exe beside the init file, as an install has them)
+      const size_t slash = o.init.find_last_of("/\\");
+      const std::string folder = slash == std::string::npos ? std::string() : o.init.substr(0, slash + 1);
+      for (const char* exe : {"ForgedAlliance.exe", "SupremeCommander.exe"}) hooks.iconFrom.push_back(folder + exe);
+    }
     if (directWindow) {
       hooks.opened = [&](void* handle) {
         session.window = handle;

@@ -405,6 +405,10 @@ class WorldSource {
   // renderer's own supersampling), its progress 0..1 (PhotoProgress) and its pixels once it is done (TakeDonePhoto,
   // as Draw gives them). StartPhoto false while one is being made or the photo mode is not open.
   virtual bool StartPhoto(int, int) { return false; }
+  // The same for the console's remaster_photo (ours, Chris 2026-11-13: the photo no longer holds a frame for a
+  // second): a photo begun from the cinematic camera while it is on, else from the game's camera `game`, made over the
+  // next frames and taken with TakeDonePhoto as the photo mode's.
+  virtual bool StartPhotoFrom(const WorldCamera&, int, int) { return false; }
   virtual float PhotoProgress() const { return 0; }
   virtual bool TakeDonePhoto(std::vector<uint32_t>*, int*, int*) { return false; }
 };

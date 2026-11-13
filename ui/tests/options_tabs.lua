@@ -199,6 +199,45 @@ ForkThread(function()
     check("and the program took them", tostring(moho64ui_Looks().sharpen) .. " " .. tostring(moho64ui_Looks().shoreSoak) .. " " ..
         tostring(moho64ui_Looks().atmosphere), "0 false false")
 
+    -- Tab Defaults (ours): the tab shown put back to its defaults in the dialog's working set, the other tabs' options
+    -- left alone, nothing kept until OK, and Cancel leaves it all
+    do
+        local b2, d2 = Open()
+        local tabDefaults = d2.remasterTabDefaults
+        LOG("options_tabs: Tab Defaults " .. tostring(tabDefaults and tabDefaults.Left()) .. ".." .. tostring(tabDefaults and tabDefaults.Right()) .. ", its label " .. tostring(tabDefaults and tabDefaults.label.Width()) .. ", the dialog from " .. d2.Left())
+        check("the dialog has a Tab Defaults button inside the panel, its label inside it (6 to spare each side)",
+            tabDefaults ~= nil and tabDefaults.Left() >= d2.Left() and tabDefaults.label.Width() <= tabDefaults.Width() - 12, true)
+        -- (the five buttons of the row narrowed to fit: each label still inside its button)
+        local tight = {}
+        d2:ApplyFunction(function(control)
+            if control.label and control.label.GetText and control.OnClick and not control.tabData
+                and control.label.Width() > control.Width() - 12 then
+                table.insert(tight, control.label:GetText() .. " " .. control.label.Width() .. "/" .. control.Width())
+            end
+        end)
+        check("and every button's label of the dialog fits its button", table.concat(tight, ", "), "")
+        Button(b2, 'remaster'):OnClick()
+        check("before: the Remastered tab shows Low's looks (kept above)", tostring((WorkingSet() or {}).remaster_preset) .. " " ..
+            tostring((WorkingSet() or {}).remaster_sharpen), "1 0")
+        local soundBefore = (WorkingSet() or {}).master_volume
+        tabDefaults:OnClick()
+        local set2 = WorkingSet() or {}
+        local wrong = {}
+        for _, item in O.options.remaster.items do
+            if item.type ~= 'header' and item.type ~= 'button' and item.default ~= nil and set2[item.key] ~= item.default then
+                table.insert(wrong, item.key .. "=" .. tostring(set2[item.key]) .. "/" .. tostring(item.default))
+            end
+        end
+        check("Tab Defaults: every option of the Remastered tab is at its default in the working set", table.concat(wrong, " "), "")
+        check("the preset's control shows its default, Sharpen's slider its own", Item('remaster_preset').control.keyMap[Item('remaster_preset').control:GetItem()]
+            .. " " .. Item('remaster_sharpen').control:GetValue(), Item('remaster_preset').default .. " " .. Item('remaster_sharpen').default)
+        check("another tab's option is left alone (the sound's master volume)", set2.master_volume, soundBefore)
+        check("nothing is kept yet: the profile still has Low", optionslogic.GetCurrent().remaster_preset, 1)
+        d2.cancelBtn:OnClick()
+        check("Cancel leaves the profile as it was", tostring(optionslogic.GetCurrent().remaster_preset) .. " " .. tostring(optionslogic.GetCurrent().remaster_sharpen), "1 0")
+        check("and the program's looks (the sliders' preview is taken back)", tostring(moho64ui_Looks().sharpen), "0")
+    end
+
     -- left open for a picture
     if case then
         buttons, dialog = Open()

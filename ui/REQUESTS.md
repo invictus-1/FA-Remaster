@@ -1426,6 +1426,58 @@ The simulation keeps both as script attributes (src/sim/entities.cpp kAttrs: Set
 SetStunned / IsStunned). Asked: two booleans in `UnitStateView` (as autoMode, autoSurfaceMode, repeatQueue are), filled
 where the others are. The ui then binds them with l_UnitSwitch and adds a check to its toggles test.
 
+### 61. Which armies have seen a prop made after the start (for the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
+
+**OPEN (asked 2026-11-13 13:03).**
+
+NARROWED 13:05 on the renderer's point (his render/REQUESTS.md 77 to you; I agree): only WRECKAGE (a unit's wreck)
+holds a set of armies; every other prop made after the start (the single trees a tree group breaks into: 5,240 of
+them at beat 1200 in his test game) counts as seen by everyone from its making, like a map prop. Allies' vision
+counts as the army's own, so the viewer is one bit, the focus army's. Read "a prop made after the start" below
+as "a wreck".
+
+Who: ui (with the renderer: his request 53 below is the picture's half). Why: Chris said yes on 2026-11-13 to the
+ideas I had listed for him, among them a player option "Wrecks appear only once seen", OFF by default (off = the
+original's and FAF's way: a wreck made out of sight shows under the fog at once, and the reclaim cursor and the
+reclaim labels answer over it; the review of 2026-11-09, row L: FAF's wreckage.lua leaves wrecks visible to every army
+on purpose). With the option on, a wreck shows to the player only from the moment its place has lain in the sight of
+his army or an ally's. A matter of the picture and the interface alone: nothing of the simulation changes, no
+checksum, no replay.
+
+The fact both the picture and the interface need is "which armies have had this prop's place in their VISION at any
+beat since it was made". The simulation's vision grids are yours, so I ask you to keep it, beside the simulation
+(view-side, as PropEvents keeps "what was last told": not simulation state, not hashed, not saved):
+
+1. A switch `Sim::collectPropsSeen` (set from before the first beat, as collectProps): while set, once a beat after
+   Tick(), every prop MADE AFTER THE START (PropEvent's mapIndex == -1: wreckage, a script's CreateProp) that not
+   every army has seen yet is tested against each army's vision grid at its position (vision alone: what lifts the
+   fog; not radar, sonar or omni), the beat of its making included (a unit that dies in my sight leaves a wreck I
+   see at once). A bit, once set, stays (a seen wreck stays known, as a building's ghost does). The map's own props
+   count as seen by everyone always.
+2. For the interface: `uint32_t PropSeenBy(const Sim&, uint32_t propId)` -> the armies (bit army-1) that have seen
+   it; all bits for a map prop, for an id that is no prop, and while the switch is not set. And `ReclaimableAt` with
+   one more argument, a mask of armies (0 = as today): a prop none of them has seen is passed over, so that the
+   cursor finds the seen wreck beside an unseen one.
+3. For the renderer, whatever shape he asks of you (I told him): I would guess a list taken once a beat of
+   {prop id, armies} for each prop whose set grew, beside PropEvents.
+
+What I do with it: the option's row (Options, Remastered tab; default off), the reclaim cursor and order
+(ReclaimTargetAt), the rollover, and FAF's reclaim labels (a hook of ours on /lua/ui/game/reclaim.lua that leaves out
+the labels of props `moho64ui_PropSeen(id)` says the viewer's armies have not seen). The viewer's armies = the focus
+army and its allies (the fog's set); no focus army (an observer, a replay's "all armies"): everything shows.
+Kept simple on purpose, say if you see it differently: a wreck that is reclaimed out of sight goes at once, as today
+(no ghost of a wreck stays behind).
+
+### 62. third_party/lua/lgcinc.c does not compile for Linux (2026-11-13 13:52, a finding, not blocking)
+
+**OPEN.**
+
+Who: ui. Found by a compile-only build for Linux (`py ui/build_ui.py --target x86_64-linux-gnu --out <folder>`, run to
+check my SDL window code): 273 of 274 objects compile, one fails: `third_party/lua/lgcinc.c` line 976, `nowus`
+(MOHO64_GC_PHASES' clock): "variable has incomplete type 'struct timespec'", "call to undeclared function
+'timespec_get'", "use of undeclared identifier 'TIME_UTC'". LIKELY (not tried: your file): `<time.h>` is not
+included there, and the Windows headers bring it in by another way. Nothing of mine waits on it; a Linux build does.
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
@@ -2706,6 +2758,26 @@ offer; his answer of 2026-11-11: **yes**, he wants the line.
   rounds stay as they are.
 - My side, when your call is there: the pixels made once before `LetGoOfLostDevice` (the interface can still draw
   into its own software target then), handed in between your two steps; a check in ui/tests/device_lost.lua.
+
+### 53. A wreck drawn only once the viewer's armies have seen its place (the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
+
+**OPEN (asked 2026-11-13 13:03).**
+
+Who: ui. Why: Chris said yes on 2026-11-13 to a player option "Wrecks appear only once seen", OFF by default (off =
+the original's and FAF's way: a wreck made out of sight is drawn under the fog at once). The whole of it is in my
+request 61 to the engine above (read that first): he keeps, beside the simulation, which armies have had each prop
+made after the start in their vision.
+
+Asked of you: a switch on the picture (a call like SetHiddenOutlines: `SetWrecksOnceSeen(bool)`, off at first); while
+it is on, a prop made after the start (PropEvent Create with mapIndex == -1) is drawn only from the moment one of the
+viewer's armies has seen it (the armies whose vision lifts your fog; no focus army: everything is drawn), and with
+it what hangs on it (its glow and cooling, its smoke, its shadow, its crater decal if that is tied to the prop). A
+prop that is destroyed before it was seen is never drawn. Switched off again: everything held back shows at once.
+The fact comes from the engine in whatever shape you two agree on (I guessed in request 61: a list taken once a beat
+of {prop id, armies} for each prop whose set grew). The interface's half (the option's row, the reclaim cursor, the
+rollover, the reclaim labels) is mine and asks the engine the same fact, so the picture and the cursor agree.
+A test I will add when both are in: a wreck made out of sight is not in the picture (a pixel read at its place) and
+not under the cursor; a scout flies over; it is both.
 
 ## To the visuals track
 

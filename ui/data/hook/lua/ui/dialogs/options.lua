@@ -84,6 +84,82 @@ do
         return out
     end
 
+    -- "Tab Defaults" (ours, Chris 2026-11-13): the options of ONE tab put back to their defaults. The game's Reset
+    -- puts back every option of every tab at once (the sound's and the gameplay's with the graphics') and closes the
+    -- dialog. Ours changes each row of the tab shown as a hand would (the dialog's own item.change: the control, the
+    -- dialog's working set, and an option's own update, a slider's preview), so nothing is kept until OK or Apply, and
+    -- Cancel leaves the options as they were. Headers and button rows have nothing to put back.
+    function RemasterTabDefaults(tabData)  -- (also for the tests) -> how many rows were given their default
+        local n = 0
+        for _, item in (tabData and tabData.items) or {} do
+            if item.type ~= 'header' and item.type ~= 'button' and item.default ~= nil and item.control and item.change then
+                item.change(item.control, item.default)
+                n = n + 1
+            end
+        end
+        return n
+    end
+    -- its button, left of the game's Reset (found by its label: the buttons are locals of the game's CreateDialog),
+    -- made as the game makes its four
+    local function AddTabDefaults(dialog, currentTab)
+        local UIUtil = import('/lua/ui/uiutil.lua')
+        local LayoutHelpers = import('/lua/maui/layouthelpers.lua')
+        local Button = import('/lua/maui/button.lua').Button
+        local reset = false
+        dialog:ApplyFunction(function(control)
+            if not reset and control.label and control.label.GetText and control.OnClick
+                and control.label:GetText() == LOC("<LOC _Reset>") then
+                reset = control
+            end
+        end)
+        if not reset then
+            WARN("FA Remastered: the Options dialog has no Reset button where our hook looks for it: Tab Defaults is left out")
+            return
+        end
+        local btn = Button(dialog,
+            UIUtil.UIFile('/scx_menu/small-short-btn/small-btn_up.dds'),
+            UIUtil.UIFile('/scx_menu/small-short-btn/small-btn_down.dds'),
+            UIUtil.UIFile('/scx_menu/small-short-btn/small-btn_over.dds'),
+            UIUtil.UIFile('/scx_menu/small-short-btn/small-btn_dis.dds'),
+            "UI_Opt_Yes_No", "UI_Opt_Affirm_Over")
+        btn.label = UIUtil.CreateText(btn, "Tab Defaults", 14)
+        LayoutHelpers.AtCenterIn(btn.label, btn)
+        LayoutHelpers.LeftOf(btn, reset, -6)
+        import('/lua/ui/game/tooltip.lua').AddButtonTooltip(btn, 'options_tab_defaults')
+        btn.OnRolloverEvent = function(self, event)
+            if event == 'enter' then
+                self.label:SetColor('ff000000')
+            elseif event == 'exit' then
+                self.label:SetColor(UIUtil.fontColor)
+            end
+        end
+        btn.OnClick = function(self, modifiers)
+            local tab = currentTab()
+            if tab and not IsDestroyed(tab) then RemasterTabDefaults(tab.tabData) end
+        end
+        dialog.remasterTabDefaults = btn  -- (for the tests)
+        -- The game's four buttons fill the row (each as wide as its texture, 6 over the next, 15 from the panel's right
+        -- edge): a fifth would stand out of the panel on the left. The five get the width that fits them between 15 and
+        -- 15, the textures drawn narrower, as the tab buttons above; the places stay the game's own (LeftOf).
+        local row = { btn }
+        dialog:ApplyFunction(function(control)
+            if control ~= btn and control.label and control.label.GetText and control.OnClick then
+                local text = control.label:GetText()
+                if text == LOC("<LOC _Reset>") or text == LOC("<LOC _Ok>") or text == LOC("<LOC _Cancel>") or text == LOC("<LOC _Apply>") then
+                    table.insert(row, control)
+                end
+            end
+        end)
+        local panel = GetTextureDimensions(UIUtil.UIFile('/scx_menu/options/panel_bmp.dds'))
+        local own = GetTextureDimensions(UIUtil.UIFile('/scx_menu/small-short-btn/small-btn_up.dds'))
+        if table.getn(row) == 5 and panel and own and panel > 0 and own > 0 then
+            local width = math.min(own, math.floor((panel - 30 + 6 * 4) / 5))
+            for _, control in row do LayoutHelpers.SetWidth(control, width) end
+        else
+            WARN("FA Remastered: the Options dialog's buttons left as wide as the game makes them (not its four found): Tab Defaults may stand out of the panel")
+        end
+    end
+
     function CreateDialog(over, exitBehavior)
         -- (the sliders that showed their effect while dragged are given the kept values when the dialog closes, by
         -- OK or by Cancel: options.lua's RemasterEndPreview, before the caller's own exit)
@@ -100,6 +176,7 @@ do
             WARN("FA Remastered: the Options dialog's tabs left as the game lays them (its locals not found)")
             return
         end
+        AddTabDefaults(dialog, function() return Upvalue(gameSetNewPage, 'currentTabButton') end)
         local buttons = RemasterOptionsTabButtons(dialog)
         local width = RemasterTabWidth(table.getn(buttons))
         if not width then return end

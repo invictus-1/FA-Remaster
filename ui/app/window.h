@@ -24,6 +24,9 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
     std::function<bool(const UiEvent&)> key;  // a key down, key up or character; true when it was handled
     std::function<void(int width, int height)> resized;
     std::function<void(bool inFront)> focus;  // the window came to the front (true) or left it
+    // Alt+Enter (ours, Chris 2026-11-13): the player asks for the other mode, a full screen or a window. The key
+    // itself goes to nobody. Unset: Alt+Enter is a key like any other.
+    std::function<void()> toggleFullScreen;
   };
 
   ~Window();
@@ -58,6 +61,24 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
   void SetMode(bool full, int width, int height, const Screen* on = nullptr);
   // The inside's size now.
   void ClientSize(int* width, int* height) const;
+  // The window as a framed window, as it last was one (ours, Chris 2026-11-13: a remembered window place): its outer
+  // top left corner on the desktop, its inside's size, and whether it was maximized. `known` false before it ever was a
+  // framed window on the screen. While it is maximized, minimized or a full screen the corner and the size are those it
+  // had before. (The original keeps the size and "maximized" in its preferences, Windows.Main.width / height /
+  // maximized, written at 0x8cdd40; the corner it only reads, Windows.Main.x / y, 0x8d0bdc: nothing of it writes it.)
+  struct Place {
+    bool known = false;
+    int x = 0, y = 0, width = 0, height = 0;
+    bool maximized = false;
+  };
+  Place Windowed() const { return windowed_; }
+  // Before Create (or before a full screen's way back to a window): where the framed window is to stand (`corner`
+  // false: not known, the system's own place for a new window), and whether maximized. Kept on a screen when it is
+  // used (a screen may be gone since).
+  void RememberPlace(bool corner, int x, int y, bool maximized);
+  // The window's icon (title bar, taskbar, the system's list of windows) from a program file's own first icon (the
+  // game's exe in the player's install: nothing of the game is in ours). False when there is none to take. Ours.
+  bool SetIconFromExe(const std::string& path);
   // The window's middle on the desktop (in the units of Screen's places): which screen it is on.
   void Middle(int* x, int* y) const;
   // How many times a second the main screen shows a new picture (its refresh rate); 60 when it
@@ -107,8 +128,8 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
   bool holding_ = false;
   int holdX_ = 0, holdY_ = 0;      // where the pointer is held, in the window
   float heldX_ = 0, heldY_ = 0;    // where the mouse's moves have taken its place since
-  bool windowedKnown_ = false;     // where the window last was as a window (SetMode)
-  int windowedX_ = 0, windowedY_ = 0;
+  Place windowed_;                 // the window as a framed window (Windowed)
+  void* icons_[2] = {nullptr, nullptr};  // the icon's two sizes (SetIconFromExe); ours to destroy
   // (The SDL build's: its window, and the renderer and texture Present shows the pixels with.)
   void* sdl_ = nullptr;
   void* renderer_ = nullptr;
@@ -122,6 +143,11 @@ class Window {  // (the host's window: one, or with the second head two, docs/ui
   bool lockMouse = false;
   void LockMouse(bool lock);
   void KeepMouseInside(bool keep);  // (the window's own, when it comes to the front and leaves it)
+  void NoteWindowed();              // (the window's own, when it moved or changed size: Windowed)
+  // The smallest inside a framed window can be dragged or set to (0: none). Ours (Chris 2026-11-13): the original's
+  // smallest screen mode and its window's first size are 1024x768 (0xf57878 / 0xf5787c), which is what the game's
+  // interface is laid out for.
+  int minWidth = 0, minHeight = 0;
   // [head2] The second head's window (set before Create): `owner` the main window's handle (owned: not in the taskbar
   // nor the alt-tab list, it rises with its owner), `noActivate` (WS_EX_NOACTIVATE: a click on it leaves the keyboard
   // with the main window, so the keys keep working while the mouse is on head 1: the original's keys are global, input.h
@@ -185,6 +211,9 @@ struct WindowHooks {
   std::function<bool()> secondDrawn;
   std::function<bool(const std::string& path)> secondCapture;
   std::function<void()> secondClosing;
+  // Program files whose own icon the window takes, the first that has one (the game's exe in the player's install:
+  // Window::SetIconFromExe). Ours (Chris 2026-11-13). Empty: the system's plain icon.
+  std::vector<std::string> iconFrom;
   // Hears, once the window is open (whichever way it is shown), a function that sets the window's title, an empty
   // text for the window's own title again; and an empty function before the window goes. For what the host must say
   // while no frame can be drawn (GameSession::windowTitle: the graphics device lost and the picture being made anew,

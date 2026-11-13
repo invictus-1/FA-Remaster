@@ -70,9 +70,21 @@ local function take()
 end
 local view = import("/lua/ui/game/worldview.lua").viewLeft
 -- The photo: the console's line says where; the file is a PNG at twice the main view's size.
+-- (The file is written on a thread of its own, the review's item of 2026-11-09: the command comes back once the
+-- picture is made, and the line comes when the file is there. Call it from a thread: it waits for the line.)
 local function photo(what)
+    local before = moho64ui_WallSeconds()
     ConExecute("remaster_photo")
+    local took = moho64ui_WallSeconds() - before
     local line = take()
+    check(what .. ": the command comes back before the file is written (no line yet)", line, "")
+    for i = 1, 200 do
+        if line ~= "" then break end
+        WaitFrames(1)
+        line = take()
+    end
+    LOG(string.format("TEST note: remaster_photo came back after %.0f ms (the picture is made over the next frames, the file written beside)", took * 1000))
+    check(what .. ": the command itself holds no frame (under 100 ms)", took < 0.1, true)
     local path = string.match(line, "^Photo saved: (.+) %(%d+x%d+%)$")
     check(what .. ": a console line says where the photo is", path ~= nil, true)
     if not path then

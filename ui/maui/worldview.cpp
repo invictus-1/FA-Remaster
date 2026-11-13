@@ -3377,6 +3377,39 @@ std::string NextPhotoPath(lua_State* L) {
   for (int n = 2; hostfs::IsFile(path) && n < 1000; ++n) path = folder + "/" + stamp + "_" + std::to_string(n) + ".png";
   return path;
 }
+// The photo being saved (one at a time): on a thread of its own, as a large one takes a while (a stored PNG of 4 times
+// a 4K screen is some 400 MB; remaster_photo's, twice a 4K view, held its frame for about a second: the review of
+// 2026-11-09, Chris 2026-11-13); the frame tells of it once it is written (PhotoModeFrame). Joined at the program's end.
+// `command`: whose photo it is, for the console's lines.
+struct PhotoSaver {
+  std::thread worker;
+  std::atomic<bool> written{false};
+  bool busy = false, ok = false;
+  std::string path;
+  int width = 0, height = 0;
+  const char* command = "remaster_photo";
+  ~PhotoSaver() {
+    if (worker.joinable()) worker.join();
+  }
+};
+PhotoSaver& Saver() {
+  static PhotoSaver saver;
+  return saver;
+}
+// The pixels handed to the saver's thread (not while it is busy: ask Saver().busy first).
+void SavePhotoOnThread(lua_State* L, std::vector<uint32_t> pixels, int width, int height, const char* command) {
+  PhotoSaver& saver = Saver();
+  saver.busy = true, saver.ok = false, saver.written = false;
+  saver.path = NextPhotoPath(L), saver.width = width, saver.height = height, saver.command = command;
+  saver.worker = std::thread([&saver, pixels = std::move(pixels)] {
+    saver.ok = SavePngPixels(saver.path, pixels.data(), saver.width, saver.height);
+    saver.written = true;
+  });
+}
+std::string FileNameOf(const std::string& path) {
+  const size_t slash = path.find_last_of("/\\");
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
 }  // namespace
 
 // cam_SetLOD <camera> <scale> (user_state.h; FA exe 0x7adfc0, READ): with fewer than two words after its name nothing
@@ -3458,10 +3491,14 @@ void CineCameraCommand(lua_State* L, const std::string& value) {
   user->cineCamera = v->cameraName;
 }
 
-// The photo (user_state.h): the world at twice the main view's size (the renderer's TakePhoto: drawn larger again and
-// made smaller for smooth edges, nothing of the interface), from the cinematic camera while it is on, else from the
+// The photo (user_state.h): the world at twice the main view's size (the renderer's StartPhoto, as the photo mode's:
+// made over the next frames while the window goes on being drawn, where TakePhoto held one frame for 0.7 to 1 s; drawn
+// larger again and made smaller for smooth edges, nothing of the interface), from the cinematic camera while it is on,
+// else from the
 // game's camera; saved as <the preferences' folder>/screenshots/photo_<date>_<time>.png by the PC clock (a second
-// one in the same second gets _2, _3, ...); the console says where. In any game: a photo changes nothing in it.
+// one in the same second gets _2, _3, ...); the console says where, once the file is written: on a thread of its own
+// (PhotoModeFrame takes the finished picture and gives it to SavePhotoOnThread). In any game: a photo changes nothing
+// in it.
 void CinePhotoCommand(lua_State* L) {
   UserState* user = UserState::From(L);
   if (!user->gameInterface) return ConsoleNoSession(L);
@@ -3470,18 +3507,13 @@ void CinePhotoCommand(lua_State* L) {
   Rect r;
   if (v) v->GetRect(&r.x0, &r.y0, &r.x1, &r.y1);
   const int w = v ? static_cast<int>(r.x1 - r.x0) : 0, h = v ? static_cast<int>(r.y1 - r.y0) : 0;
-  std::vector<uint32_t> pixels;
-  int madeW = 0, madeH = 0;
   if (!source || w <= 0 || h <= 0) return ConsolePrint(L, "remaster_photo: there is no picture of the world");
-  if (user->photoMode.taking) return ConsolePrint(L, "remaster_photo: the photo mode's photo is being made");
-  if (!source->TakePhoto(v->PictureCameraFor(L), 2 * w, 2 * h, &pixels, &madeW, &madeH) || madeW <= 0 || madeH <= 0 ||
-      pixels.size() != static_cast<size_t>(madeW) * static_cast<size_t>(madeH))
-    return ConsolePrint(L, "remaster_photo: the photo could not be made");
-  const std::string path = NextPhotoPath(L);
-  if (!SavePngPixels(path, pixels.data(), madeW, madeH)) return ConsolePrintf(L, "remaster_photo: cannot write %s", path.c_str());
-  g_lastPhoto = path;
-  Logf(LogLevel::Info, "moho64ui: a photo of %dx%d: %s", madeW, madeH, path.c_str());
-  ConsolePrintf(L, "Photo saved: %s (%dx%d)", path.c_str(), madeW, madeH);
+  if (user->photoMode.taking) return ConsolePrint(L, "remaster_photo: a photo is being made");
+  if (Saver().busy) return ConsolePrint(L, "remaster_photo: the last photo is still being saved");
+  if (!source->StartPhotoFrom(v->PictureCameraFor(L), 2 * w, 2 * h)) return ConsolePrint(L, "remaster_photo: the photo could not be made");
+  user->photoMode.taking = true;  // (PhotoModeFrame: its frames, then the file and the console's line)
+  user->photoMode.takingFor = "remaster_photo";
+  PhotoSettings().progress = 0;
 }
 
 // --- the photo mode (ours, not the original's: Chris's approval of 2026-10-18, the visuals session's look 7) ---
@@ -3536,26 +3568,6 @@ void CallPhotoPanel(lua_State* L, const char* fn) {
     Logf(LogLevel::Warning, "moho64ui: the photo mode's panel (/moho64ui/lua/photomode.lua) is not there: %s", lua_isstring(L, -1) ? lua_tostring(L, -1) : "?");
   }
   lua_settop(L, top);
-}
-// The photo being saved (one at a time): on a thread of its own, as a large one takes a while (a stored PNG of 4 times
-// a 4K screen is some 400 MB); the frame tells of it once it is written (PhotoModeFrame). Joined at the program's end.
-struct PhotoSaver {
-  std::thread worker;
-  std::atomic<bool> written{false};
-  bool busy = false, ok = false;
-  std::string path;
-  int width = 0, height = 0;
-  ~PhotoSaver() {
-    if (worker.joinable()) worker.join();
-  }
-};
-PhotoSaver& Saver() {
-  static PhotoSaver saver;
-  return saver;
-}
-std::string FileNameOf(const std::string& path) {
-  const size_t slash = path.find_last_of("/\\");
-  return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 // Whether the photo mode pauses the game: in a replay, and in a game with one command source (one player; AIs have
 // none, an observer has one of his own).
@@ -3658,7 +3670,7 @@ void PhotoModeFrame(lua_State* L, float seconds) {
       ConsolePrintf(L, "Photo saved: %s (%dx%d)", saver.path.c_str(), saver.width, saver.height);
     } else {
       settings.note = "The photo could not be saved";
-      ConsolePrintf(L, "remaster_photo_mode: cannot write %s", saver.path.c_str());
+      ConsolePrintf(L, "%s: cannot write %s", saver.command, saver.path.c_str());
     }
   }
   if (p.taking && source) {
@@ -3674,17 +3686,12 @@ void PhotoModeFrame(lua_State* L, float seconds) {
       double sum[3] = {0, 0, 0};
       for (uint32_t c : pixels) sum[0] += (c >> 16) & 0xff, sum[1] += (c >> 8) & 0xff, sum[2] += c & 0xff;  // (ARGB)
       for (int i = 0; i < 3; ++i) settings.mean[i] = static_cast<float>(sum[i] / static_cast<double>(pixels.size()));
-      saver.busy = true, saver.ok = false, saver.written = false;
-      saver.path = NextPhotoPath(L), saver.width = w, saver.height = h;
-      saver.worker = std::thread([&saver, pixels = std::move(pixels)] {
-        saver.ok = SavePngPixels(saver.path, pixels.data(), saver.width, saver.height);
-        saver.written = true;
-      });
+      SavePhotoOnThread(L, std::move(pixels), w, h, p.takingFor);
     } else if (progress >= 1) {  // (done, and nothing handed over: the card had no room for it)
       p.taking = false;
       settings.progress = 0;
       settings.note = "The photo could not be made";
-      ConsolePrint(L, "remaster_photo_mode: the photo could not be made");
+      ConsolePrintf(L, "%s: the photo could not be made", p.takingFor);
     } else {
       settings.progress = progress;
     }
@@ -3847,6 +3854,7 @@ int l_PhotoModeTake(lua_State* L) {
   const int k = PhotoSettings().size, w = static_cast<int>(r.x1 - r.x0), h = static_cast<int>(r.y1 - r.y0);
   if (w <= 0 || h <= 0 || !source->StartPhoto(w * k, h * k)) return refuse("the photo could not be begun");
   user->photoMode.taking = true;
+  user->photoMode.takingFor = "remaster_photo_mode";
   PhotoSettings().progress = 0;
   PhotoSettings().note = "Taking the photo...";
   Logf(LogLevel::Info, "moho64ui: the photo mode takes a photo of %dx%d", w * k, h * k);

@@ -482,17 +482,29 @@ int l_LooksForTests(lua_State* L) {
   // screen the live window is on (-1: none)
   const DisplayMode& display = Display();
   // heads: the heads the program runs with (2: the second head), secondWidth / secondHeight: head 1's size
-  const char* modes[10] = {"displayRequest", "windowedWidth", "windowedHeight", "displayScreen", "screens", "secondScreen", "windowScreen",
-                           "heads", "secondWidth", "secondHeight"};
-  const int modeValues[10] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight,
+  // placeKept, placeKnown, placeX, placeY, placeMaximized: the framed window's place from the preferences (1 / 0)
+  const char* modes[15] = {"displayRequest", "windowedWidth", "windowedHeight", "displayScreen", "screens", "secondScreen", "windowScreen",
+                           "heads", "secondWidth", "secondHeight", "placeKept", "placeKnown", "placeX", "placeY", "placeMaximized"};
+  const int modeValues[15] = {static_cast<int>(display.request), display.windowedWidth, display.windowedHeight,
                               display.screen, static_cast<int>(display.screens.size()), display.secondScreen, display.windowScreen,
-                              display.heads, display.secondWidth, display.secondHeight};
-  for (int i = 0; i < 10; ++i) {
+                              display.heads, display.secondWidth, display.secondHeight, display.placeKept ? 1 : 0,
+                              display.placeKnown ? 1 : 0, display.placeX, display.placeY, display.placeMaximized ? 1 : 0};
+  for (int i = 0; i < 15; ++i) {
     lua_pushstring(L, modes[i]);
     lua_pushnumber(L, modeValues[i]);
     lua_rawset(L, -3);
   }
   return 1;
+}
+// moho64ui_WindowPlaceRead(): the window's place read from the preferences as at the start (ReadWindowPlace; see it
+// with moho64ui_Looks). moho64ui_AltEnter(toFull, screen): what Alt+Enter does in a live window (TogglePrimaryMode).
+int l_WindowPlaceRead(lua_State* L) {
+  ReadWindowPlace(L);
+  return 0;
+}
+int l_AltEnter(lua_State* L) {
+  TogglePrimaryMode(L, lua_toboolean(L, 1) != 0, static_cast<int>(luaL_optnumber(L, 2, 0)));
+  return 0;
 }
 int l_KeyMapAction(lua_State* L) {
   KeyMap& map = Map(L);
@@ -782,6 +794,41 @@ std::pair<std::string, std::string> ScreenState(const DisplayMode& display, int 
   return {text, key};
 }
 }  // namespace
+
+void ReadWindowPlace(lua_State* L) {
+  DisplayMode& display = Display();
+  const int none = -1000000;
+  const int w = PreferenceNumber(L, "Windows.Main.width", 0), h = PreferenceNumber(L, "Windows.Main.height", 0);
+  if (w > 0 && h > 0) display.windowedWidth = w, display.windowedHeight = h;
+  const int x = PreferenceNumber(L, "Windows.Main.x", none), y = PreferenceNumber(L, "Windows.Main.y", none);
+  display.placeKnown = x != none && y != none;
+  display.placeX = display.placeKnown ? x : 0, display.placeY = display.placeKnown ? y : 0;
+  const int top = lua_gettop(L);
+  lua_getglobal(L, "GetPreference");
+  lua_pushstring(L, "Windows.Main.maximized");
+  display.placeMaximized = lua_isfunction(L, -2) && lua_pcall(L, 1, 1, 0) == 0 && lua_isboolean(L, -1) && lua_toboolean(L, -1);
+  lua_settop(L, top);
+}
+
+void TogglePrimaryMode(lua_State* L, bool toFull, int screen) {
+  DisplayMode& display = Display();
+  if (display.screens.empty()) return;
+  if (screen < 0 || screen >= static_cast<int>(display.screens.size())) screen = 0;
+  const std::string value = toFull ? ScreenState(display, screen, 0).second : std::string("windowed");
+  Logf(LogLevel::Info, "moho64ui: Alt+Enter: %s", toFull ? ("full screen on screen " + std::to_string(screen + 1)).c_str() : "a window");
+  if (!display.overridden) {
+    // (the option itself, so that the Options menu shows what is and the next start opens the same way; written
+    // straight into the profile: FAF's prefs.SetOption applies every option anew)
+    const std::string keep = "local p = import('/lua/user/prefs.lua') local o = p.GetFromCurrentProfile('options') or {} "
+                             "o.primary_adapter = '" + value + "' p.SetToCurrentProfile('options', o) SavePreferences()";
+    const int top = lua_gettop(L);
+    if (luaL_loadbuffer(L, keep.data(), keep.size(), "=(Alt+Enter)") != 0 || lua_pcall(L, 0, 0, 0) != 0)
+      LogScriptError(lua_isstring(L, -1) ? lua_tostring(L, -1) : "(error object is not a string)");
+    lua_settop(L, top);
+    SetupSecondaryAdapterSettings(L, !toFull);
+  }
+  ExecuteConsoleCommand(L, "SC_PrimaryAdapter " + value);
+}
 
 int ScreenOfModeKey(const std::string& key, int ownAdapter) {
   int numbers[4] = {0, 0, 0, ownAdapter};
@@ -1938,6 +1985,8 @@ void RegisterKeyMapBindings(lua_State* L) {
   lua_register(L, "moho64ui_KeyMapAction", l_KeyMapAction);
   lua_register(L, "moho64ui_ConsoleNames", l_ConsoleNames);
   lua_register(L, "moho64ui_Looks", l_LooksForTests);
+  lua_register(L, "moho64ui_WindowPlaceRead", l_WindowPlaceRead);
+  lua_register(L, "moho64ui_AltEnter", l_AltEnter);
   // moho64ui_RayTracingSupported() -> true or false once a picture of the renderer has opened and said whether
   // the graphics card can ray trace, nil before (the Remastered tab's Ray Tracing: one state, greyed, where it cannot).
   lua_register(L, "moho64ui_RayTracingSupported", [](lua_State* S) -> int {

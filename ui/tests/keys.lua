@@ -213,6 +213,17 @@ moho64ui_Key("k", "Shift Ctrl")
 check("IN_RemoveKeyMapTable unbinds the table's keys", table.concat(keyRan, " "), "f5true csk csk")
 ConExecute("UI_Lua table.insert(keyRan, 'console')")
 check("ConExecute runs a console command", keyRan[4], "console")
+-- mouse buttons 4 and 5 (ours, Chris 2026-11-13): keys with Windows' codes 5 and 6, which the game's own key names
+-- call XButton1 and XButton2, so a binding can name them (the window sends them so: app/window.cpp)
+IN_AddKeyMapTable({
+    ["XButton1"] = {action = "UI_Lua table.insert(keyRan, 'x1')"},
+    ["Ctrl-XButton2"] = {action = "UI_Lua table.insert(keyRan, 'cx2')"},
+})
+moho64ui_Key(5, "", "", 5)
+moho64ui_Key(6, "Ctrl", "", 6)
+moho64ui_Key(6, "", "", 6)
+check("mouse buttons 4 and 5 are keys a binding can name", tostring(keyRan[5]) .. " " .. tostring(keyRan[6]) .. " " .. tostring(keyRan[7]), "x1 cx2 nil")
+IN_RemoveKeyMapTable({["XButton1"] = {action = ""}, ["Ctrl-XButton2"] = {action = ""}})
 check("an unknown console command is no error", pcall(ConExecute, "no_such_command 1 2"), true)
 check("key codes: Windows to the engine's", KeycodeMSWToMaui(35) .. " " .. KeycodeMSWToMaui(46) .. " " .. KeycodeMSWToMaui(112) .. " " .. KeycodeMSWToMaui(65), "314 127 342 0")
 check("key codes: the engine's to Windows", KeycodeMauiToMSW(314) .. " " .. KeycodeMauiToMSW(127) .. " " .. KeycodeMauiToMSW(342) .. " " .. KeycodeMauiToMSW(65), "35 46 112 65")
