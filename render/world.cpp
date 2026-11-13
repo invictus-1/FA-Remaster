@@ -552,6 +552,7 @@ void World::RestartGame() {
   decorUnder_.clear();
   propEvents_.clear();
   propsKept_.clear();  // [devicelost] (the new game's own from here; its looks come with its SetLooks)
+  heldProps_.clear();  // [wrecksseen]
   looksKept_.clear();
   recentProps_.clear();
   recentPruned_ = 0;
@@ -2299,6 +2300,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   pickables_.clear();
   CpuTimes::Part("scenery listed");
   // the scenery's changes that are due by now, then the scenery
+  RefreshWrecksSeen();  // [wrecksseen] (the switch or the focus army changed: what stands, judged anew)
   while (!propEvents_.empty() && static_cast<double>(propEvents_.front().tick) * 0.1 <= clock + 1e-6) {
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
@@ -2932,9 +2934,38 @@ bool World::IsProp(uint32_t id) const {
   return false;
 }
 
+// [wrecksseen] The switch or the focus army is another than the made props were last judged by: each one that stands,
+// as the simulation last had it, is shown or held back by the rule as it is now.
+void World::RefreshWrecksSeen() {
+  if (wrecksOnceSeen == wrecksSeenWas_ && (!wrecksOnceSeen || focusArmy == wrecksFocusWas_)) return;
+  wrecksSeenWas_ = wrecksOnceSeen;
+  wrecksFocusWas_ = focusArmy;
+  std::vector<FramePropEvent> again;
+  for (const auto& [key, event] : propsKept_) {
+    if ((key >> 32) != 0 || event.mapIndex >= 0 || event.kind == FramePropEvent::Destroy) continue;
+    if (WreckShown(event.seenBy) == (heldProps_.count(event.id) != 0)) again.push_back(event);
+  }
+  std::sort(again.begin(), again.end(), [](const FramePropEvent& a, const FramePropEvent& b) { return a.tick != b.tick ? a.tick < b.tick : a.id < b.id; });
+  propReveal_ = true;
+  for (const FramePropEvent& event : again) ApplyPropEvent(event);
+  propReveal_ = false;
+}
+
 void World::ApplyPropEvent(const FramePropEvent& e) {
   const bool ofMap = e.mapIndex >= 0;
-  {  // [scars] (remembered a little while: a flash made on it in the same beat is no explosion, IsProp)
+  if (e.kind == FramePropEvent::Seen) {  // [wrecksseen] more armies have seen it: one held back for that is laid now
+    auto kept = ofMap ? propsKept_.end() : propsKept_.find(e.id);
+    if (kept == propsKept_.end()) return;  // (gone meanwhile)
+    kept->second.seenBy |= e.seenBy;
+    if (heldProps_.count(e.id) && WreckShown(kept->second.seenBy)) {
+      const FramePropEvent show = kept->second;  // (as its making, at the beat it was made: a wreck's age is by it)
+      propReveal_ = true;
+      ApplyPropEvent(show);
+      propReveal_ = false;
+    }
+    return;
+  }
+  if (!propReveal_) {  // [scars] (remembered a little while: a flash made on it in the same beat is no explosion, IsProp)
     const double when = static_cast<double>(e.tick) * 0.1;
     recentProps_[e.id] = when;
     if (when > recentPruned_ + 5 || when < recentPruned_ - 5) {  // (those older than ten seconds forgotten, every five)
@@ -2943,19 +2974,38 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     }
   }
   if (ofMap && static_cast<size_t>(e.mapIndex) >= props_.size()) return;
-  {  // [devicelost] (Keep) what the simulation last said of this prop, for a world made anew
+  if (!propReveal_) {  // [devicelost] (Keep) what the simulation last said of this prop, for a world made anew
     const uint64_t key = ofMap ? (1ull << 32) | static_cast<uint32_t>(e.mapIndex) : e.id;
     if (e.kind == FramePropEvent::Destroy && !ofMap) {
       propsKept_.erase(key);  // (one made in the game and gone again: nothing to say of it)
     } else {
       auto [it, fresh] = propsKept_.try_emplace(key);
-      const uint32_t madeAt = it->second.tick;
+      const uint32_t madeAt = it->second.tick, seenWas = it->second.seenBy;
       it->second = e;
       // (one made in the game: told again as its making, at the beat it was made - a wreck's age is by it)
       if (!ofMap && e.kind != FramePropEvent::Destroy) {
         it->second.kind = FramePropEvent::Create;
         if (!fresh) it->second.tick = madeAt;
+        if (!fresh && e.kind == FramePropEvent::Change) it->second.seenBy = seenWas;  // [wrecksseen] (a change says nothing of who saw it)
       }
+    }
+  }
+  if (!ofMap) {  // [wrecksseen] one the viewer's army has not seen is held back: nothing of it in the world
+    if (e.kind == FramePropEvent::Destroy) {
+      if (heldProps_.erase(e.id)) return;  // (never drawn: nothing to take away)
+    } else {
+      const auto kept = propsKept_.find(e.id);
+      if (kept != propsKept_.end() && !WreckShown(kept->second.seenBy)) {
+        auto had = madeProps_.find(e.id);
+        if (had != madeProps_.end()) {  // (it stood: the switch was put on, or the picture is for another army now)
+          UnlistProp(&had->second, e.id, true);
+          madeProps_.erase(had);
+          pileProps_.erase(e.id);
+        }
+        heldProps_.insert(e.id);
+        return;
+      }
+      heldProps_.erase(e.id);
     }
   }
   if (ofMap) ForgetUnderfoot(static_cast<uint32_t>(e.mapIndex));  // [simunder] (the game's change first: it is its prop)

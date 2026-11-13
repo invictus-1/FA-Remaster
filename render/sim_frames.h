@@ -153,6 +153,14 @@ class SimFrames {
   size_t groundSeen_ = 0;  // how many of the map's height changes have been read (the simulation's thread only)
   std::unordered_map<uint32_t, size_t> propWaiting_;  // a prop's change among them: its place in the list
   size_t propSuperseded_ = 0;                   // [propqueue] how many of them a newer change took the place of
+  // [wrecksseen] (Beat's alone) the wrecks that stand: where, and which armies have seen them (FramePropEvent::seenBy).
+  // A stand-in until the engine tells it (render REQUESTS 77): worked out here for the focus army alone.
+  struct WreckSeen {
+    float position[3] = {0, 0, 0};
+    uint32_t seenBy = 0;
+  };
+  std::unordered_map<uint32_t, WreckSeen> wrecks_;
+  uint32_t wrecksTick_ = 0;
   FrameCombat combat_;                                 // not yet taken
   bool combatKept_[3] = {false, false, false};         // the simulation's collectHits, collectImpacts, collectHealth
   std::unordered_map<uint32_t, size_t> healthWaiting_;  // an entity's place in combat_.health
