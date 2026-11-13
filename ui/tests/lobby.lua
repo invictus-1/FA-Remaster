@@ -114,7 +114,7 @@ do
     end
     check("none empty, and no look left over for a section More", empty .. " " .. tostring(more), "0 false")
     check("Go to Section names the eight", table.getn(items[1].custom.states) .. " " .. items[1].custom.states[5].text, "8 Water")
-    check("54 rows: Go to Section, 8 headers, 45 options", table.getn(items), 54)
+    check("55 rows: Go to Section, 8 headers, 46 options", table.getn(items), 55)
     check("Haze & Mist is on the tab, set by no preset level (a taste setting)", tostring(remaster.remaster_haze_mist ~= nil) .. " " ..
         tostring(O.RemasterPresetValues(4).remaster_haze_mist) .. " " .. tostring(O.RemasterPresetValues(0).remaster_haze_mist), "true nil nil")
     local missing = {}

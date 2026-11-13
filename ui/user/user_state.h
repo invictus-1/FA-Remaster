@@ -314,7 +314,9 @@ class UserState {
   // simulation's copies made at each sync point (the engine's SyncSnapshots, sim/sim_snapshot.h: the same code, exact),
   // so no wait for a running beat; through LiveSim only until the first copy exists. False: no such blueprint / none.
   bool BuildSite(const std::string& blueprint, const float at[3], float site[3], bool* canBuild);
-  bool Reclaimable(const float at[3], float within, ReclaimableView* out);
+  // (armyMask: 0 every prop; else a wreck none of those armies has seen is passed over: the option "Wrecks appear
+  // only once seen", LookSettings::wrecksOnceSeen)
+  bool Reclaimable(const float at[3], float within, ReclaimableView* out, uint32_t armyMask = 0);
   // What the scripts ask of the simulation every frame, copied when a beat's sync comes (the
   // simulation is idle then), so that asking never waits for a beat: the focus army's economy
   // (EconomyTotals of sim/sim_view.h, its twelve numbers in order). session_bindings.cpp.
@@ -644,6 +646,14 @@ struct LookSettings {
   // its army's colour (true, the default: Team colour) or in its faction's own (Faction colour: UEF blue for a red
   // player's units). Console remaster_lamp_colour team|faction.
   bool lampsTeamColour = true;
+  // Wrecks Appear Once Seen (ours, Chris 2026-11-13; OFF by default = the original's and FAF's way: a wreck made out
+  // of sight shows under the fog at once and the reclaim cursor and labels answer over it). On: a unit's wreck is in
+  // the picture (the renderer's WorldPicture::SetWrecksOnceSeen), under the reclaim cursor and among FAF's reclaim
+  // labels only once the focus army or an ally has had its place in sight (the engine's PropSeenBy and
+  // ReclaimableAt's armyMask, Sim::collectPropsSeen; ui requests engine 61, renderer 53). Trees, rocks, the map's
+  // own wrecks and a death's scorch and smoke are never held back; an observer sees everything. Console
+  // remaster_wrecks_once_seen 0|1.
+  bool wrecksOnceSeen = false;
   // Scorch Glow (the renderer's HotMetal::softScorch, render 5d77cf6; Chris: the remastered look the default, the old one
   // kept): a death's fresh scorch on the ground with hot metal on: soft (true, the default: a deep-red bed with bright
   // cracks) or bright (the earlier orange-hot sheet). Console remaster_scorch soft|bright.

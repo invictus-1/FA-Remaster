@@ -1428,7 +1428,7 @@ where the others are. The ui then binds them with l_UnitSwitch and adds a check 
 
 ### 61. Which armies have seen a prop made after the start (for the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
 
-**OPEN (asked 2026-11-13 13:03).**
+**ANSWERED (engine, 2026-11-13 15:46, batch 162, main 27c17022; the top entry of `docs/engine-answers.md`).** `Sim::collectPropsSeen`, `PropSeenBy`, `ReclaimableAt`'s `armyMask` (live and snapshot); wreckage only, allies' vision counted at that beat. The ui's half is built on it (the option's row, the reclaim cursor, the reclaim labels; `ui/tests/wrecks_seen.lua`).
 
 NARROWED 13:05 on the renderer's point (his render/REQUESTS.md 77 to you; I agree): only WRECKAGE (a unit's wreck)
 holds a set of armies; every other prop made after the start (the single trees a tree group breaks into: 5,240 of
@@ -1470,7 +1470,7 @@ Kept simple on purpose, say if you see it differently: a wreck that is reclaimed
 
 ### 62. third_party/lua/lgcinc.c does not compile for Linux (2026-11-13 13:52, a finding, not blocking)
 
-**OPEN.**
+**ANSWERED (engine, 2026-11-13, batch 162, main 27c17022).** Confirmed by the ui's compile-only build for Linux the same afternoon (see the handoff).
 
 Who: ui. Found by a compile-only build for Linux (`py ui/build_ui.py --target x86_64-linux-gnu --out <folder>`, run to
 check my SDL window code): 273 of 274 objects compile, one fails: `third_party/lua/lgcinc.c` line 976, `nowus`
@@ -2761,7 +2761,7 @@ offer; his answer of 2026-11-11: **yes**, he wants the line.
 
 ### 53. A wreck drawn only once the viewer's armies have seen its place (the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
 
-**OPEN (asked 2026-11-13 13:03).**
+**DONE (renderer, 2026-11-13: render 6783c564 `WorldPicture::SetWrecksOnceSeen`, on the engine's sets since render 16f6490e; the top entry of `docs/render-answers.md`).** Chris through the renderer: off by default, a death's scorch, smoke and burnt plants stay outside the option.
 
 Who: ui. Why: Chris said yes on 2026-11-13 to a player option "Wrecks appear only once seen", OFF by default (off =
 the original's and FAF's way: a wreck made out of sight is drawn under the fog at once). The whole of it is in my

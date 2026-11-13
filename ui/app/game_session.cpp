@@ -152,6 +152,7 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
   p.SetGroundDetail(looks.groundDetail);
   p.SetFrameGeneration(looks.frameGeneration);
   p.SetHiddenOutlines(looks.hiddenOutlines);
+  p.SetWrecksOnceSeen(looks.wrecksOnceSeen);
   p.SetMinimapMeshes(looks.minimapLod != 0);
 }
 // A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
@@ -692,6 +693,8 @@ struct GameSession::Picture : WorldSource {
     ApplyLens();  // (Cinematic Lens Blur: only while the cinematic camera shows)
     if (render::World* w = picture.world()) WorldLooks(*w, looks, !lookApplied || looks.photoLook != lookNow.photoLook);
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
+    // (Wrecks Appear Once Seen, ours: the renderer's answer to ui request 53)
+    if (!lookApplied || looks.wrecksOnceSeen != lookNow.wrecksOnceSeen) picture.SetWrecksOnceSeen(looks.wrecksOnceSeen);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
@@ -2500,6 +2503,10 @@ void GameSession::BeginLoad() {
 #ifdef MOHO64UI_WORLD_PICTURE
     sim->collectEffects = wantPicture;  // explosions, shots, smoke: the picture's, asked for before the first beat
     sim->collectProps = wantPicture;    // wreckage, and trees reclaimed, burnt or knocked over (the picture takes the list)
+    // Which armies have seen each wreck (the engine's answer to ui request 61; view-side, nothing of the simulation):
+    // always kept, so that the option "Wrecks appear only once seen" can be switched on in the middle of a game
+    // (measured by the engine: 0.04 to 0.08 ms a beat in a 4v4, 0.7 ms with 5,000 wrecks nobody has seen).
+    sim->collectPropsSeen = true;
     sim->keepSnapshots = true;          // building sites and reclaimables copied at each sync point (UserState::BuildSite)
     // hits, impacts and health changes, for the looks that answer them (marks on units, water ripples, blast waves;
     // about 1% of a beat's time; the renderer's request of 2026-10-18: render/world_picture.h)

@@ -2043,6 +2043,14 @@ bool IssueToSelectionAt(lua_State* L, const std::string& order, uint32_t entity,
 }
 
 namespace {
+// The armies whose sight decides which wrecks the view has (LookSettings::wrecksOnceSeen): the focus army's bit
+// (allies' sight counts as its own in the engine's sets), or 0 when nothing is held back: the option off, or no
+// focus army (an observer, a replay's "all armies").
+uint32_t WrecksViewMask(lua_State* L) {
+  if (!Looks().wrecksOnceSeen) return 0;
+  const int focus = FocusArmyNow(L);
+  return focus >= 0 && focus < 32 ? 1u << focus : 0;
+}
 // The reclaimable thing at a place, if the selection holds a unit of the player's that can reclaim.
 // (The props are the running simulation's: asked only when the selection can reclaim; the rest from the copies.)
 bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableView* prop) {
@@ -2054,7 +2062,8 @@ bool ReclaimTargetAt(lua_State* L, const float at[3], float within, ReclaimableV
   for (UserUnit* u : store.selection)
     if (!u->gone && !u->view.dead && u->view.army == focusArmy + 1) caps |= u->view.commandCaps;
   if (!(caps & kReclaim)) return false;
-  return UserState::From(L)->Reclaimable(at, within, prop);  // (the sync point's copy: no wait for a beat)
+  // (the sync point's copy: no wait for a beat; a wreck the view's army has not seen is passed over: the option)
+  return UserState::From(L)->Reclaimable(at, within, prop, WrecksViewMask(L));
 }
 }  // namespace
 
@@ -2079,7 +2088,46 @@ bool CanReclaimAtPlace(lua_State* L, const float at[3], float within) {
   return store.reclaimAnswer;
 }
 
-// moho64ui_ReclaimableAt(x, z, within) -> nil, or {id, blueprint, x, z, mass, energy} of the
+// moho64ui_WrecksOnceSeen() -> whether the view holds wrecks back now (the option on and a focus army).
+// moho64ui_PropSeen(id) -> whether the view has that prop (an entity id as its text, as the scripts have it): false only for a
+// unit's wreck that the focus army and its allies have not seen while the view holds wrecks back. Our hook of FAF's
+// reclaim labels asks it (ui/data/hook/lua/ui/game/reclaim.lua), in the sync's and the beat's own calls, where the
+// simulation stands still (elsewhere the call waits for the beat's end).
+// (An entity id from a script: its text, as the scripts have them, read whole. A Lua number here is a 32-bit float
+// and cannot hold a prop's id, 0x2ff00000 and up: one given as a number is taken as it is, good for small ids only.)
+uint32_t EntityIdArg(lua_State* L, int index) {
+  if (lua_type(L, index) == LUA_TSTRING) return static_cast<uint32_t>(std::strtoul(lua_tostring(L, index), nullptr, 10));
+  return static_cast<uint32_t>(lua_tonumber(L, index));
+}
+int l_WrecksOnceSeen(lua_State* L) {
+  lua_pushboolean(L, UserState::From(L)->HasSim() && WrecksViewMask(L) != 0);
+  return 1;
+}
+int l_PropSeen(lua_State* L) {
+  bool seen = true;
+  const uint32_t mask = UserState::From(L)->HasSim() ? WrecksViewMask(L) : 0;
+  if (mask && lua_isnumber(L, 1)) {  // (a text that is a number counts: the scripts' entity ids are texts)
+    if (Sim* sim = TheSim(L)) seen = (PropSeenBy(*sim, EntityIdArg(L, 1)) & mask) != 0;
+  }
+  lua_pushboolean(L, seen);
+  return 1;
+}
+// moho64ui_PropSeenBy(id) -> the engine's own record for a prop: the armies that have seen it as a number (bit army-1;
+// 4294967295: everyone, which is also the answer for whatever is no tracked wreck). For tests.
+int l_PropSeenByForTests(lua_State* L) {
+  Sim* sim = UserState::From(L)->HasSim() ? TheSim(L) : nullptr;
+  lua_pushnumber(L, sim ? static_cast<lua_Number>(PropSeenBy(*sim, EntityIdArg(L, 1))) : -1);
+  return 1;
+}
+// moho64ui_CanReclaimAt(x, z [, within]) -> whether the reclaim cursor shows there now: the cursor's own question
+// (CanReclaimAtPlace: the selection can reclaim, a reclaimable thing is there, and the view has it). For tests.
+int l_CanReclaimAtForTests(lua_State* L) {
+  const float at[3] = {static_cast<float>(luaL_checknumber(L, 1)), 0, static_cast<float>(luaL_checknumber(L, 2))};
+  lua_pushboolean(L, CanReclaimAtPlace(L, at, static_cast<float>(luaL_optnumber(L, 3, 0))));
+  return 1;
+}
+
+// moho64ui_ReclaimableAt(x, z, within) -> nil, or {id, idText, blueprint, x, z, mass, energy} of the
 // tree, rock or wreck the simulation finds there: the host's own function for tests.
 int l_ReclaimableAtForTests(lua_State* L) {
   Sim* sim = TheSim(L);
@@ -2098,6 +2146,9 @@ int l_ReclaimableAtForTests(lua_State* L) {
   number("id", prop.id), number("x", prop.position[0]), number("z", prop.position[2]), number("mass", prop.mass), number("energy", prop.energy);
   lua_pushstring(L, "blueprint");
   lua_pushstring(L, prop.blueprint.c_str());
+  lua_rawset(L, -3);
+  lua_pushstring(L, "idText");  // (the id whole: a prop's does not fit a Lua number, a 32-bit float)
+  lua_pushstring(L, std::to_string(prop.id).c_str());
   lua_rawset(L, -3);
   return 1;
 }
@@ -5967,6 +6018,10 @@ void RegisterUserUnitBindings(lua_State* L) {
   lua_register(L, "moho64ui_UnitBuilt", l_UnitBuiltForTests);
   SetGlobal(L, "GetRolloverInfo", l_GetRolloverInfo);
   lua_register(L, "moho64ui_ReclaimableAt", l_ReclaimableAtForTests);
+  lua_register(L, "moho64ui_WrecksOnceSeen", l_WrecksOnceSeen);
+  lua_register(L, "moho64ui_PropSeen", l_PropSeen);
+  lua_register(L, "moho64ui_PropSeenBy", l_PropSeenByForTests);
+  lua_register(L, "moho64ui_CanReclaimAt", l_CanReclaimAtForTests);
   lua_register(L, "moho64ui_OrderGraph", l_OrderGraphForTests);
   // moho64ui_SentMessages() -> the command stream's messages handed to the simulation since the last call (in a test
   // run only: UnitStore::sentForTests), each {type = n, payload = its bytes as a string}, oldest first. The host's

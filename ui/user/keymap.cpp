@@ -319,7 +319,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_gateway", "remaster_ghost_look", "remaster_guide", "remaster_cloak_look", "remaster_stealth_veil",
         "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
         "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist", "remaster_warpin_colours",
-        "remaster_water_mirror"};
+        "remaster_water_mirror", "remaster_wrecks_once_seen"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -402,6 +402,9 @@ int l_LooksForTests(lua_State* L) {
                            looks.battleEffects, looks.energyShields, looks.hiddenOutlines, looks.lampsTeamColour,
                            looks.softScorch, looks.oceanGlitter, looks.shoreSoak, looks.remasteredGate, looks.ghostLook,
                            looks.guideOverGrass, looks.cloakLook, looks.stealthLook, looks.seaSparkle, looks.unitDetail, looks.cloudLayout != 0, looks.stormCells, looks.starryNight, looks.warpInColours, looks.waterFxMirror};
+  lua_pushstring(L, "wrecksOnceSeen");
+  lua_pushboolean(L, looks.wrecksOnceSeen);
+  lua_rawset(L, -3);
   lua_pushstring(L, "shieldBend");
   lua_pushnumber(L, looks.shieldBend);
   lua_rawset(L, -3);
@@ -1531,7 +1534,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         key == "REMASTER_WARPIN_COLOURS" || key == "REMASTER_WATER_MIRROR" ||
         key == "REMASTER_GHOST_LOOK" || key == "REMASTER_GUIDE" || key == "REMASTER_CLOAK_LOOK" ||
         key == "REMASTER_STEALTH_VEIL" || key == "REMASTER_SEA_SPARKLE" || key == "REMASTER_UNIT_DETAIL" ||
-        key == "REMASTER_STORM_CLOUDS" ||
+        key == "REMASTER_STORM_CLOUDS" || key == "REMASTER_WRECKS_ONCE_SEEN" ||
         key == "REMASTER_NIGHT_SKY") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
@@ -1556,6 +1559,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_UNIT_DETAIL"      ? looks.unitDetail
                  : key == "REMASTER_STORM_CLOUDS"     ? looks.stormCells
                  : key == "REMASTER_NIGHT_SKY"        ? looks.starryNight
+                 : key == "REMASTER_WRECKS_ONCE_SEEN" ? looks.wrecksOnceSeen
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;
