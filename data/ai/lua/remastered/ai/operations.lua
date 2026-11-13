@@ -921,7 +921,18 @@ function Think(brain)
         end
     end
     -- a new ATTACK / PUSH when ahead, by the estimate at the target
-    if not R.op and ratio >= kAttackRatio and units[1] and edgeOk then
+    -- (2026-11-04, the early army's second form) GUARDS FIRST. ea1's early army (845 mass at minute 6 in a judge game)
+    -- went on "a decisive push" at a ratio of 60 - the enemy's army unseen under fog - and was gone by minute 9: 8,200
+    -- mass of our land units lost in the first 10 minutes against 3,100 before, while the same army at home and at
+    -- its posts cut the extractors lost from 7,300 to 1,700. So no new attack or push while the army is under the pros'
+    -- curve (R.earlyWanted, brain.lua); the defence, the posts and the raids go on.
+    if not R.op and units[1] and (R.armyMass or 0) < (R.earlyWanted or 0) and ratio >= kAttackRatio and
+        R.tick - (R.earlyLogged or -10000) >= 600 then
+        Log(R, 'wait', 0, 0, ratio, string.format('the army (%.0f mass) is under the early curve (%.0f): it guards, no attack yet',
+            R.armyMass or 0, R.earlyWanted or 0))
+        R.earlyLogged = R.tick
+    end
+    if not R.op and ratio >= kAttackRatio and units[1] and edgeOk and (R.armyMass or 0) >= (R.earlyWanted or 0) then
         local push = ratio >= kPushRatio
         local target, margin, bestZone = PickTarget(R, enemyZones, push and K.launchPush or K.launch)
         -- scouting before a push (phase 7b): under fog the estimate at the target is only what the army last saw there.
@@ -1006,7 +1017,11 @@ function Think(brain)
     end
 
     -- RAID: an enemy zone with economy and no known defenders, with up to 6 of our lightest combat units
-    if not R.op and units[1] then
+    -- (2026-11-06, the early army: not while the army is under the pros' curve, R.earlyWanted. The kill probe with each
+    -- victim's order (3 judge seeds, minutes 6-9): raiders died with 140 mass of ours within 30 against 150 of the
+    -- enemy's - groups of up to 6 sent one after another past an enemy army the fog hid - 1,000 mass of the 3,800 the
+    -- early army lost in those minutes.)
+    if not R.op and units[1] and (R.armyMass or 0) >= (R.earlyWanted or 0) then
         for _, e in ipairs(enemyZones) do
             if e.economy > 0 and e.strength <= 0 and Remastered.AIZoneDistance(R.startZone, e.zone, 'land') >= 0 then
                 local margin = Remastered.AIZoneEstimate(R.army, e.zone, kHorizon, false, false, true)

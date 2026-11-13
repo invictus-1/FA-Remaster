@@ -97,6 +97,26 @@ local kNavalAirShare = 1.5                    -- anti-ship aircraft kept per mas
 local kNavalAirFactory = 1500                 -- one air factory more per this much enemy ship mass there
 local kNavalPendingTicks = 600                -- a naval factory ordered counts as under way this long before it starts
 local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
+-- (2026-11-04, the early army) THE PROS' CURVE. The scoreboard against 1v1 pro replays (procurve.py, the army-stats
+-- sampler): our army 0 at minute 5 against the pros' ~800 mass and M28's 174, and 0-675 at minute 10 against the
+-- pros' 4,230 and M28's 4,025 - the window where M28 took the last free mass points and began its raids - while our
+-- extractors and income stood ahead (160-209%, 122-237%). In Seton's duels we had 1 land factory until minute 4 with
+-- the mass bar full (pros: 6 factories at minute 5), every factory making engineers (the army's floor began at minute 5).
+-- So, in parallel with the opening's economy (the extractors-first rules unchanged):
+-- - factories: from minute kEarly.from, 1 + kEarly.factoryRate a minute (6-7 at minute 5), within the income's cap
+--   (one per ~6 mass a second) and the opening's energy rule;
+-- - the army kept: from minute kEarly.from on the pros' curve, kEarly.army = {minute, mass} points (x the personality's
+--   armyMatch / 0.8), so that while it is short most land factories make units (map control, phase 6).
+local kEarly = { from = 1.5, factoryRate = 1.2, army = { { 2, 0 }, { 5, 800 }, { 10, 4000 } }, piling = 0.3 }
+local function EarlyArmy(minutes)
+    local pts = kEarly.army
+    if minutes <= pts[1][1] then return 0 end
+    for i = 2, table.getn(pts) do
+        local a, b = pts[i - 1], pts[i]
+        if minutes <= b[1] then return a[2] + (b[2] - a[2]) * (minutes - a[1]) / (b[1] - a[1]) end
+    end
+    return pts[table.getn(pts)][2]
+end
 -- (2026-11-04, item 1: the mass sinks) the T1 land factories' upgrade to support factories once an HQ stands: from:
 -- minutes; income: mass a second per extra upgrade at once (1 + ...); share: at most this share of the land factories
 -- upgrading at once; stored: the mass bar share from which they go while the army is short
@@ -866,6 +886,23 @@ AIBrain = Class(StandardBrain) {
         -- back in 18 s), so in the opening an engineer takes the nearest free mass point within kOpeningMexRange before
         -- power and factories, while energy is not empty. The opening probe: our extractors were 3 at minute 3 and 8 at
         -- minute 5 (M28 7 and 15) while power, factories and the air factory came first.
+        -- (2026-11-04, the early army's second form) MASS PILING BUILDS THE FLOOR'S FACTORIES FIRST. ea1 asked for 6
+        -- land factories at minute 5 and got 3: the commander was at its own extractors and power, the engineers took
+        -- the opening's extractors first, and a factory in the opening waited for energy - the mass bar stood full at
+        -- minute 7 with 4 factories. Now in the opening, with kEarly.piling of the mass bar and fewer land factories than
+        -- the floor, a builder builds one before the opening's extractors - the commander first, as its job is given
+        -- before the engineers' (energy allowing at 10% stored); one a step.
+        if ctx.minutes < kOpening and ctx.minutes >= kEarly.from and self:GetEconomyStoredRatio('MASS') >= kEarly.piling and
+            self:GetEconomyStoredRatio('ENERGY') >= 0.1 and not ctx.factoryPushed then
+            local want = math.min(kMaxFactories, 1 + math.floor(self:GetEconomyIncome('MASS') * 10 / 6))
+            local floor = math.min(want, 1 + math.floor(kEarly.factoryRate * ctx.minutes))
+            local landBp = ctx.landFactories < floor and self:LandFactoryBp(u, ctx)
+            if landBp and self:BuildAt(u, landBp, 8) then
+                ctx.landFactories = ctx.landFactories + 1
+                ctx.factoryPushed = true
+                return
+            end
+        end
         if not isCommander and ctx.minutes < kOpening and self:GetEconomyStoredRatio('ENERGY') >= 0.2 then
             local m = self:NextMassPoint(u)
             if m then
@@ -951,6 +988,10 @@ AIBrain = Class(StandardBrain) {
         -- at minute 10 to our 9-10; the cap stays the income's)
         local floorFactories = ctx.minutes >= 3 and math.min(wantFactories, 1 + math.floor(ctx.minutes / 1.5) +
             math.floor(math.max(0, ctx.minutes - kOpening) / kFactoryEvery)) or 1
+        -- (2026-11-04, the early army: from minute kEarly.from at the pros' pace, kEarly above)
+        if ctx.minutes >= kEarly.from then
+            floorFactories = math.max(floorFactories, math.min(wantFactories, 1 + math.floor(kEarly.factoryRate * ctx.minutes)))
+        end
         -- (phase 8: in the opening a new factory waits for a sound energy economy: a factory draws energy as it
         -- builds and as it works, and the second one had started the stall)
         local energyOk = ctx.minutes >= kOpening or not ctx.energyShort
@@ -1583,8 +1624,11 @@ AIBrain = Class(StandardBrain) {
         local incomeSec = math.min(kArmyIncomeMax, kArmyIncomeRate * math.max(0, ctx.minutes - kOpening)) * K.armyMatch / 0.8
         local armyWanted = math.max(K.armyMatch * R.enemyGroundPeak,
             ctx.minutes >= kArmyFrom and K.armyPerMinute * (ctx.minutes - kArmyFrom + 1) or 0,
+            EarlyArmy(ctx.minutes) * K.armyMatch / 0.8,  -- (2026-11-04, the early army: the pros' curve, kEarly)
             incomeSec * (R.massAvg or 0))
         local armyShort = (R.armyMass or 0) < armyWanted
+        -- (ea2: the operations hold new attacks and pushes while the army is under the pros' curve)
+        R.earlyWanted = ctx.minutes < kEarly.army[table.getn(kEarly.army)][1] and EarlyArmy(ctx.minutes) * K.armyMatch / 0.8 or 0
         if armyShort ~= (R.armyShort or false) and R.tick - (R.armyShortLogged or -10000) >= 600 then
             LOG(string.format('aiarmy %d %d %s army %.0f wanted %.0f (enemy ground %.0f) engineers %d floor %d cap %d',
                 R.army, R.tick, armyShort and 'short' or 'enough', R.armyMass or 0, armyWanted, R.enemyGroundPeak,

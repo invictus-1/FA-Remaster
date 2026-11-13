@@ -55,6 +55,11 @@ local function Knobs(brain)
     return import("/lua/remastered/ai/personality.lua").Knobs(brain)
 end
 
+-- (2026-11-06, the early army: T1 was tanks 0.6, artillery 0.2, anti-air 0.2. The counter-pick waits for 150 mass of
+-- the enemy known, which came at minutes 6.5-10.6 in the judge games, so this mix WAS the early army. The fight bench
+-- against M28's early mix, 1,000 mass a side, lost per killed: this mix 1.67 meeting it, 1.23 holding; artillery 0.6 /
+-- tanks 0.4 0.81 and 1.04; artillery alone 0.95 and 0.42 (and 1.17 at 2,000). Mobile anti-air before any enemy
+-- aircraft is known is mass with no weapon against the land army; the tanks stay as a screen and for sight.)
 local kDefault = {  -- the tech's mix while nothing is known: suffix, weight
     { { 'l0201', 0.6 }, { 'l0103', 0.2 }, { 'l0104', 0.2 } },
     { { 'l0202', 0.8 }, { 'l0205', 0.2 } },
@@ -90,15 +95,32 @@ local function IsAntiAir(id)
 end
 
 -- the enemy army as known: the ground part and the air part (AIBuildValue's force form) and their masses
-local function Mix(R)
+-- (2026-11-06, the early army: with `strike`, the air part is only the aircraft that hit the ground - bombers,
+-- gunships - for the land factories' anti-air share. M28 keeps a T1 transport from minute 1, and its air scouts and
+-- interceptors came and went: all counted as air, they gave our land factories an anti-air share of 0.22-0.62 in the
+-- judge games' first 12 minutes, so a quarter of the early army was mobile anti-air with no weapon against the land
+-- army that killed it. The fight bench (1,000 mass each, against M28's early mix of Othazyne, Thaam and Zthuee):
+-- the same army with that share lost 1.88 per mass killed meeting it and 1.16 holding, without it (all artillery)
+-- 0.95 and 0.42. Fighters and scouts are the air factories' to answer, EnemyAir.)
+local function Mix(R, strike)
     local ground, air, gm, am = {}, {}, 0, 0
+    R.strikesGround = R.strikesGround or {}
     for _, e in ipairs(Remastered.AIEnemyMix(R.army)) do
         local bp = __blueprints[e[1]]
         local isAir = false
         if bp and bp.Categories then
             for _, c in ipairs(bp.Categories) do if c == 'AIR' then isAir = true end end
         end
-        if isAir then
+        if isAir and strike then
+            if R.strikesGround[e[1]] == nil then
+                local r = Remastered.AIUnitRating(e[1])
+                R.strikesGround[e[1]] = (r and r.dps.ground or 0) > 0
+            end
+            if not R.strikesGround[e[1]] then isAir = nil end
+        end
+        if isAir == nil then
+            -- (an aircraft that cannot hit the ground: neither the land army's target nor its anti-air's)
+        elseif isAir then
             table.insert(air, { e[1], e[2] })
             am = am + e.mass
         else
@@ -127,7 +149,7 @@ function Counter(brain, tech)
     R.counter = R.counter or {}
     local c = R.counter[tech]
     if c and R.tick - c.tick < kCounterTicks then return c end
-    local ground, air, gm, am = Mix(R)
+    local ground, air, gm, am = Mix(R, true)
     c = { tick = R.tick }
     if gm + am >= kMixMass then
         local list = Candidates(brain, tech)
