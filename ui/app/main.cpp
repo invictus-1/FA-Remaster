@@ -1558,10 +1558,22 @@ int main(int argc, char** argv) {
       if (frameMs + roundBeatMs > 100.0) {
         const bool first = inGame && done - gameFrom <= 5;
         if (!first) ++longFrames, longestFrameMs = (std::max)(longestFrameMs, frameMs + roundBeatMs);
-        Logf(LogLevel::Info, "moho64ui: a long frame: %.0f ms (frame %d: the interface's frame %.0f ms, round the beat %.0f ms%s)", frameMs + roundBeatMs,
+        // (with MOHO64UI_LONG_FRAMES set: what ran long in it, as a window's long frames are told: the engine functions
+        // the scripts called, the host's parts, a Lua collection; the six longest)
+        std::string inIt;
+        std::vector<std::pair<const char*, double>>& notes = ui::LongFrames().notes;
+        std::stable_sort(notes.begin(), notes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        for (size_t i = 0; i < notes.size() && i < 6; ++i) {
+          char one[200];
+          std::snprintf(one, sizeof one, "%s%s %.0f", i ? ", " : "; in it: ", notes[i].first, notes[i].second);
+          inIt += one;
+        }
+        Logf(LogLevel::Info, "moho64ui: a long frame: %.0f ms (frame %d: the interface's frame %.0f ms, round the beat %.0f ms%s)%s", frameMs + roundBeatMs,
              done, frameMs, roundBeatMs,
-             first ? "; a game's first frames, not counted" : inGame ? (session.Loading() ? "; a game loading" : "; in a game") : "; in the front end");
+             first ? "; a game's first frames, not counted" : inGame ? (session.Loading() ? "; a game loading" : "; in a game") : "; in the front end",
+             inIt.c_str());
       }
+      ui::LongFrames().notes.clear();  // (this frame's)
       listen();
       sounds.Update(static_cast<float>(seconds));
       leaveOrRestart();
