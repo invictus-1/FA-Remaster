@@ -151,8 +151,10 @@ struct FramePropEvent {
   float orientation[4] = {0, 0, 0, 1};
   float scale[3] = {1, 1, 1};  // the engine's scale x draw scale
   // [wrecksseen] Create, Seen: the armies (bit n: army n, from 0; an ally's sight counts as the army's own) that have had
-  // the prop in their sight since it was made, the whole set as it is now. All of them where nothing tells it (a map's
-  // own prop, any prop that is not a wreck, a recording): World::wrecksOnceSeen then holds nothing back.
+  // the prop in their sight since it was made, the whole set as it is now, as the engine keeps it (moho::PropsSeen,
+  // with Sim::collectPropsSeen set before the first beat). All of them where nothing tells it (a map's own prop, any
+  // prop that is not a wreck, a simulation without the switch, a recording): World::wrecksOnceSeen then holds
+  // nothing back.
   uint32_t seenBy = 0xffffffffu;
   bool superseded = false;     // [propqueue] (SimFrames' own: a newer change of the prop waits behind it; never handed out)
 };
