@@ -141,7 +141,8 @@ struct FrameGroundChange {
 // one whose mesh or place changed (a burnt tree, a tree knocked over), one that is gone. A prop of
 // the map is named by its index in the map file's list of props.
 struct FramePropEvent {
-  enum Kind { Create, Change, Destroy } kind = Create;
+  // (Seen [wrecksseen]: no change of the prop itself: more armies have had it in their sight, `seenBy`)
+  enum Kind { Create, Change, Destroy, Seen } kind = Create;
   uint32_t tick = 0;  // the beat it was told in
   uint32_t id = 0;
   int mapIndex = -1;  // -1: made after the start
@@ -149,6 +150,10 @@ struct FramePropEvent {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float scale[3] = {1, 1, 1};  // the engine's scale x draw scale
+  // [wrecksseen] Create, Seen: the armies (bit n: army n, from 0; an ally's sight counts as the army's own) that have had
+  // the prop in their sight since it was made, the whole set as it is now. All of them where nothing tells it (a map's
+  // own prop, any prop that is not a wreck, a recording): World::wrecksOnceSeen then holds nothing back.
+  uint32_t seenBy = 0xffffffffu;
   bool superseded = false;     // [propqueue] (SimFrames' own: a newer change of the prop waits behind it; never handed out)
 };
 

@@ -340,6 +340,13 @@ class WorldPicture {
   // "Always Show Enemy Lifebars": OFF at first, as the original). For no one army: every unit's.
   void SetAllies(const std::vector<int>& armies);
   void SetLifeBarsOnEnemies(bool on);
+  // [wrecksseen] Wrecks appear only once seen (World::wrecksOnceSeen; ui request 53): OFF at first, the original's
+  // way (a wreck made out of sight is drawn under the fog at once). On: a wreck made in the game is drawn only from
+  // the moment the focus army or an ally has had its place in sight, with its heat, smoke, shadow and pile; one
+  // destroyed before that is never drawn. With no focus army everything is drawn. May be set at any time: put on in
+  // a game, the wrecks not seen so far go from the next frame; put off, all held back show at once. A change of
+  // the focus army is followed. Trees and other props made in the game are never held back. A player's option.
+  void SetWrecksOnceSeen(bool on);
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.
   void SetRemasteredEffects(bool on);

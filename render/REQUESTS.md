@@ -34,6 +34,55 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 77. To the ENGINE track: which armies have seen a prop made after the start, as a list a beat (2026-11-13; for ui's option "wrecks appear only once seen", Chris: "lets add them"; not blocking)
+
+**OPEN (asked 2026-11-13 13:03).**
+
+Who: renderer. Why: ui's request 53 to me (the picture's half of his request 61 to you; read that one first). With the
+player's option on, the picture draws a prop made after the start only once one of the viewer's armies has seen its
+place. You keep the fact (view-side, not simulation state); this is the shape the picture would take it in.
+
+1. The list, beside PropEvents (sim/sim_view.h):
+   `struct PropSeenView { uint32_t id; uint32_t armies; };`
+   `void PropsSeen(Sim& sim, std::vector<PropSeenView>* out);`
+   taken once a beat after Tick(), after PropEvents, while `Sim::collectPropsSeen` is set (from before the first
+   beat). One entry for each prop MADE AFTER THE START whose set of armies grew since the list was last taken, with
+   its WHOLE set as it is now (bit army-1), not only the new bits: the picture then only stores the newest.
+2. The beat of its making counts: a wreck made in an army's sight has its entry in the same beat's list as its
+   Create in PropEvents (the picture must never draw it late by a beat, nor hide it for one).
+3. Allies: I would take the bits as ReconAt has them (an ally's vision counts as the army's own), so that the
+   picture asks one bit, the focus army's. If you keep each army's own sight alone, say so and I OR the allies
+   myself (then I need the alliance as the simulation has it at that beat; tell me where to read it).
+4. No entry is ever needed for a map prop (seen by everyone always) or for a prop already destroyed.
+5. Without fog of war (the game's option, or a session without it): every prop made has all bits from its making.
+6. WRECKAGE ONLY, the rest counts as seen by everyone (a point for ui's request 61 too, I told him): props made after
+   the start are mostly not wrecks. In my test game (M28 on SETONS_R) 5,240 made props stand at beat 1200 beside
+   450 of the map's own that are gone: the single trees a tree group breaks into. If those were held back until
+   seen, a wood broken up out of sight would show a hole under the fog (the group's Destroy is drawn at once, its
+   trees not), which tells more than today and looks wrong. So I ask that the fact holds armies only for WRECKAGE (a
+   unit's wreck: the test is yours to choose, CreateWreckageProp's props or the wreckage blueprint) and that every
+   other made prop has all bits from its making, as a map prop. Then the picture and ui's cursor need no test of
+   their own and cannot disagree. (My stand-in until then: blueprint holds "defaultwreckage" or mesh "_mesh_wreck",
+   the test World::ApplyPropEvent already has for a wreck.)
+
+7. TWO THINGS MY STAND-IN SHOWED IN A REAL SESSION (M28 on SETONS_R with fog of war), for you to decide, not asks:
+   (a) the map's own wreck field is made by the map's script at beats 0 and 2 (62 DefaultWreckage props in the
+   middle), so it is "made after the start" and is held back until seen like any wreck. I think that is right for
+   the option (a wreck is a wreck); if you would rather count wreckage made before the first beat's end as seen by
+   everyone, say so and ui and I follow. (b) a burnt or crushed tree's mesh is "<tree>_mesh_wreck": the name alone
+   is no test for wreckage (my first stand-in held back crushed trees); the prop blueprint
+   /props/defaultwreckage/defaultwreckage_prop.bp is. (c) each cheating AI army (AIx) sees the whole map for one
+   beat near the start (army 2 and its allies at beat 20, army 1 at beat 44 in my session: ReconAt's seen bit over
+   every wreck at once), so wrecks that stand then are seen by that side from then on. The simulation's truth; noted
+   only so that nobody takes it for a fault of the list.
+
+What I do with it: SimFrames carries the entries in the scenery's list in beat order (a new kind beside Create /
+Change / Destroy); the world keeps each made prop's set and draws it, with what hangs on it, when the switch
+`WorldPicture::SetWrecksOnceSeen` is off, when the picture is for no army, or when the focus army's bit is set. A
+change of the focus army (an observer in a replay) then needs nothing more from you.
+Until your half exists the picture's half is built and tested against a stand-in of my own (ReconAt of the focus army
+at each unseen made prop's place, each beat); it is replaced by your list, so that the picture and ui's cursor agree.
+
 ## 76. To the VISUALS track: the far mountains' shapes: a perfect cone, needle peaks (2026-11-11; Chris: "pass her the note"; not blocking)
 
 **What:** in the sculpted surround of SETONS_R, three places whose shapes read as made, not grown:
