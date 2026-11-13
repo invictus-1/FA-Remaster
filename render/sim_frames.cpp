@@ -693,7 +693,49 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(f.position, v.position, sizeof f.position);
     std::memcpy(f.orientation, v.orientation, sizeof f.orientation);
     for (int k = 0; k < 3; ++k) f.scale[k] = v.scale[k] * v.drawScale;
+    // [wrecksseen] a unit's wreck made in the game (World::ApplyPropEvent's test for one, unitWreck): whether the army the picture is
+    // for sees its place now, at its making; kept, and asked again each beat below until it does
+    if (f.mapIndex < 0) {
+      if (f.kind == FramePropEvent::Destroy) {
+        wrecks_.erase(f.id);
+      } else if (f.kind == FramePropEvent::Create) {
+        std::string low = f.blueprint + "|" + f.mesh;
+        for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low.find("defaultwreckage") != std::string::npos) {  // (a unit's wreck; a burnt tree's mesh is a "_mesh_wreck" too)
+          WreckSeen& w = wrecks_[f.id];
+          std::memcpy(w.position, f.position, sizeof w.position);
+          w.seenBy = focus > 0 && focus <= 32 && (moho::ReconAt(sim, focus, f.position) & moho::kReconSeenNow) != 0 ? 1u << (focus - 1) : 0;
+          f.seenBy = w.seenBy;
+          if (getenv("MOHO64_DEBUG_WRECKS"))  // (checks)
+            printf("render: wrecks: beat %u: %u made at %.0f, %.0f (%s), focus %d sees it: %s\n", sim.tick(), f.id, f.position[0], f.position[2], low.c_str(), focus,
+                   w.seenBy ? "yes" : "no");
+        }
+      } else if (auto w = wrecks_.find(f.id); w != wrecks_.end()) {
+        std::memcpy(w->second.position, f.position, sizeof w->second.position);
+      }
+    }
     propEvents.push_back(std::move(f));
+  }
+  // [wrecksseen] the wrecks the focus army had not seen: those whose place it sees now (by their numbers, so that the
+  // list is the same in every run)
+  if (sim.tick() < wrecksTick_) wrecks_.clear();  // (the game begun again: its own from here)
+  wrecksTick_ = sim.tick();
+  if (focus > 0 && focus <= 32 && !wrecks_.empty()) {
+    const uint32_t bit = 1u << (focus - 1);
+    const size_t before = propEvents.size();
+    for (auto& [id, w] : wrecks_) {
+      if ((w.seenBy & bit) != 0 || (moho::ReconAt(sim, focus, w.position) & moho::kReconSeenNow) == 0) continue;
+      w.seenBy |= bit;
+      FramePropEvent seen;
+      seen.kind = FramePropEvent::Seen;
+      seen.tick = sim.tick();
+      seen.id = id;
+      seen.seenBy = w.seenBy;
+      if (getenv("MOHO64_DEBUG_WRECKS")) printf("render: wrecks: beat %u: %u at %.0f, %.0f seen by focus %d\n", sim.tick(), id, w.position[0], w.position[2], focus);
+      propEvents.push_back(std::move(seen));
+    }
+    std::sort(propEvents.begin() + static_cast<std::ptrdiff_t>(before), propEvents.end(),
+              [](const FramePropEvent& a, const FramePropEvent& b) { return a.id < b.id; });
   }
   beat.beams.reserve(e.beams.size());
   for (const moho::BeamView& v : e.beams) {
@@ -769,7 +811,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
         ++propSuperseded_;
       }
       propWaiting_[f.id] = propEvents_.size();
-    } else {
+    } else if (f.kind != FramePropEvent::Seen) {  // ([wrecksseen] no change of the prop)
       propWaiting_.erase(f.id);
     }
     propEvents_.push_back(std::move(f));
@@ -783,7 +825,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     propWaiting_.clear();
     for (size_t i = 0; i < propEvents_.size(); ++i) {
       if (propEvents_[i].kind == FramePropEvent::Change) propWaiting_[propEvents_[i].id] = i;
-      else propWaiting_.erase(propEvents_[i].id);
+      else if (propEvents_[i].kind != FramePropEvent::Seen) propWaiting_.erase(propEvents_[i].id);
     }
   }
   beats_.push_back(std::move(beat));

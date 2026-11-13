@@ -318,6 +318,10 @@
 //           four of them (a side picture: WorldPicture::DrawMinimap, its first drawing). A side picture leaves the game's
 //           next frames alone, so the two runs' files must be the same picture: the renderer's gate_side.sh compares them
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
+// --wrecks-once-seen  [wrecksseen] a wreck made in the game is drawn only once the army the picture is for (--focus) has
+//           had its place in sight (World::wrecksOnceSeen; off: the original's way, drawn under the fog at once)
+// --wrecks-once-seen-from <frame>, --wrecks-once-seen-until <frame>  (checks) the same, put on from that frame and / or
+//           off again from that one, in the running game (the viewer's own world, not --picture)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
 //           hidden_outlines.h: on unless this is given, in the modern look); --hidden-outlines: on (as at first)
 // --battle-scars  the scorches and craters scripts lay stay, weathering, up to a most (World::battleScars);
@@ -1178,6 +1182,8 @@ struct Options {
   std::vector<std::string> wearArt;            // [grime] --wear-art
   float treadDepth = 0.007f;                   // [treads] --tread-depth
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
+  bool wrecksOnceSeen = false;          // --wrecks-once-seen [wrecksseen]
+  int wrecksFrom = -1, wrecksUntil = -1;  // --wrecks-once-seen-from, --wrecks-once-seen-until (frames; -1: not given)
   bool hotMetal = false;                // --hot-metal
   bool hotScorchOriginal = false;       // [softscorch] --hot-scorch bright
   int wreckTest = 0;                    // --wreck-test
@@ -1538,6 +1544,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-follow") o->fxFollow = true;  // [unit dirt]
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
+    else if (a == "--wrecks-once-seen") o->wrecksOnceSeen = true;
     else if (a == "--hot-metal") o->hotMetal = true;
     else if (a == "--remastered-build") o->remasteredBuild = true;
     else if (a == "--exhausts") o->realExhausts = true;
@@ -2021,6 +2028,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
+    else if (a == "--wrecks-once-seen-from") o->wrecksFrom = atoi(v);
+    else if (a == "--wrecks-once-seen-until") o->wrecksUntil = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--wet") o->wet = static_cast<float>(atof(v));
     else if (a == "--shader-cache") o->shaderCacheDir = v;
@@ -2505,6 +2514,7 @@ int main(int argc, char** argv) {
     picture.SetTemporalUpscale(opt.fsr3);   // (--fsr3)
     picture.SetRayReflections(opt.rayReflections);  // (--ray-reflections)
     picture.SetHiddenOutlines(opt.hiddenOutlines);  // (--no-hidden-outlines)
+    picture.SetWrecksOnceSeen(opt.wrecksOnceSeen);  // (--wrecks-once-seen)
     if (Season s; !opt.season.empty() && SeasonNamed(opt.season, &s)) picture.SetSeason(s);  // [seasons] (--season)
     if (opt.timeOfDay >= 0) picture.SetDayAndWeather(opt.timeOfDay, opt.dayLength, opt.weather == "auto");  // (--picture: the hour and the weather through the pixel interface)
     setup.modUids = opt.modUids;
@@ -2827,6 +2837,7 @@ int main(int argc, char** argv) {
     world.models.wearArtTrial.push_back(id);
   }
   world.hiddenOutlines = opt.hiddenOutlines;
+  world.wrecksOnceSeen = opt.wrecksOnceSeen;
   world.hotMetal = opt.hotMetal;
   world.heat.softScorch = !opt.hotScorchOriginal;  // [softscorch]
   if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
@@ -3889,6 +3900,8 @@ int main(int argc, char** argv) {
     const double limiterMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - limiterFrom).count();
     double simulationWaitMs = 0;
     if (!window->Pump(&events)) break;
+    if (opt.wrecksFrom >= 0 || opt.wrecksUntil >= 0)  // [wrecksseen] (--wrecks-once-seen-from / -until: switched in the game)
+      world.wrecksOnceSeen = frameCount >= std::max(opt.wrecksFrom, 0) && (opt.wrecksUntil < 0 || frameCount < opt.wrecksUntil);
     if (opt.hitchEvery > 0 && frameCount > 0 && frameCount % opt.hitchEvery == 0) {  // (--hitch: a long frame)
       // (in whole microseconds: a time point of float nanoseconds would round to some milliseconds)
       const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(static_cast<long long>(opt.hitchMs * 1000));
@@ -5493,6 +5506,7 @@ int main(int argc, char** argv) {
       if (world.remasteredTarmacs) printf(" (and %d remastered pads)", decals.tarmacsDrawn);  // [tarmac]
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (haveLive) printf("; scenery: %d props made in the game stand, %d of the map's own gone", world.MadeProps(), world.MapPropsGone());
+      if (haveLive && world.wrecksOnceSeen) printf(", %d wrecks held back as not seen", world.WrecksHeld());
       if (world.effects.staleKept > 0) printf("; %d lasting emitters started after a jump", world.effects.staleKept);  // [stalelast]
       if (world.effects.unitEmittersPlayed > 0) printf("; %d emitters played a unit's own way", world.effects.unitEmittersPlayed);  // [unitfx]
       if (world.horizonWeather)  // [horizon]

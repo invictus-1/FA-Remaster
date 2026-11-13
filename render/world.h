@@ -257,6 +257,14 @@ class World {
   int hitsTaken = 0, impactsTaken = 0;  // since the map was opened (AddCombat)
   int hitsShown = 0, impactsShown = 0;  // ... and of those, handed to the looks (their beat reached by AddFrame)
   int propsChanged = 0, propsGone = 0;  // since the map was opened
+  // [wrecksseen] Wrecks appear only once seen (ui request 53; Chris, 2026-11-13: a player's option, OFF at first = the
+  // original's way, a wreck made out of sight is drawn under the fog at once). On: a wreck made in the game is drawn
+  // only from the moment the army the picture is for (or an ally) has had its place in sight, with all that hangs on
+  // it (its heat and smoke, its shadow, its pile); one destroyed before that is never drawn. For no one army
+  // (focusArmy -1) everything is drawn. Switched on in a game, the wrecks not seen so far go; switched off, or the
+  // focus army changed, what was held back shows at once. Who has seen what: FramePropEvent::seenBy.
+  bool wrecksOnceSeen = false;
+  int WrecksHeld() const { return static_cast<int>(heldProps_.size()); }  // (checks) held back now
   int groundChanges = 0;                // the simulation's changes of the ground's heights taken in (ChangeGround)
   int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
   int MadeProps() const { return static_cast<int>(madeProps_.size()); }  // props made in the game that stand now
@@ -1820,6 +1828,15 @@ class World {
   // list), kept as each change takes hold
   std::vector<BlueprintLook> looksKept_;
   std::unordered_map<uint64_t, FramePropEvent> propsKept_;
+  // [wrecksseen] the made props held back now (each as propsKept_ has it, with who has seen it); the switch and the
+  // focus army they were last judged by; propReveal_: ApplyPropEvent is laying one of propsKept_ again, not a change
+  std::unordered_set<uint32_t> heldProps_;
+  bool wrecksSeenWas_ = false, propReveal_ = false;
+  int wrecksFocusWas_ = -1;
+  bool WreckShown(uint32_t seenBy) const {
+    return !wrecksOnceSeen || focusArmy < 0 || focusArmy >= 32 || ((seenBy >> focusArmy) & 1u) != 0;
+  }
+  void RefreshWrecksSeen();
   bool streamNow_ = false;  // [stream] (streams drawn as water this frame)
   bool horizonNow_ = false;  // [horizon] (something of it this frame)
   Season seasonOpen_ = Season::Summer;  // [seasons]
