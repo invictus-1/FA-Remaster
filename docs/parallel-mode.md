@@ -12,6 +12,36 @@ stage from a spline snapshot, its cross-unit writes as messages, on the pool (3.
 weapons' acquire, grid spans (3.1); step 5.6, recon's answers from the stage's start and AdvanceCoords' look at every
 entity on the pool (3.4).
 
+## State on 2026-11-13 (the wrap-up's proofs and timing, main dfd0c579)
+
+**Proofs, run again on today's main** (about 50 simulation batches after the last long proofs of 11-08; helper
+mcwrap, the key rows recomputed and one run repeated by the lead): parallel order gives the same game at every
+thread count in every case run: b8 6000 beats at 1 = 8 = 32 threads = shuffled = reversed turns; B3-16k 2000 beats
+at 1 = 16 = shuffled; B1 (four M28 AIs on Seton's) 36000 beats at 1 = 16 to the end; two processes; B1 in lockstep
+12001 beats; the 50,000-unit session 600 beats at 1 = 16 = shuffled. The audits (shuffled turns with the Lua check)
+log nothing on B1 36000, b8 and B3. The write trap sees no cross-unit write in a pool phase (b8 3000, B1 12000);
+the same trap on the original order catches 910,928 writes at 102 sites, so it works. The dead trap (freeing dead
+objects during a game is the default since batch 152) is clean over B1 36000: 1,059,038 objects freed, no stale
+read.
+
+**Timing** (section 8 item 6; the tables are in [benchmarks.md](benchmarks.md), "Parallel order against the
+original order"): parallel order at 16 threads against the original order at 1 thread is 2.05x on B3-16k (32.5 to
+15.9 ms a beat), 1.90x on the 50,000-unit session (89.7 to 47.2 ms, so 50,000 units keep real time with room), and
+1.06x on B1, where M28's Lua is 61% of the beat. The 3-6x target is not reached. The pool stages scale 9-16x
+but are 27% of a 16-thread beat; 73% of it still runs on one thread, which caps the speed-up near 2.6-2.8x
+whatever the thread count. And risk 7 does not hold today: parallel order at 1 thread is 10% (B3) to 22-38% (50k)
+slower than the original order at 1 thread, from its snapshots, commits and messages.
+
+**What is left serial**, largest first, is the table at the end of that benchmarks section: the navigators'
+snapshot and commit, the commands stage, the Lua threads stage, the weapons' fire threads, destroy + sync, and
+inside the entity pass the beat-start snapshot, phase D, the deferred script calls, the sorted economy sums and
+the combat data prefill. Next (the lead's decision, 2026-11-13): one bounded round on the serial work that
+parallel order itself added and that keeps the game identical (the sorted sums kept in order, the prefill only
+for new units, the snapshots on the pool, phase D on the pool with its two shared writes as messages), proven
+by equal fingerprints against today's parallel runs; the commands stage, the fire threads as messages, the
+formations and the Lua stages are the optimisation phase's and the AI track's. Step 5.7 (the collector's marking
+in batches) stays held: the collector's step is 0.23-0.35 ms of a beat.
+
 ## For Chris: the short version
 
 **What it is.** Today our simulation copies the original game's order of work exactly: one unit after another, each
@@ -628,6 +658,7 @@ Script methods the engine calls inside the pass (b8 / B3): `OnMotionHorzEventCha
 6. **Memory:** message buffers and snapshots. Per worker, reused, bounded by the items; measured per stage.
 7. **The 1-thread case:** parallel mode at 1 thread must not be slower than compatibility mode at 1 thread by more than
    a few percent (the buffers cost something). Measured per stage; a laptop with 2 cores is a real player.
+   (Measured 2026-11-13: NOT held: 10% slower on B3-16k, 22-38% on 50,000 units. See "State on 2026-11-13".)
 8. **AI-heavy games:** the Lua half stays serial (section 1). The 3-6x is reachable for unit-heavy games; for AI games
    only with the AI's work moved out of Lua (native helpers, our own AI in C++), which is its own track.
 9. **Debugging:** a desync in parallel mode has no oracle; the fingerprint's detail listing (exists) plus the write
