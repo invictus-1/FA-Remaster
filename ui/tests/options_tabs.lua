@@ -212,5 +212,11 @@ ForkThread(function()
         end
         LOG("options_tabs: left open for the picture: " .. case)
     end
+    -- our hooks read locals of the game's scripts through the functions that use them; one that is gone (a FAF update)
+    -- is said once in the log (the lab's suite looks for that line), and the lookup gives nil
+    local OptionsDialog = import("/lua/ui/dialogs/options.lua")
+    check("the hook finds a local of the game's dialog (CreateOption)", type(OptionsDialog.RemasterHookLocal('CreateOption')), 'function')
+    check("a local that is not there: nil", OptionsDialog.RemasterHookLocal('NoSuchLocalOfTheDialog'), nil)
+    check("asked again: nil again (the warning is said once)", OptionsDialog.RemasterHookLocal('NoSuchLocalOfTheDialog'), nil)
     LOG("TEST done: " .. failed .. " failed")
 end)

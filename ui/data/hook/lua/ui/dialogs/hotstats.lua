@@ -30,10 +30,19 @@ do
     }
 
     -- A local of FAF's module (a hook does not see them): through a function of it that uses it.
+    local RemasterGoneSaid = {}
     local function ModuleLocal(fn, name)
         for i = 1, 200 do
             local n, v = debug.getupvalue(fn, i)
-            if not n then return nil end
+            if not n then
+                -- (the game's script has no such local any more, a FAF update: said once, so that the feature that
+                -- is left out does not go in silence; the lab's hook_contract.py says the same before a push)
+                if not RemasterGoneSaid[name] then
+                    RemasterGoneSaid[name] = true
+                    WARN("FA Remastered: /lua/ui/dialogs/hotstats.lua has no local '" .. tostring(name) .. "' where our hook reads it: a feature of ours is left out")
+                end
+                return nil
+            end
             if n == name then return v end
         end
     end
