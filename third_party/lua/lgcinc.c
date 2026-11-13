@@ -28,6 +28,10 @@
 **   bit 6           tables: in this cycle's weak array
 */
 
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L  /* clock_gettime and struct timespec under -std=c99 (nowus below) */
+#endif
+
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -974,7 +978,11 @@ static void startcycle (lua_State *L, global_State *g) {
 typedef struct Phases { double t0; double us[NPH]; lu_mem vis[NPH], un[NPH], n[NPH]; int k; } Phases;
 static double nowus (void) {
   struct timespec ts;
+#if defined(_WIN32)
   timespec_get(&ts, TIME_UTC);
+#else
+  clock_gettime(CLOCK_MONOTONIC, &ts);  /* (timespec_get is C11: not declared by glibc under -std=c99) */
+#endif
   return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
 }
 static void ph_begin (GCInc *inc, Phases *p) {
