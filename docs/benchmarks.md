@@ -118,6 +118,191 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## Parallel order against the original order: B3-16k, 50,000 units, B1 (2026-11-13, main dfd0c579)
+
+parallel-mode.md section 8 item 6. Measured by the engine helper mcwrap, 2026-11-13 12:47-14:16 (PC clock).
+
+**Exe.** Main dfd0c579, a clean worktree built by `tools/build_zig.py` (`build-zig/moho64.exe`, md5 f5c67494...), run
+from its build folder, so the script fixes in `data/fixes` were on.
+
+**Machine.** Ryzen 9 9950X3D, 94 GB, Windows 11 Pro 26300. Every timing run:
+- was pinned to logical CPUs 0-15 (the V-cache CCD) with `MOHO64_PLACE=off`;
+- ran one at a time, with `MOHO64_PROFILE=1` and `MOHO64_STATS=1`;
+- ran with 45-53 GB of memory free.
+
+**What ran beside.**
+- Before the first run, the lead held the other chats and ended the AI dispatcher. The lead's lock covered 13:25:38-14:16.
+- Every run checked at its start and its end that no moho64 (anyone's), moho64ui, moho64view or ForgedAlliance* was
+  running.
+- Rounds 3, 4 and 5 also checked every ~6 s during the run. The checker was pinned to CPUs 16-31. Every sample saw
+  only the run itself.
+- 6 runs saw a moho64ui at their end and were made again: b50_P8_r1 once, b3_O16_r2 five times.
+- Round 1 (12:47-13:06) was checked at start and end only. Its rows below are a third opinion, marked as such.
+- Round 2 (13:06-13:39), also checked at start and end only, is left out of the means. A moho64ui came and went between
+  the checks (b3_O16_r2), so its runs may have been disturbed unseen. Its numbers are in `runs/t1_table_r345.txt`.
+
+**Workloads.**
+- **B3-16k:** `b3_session_hanna.lua --seed 1 --orders b3_16000.txt --ticks 2000`.
+- **50k:** the same session with `b3_50000.txt` (25,000 units a side), `--ticks 600`.
+- **B1:** `b1_setons_4xm28.lua --seed 12345 --ticks 12000`. Only the first 12000 beats. B1's cost grows later: the
+  36000-beat proof runs averaged 29.5-34.1 ms a beat, on CPUs 16-31 and not as timing runs.
+
+**Configs.**
+- **O1 / O16:** the original order at 1 and 16 threads. O16 runs the speculation, the MOHO64_PAR_* defaults.
+- **P1 / P8 / P16:** parallel order (`MOHO64_SIM_ORDER=parallel`) at 1, 8 and 16 threads.
+
+**How to read the numbers.**
+- **ms/beat:** the profile's mean tick.
+- **p99:** the profile's 99th percentile, which is where the worst 1% of beats begins.
+- **wall:** the engine's `moho64: timing:` seconds for the ticks.
+- **mean:** the mean of the rounds named. Where two rounds differ by more than 5%, both numbers are given and the row is
+  marked "spread". The spread is the same share in every phase, the Lua phases included (b50 P1 r3 against r4: every
+  phase about 10% apart), so it is the machine's speed between runs, not the workload.
+- **Parallel order plays its own game:** compare the units alive in each row. B3 and 50k come out almost the same game
+  in both orders. B1 is a different game after a while (1,321 against 1,309 units at beat 12000), so B1's
+  order-against-order numbers compare two different games.
+
+| workload | config | ms/beat r3 / r4 (r5) | mean | p99 | wall s | Lua % | peak MB | units alive | r1 (third opinion) | flag | speed-up vs O1 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| B3-16k, 2000 beats | O1 | 32.75 / 32.15 | 32.45 | 56.39 | 65.4 | 10.1 | 1558 | 15,159 @ 1800 | 33.66 |  | 1.00x |
+| B3-16k | O16 | 28.61 / 28.75 | 28.68 | 46.80 | 57.8 | 11.6 | 1689 | 15,159 @ 1800 | 33.10 |  | 1.13x |
+| B3-16k | P1 | 35.67 / 35.64 | 35.66 | 61.07 | 71.8 | 9.0 | 1577 | 15,175 @ 1800 | 36.21 |  | 0.91x |
+| B3-16k | P8 | 17.36 / 17.34 | 17.35 | 28.85 | 35.1 | 17.9 | 1678 | 15,175 @ 1800 | 19.92 |  | 1.87x |
+| B3-16k | P16 | 15.91 / 15.81 | 15.86 | 26.24 | 32.2 | 19.4 | 1690 | 15,175 @ 1800 | 17.16 |  | **2.05x** |
+| 50k, 600 beats | O1 | 89.91 / 89.41 | 89.66 | 121.99 | 55.5 | 7.2 | 2136 | 49,703 @ 600 | 91.49 |  | 1.00x |
+| 50k | O16 | 85.82 / 78.59 / 79.68 | 81.36 | 109.84 | 50.3 | 7.7 | 2219 | 49,703 @ 600 | 78.74 | spread 9.2% | 1.10x |
+| 50k | P1 | 109.78 / 123.50 | 116.64 | 151.99 | 71.7 | 5.6 | 2162 | 49,684 @ 600 | 102.92 | spread 12.5% | 0.77x (r3 alone 0.82x) |
+| 50k | P8 | 54.56 / 55.12 | 54.84 | 73.29 | 34.3 | 11.3 | 2190 | 49,684 @ 600 | 54.57 |  | 1.63x |
+| 50k | P16 | 50.12 / 44.23 | 47.17 | 62.49 | 29.7 | 12.0 | 2194 | 49,684 @ 600 | 49.70 | spread 13.3% | **1.90x** (1.79-2.03) |
+| B1, 12000 beats | O1 | 6.75 / 6.34 | 6.55 | 20.56 | 78.6 | 60.5 | 1346 | 1,309 @ 12000 | 6.60 | spread 6.5% | 1.00x |
+| B1 | O16 | 6.53 / 6.00 | 6.27 | 18.88 | 75.2 | 61.5 | 1376 | 1,309 @ 12000 | 6.17 | spread 8.8% | 1.04x |
+| B1 | P1 | 7.29 / 7.12 | 7.21 | 21.88 | 86.5 | 58.6 | 1372 | 1,321 @ 12000 | 7.53 |  | 0.91x |
+| B1 | P8 | 6.57 / 6.29 | 6.43 | 19.07 | 77.2 | 65.0 | 1395 | 1,321 @ 12000 | 7.09 |  | 1.02x |
+| B1 | P16 | 6.45 / 5.89 | 6.17 | 18.32 | 74.1 | 65.4 | 1413 | 1,321 @ 12000 | 6.02 | spread 9.5% | **1.06x** |
+
+The longest single beat (the profile's max) in the runs: B3 107-235 ms, 50k 338-504 ms, B1 849-975 ms. Which beat it
+was is not in the profile.
+
+### The beat by phase, ms a beat (Lua in brackets), rounds 3 and 4 averaged
+
+| phase | B3 O1 | B3 P1 | B3 P16 | 50k O1 | 50k P1 | 50k P16 | B1 O1 | B1 P16 |
+|---|---|---|---|---|---|---|---|---|
+| economy | 0.10 | 0.10 | 0.10 | 0.40 (0.02) | 0.41 (0.02) | 0.34 (0.02) | 0.04 | 0.04 |
+| navigators+paths | 8.19 | 8.98 | 3.45 | 13.68 | 17.94 | 7.54 | 0.99 | 0.79 |
+| steering | 1.40 | 1.82 | 0.51 | 4.74 | 6.69 | 1.97 | 0.12 | 0.06 |
+| weapons | 2.46 (0.07) | 3.05 (0.07) | 0.96 (0.06) | 7.56 (0.08) | 11.71 (0.07) | 4.33 (0.07) | 0.05 | 0.07 |
+| commands | 1.33 (0.01) | 1.50 (0.01) | 1.34 (0.01) | 4.91 (0.02) | 5.34 (0.02) | 4.34 (0.02) | 0.19 (0.06) | 0.23 (0.06) |
+| threads | 2.58 (1.67) | 2.71 (1.73) | 2.65 (1.67) | 4.42 (3.35) | 4.47 (3.42) | 4.12 (3.07) | 3.71 (3.66) | 3.77 (3.73) |
+| entitypass | 12.46 (1.20) | 13.95 (1.33) | 4.46 (1.27) | 41.50 (2.57) | 57.52 (2.88) | 16.89 (2.42) | 0.75 (0.22) | 0.54 (0.23) |
+| projectiles | 0.48 (0.27) | 0.07 | 0.06 | 0.93 (0.44) | 0.38 | 0.35 | 0.01 | 0.00 |
+| recon | 0.49 | 0.63 | 0.34 | 1.73 (0.02) | 2.26 (0.02) | 1.25 (0.02) | 0.08 | 0.08 |
+| formations | 0.38 | 0.37 | 0.32 | 1.43 | 1.53 | 1.14 | 0.03 | 0.03 |
+| killcleanup | 0.06 | 0.05 | 0.05 | 0.32 | 0.32 | 0.29 | 0.00 | 0.00 |
+| advancecoords | 1.44 | 1.26 | 0.49 | 5.21 | 5.07 | 1.93 | 0.10 | 0.09 |
+| destroy+sync | 1.07 (0.04) | 1.17 (0.04) | 1.12 (0.04) | 2.83 (0.05) | 2.98 (0.07) | 2.66 (0.07) | 0.48 (0.01) | 0.45 (0.01) |
+| **tick** | **32.45 (3.27)** | **35.66 (3.20)** | **15.86 (3.05)** | **89.66 (6.50)** | **116.64 (6.50)** | **47.17 (5.67)** | **6.55 (3.96)** | **6.17 (4.05)** |
+
+(In parallel order the shells made before the pass step inside "entitypass" (sim.cpp:3383-3384), so its "projectiles"
+phase holds only the shells made during the pass. B1's Lua is M28: threads-ai 44.8 s of the 74 s run at P16.)
+
+### A 16-thread parallel-order beat: how much still runs on one thread, stage by stage (rounds 3 and 4)
+
+"On the pool" is the wall time of the profile's `parallel` stages inside the phase. "Serial" is the rest of the phase.
+The profile's own total of the serial share: B3 72.6-72.7%, 50k 71.5-74.9%, B1 85.8-87.0%.
+
+| phase | B3 P16: phase / on the pool / serial (Lua) | 50k P16 | B1 P16 |
+|---|---|---|---|
+| entitypass | 4.46 / 1.25 (A 0.54, C 0.55, C1 0.17) / **3.21** (1.27) | 16.89 / 6.46 (A 2.58, C 2.57, C1 1.31) / **10.43** (2.42) | 0.54 / 0.16 / 0.38 (0.23) |
+| navigators+paths | 3.45 / 2.28 (navigators 0.66, path searches ahead 1.21, clusters ahead 0.35, grid build 0.07) / **1.17** | 7.54 / 2.75 (navigators 1.40, searches 0.39, clusters 0.74, grid 0.22) / **4.79** | 0.79 / 0.56 / 0.23 |
+| threads (Lua threads) | 2.65 / 0 / **2.65** (1.67) | 4.12 / 0 / **4.12** (3.07) | 3.77 / 0 / **3.77** (3.73) |
+| commands | 1.34 / 0 / **1.34** (0.01) | 4.34 / 0 / **4.34** (0.02) | 0.23 / 0 / 0.23 (0.06) |
+| destroy+sync | 1.12 / 0 / **1.12** (0.04; Lua GC mean 0.23) | 2.66 / 0 / **2.66** (0.07; GC mean 0.30-0.35) | 0.45 / 0 / 0.45 (GC mean 0.33-0.35) |
+| weapons | 0.96 / 0.27 (acquire) / 0.69 (0.06) | 4.33 / 1.07 / **3.26** (0.07) | 0.07 / 0.04 / 0.03 |
+| steering | 0.51 / 0.21 / 0.30 | 1.97 / 0.93 / 1.04 | 0.06 / 0.04 / 0.02 |
+| recon | 0.34 / 0.07 / 0.28 | 1.25 / 0.23 / 1.02 | 0.08 / 0.00 / 0.08 |
+| formations | 0.32 / 0 / 0.32 | 1.14 / 0 / 1.14 | 0.03 / 0 / 0.03 |
+| advancecoords | 0.49 / 0.27 / 0.23 | 1.93 / 1.16 / 0.77 | 0.09 / 0.03 / 0.06 |
+| economy, projectiles, killcleanup, anim | 0.22 / 0 / 0.22 | 1.00 / 0 / 1.00 | 0.04 / 0 / 0.04 |
+| **beat** | **15.86 / 4.33 / 11.53 (73%)** | **47.17 / 12.60 / 34.57 (73%)** | **6.17 / 0.83 / 5.34 (87%)** |
+
+The navigators' own split comes from the `landnav profile` line, in seconds over the run.
+- B3 P16: execute 3.05, path work 2.70, deliver 0.20.
+- 50k P16: execute 3.21, path work 0.40, deliver 0.26.
+- B1 P16: execute 1.06, path work 5.0, deliver 0.08.
+
+So in 50k the navigators' serial 4.8 ms is mostly their stage's own snapshot and commit around the pool's 1.4 ms (execute
+5.35 ms a beat), not the path searches.
+
+**The entity pass's serial part, split** (study build: main + `epsplit_STUDY_dfd0c579.patch`, measuring only, in
+`wt/build-split`).
+- The study runs were not timing runs: CPUs 16-31, beside the lead's 3 AI games. So only their shares count. Each
+  part's ms below is that share times the timing run's serial entity pass (B3 3.21 ms, 50k 10.43, B1 0.38).
+- Study runs: `runs/sp/sp_b3b`, `sp_b50b`, `sp_b1`, one at a time.
+
+| part of the entity pass (parallel order) | B3: share, ~ms | 50k: share, ~ms | B1: share, ~ms |
+|---|---|---|---|
+| A1 commit: the deferred script calls (Lua, about 87% of it) | 27%, 0.87 | 18%, 1.92 | 43%, 0.17 |
+| beat-start snapshot | 20%, 0.66 | 24%, 2.48 | 12%, 0.05 |
+| phase D, the units' economy (serial) | 18%, 0.59 | 23%, 2.37 | 13%, 0.05 |
+| SumUnitEconomy (the sort and the sums) | 9%, 0.28 | 12%, 1.30 | 1% |
+| combat data prefill | 8%, 0.27 | 11%, 1.16 | 2% |
+| pre-pass beams + shells (their hits' Lua: 62% B3, 78% 50k, 45% B1) | 11%, 0.35 | 5%, 0.55 | 12%, 0.05 |
+| after the phases (cargo, attached entities, motors) | 3%, 0.10 | 3%, 0.27 | 10%, 0.04 |
+| A2, the C1 / C2 / D commits, the pass's set-up | 3% | 4% | 6% |
+
+### What the numbers say about the 3-6x target
+
+- **The pool stages already scale well. They are just a small part of the beat.** At 16 threads the entity pass's A
+  and C run 14-16x: in 50k, A is 39.7 ms busy in 2.58 ms wall and C 40.0 in 2.57. Steering, the navigators' turns and
+  acquire run 9-15x. But all the pool stages together are 27% of a P16 beat in B3 and 50k: 4.33 of 15.86 ms, and 12.60
+  of 47.17 ms.
+- **The serial 73% bounds the speed-up.** B3 still has 11.53 ms on one thread, 50k 34.57 ms. With any number of
+  threads that caps the speed-up over O1 at 32.45 / 11.53 = 2.8x (B3) and 89.66 / 34.57 = 2.6x (50k). Measured: 2.05x
+  and 1.90x. The 3-6x target needs the serial items below moved, not more threads.
+- **Parallel order costs more than the original order on one thread.**
+  - P1 against O1: B3 +10%, 50k +22% (r3) to +38% (r4); every phase is slower.
+  - In 50k, P1's entitypass is +16.0 ms, navigators +4.3, weapons +4.2 and steering +2.0.
+  - Some of that extra work is still serial at 16 threads: the beat-start snapshot, the combat data prefill and the
+    sorted sums, 1.2 ms (B3) and 4.9 ms (50k), plus the navigators' and steering's own snapshots and commits.
+  - Risk 7 of parallel-mode.md ("not slower ... by more than a few percent") does not hold today.
+- **The path searches ahead scale only about 3.5x.** In B3: 1.21 ms wall against 4.18 ms busy. The beat waits for the
+  longest search.
+- **B1 is bounded by M28.** The Lua threads stage is 3.77 of 6.17 ms (61%) at P16, 99% of it Lua, M28's threads-ai.
+  On those numbers the engine side can bring B1 to at most about 6.55 / 3.77 = 1.7x over O1, as sections 1 and 9
+  expected.
+
+### What is left serial in a 16-thread parallel-order beat, largest first (50k, then B3 and B1)
+
+The ms are a beat's (rounds 3 and 4); the entity pass's parts come from the study's shares (~). "Reason" is what the
+code or the doc says. Where it is my inference, it says so.
+
+| # | Serial item | 50k ms (share) | B3 ms (share) | B1 ms (share) | Where | Why serial, as the code / doc has it |
+|---|---|---|---|---|---|---|
+| 1 | Navigators: the stage's snapshot + commit, the path budget walk, delivery | 4.79 (10.2%) | 1.17 (7.4%) | 0.23 (3.7%) | landnav.cpp:1607-1621 (per-unit snapshot, FootprintGrid / AltFootprintGrid, SteeringSnapshot, EnsureUnitGrid), 1645 (commit); LandNavStageEnd 1721 (ApplyTerrainChanges), 1732-1734 (SettleSearchesAhead, WorkAll(0)), 1742-1747 (OnPath) | Snapshot: what a turn would otherwise make at its first read (shared lazy caches) and read of others (parallel-mode.md:166-172); messages applied "in the commit, in the turns' order" (:175-178); path budgets charged "in queue order" (:123-125). In 50k most of it is the snapshot and commit: execute 5.35 ms a beat against 1.40 on the pool. |
+| 2 | Commands stage | 4.34 (9.2%) | 1.34 (8.4%) | 0.23 (3.7%) | sim.cpp:3035; commands.cpp:1601-1628 (every unit's command thread in thread order, then the path queue with its work budget) | parallel-mode.md:209-210: "Serial, as today: tasks call Lua at every turn, place structures, claim targets; a task's outcome is the next one's input." No parallel-order driver exists. |
+| 3 | Lua threads stage | 4.12 (8.7%; Lua 3.07) | 2.65 (16.7%; Lua 1.67) | **3.77 (61.1%; Lua 3.73)** | sim.cpp:3040-3041 (ai::IndexBeat, threads_->RunTick) | One Lua state: rule 5, parallel-mode.md:99-101; 3.2 (:213): "the stage that keeps AI-heavy games serial". |
+| 4 | Weapons W2: fire threads (+ the CB loop, unit grid, commit) | 3.26 (6.9%) | 0.69 (4.4%) | 0.03 | combat.cpp:2398-2399, 2421, 2422-2438 | parallel-mode.md:192-194: the fire threads "run the shot's scripts and make projectiles: serial, ids in order". The planned "create projectile" messages with OnFire in the commit (:133-135) are not built. |
+| 5 | destroy + sync | 2.66 (5.6%) | 1.12 (7.1%) | 0.45 (7.3%) | sim.cpp:3685 ProcessDestroyQueue, 3686 EffectsEndOfBeat, 3696 CollectorStep (the Lua collector's step, mean 0.23-0.35 ms a beat by MOHO64_STATS), 3699 UpdateIdPools, 3700 SyncStep | One Lua heap and state (the collector, the Sync table); the destroy queue and id pools in order. No parallel driver. |
+| 6 | Entity pass: beat-start snapshot | ~2.48 (5.3%) | ~0.66 (4.2%) | ~0.05 | sim.cpp:110-134 (called at 3385) | Makes what a turn of A would make at first read or read of another unit: FootprintGrid (shared lazy cache, :114-115), HoldShape onto the shared held list (:117; parallel-mode.md:320), the guard formations, which run Lua (:132-133; parallel-mode.md:253-254), the unit grid (:134). The per-unit snap fields write only their own unit, so they could go on the pool if the shared parts are taken out (my inference). |
+| 7 | Entity pass: phase D, the units' economy | ~2.37 (5.0%) | ~0.59 (3.7%) | ~0.05 | sim.cpp:3474 (runPhase "entity pass D" with pool = false), turnEconomy 3331-3348 | parallel-mode.md:288 and :327: "D stays on the sim's thread". No reason is given in the code. Its turns issue a pod's assist order (sim.cpp:3345, a new command and command id) and validate a factory's queue (:3347), which are shared writes (my inference for the reason). |
+| 8 | Entity pass: A1 commit (the deferred script calls) | ~1.92 (4.1%; ~88% Lua) | ~0.87 (5.5%; ~87% Lua) | ~0.17 (2.7%) | sim.cpp:3433 -> RunDeferredScriptCalls 1204-1232 | Lua in key order: rule 5, parallel-mode.md:99-101 and 3.3 (:222-224). |
+| 9 | Entity pass: SumUnitEconomy | ~1.30 (2.8%) | ~0.28 (1.8%) | ~0.01 | sim.cpp:1189-1202, called at 3478 and 3586 | Rule 7: float sums in creation order (parallel-mode.md:105-106, :278-281). Each call sorts econAdders_ by entSeq (:1191) before summing. |
+| 10 | Entity pass: combat data prefill | ~1.16 (2.5%) | ~0.27 (1.7%) | ~0.01 | sim.cpp:3388 -> combat.cpp:3783-3785 | CB(u) for every unit of the pass: a missing entry is read from Lua (combat.cpp:1122-1130), and Lua in a task aborts. This is e1f's fix of 11-08. Every beat it walks all the units though only units made since the weapons stage can miss (my inference: one pass over the same units as the snapshot). |
+| 11 | Formations (+ the effects tick) | 1.14 (2.4%) | 0.32 (2.0%) | 0.03 | sim.cpp:3620 EffectsTick, 3625-3639 FormationsTick | No parallel driver. The plan, "each formation's update on the pool; the at-goal broadcast in the commit" (parallel-mode.md:371), is not built. |
+| 12 | Steering: snapshot + commit | 1.04 (2.2%) | 0.30 (1.9%) | 0.02 | steering.cpp:1342 (SteeringSnapshot), 1353 (RunDeferredScriptCalls) | The predictions on another unit are messages applied in the turns' order (parallel-mode.md:160-165). |
+| 13 | Recon: blips and intel changes | 1.02 (2.2%) | 0.28 (1.8%) | 0.08 | intel.cpp:1030 ReconBeat (detection ahead on the pool) | Blip creation and deletion and OnIntelChange in the commit, in (army, unit serial) order; blip ids follow that order (parallel-mode.md:369-370). |
+| 14 | Economy, projectiles (made in the pass), kill clean-up | 1.00 (2.1%) | 0.22 (1.4%) | 0.04 | sim.cpp:2957-2963, 3576-3584, 3642 | No parallel driver. |
+| 15 | AdvanceCoords: placing the moved entities, shells, motors | 0.77 (1.6%) | 0.23 (1.5%) | 0.06 | entity_grid.cpp:356 GridAdvanceCoords; sim.cpp:3671 (shellsPart), 3681 | Spans on the pool, "placed one after another" (parallel-mode.md:204-205). |
+| 16 | Entity pass: pre-pass beams + shells | ~0.55 (1.2%; ~78% Lua) | ~0.35 (2.2%; ~62% Lua) | ~0.05 | sim.cpp:3383-3384 | "the beams and every shell made before the pass first, in creation order (their hits immediate)" (parallel-mode.md:220-221). The planned "a hit is a message", applied in phase B (:350-351), is not built. |
+| 17 | Entity pass: after the phases | ~0.27 | ~0.10 | ~0.04 | sim.cpp:3480-3537 (AttachedUnitsTick, attached entities, MotorsTick) | Serial loops; no parallel driver. |
+
+Line numbers are clean main dfd0c579's.
+
+Read without Lua, 50k's serial 34.6 ms is mostly engine C++ (Lua about 5.6 ms). B3's 11.5 ms has about 3.0 ms of Lua.
+B1's 5.3 ms is 4.0 ms Lua, almost all M28.
+
+The runs, the full per-stage tables and the measuring patch are in the lab's scratch (the engine helper mcwrap's folder, 2026-11-13), not in the repository.
+
 ## B3 and B8: first baselines (draft, 2026-10-21, main 533e7cc + the order-latency log)
 
 Measured on main 533e7cc in my worktree wt39, with two test-only additions (`fix_profile_order_latency_on_533e7cc.patch`,
