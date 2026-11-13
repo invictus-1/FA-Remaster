@@ -327,3 +327,103 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     out (17 attacks against 2) but those attacks traded worse (lost per killed 10.1 against 7.3) and the duels lasted
     no longer. The army's own estimate of the fights it goes into is what decides here, not the rule that sends it.
 
+37. **The army is recalled for the enemy in the base, not for the enemy that could come (helpers aicore4 / aicore5 /
+    aicore6, 2026-11-09 to 11; refines 20 and 36's third item).** The recall took every unit home while enemy mass of
+    300 or more *could come* to a base zone, and renewed itself every think; against M28 and FAF that was most of the
+    game, so the army sat at home with no operation in 71-95% of the minutes, and the guard posts at the outlying
+    extractors, which get only the units the defence leaves, had no guard at all in most minutes. Now the recall
+    counts the enemy *in* the base zone; a defence sends 1.5 times the enemy in the zone plus a quarter of what else
+    can come; and a new attack needs the free army to be 2.5 times the enemy army known within 600 of our start, so
+    that coming out again (36's finding: it went out and traded worse) happens only with a real edge.
+    Judged on main 3f942bb3 (16 seeds a set, full games with fog on SETONS_R, paired by seed against the same build
+    without it; tools/board.py --games b144 hb3w): against FAF's veteran AI 9 wins of 16 against 3, score +11.9
+    (p 0.071), 13 seeds better and 3 worse, extractor mass lost by minute 20 down 4.1k a game (p 0.009); against FAF's
+    rush AI 11 wins of 16 against 4, +10.8 (p 0.016), 11 better and 5 worse; against M28 no win either way (0 of 16),
+    +0.4 (p 0.71), 9 better and 7 worse: not worse. The guard posts at the outlying extractors stood without a guard
+    in 9-10% of the minutes 8-20 against FAF (50-56% before) and in 53% against M28 (96% before). Landed as batch 156
+    (2026-11-12). It is the first half of Chris's line of 2026-11-06 (hold back when losing, then come back out, where
+    M28 only sits); whether a fight is worth coming out for is still the army's own estimate (36).
+
+38. **Never in an ally's base (Chris, 2026-11-04, goal 31; built 2026-11-10).** The rule had no code. An ally's base
+    is the zones within 150 of land travel of its start that are nearer to its start than to ours; their mass points
+    are left out of our list, so no engineer of ours is sent there. In the all-AI 4v4 on SETONS_R one army held an
+    extractor in an ally's base from minute 5 to 20 before; none now, with the same extractors in all (112 / 119 / 106
+    / 104 against 114 / 117 / 107 / 105 at minutes 5 / 10 / 15 / 20). With no ally nothing changes: a 1v1 duel is
+    identical beat for beat. Still open: the other build sites (power, factories, defences) and the reclaim trips
+    do not yet ask whose base a zone is. Landed as batch 147 (2026-11-11).
+
+39. **How the extractors are kept alive (Chris, 2026-11-11).** His words, after the raid bench below: "for mass
+    extractors not every single one must be protected at all cost I think early on a basic level of defense is good
+    enough but establishing map control, navy, air, land and pushing in and keeping a strong deterrent force for each
+    unit type is better at keeping those mexes alive vs building defenses around them though you still can just
+    early on it shouldn't be the focus and a few turrets throughout should be more than enough since a big army of t1
+    + t2 navy patroling stops air attacks and navy from taking out mexes while a small air force at key choke points
+    and undefended areas by navy helps cover those." So the goal is: (1) early, a basic level only - a few turrets,
+    spread, cheap, never one per extractor and never the focus; (2) the main answer is active - map control and
+    pushing in, with a deterrent force kept in each domain (land, navy, air); (3) a patrolling T1 + T2 navy covers
+    the extractors in its reach against air and naval raids; (4) a small air force stands at key choke points and
+    over what the navy does not cover. Candidates are judged against this as well as by the scoreboard: a change
+    that wins by turrets everywhere is against the design (the goals stay adjustable when games show a better way,
+    with the reason written here).
+
+40. **What a raid costs and what stops it (the raid bench, 2026-11-10).** A scripted bench without AI or fog: three
+    T2 extractors (2,700 mass) of ours, Seraphim T1 tanks walking in from 134 away. Undefended, 6 tanks kill all
+    three in 90 seconds. One T1 point defence (275 mass) at the group stops 12 tanks with no extractor lost, one T2
+    point defence stops 24. T1 artillery standing at the extractors holds too: at 1.5 times the raiders' mass it
+    loses 0-4% of the extractors, at 0.8 times 8-33%; our T1 tanks are the worst guard (a third lost at 1.5 times).
+    So what the games lose (16k mass of extractors by minute 20 against FAF, two thirds of it 150-300 from the
+    start) is lost where nothing of ours stands in time, not because our units cannot hold: the answer is where the
+    army stands and how early it exists (39's main line), and a single turret pays only at the few richest groups.
+
+41. **Tried on 2026-11-10 / 11 for "hold what we own"; each on hb3 (37), paired by seed against it.** First on the
+    base before the engine's batch 144 (8 seeds a set, the first 21 minutes; extractor mass saved by minute 20 a
+    game): (a) *the early army on the pros' curve* (aicore3's form of 2026-11-06, then "not proven" on M28 minutes;
+    the pros' replays open with tanks and engineers from the first factory, 4,230 mass of army at minute 10 where
+    ours had 1,100-1,600): army at minute 10 3,700-4,500, extractors saved 6.7k against FAF veteran (p 0.008), 3.4k
+    against FAF rush, 9.8k against M28 (p 0.02), five FAF games won before minute 21, but two of eight commanders
+    dead before minute 21 against M28. (b) *A few turrets* (the defence's class is the raid's - point defence for a
+    land raid, anti-air where aircraft hit our structures, the base too - one defence at a raided or rich zone, at
+    most four of a class on the map): 1.8k saved against FAF veteran, 4.9k against M28, nothing against FAF rush;
+    within the noise. (c) *Every raided zone gets its detachment* (not only the first the defence can hold): 2.4k
+    and 1.7k saved against FAF, 1.8k more lost against M28; within the noise. (d) *The defence by what attacks the
+    place without a cap* (up to three defences at every raided zone): our income at minute 20 fell by 64 against
+    FAF rush (p 0.008) and four of eight commanders died before minute 21 against M28. Dropped: the mass went into
+    turrets, which is also what 39 speaks against.
+    Again on main 3f942bb3 (after the engine's batch 144, which changed every AI game), 16 seeds a set, each
+    candidate's first 21 minutes against hb3's full games cut there (tools/board.py --to 21): (a) the early army:
+    extractor mass saved by minute 20 6.6k against M28 (p 0.002), 4.6k against FAF veteran (p 0.002), 6.2k against FAF
+    rush (p 0.005); the army at minute 10 3,950-4,840 mass against 970-1,280; 6 FAF games won before minute 21, and
+    against M28 no commander lost before it (hb3: 2 of 16); the price: our income at minute 10 lower (98-127 against
+    121-132; it is back ahead by minute 20, +37 to +52, p 0.06-0.13) and more T1 bombers lost against M28 by minute 20
+    (29 against 16). It serves 39's main line (an army that holds the map early) and the pros' openings (tanks from
+    the first factory), and goes on to full games (16 seeds x 3) before any verdict. (b) a few turrets: 2.5k saved
+    against FAF rush (p 0.03), nothing against FAF veteran or M28. (c) a detachment for every raided zone: mixed -
+    against FAF rush 4.4k saved and income at minute 20 +37 (p 0.004 / 0.009), income +37 against FAF veteran
+    (p 0.03), but 3.6k more lost against M28 (p 0.08). (e) the free army stands in the middle of the economy it
+    protects (39's map control, first land form): no effect (2.6k more lost against M28, p 0.12; FAF within 0.5k). (f)
+    the navy patrols the coastal water zones beside our economy (39's navy line, first form): no effect (all within
+    1.2k, p 0.19 or more). (g) the interceptors go where enemy aircraft last hit our structures (39's air line, first
+    form): no effect (1.6k more lost against FAF veteran, p 0.025; FAF rush +0.1k; 16 full games against M28: score
+    +0.7, p 0.36, extractors 0.2k more lost, p 0.89). (e)-(g) are first forms of Chris's land, navy and air lines that
+    moved nothing yet; the lines stay the direction.
+
+42. **The early army landed; the bombers' rule did not (2026-11-13; full games of 41's (a), and of one more).**
+    *The early army on the pros' curve* (41 (a)) in full games on main 3f942bb3, 16 seeds a set, paired by seed
+    against 37's build (tools/board.py --games hb3w ea8w): against FAF's veteran AI 12 wins of 16 against 9, score
+    +12.1 (p 0.136), 12 seeds better and 4 worse, extractor mass saved by minute 20 4.6k a game (p 0.002), the
+    games shorter (33 minutes against 43) and the trade better (mass lost per mass killed 0.60 against 1.12);
+    against FAF's rush AI 12 of 16 against 11, +12.6 (p 0.005), 13 better and 3 worse, 6.2k saved (p 0.005), 23
+    minutes a game against 38; against M28 no win either way (0 of 16), +1.7 (p 0.276), 9 better and 7 worse, 6.6k
+    saved (p 0.002): not worse. The army at minute 10 is 3,950-4,840 mass against 970-1,280. The price is as in the
+    screens: income at minute 10 lower (98-127 against 121-132), ahead again by minute 20 (+37 to +52, p 0.06-0.13);
+    against M28 more T1 bombers are lost (30 a game against 17). By the kept rule (better beyond the noise against
+    FAF, not worse against M28) it landed as batch 161 (2026-11-13). With 37, our AI now wins 24 of these 32 games
+    against FAF's two AIs where the build before 37 won 7; against M28 it has still won none of 16, and that is
+    where the next candidates are aimed (Chris's lines of 2026-11-06: combined arms, a retreat and a return as one
+    group; 39's deterrent forces).
+    *No T1 bombers against ships that shoot at aircraft* (the bombers died there after minute 15: 58-60 lost a game
+    against FAF, 5.2-5.4k mass): with the rule our AI in effect has no T1 bombers (none lost, none at minute 20); the
+    games are not better: against FAF's rush AI score -2.5 (p 0.054), 11 seeds worse and 4 better, 0.6k more
+    extractor mass lost (p 0.015); against FAF's veteran AI -1.4 (p 0.79), 7 and 7; against M28 +1.3 (p 0.11), 10
+    better and 4 worse, no win. Not taken: the games say the bombers that die over ships are not a plain loss, and
+    what to do with that mass instead is a question for the combined-arms candidates, not for a ban.
