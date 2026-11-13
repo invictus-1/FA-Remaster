@@ -63,6 +63,7 @@ struct PlacedUnit {
 struct ReclaimEntry {
   uint32_t id = 0, seq = 0, name = 0;  // entity id, the props' order, the blueprint (ReclaimSnapshot::names)
   float x = 0, y = 0, z = 0, sx = 0, sz = 0;
+  uint32_t armies = 0xffffffffu;  // the armies that had seen it (PropSeenBy; every army unless a tracked wreck)
 };
 using Cell = std::vector<ReclaimEntry>;
 // The cells in blocks of 8 x 8: an Update copies the block list (some hundred pointers) and the blocks it changes, not
@@ -492,7 +493,10 @@ std::shared_ptr<const ReclaimSnapshot> SyncSnapshots::Builder::Reclaim(Sim& sim,
     const int cx = std::clamp(static_cast<int>(at[0]) >> 3, 0, gw - 1);
     const int cz = std::clamp(static_cast<int>(at[2]) >> 3, 0, gh - 1);
     const int cell = cz * gw + cx;
-    if (p->snapIn && p->snapCell == cell && std::memcmp(at, p->snapAt, sizeof at) == 0) return true;
+    // (Sim::collectPropsSeen: the set of the armies that have seen it; PropsSeenBeat notes a prop whose set grew)
+    const uint32_t armies = sim.collectPropsSeen ? PropSeenBy(sim, p->id) : 0xffffffffu;
+    if (p->snapIn && p->snapCell == cell && std::memcmp(at, p->snapAt, sizeof at) == 0 && p->snapArmies == armies)
+      return true;
     if (p->snapIn) OpsAt(p->snapCell).remove.push_back(p->id);
     else ++liveIn;
     ReclaimEntry e;
@@ -506,10 +510,12 @@ std::shared_ptr<const ReclaimSnapshot> SyncSnapshots::Builder::Reclaim(Sim& sim,
     }
     e.name = it->second;
     e.x = at[0], e.y = at[1], e.z = at[2], e.sx = at[3], e.sz = at[4];
+    e.armies = armies;
     OpsAt(cell).add.push_back(e);
     p->snapIn = true;
     p->snapCell = cell;
     std::memcpy(p->snapAt, at, sizeof at);
+    p->snapArmies = armies;
     any = true;
     return false;
   };
@@ -687,7 +693,8 @@ bool BuildSiteOf(const PlacementSnapshot& snap, const PlacementQuery& q, float s
 }
 uint32_t SnapshotTick(const PlacementSnapshot& snap) { return snap.tick; }
 
-bool ReclaimableAt(const ReclaimSnapshot& snap, const float at[3], float within, ReclaimableView* out) {
+bool ReclaimableAt(const ReclaimSnapshot& snap, const float at[3], float within, ReclaimableView* out,
+                   uint32_t armyMask) {
   SimFpScope fp;
   if (!snap.table) return false;
   const CellTable& t = *snap.table;
@@ -710,6 +717,7 @@ bool ReclaimableAt(const ReclaimSnapshot& snap, const float at[3], float within,
       if (!c) continue;
       const int cell16 = (cz >> 1) * gw16 + (cx >> 1);
       for (const ReclaimEntry& p : *c) {
+        if (armyMask && !(p.armies & armyMask)) continue;  // (a wreck none of the mask's armies had seen)
         const float sx = p.sx, sz = p.sz;
         const float dx = std::fabs(at[0] - p.x), dz = std::fabs(at[2] - p.z);
         const float ex = std::max(0.0f, dx - sx * 0.5f), ez = std::max(0.0f, dz - sz * 0.5f);

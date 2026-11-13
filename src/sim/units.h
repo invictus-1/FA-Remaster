@@ -531,6 +531,7 @@ class Prop : public Entity {
   uint32_t snapSeq = 0;
   int snapCell = -1;
   float snapAt[5] = {0, 0, 0, 0, 0};  // x, y, z, box x, box z
+  uint32_t snapArmies = 0xffffffffu;  // the armies its entry says have seen it (Sim::collectPropsSeen; PropSeenBy)
 };
 
 class ShieldEntity : public Entity {

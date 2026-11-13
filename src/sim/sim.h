@@ -362,8 +362,40 @@ class Sim {
   // an engine event is deleted: the threads still waiting on it die with it (ThreadScheduler::KillWaitersOn)
   void KillEventWaiters(const ScriptObject* o);
   // PropEvents (sim/sim_view.h): while set, every prop that goes is noted (its id, its place in the map file)
+  // (PropsSeen below: see collectPropsSeen)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;
+  // Which armies have seen each wreck (sim/sim_view.h PropSeenBy, PropsSeen, ReclaimableAt's armyMask; the option
+  // "wrecks appear only once seen"). Set collectPropsSeen before the first beat (before Start or between Start and
+  // the first Tick); off, nothing below is touched. While set, the end of every Tick and PausedBeat (after the Sync,
+  // before the sync point's copies) runs PropsSeenBeat on the thread that runs the beat: the wrecks made in the beats
+  // since the last one join the table with no army, then every wreck not yet seen by every army is tested at its
+  // place against each army's vision (ArmiesSeeingPoints: ReconAt's seen bit, allies' vision counting as the
+  // army's own at that beat), and the bits found are added (a bit once set stays). View-side only: these members are
+  // no part of the simulation's state (not saved, not in the state hash, the fingerprint or the replay), nothing in
+  // the simulation reads them, and the reads make nothing in the Lua state.
+  bool collectPropsSeen = false;
+  struct PropsSeenState {
+    bool wreckBpsRead = false;
+    std::unordered_map<const BlueprintInfo*, bool> wreckBps;  // the prop blueprints a unit blueprint's Wreckage.Blueprint names
+    std::vector<uint32_t> made;  // the handles of the props made during beats since the last PropsSeenBeat
+    std::unordered_map<uint32_t, uint32_t> armies;  // wreck id -> the armies that have seen it (bit army - 1)
+    struct Work {
+      uint32_t handle = 0, id = 0, armies = 0;  // (armies: as in the table)
+    };
+    std::vector<Work> work;  // the wrecks not yet seen by every army, in the order made
+    std::vector<PropSeenView> events;  // PropsSeen's list (one entry per wreck: made, or its set grew), until taken
+    std::unordered_map<uint32_t, size_t> eventAt;  // wreck id -> its entry in events
+    // what it costs (measurements): PropsSeenBeat's last, longest and total time (the check of =2 left out), the
+    // beats, the wrecks tested
+    double lastMs = 0, maxMs = 0, totalMs = 0;
+    double madeMs = 0, gatherMs = 0, batchMs = 0;  // (of totalMs: the made props, the wrecks' places, the vision test)
+    uint64_t beats = 0, tested = 0, madeSeen = 0;  // (madeSeen: the props made during beats looked at)
+    // (MOHO64_DEBUG_PROPSSEEN=2, app/main.cpp: every point's answer against ReconAt army by army)
+    bool verify = false;
+    uint64_t verified = 0, mismatches = 0;
+  } propsSeen;
+  void PropsSeenBeat();  // (sim/sim_view.cpp)
   // The sync point's copies for an interface (sim/sim_snapshot.h): while set, the end of Start, of every Tick and of
   // every PausedBeat (after the Sync) brings snapshots() up to date, on the thread that runs the beat. snapshots()
   // is made with the Sim and never moves: a host may keep its address and read it from any thread at any time. The

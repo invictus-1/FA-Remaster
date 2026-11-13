@@ -2092,7 +2092,6 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   RevertCollisionShape(L, p);
   props.push_back(p);
   propGridDirty_ = true;
-  NotePropTouched(p);  // (the sync point's reclaim copy)
   bps_.PushTable(L, bp);
   int bpIdx = lua_gettop(L);
   PushPath(L, bpIdx, "Defense", "MaxHealth");
@@ -2111,6 +2110,10 @@ Prop* Sim::CreateProp(lua_State* L, const BlueprintInfo& bp, Vec3 pos, Quat q, V
   p->ownedSlot = static_cast<uint32_t>(owned_.size());
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
+  // (the sync point's reclaim copy; after RegisterEntity: the note is the prop's handle, which is 0 before it, so a
+  // new prop reached the copy only through its rolling window, up to 256 beats late)
+  NotePropTouched(p);
+  if (collectPropsSeen && beatStarted_) propsSeen.made.push_back(p->handle);  // (view-side: sim/sim_view.h PropsSeen)
   lua_settop(L, top);
   CallMethod(L, p, "OnCreate", 0);
   // Prop::Prop, after OnCreate (0x6f9f1f..0x6f9fde): a prop whose blueprint gives reclaim (Economy.ReclaimMassMax or

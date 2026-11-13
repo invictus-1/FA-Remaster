@@ -1,8 +1,11 @@
 #include "sim/sim_view.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+
+#include "core/log.h"
 
 #include "sim/ai_brain.h"
 #include "sim/blueprints.h"
@@ -285,6 +288,180 @@ void PropEvents(Sim& sim, std::vector<PropEvent>* out) {
     p->viewScale[3] = p->drawScale;
     p->viewMesh = p->mesh;
   }
+}
+
+// ---- the wrecks' seen sets (Sim::collectPropsSeen) ------------------------------------------------------------------
+
+namespace {
+
+// The map's own wrecks are made up to this game tick: FAF's ScenarioUtilities makes a map's WRECKAGE groups in the
+// setup (CreateWreckageUnit -> unit:CreateWreckageProp(0), then unit:Destroy()), and for a unit with a death
+// animation in a thread (AnimateDeathThread: the animation set to its end, WaitFor, then the wreck), a beat or two
+// later (seen by the renderer: beats 0 and 2). The engine cannot tell that path from a dying unit's (the same
+// Unit:CreateWreckageProp, the same CreateProp). No unit can leave a wreck of its own by tick 10: the only units then
+// are the start's (commanders warping in, the map's civilians), nothing has been built to the half a wreck needs,
+// and no weapon has killed anything; only a player's self-destruct in the first second would be counted as the map's.
+constexpr uint32_t kMapWreckTicks = 10;
+
+// The prop blueprints that some unit blueprint names as its Wreckage.Blueprint, read once from the sim state's
+// blueprint tables. Only lua_next / lua_rawgeti / lua_type / lua_tostring of strings and lua_settop: nothing is made
+// in the Lua state, no string, no table, and the collector is never asked (lapi.c: none of them calls luaC_checkGC
+// on these values), so the game's Lua runs on exactly as without it.
+void ReadWreckBlueprints(Sim& sim) {
+  Sim::PropsSeenState& s = sim.propsSeen;
+  s.wreckBpsRead = true;
+  lua_State* L = sim.L();
+  if (!L) return;
+  const SimBlueprints& bps = sim.blueprints();
+  const int top = lua_gettop(L);
+  for (int i = 0; i < bps.EntityCount(); ++i) {
+    const BlueprintInfo* bp = bps.ByEntityIndex(i);
+    if (!bp || bp->kind != BpKind::Unit) continue;
+    bps.PushTable(L, *bp);
+    if (lua_type(L, -1) == LUA_TTABLE) {
+      const int t = lua_gettop(L);
+      lua_pushnil(L);
+      while (lua_next(L, t)) {
+        if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) == LUA_TTABLE && std::strcmp(lua_tostring(L, -2), "Wreckage") == 0) {
+          const int w = lua_gettop(L);
+          lua_pushnil(L);
+          while (lua_next(L, w)) {
+            if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) == LUA_TSTRING &&
+                std::strcmp(lua_tostring(L, -2), "Blueprint") == 0)
+              if (const BlueprintInfo* wb = bps.Find(lua_tostring(L, -1)))
+                if (wb->kind == BpKind::Prop) s.wreckBps[wb] = true;
+            lua_pop(L, 1);
+          }
+        }
+        lua_pop(L, 1);
+      }
+    }
+    lua_settop(L, top);
+  }
+}
+
+uint32_t AllArmiesMask(const Sim& sim) {
+  const size_t n = std::min<size_t>(sim.armies().size(), 32);
+  return n >= 32 ? 0xffffffffu : (1u << n) - 1u;
+}
+
+}  // namespace
+
+void Sim::PropsSeenBeat() {
+  PropsSeenState& s = propsSeen;
+  const auto t0 = std::chrono::steady_clock::now();
+  double checkMs = 0;
+  if (!s.wreckBpsRead) ReadWreckBlueprints(*this);
+  const bool fog = FogOfWarOn(*this);
+  // the props made since the last beat's end: the wrecks join the table with no army, and the work list
+  const size_t firstNew = s.work.size();
+  s.madeSeen += s.made.size();
+  for (uint32_t h : s.made) {
+    Entity* e = FindEntity(h);
+    if (!fog || !e || e->kind != Entity::Kind::Prop || e->destroyQueued || !e->blueprint) continue;
+    if (tick_ <= kMapWreckTicks) continue;  // (the map's own wreck fields)
+    if (s.wreckBps.find(e->blueprint) == s.wreckBps.end()) continue;
+    s.armies[e->id] = 0;
+    s.work.push_back(PropsSeenState::Work{h, e->id, 0});
+  }
+  s.made.clear();
+  const auto t1 = std::chrono::steady_clock::now();
+  // every wreck not yet seen by all: its place against each army's vision now (a wreck gone has left the table with
+  // its destroy pass, and leaves the list here; one destroy-queued goes at the next pass and is not tested)
+  const uint32_t all = AllArmiesMask(*this);
+  std::vector<Vec3> pts;
+  std::vector<size_t> at;  // (each point's work entry)
+  std::vector<uint32_t> known;  // (each point's set so far: those armies are not asked again)
+  pts.reserve(s.work.size());
+  at.reserve(s.work.size());
+  known.reserve(s.work.size());
+  size_t keep = 0, newFrom = s.work.size();
+  for (size_t i = 0; i < s.work.size(); ++i) {
+    if (i == firstNew) newFrom = keep;
+    Entity* e = FindEntity(s.work[i].handle);
+    if (!e || e->kind != Entity::Kind::Prop) continue;
+    s.work[keep] = s.work[i];
+    if (!e->destroyQueued) {
+      at.push_back(keep);
+      pts.push_back(e->position);
+      known.push_back(s.work[i].armies);
+    }
+    ++keep;
+  }
+  if (newFrom > keep) newFrom = keep;
+  s.work.resize(keep);
+  const auto t2 = std::chrono::steady_clock::now();
+  std::vector<uint32_t> seen;
+  ArmiesSeeingPoints(*this, pts, &seen, &known);
+  s.tested += pts.size();
+  const auto t3 = std::chrono::steady_clock::now();
+  s.madeMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+  s.gatherMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+  s.batchMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
+  if (s.verify) {  // (MOHO64_DEBUG_PROPSSEEN=2: each answer against ReconAt army by army; its time is not counted)
+    const auto c0 = std::chrono::steady_clock::now();
+    const int n = static_cast<int>(std::min<size_t>(armies().size(), 32));
+    for (size_t i = 0; i < pts.size(); ++i) {
+      uint32_t r = 0;
+      for (int a = 0; a < n; ++a)
+        if (ReconAtPoint(*this, a, pts[i], 0) & 8) r |= 1u << a;
+      ++s.verified;
+      if ((r & ~known[i]) != (seen[i] & ~known[i]) && s.mismatches++ < 20)  // (the armies asked)
+        Logf(LogLevel::Info, "propsseen: tick %u: wreck %#x at %.2f %.2f (known %#x): batch %#x, ReconAt %#x", tick_,
+             s.work[at[i]].id, pts[i].x, pts[i].z, known[i], seen[i], r);
+    }
+    checkMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
+  }
+  // the sets grow; PropsSeen's list gets every wreck whose set grew and every wreck made since the last beat
+  auto listIt = [&](uint32_t id, uint32_t armies) {
+    auto it = s.eventAt.find(id);
+    if (it != s.eventAt.end()) s.events[it->second].armies = armies;
+    else {
+      s.eventAt.emplace(id, s.events.size());
+      s.events.push_back(PropSeenView{id, armies});
+    }
+  };
+  bool anyDone = false;
+  for (size_t i = 0; i < pts.size(); ++i) {
+    PropsSeenState::Work& w = s.work[at[i]];
+    const uint32_t now = w.armies | (seen[i] & all);
+    if (now == w.armies) continue;
+    w.armies = now;
+    s.armies[w.id] = now;
+    NotePropTouched(FindEntity(w.handle));  // (the sync point's reclaim copy holds the set: a grown set is a touch)
+    if (now == all) anyDone = true;
+    if (at[i] < newFrom) listIt(w.id, now);
+  }
+  for (size_t k = newFrom; k < s.work.size(); ++k) {  // the new ones, grown or not (the copy too: from this beat on)
+    listIt(s.work[k].id, s.work[k].armies);
+    NotePropTouched(FindEntity(s.work[k].handle));
+  }
+  if (anyDone) {  // seen by every army: out of the work list (its set stays in the table)
+    size_t k = 0;
+    for (const PropsSeenState::Work& w : s.work)
+      if (w.armies != all) s.work[k++] = w;
+    s.work.resize(k);
+  }
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() - checkMs;
+  s.lastMs = ms;
+  s.maxMs = std::max(s.maxMs, ms);
+  s.totalMs += ms;
+  ++s.beats;
+}
+
+uint32_t PropSeenBy(const Sim& sim, uint32_t propId) {
+  if (!sim.collectPropsSeen) return 0xffffffffu;
+  auto it = sim.propsSeen.armies.find(propId);
+  return it == sim.propsSeen.armies.end() ? 0xffffffffu : it->second;
+}
+
+void PropsSeen(Sim& sim, std::vector<PropSeenView>* out) {
+  out->clear();
+  Sim::PropsSeenState& s = sim.propsSeen;
+  for (const PropSeenView& v : s.events)
+    if (s.armies.find(v.id) != s.armies.end()) out->push_back(v);  // (a wreck gone since: left out)
+  s.events.clear();
+  s.eventAt.clear();
 }
 
 namespace {
@@ -694,7 +871,7 @@ bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], flo
   return true;
 }
 
-bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out) {
+bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out, uint32_t armyMask) {
   lua_State* L = sim.L();
   const float reach = (within > 0 ? within : 0.0f) + 16.0f;  // (no prop's box is wider than that)
   Prop* best = nullptr;
@@ -703,6 +880,7 @@ bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* o
     if (p->destroyQueued || !p->blueprint || !p->HasLuaObject()) return;
     // (the blueprint's RECLAIMABLE and size as CopyToSim read them: no sim Lua per prop, ui request 27)
     if (!p->blueprint->reclaimable) return;
+    if (armyMask && !(PropSeenBy(sim, p->id) & armyMask)) return;  // (a wreck none of the mask's armies has seen)
     const float sx = p->blueprint->sizeX * p->scale[0];
     const float sz = p->blueprint->sizeZ * p->scale[2];
     const float dx = std::fabs(at[0] - p->position.x), dz = std::fabs(at[2] - p->position.z);

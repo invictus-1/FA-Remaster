@@ -5,6 +5,68 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-13 15:46, ui request 61 and render request 77: which armies have seen a wreck, for "wrecks appear only once seen" (batch 162)
+
+View-side only: the switch changes nothing of the simulation (its state, hash, fingerprint, replay, Lua); with it
+off no path changes. Everything is in `sim/sim_view.h` (and `sim/sim_snapshot.h` for the snapshot call).
+
+**Switch.** `sim.collectPropsSeen = true;` before the first beat (before `Start`, or between `Start` and the first
+`Tick`). Armies are bits `1u << (army - 1)` (army 1-based; 16 at most).
+
+**What counts as a wreck.** A prop made during the game (after game tick 10) whose blueprint some unit blueprint
+names as its `Wreckage.Blueprint` (read once from the blueprints: the stock
+`/props/defaultwreckage/defaultwreckage_prop.bp`, the walls' `/env/wreckage/props/walls/ueb5101_prop.bp`, and any a
+mod's unit names). The test is the blueprint, not the mesh (a burnt tree's `_mesh_wreck` is no wreck). Map props,
+props made by the setup, the map's own wreck fields (FAF's ScenarioUtilities makes them in the setup and, for units
+with a death animation, a beat or two later: all by tick 10), trees (also the thousands of single trees a group
+breaks into) and every other prop are not tracked: they count as seen by every army. Without fog of war
+(`FogOfWar = 'none'`) nothing is tracked.
+
+**When a bit is set.** At the end of every beat (the beat of the wreck's making included), every wreck not yet seen
+by every army is tested at its position: army A's bit is set when `ReconAt(sim, A, position, 0) & kReconSeenNow`
+(vision only, not radar / sonar / omni; allies' vision counts as A's own at that beat, exactly as ReconAt). A bit
+once set stays. (An AIx army that sees the whole map for a beat near the start gets the bits of whatever wrecks
+exist then: that is what it saw.)
+
+**Calls.**
+- `uint32_t PropSeenBy(const Sim&, uint32_t propId)`: the armies that have seen it; `0xffffffff` (everyone) for
+  anything that is not a tracked wreck (map prop, tree, other prop, an id that is no prop, a wreck gone) and while the
+  switch is off.
+- `bool ReclaimableAt(Sim&, const float at[3], float within, ReclaimableView* out, uint32_t armyMask = 0)` and
+  `bool ReclaimableAt(const ReclaimSnapshot&, const float at[3], float within, ReclaimableView* out, uint32_t armyMask = 0)`:
+  `armyMask` 0 = as before; otherwise a prop none of the mask's armies has seen is passed over (the interface passes
+  its focus army's bit, or its allies' bits). The snapshot holds each prop's set as at its sync point (a grown set is
+  copied in the same beat's update).
+- For the renderer, beside `PropEvents`: `struct PropSeenView { uint32_t id; uint32_t armies; };`
+  `void PropsSeen(Sim&, std::vector<PropSeenView>*)`: take it once a beat, after PropEvents. One entry per wreck whose
+  set grew since the last call, with its whole set now. **Every tracked wreck has an entry in the beat of its making,
+  in the same beat as its PropEvents Create, also when its set is still empty (armies 0)**: so a Create with no entry
+  in the same beat is not a wreck and is drawn as before; a Create with an entry whose set lacks the focus army is held
+  back until a later entry adds that army's bit. Entries of wrecks gone before they were taken are left out.
+
+**Cost.** Measured on the beat's thread (MOHO64_DEBUG_PROPSSEEN=1): MP1 (4v4 + 2 civilian armies, 10 armies, ~600
+wrecks to test late) 0.08 ms a beat, 0.038 ms on average over the game; MP2 0.05 ms (490 wrecks, 4 armies). 5,000
+wrecks that no army has seen yet, 10 armies (the AIx session on SETONS_R): 0.66-0.71 ms a beat (places 0.14, vision
+0.53-0.56); 3,100 in MP1: 0.36 ms. The first beat also reads the unit blueprints once (up to 4 ms). Only wrecks not yet
+seen by every army are tested, and for each only the armies that have not seen it (and their allies' grids) are
+asked. Note: a civilian army that never looks keeps its wrecks on the test list; the sets stay exact for every army.
+
+**Interface's snapshot.** The reclaim copy holds each prop's set; a grown set is copied in the same beat's update, so
+`ReclaimableAt(*snap, at, within, &prop, focusMask)` answers as the live call with the same mask (checked: 0 of
+4.5 million lookups differ, 3.3 million of them with a mask).
+
+**Also in batch 162.** `Sim::CreateProp` now notes a new prop for the reclaim copy after it is registered (the note
+is the prop's handle, which was 0 before): until now a prop made during a game reached the interface's reclaim
+copy only through its rolling window, up to 256 beats late; it is there in the beat of its making now.
+
+## 2026-11-13 15:46, ui request 62: third_party/lua/lgcinc.c compiles for Linux and macOS (batch 162)
+
+`nowus` (the MOHO64_GC_PHASES statistics clock) used `timespec_get`, which glibc does not declare under
+`-std=c99`. Off Windows the file now defines `_POSIX_C_SOURCE 199309L` before its includes and reads
+`clock_gettime(CLOCK_MONOTONIC)`; on Windows nothing changes. Checked: the file compiles with
+`zig cc -target x86_64-linux-gnu -std=c99` and `-target aarch64-macos`.
+
+
 ## 2026-11-10 15:38, ui request 60: IsOverchargePaused and IsStunned for the interface (batch 135, ddfe8536)
 
 `UnitStateView` (sim/sim_view.h, beside paused / repeatQueue / autoMode) has two more booleans:

@@ -546,6 +546,29 @@ void VisionCasters(const Sim& sim, std::vector<VisionCasterView>* out);
 // Sim::collectProps set from before the first beat. (It compares every prop with what was last told: measured
 // 0.066 ms a beat with 6,200 props in a small fight, 0.46 ms with 14,000 props and 200 changes a beat.)
 void PropEvents(Sim& sim, std::vector<PropEvent>* out);
+// Which armies have seen a wreck (the option "wrecks appear only once seen"): set Sim::collectPropsSeen before the
+// first beat. Bit army - 1 (army 1-based, 16 at most). A wreck is a prop made during the game (not by the map's
+// setup) whose blueprint some unit blueprint names as its Wreckage.Blueprint (every unit's wreck: FAF's
+// Unit:CreateWreckageProp makes it with CreateProp(pos, bp.Wreckage.Blueprint); the stock
+// /props/DefaultWreckage/DefaultWreckage_prop.bp, the walls' /env/Wreckage/props/Walls/UEB5101_prop.bp and any a
+// mod's unit names), made after game tick 10 (the map's own wreck fields, which FAF's ScenarioUtilities makes from
+// the map's WRECKAGE groups during the setup and, for a unit with a death animation, a beat or two later, belong to
+// the map). An army's bit is set at the end of the first beat (that of its making included) at whose end its vision
+// sees the wreck's place: ReconAt(army, position, 0)'s seen bit, its allies' vision counting as its own at that
+// beat. A bit once set stays. Without fog of war (FogOfWar 'none') nothing is tracked.
+// PropSeenBy: the armies that have seen it; 0xffffffff (every army) for anything that is not a tracked wreck (a map
+// prop, a tree, any other prop, an id that is no prop, a wreck gone) and while collectPropsSeen is not set.
+uint32_t PropSeenBy(const Sim& sim, uint32_t propId);
+// For a host that draws: the wrecks whose set grew since the last call, each once with its whole set now. A wreck is
+// listed in the beat of its making, with the set it has at that beat's end, also when that set is empty (0): a
+// prop whose Create event (PropEvents) has no entry here in the same beat is no tracked wreck and counts as seen by
+// every army. After that it is listed in each beat its set grows. Take it once a beat after PropEvents; entries of
+// wrecks gone before they were taken are left out.
+struct PropSeenView {
+  uint32_t id = 0;      // the prop's entity id
+  uint32_t armies = 0;  // bit army - 1: the armies that have seen it
+};
+void PropsSeen(Sim& sim, std::vector<PropSeenView>* out);
 // One unit's state for the panels (false: no such unit). Not const: the live caps are read through the scripts'
 // state. Ask for the units on screen, not for all of them every beat.
 bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out);
@@ -606,7 +629,8 @@ bool BuildSiteOf(Sim& sim, const std::string& blueprint, const float pos[3], flo
 // one whose centre is nearer. False: none. mass / energy: what is left in it now (the prop script's
 // MaxMassReclaim / MaxEnergyReclaim times its ReclaimLeft; 0 for a prop that holds nothing). Units are not
 // looked at: a unit under the cursor is the host's to find. Not const: the values are read from the scripts'
-// state.
+// state. armyMask (bit army - 1; Sim::collectPropsSeen): 0 = every prop as above; otherwise a prop that none of the
+// mask's armies has seen (PropSeenBy) is passed over.
 struct ReclaimableView {
   uint32_t id = 0xffffffff;       // the prop's entity id (what a Reclaim order names)
   std::string blueprint;          // the prop blueprint's id
@@ -614,7 +638,7 @@ struct ReclaimableView {
   float sizeX = 0, sizeZ = 0;     // the box it was tested with
   float mass = 0, energy = 0;
 };
-bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out);
+bool ReclaimableAt(Sim& sim, const float at[3], float within, ReclaimableView* out, uint32_t armyMask = 0);
 // The effect events since the last call (the list is emptied by it). Call once per beat, after Tick(), with
 // Sim::collectEffects set from before the first beat.
 void EffectEvents(const Sim& sim, std::vector<EffectEvent>* out);

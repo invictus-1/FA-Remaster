@@ -1962,6 +1962,7 @@ void Sim::ProcessDestroyQueue() {
       if (static_cast<Prop*>(e)->occupies) PropOccupancy(*this, static_cast<Prop*>(e), e->position, false);  // ~Prop 0x6fa05a
       if (collectProps) propsGone.emplace_back(e->id, static_cast<Prop*>(e)->mapIndex);
       if (static_cast<Prop*>(e)->snapIn) snapPropsGone.emplace_back(e->id, static_cast<Prop*>(e)->snapCell);
+      if (collectPropsSeen) propsSeen.armies.erase(e->id);  // (view-side: a wreck's seen set goes with it)
       props.erase(std::remove(props.begin(), props.end(), static_cast<Prop*>(e)), props.end());
       propGridDirty_ = true;
     }
@@ -2893,6 +2894,7 @@ void Sim::PausedBeat() {
   UpdateIdPools();
   SyncStep(collectSync);
   frozen = endGame;  // Sync copies sim+0x8dc to sim+0x8dd
+  if (collectPropsSeen) PropsSeenBeat();  // (view-side, reads only: the wrecks' seen sets, sim/sim_view.h PropsSeen)
   if (keepSnapshots) snapshots_->Update(*this);  // (sim/sim_snapshot.h: the sync point's copies, reads only)
 }
 
@@ -3700,6 +3702,10 @@ void Sim::Tick() {
   SyncStep(collectSync);
   singleStep = false;  // step 14 (sim+0x8e4 = 0)
   frozen = endGame;    // Sync copies sim+0x8dc to sim+0x8dd
+  if (collectPropsSeen) {  // (view-side, reads only: the wrecks' seen sets, sim/sim_view.h PropsSeen)
+    MOHO_ZONE("props seen");
+    PropsSeenBeat();
+  }
   if (keepSnapshots) {  // (sim/sim_snapshot.h: the sync point's copies, reads only)
     MOHO_ZONE("sync snapshots");
     snapshots_->Update(*this);

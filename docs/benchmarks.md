@@ -138,6 +138,8 @@ from its build folder, so the script fixes in `data/fixes` were on.
   only the run itself.
 - 6 runs saw a moho64ui at their end and were made again: b50_P8_r1 once, b3_O16_r2 five times.
 - Round 1 (12:47-13:06) was checked at start and end only. Its rows below are a third opinion, marked as such.
+  It also ran beside three GPU bake chains of the visuals chat (Blender, texconv, a viewer shot per unit; they ran
+  12:19-13:27 and then stood idle until 14:16), so rounds 3 and 4 had none of that beside them.
 - Round 2 (13:06-13:39), also checked at start and end only, is left out of the means. A moho64ui came and went between
   the checks (b3_O16_r2), so its runs may have been disturbed unseen. Its numbers are in `runs/t1_table_r345.txt`.
 

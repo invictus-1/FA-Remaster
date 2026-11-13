@@ -44,6 +44,7 @@
 #include "sim/command_stream.h"
 #include "sim/command_writer.h"
 #include "sim/fingerprint.h"
+#include "sim/intel.h"
 #include "sim/lockstep.h"
 #include "sim/moments.h"
 #include "sim/session.h"
@@ -650,6 +651,16 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   // (the live calls read the simulation's Lua: judge the game by a =1 run, not a =2 one).
   const int snapMode = getenv("MOHO64_SNAPSHOTS") ? std::atoi(getenv("MOHO64_SNAPSHOTS")) : 0;
   sim.keepSnapshots = snapMode > 0;
+  // MOHO64_DEBUG_PROPSSEEN=1 (a check, sim/sim_view.h PropsSeen): the wrecks' seen sets kept (Sim::collectPropsSeen)
+  // and taken after every beat as a host does; the log gets every entry ("propsseen: tick T wreck ID made|grew
+  // armies BITS at X Z; ReconAt seen BITS"), the earliest wrecks, and every 600 ticks what the sets cost. The game
+  // must play the same with it as without (view-side only): compare MOHO64_FINGERPRINT of a run with and one
+  // without. =2 also checks every tested wreck's answer against ReconAt army by army, a 16 x 16 grid of points
+  // likewise at the first 300 ticks and every 100th, and that every wreck's first entry comes with its PropEvents
+  // Create in the same beat (PropEvents is taken then too). With MOHO64_SNAPSHOTS=2 the reclaim lookups pass masks.
+  const int propsSeenLog = getenv("MOHO64_DEBUG_PROPSSEEN") ? std::atoi(getenv("MOHO64_DEBUG_PROPSSEEN")) : 0;
+  if (propsSeenLog > 0) sim.collectPropsSeen = true;
+  if (propsSeenLog >= 2) sim.propsSeen.verify = true;
   bool ok = sim.Start(session);
   auto t2 = std::chrono::steady_clock::now();
   Logf(LogLevel::Info, "moho64: sim start-up %s", ok ? "ok" : "FAILED");
@@ -671,6 +682,112 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   sim.collectEffects = o.view;
   sim.collectSounds = o.view;
   sim.collectProps = o.view;
+  // MOHO64_DEBUG_PROPSSEEN (above): what the host side does with the sets after every beat
+  if (propsSeenLog >= 2 && !o.view) sim.collectProps = true;  // (the Create events, for the pairing check)
+  struct PropsSeenCheck {
+    std::set<uint32_t> known;  // the wrecks listed so far
+    size_t made = 0, grew = 0, unpaired = 0, gridPoints = 0, gridMismatches = 0, earliest = 0;
+    uint64_t lastBeats = 0, lastMadeSeen = 0;
+    double lastTotal = 0, lastMade = 0, lastGather = 0, lastBatch = 0;
+  } psc;
+  std::vector<PropSeenView> seenList;
+  std::vector<PropEvent> seenPropEvents;
+  auto takePropsSeen = [&] {
+    if (propsSeenLog <= 0 || !sim.collectPropsSeen) return;
+    std::set<uint32_t> created;
+    if (propsSeenLog >= 2 && !o.view) {
+      PropEvents(sim, &seenPropEvents);
+      for (const PropEvent& ev : seenPropEvents)
+        if (ev.kind == PropEvent::Create) created.insert(ev.id);
+    }
+    // (a prop id is used again after its prop is gone: a wreck no longer tracked leaves the list of those listed, so
+    // that a new wreck under its id is told as made)
+    for (auto it = psc.known.begin(); it != psc.known.end();)
+      it = PropSeenBy(sim, *it) == 0xffffffffu ? psc.known.erase(it) : std::next(it);
+    PropsSeen(sim, &seenList);
+    const int n = static_cast<int>(std::min<size_t>(sim.armies().size(), 32));
+    for (const PropSeenView& v : seenList) {
+      const bool first = psc.known.insert(v.id).second;
+      first ? ++psc.made : ++psc.grew;
+      const Entity* e = sim.FindEntityById(v.id);
+      float at[3] = {0, 0, 0};
+      if (e) at[0] = e->position.x, at[1] = e->position.y, at[2] = e->position.z;
+      uint32_t recon = 0;  // the seen bit of ReconAt, army by army, at its place now
+      for (int a = 1; a <= n; ++a)
+        if (ReconAt(sim, a, at) & kReconSeenNow) recon |= 1u << (a - 1);
+      if (first && propsSeenLog >= 2 && !o.view && !created.count(v.id) && psc.unpaired++ < 20)
+        Logf(LogLevel::Info, "propsseen: tick %u: wreck %#x listed first without a Create event in the same beat", sim.tick(), v.id);
+      if (first && psc.earliest++ < 10)
+        Logf(LogLevel::Info, "propsseen: tick %u: early wreck %#x %s", sim.tick(), v.id,
+             e && e->blueprint ? e->blueprint->id.c_str() : "?");
+      Logf(LogLevel::Info, "propsseen: tick %u wreck %#x %s armies %#x at %.2f %.2f; ReconAt seen %#x", sim.tick(), v.id,
+           first ? "made" : "grew", v.armies, at[0], at[2], recon);
+    }
+    if (propsSeenLog >= 2 && sim.map() && (sim.tick() <= 300 || sim.tick() % 100 == 0)) {
+      // a 16 x 16 grid of points through the same batch as the wrecks, against ReconAt army by army (also the beat an
+      // AIx army sees the whole map)
+      std::vector<Vec3> pts;
+      for (int z = 0; z < 16; ++z)
+        for (int x = 0; x < 16; ++x)
+          pts.push_back(Vec3{(x + 0.5f) * sim.map()->width() / 16.0f, 0, (z + 0.5f) * sim.map()->height() / 16.0f});
+      std::vector<uint32_t> got;
+      ArmiesSeeingPoints(sim, pts, &got);
+      uint32_t orBits = 0, full = 0xffffffffu;
+      for (size_t i = 0; i < pts.size(); ++i) {
+        uint32_t r = 0;
+        const float at[3] = {pts[i].x, pts[i].y, pts[i].z};
+        for (int a = 1; a <= n; ++a)
+          if (ReconAt(sim, a, at) & kReconSeenNow) r |= 1u << (a - 1);
+        ++psc.gridPoints;
+        orBits |= r;
+        full &= r;
+        if (r != got[i] && psc.gridMismatches++ < 20)
+          Logf(LogLevel::Info, "propsseen: tick %u: grid point %.1f %.1f: batch %#x, ReconAt %#x", sim.tick(), pts[i].x,
+               pts[i].z, got[i], r);
+      }
+      if (full) Logf(LogLevel::Info, "propsseen: tick %u: armies %#x see all 256 grid points", sim.tick(), full);
+    }
+    const Sim::PropsSeenState& s = sim.propsSeen;
+    if (sim.tick() % 600 == 0 && s.beats > psc.lastBeats) {
+      const double nb = static_cast<double>(s.beats - psc.lastBeats);
+      Logf(LogLevel::Info, "propsseen: tick %u: %.4f ms a beat since the last line (made props %.4f, places %.4f, vision %.4f; "
+           "%.1f props made a beat), longest %.4f; %zu wrecks to test, %zu in the table, %zu wreck blueprints, %d armies",
+           sim.tick(), (s.totalMs - psc.lastTotal) / nb, (s.madeMs - psc.lastMade) / nb, (s.gatherMs - psc.lastGather) / nb,
+           (s.batchMs - psc.lastBatch) / nb, (s.madeSeen - psc.lastMadeSeen) / nb, s.maxMs, s.work.size(), s.armies.size(),
+           s.wreckBps.size(), n);
+      psc.lastBeats = s.beats;
+      psc.lastTotal = s.totalMs;
+      psc.lastMade = s.madeMs, psc.lastGather = s.gatherMs, psc.lastBatch = s.batchMs, psc.lastMadeSeen = s.madeSeen;
+      // what the test of 5,000 unseen wrecks would cost at this beat with these armies' grids, as PropsSeenBeat does it
+      // (each one's entity looked up by handle and its place read, then the vision batch with no army known): 5,000
+      // distinct props of the map spread over the props' list stand in for the wrecks (their entities lie apart in
+      // memory as wrecks' do), at their own places
+      if (sim.map() && !sim.props.empty()) {
+        std::vector<uint32_t> handles;
+        const size_t np = sim.props.size(), step = std::max<size_t>(1, np / 5000);
+        for (size_t i = 0; i < np && handles.size() < 5000; i += step) handles.push_back(sim.props[i]->handle);
+        std::vector<Vec3> pts;
+        std::vector<uint32_t> none, got;
+        pts.reserve(handles.size());
+        none.reserve(handles.size());
+        const auto b0 = std::chrono::steady_clock::now();
+        for (uint32_t h : handles) {
+          const Entity* e = sim.FindEntity(h);
+          if (!e || e->kind != Entity::Kind::Prop || e->destroyQueued) continue;
+          pts.push_back(e->position);
+          none.push_back(0);
+        }
+        const auto b1 = std::chrono::steady_clock::now();
+        ArmiesSeeingPoints(sim, pts, &got, &none);
+        const auto b2 = std::chrono::steady_clock::now();
+        size_t any = 0;
+        for (uint32_t g : got) any += g != 0;
+        Logf(LogLevel::Info, "propsseen: tick %u: %zu unseen stand-in wrecks: %.4f ms (places %.4f, vision %.4f), %zu seen by some "
+             "army", sim.tick(), pts.size(), std::chrono::duration<double, std::milli>(b2 - b0).count(),
+             std::chrono::duration<double, std::milli>(b1 - b0).count(), std::chrono::duration<double, std::milli>(b2 - b1).count(), any);
+      }
+    }
+  };
   // MOHO64_HITS=1 (render REQUESTS 36): keep the hits, impacts and health changes (Sim::collectHits, collectImpacts,
   // collectHealth) and take them after every beat as a host does; the log gets the counts, the most in one beat, a
   // few samples and what taking them cost. =2 also logs every event. (--view takes them too.) The game must play
@@ -972,6 +1089,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
   if (ok) viewReads(true);
   struct SnapCheck {
     size_t places = 0, placeDiffs = 0, placeYes = 0, reclaims = 0, reclaimDiffs = 0, reclaimFound = 0;
+    size_t masked = 0, maskedFound = 0, maskHid = 0;  // (with MOHO64_DEBUG_PROPSSEEN: lookups with an army mask)
     double liveMs = 0, snapMs = 0;
     std::vector<const BlueprintInfo*> unitBps;
     std::mt19937 rng{20261103u};  // (the check's own: the game's stream is not touched)
@@ -1047,11 +1165,26 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       static const float kWithin[4] = {0.0f, 0.5f, 2.0f, 5.0f};
       const float within = kWithin[sc.rng() % 4];
       const float at[3] = {x, 0, z};
+      // (Sim::collectPropsSeen: three lookups in four pass an army mask, one army's or a random set's, and the
+      // lookup without it is made too, to count what the mask hid; the draws only while the sets are kept)
+      uint32_t mask = 0;
+      if (sim.collectPropsSeen && !sim.armies().empty()) {
+        const uint32_t na = static_cast<uint32_t>(std::min<size_t>(sim.armies().size(), 32));
+        const uint32_t pick = sc.rng() % 4;
+        if (pick == 1 || pick == 2) mask = 1u << (sc.rng() % na);
+        else if (pick == 3) mask = static_cast<uint32_t>(sc.rng()) & (na >= 32 ? 0xffffffffu : (1u << na) - 1u);
+      }
       ReclaimableView a, b;
       const auto t0 = Clock::now();
-      const bool r1 = ReclaimableAt(sim, at, within, &a);
+      const bool r1 = ReclaimableAt(sim, at, within, &a, mask);
       const auto t1 = Clock::now();
-      const bool r2 = ReclaimableAt(*R, at, within, &b);
+      const bool r2 = ReclaimableAt(*R, at, within, &b, mask);
+      if (mask) {
+        ++sc.masked;
+        sc.maskedFound += r1;
+        ReclaimableView c;
+        if (ReclaimableAt(*R, at, within, &c) && (!r2 || c.id != b.id)) ++sc.maskHid;
+      }
       const auto t2 = Clock::now();
       sc.liveMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
       sc.snapMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -1093,6 +1226,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       sim.PausedBeat();
       takeSync();
       takeHits();
+      takePropsSeen();
       ++paused;
       if (fingerprint && !fingerprint->Beat(sim, static_cast<uint32_t>(done + paused))) diverged = true;
       if (net) net->After(sim, static_cast<uint32_t>(done + paused));
@@ -1102,6 +1236,7 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
     sim.Tick();
     takeSync();
     takeHits();
+    takePropsSeen();
     ++done;
     if (beatsDone) beatsDone->store(done, std::memory_order_release);
     MOHO_ZONE_N(afterZone, "host: after the beat");
@@ -1364,6 +1499,21 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
       Logf(LogLevel::Info, "snapshots: %zu placement tests (%zu can build), %zu differ; %zu reclaim lookups (%zu found), %zu "
            "differ; the live calls %.3f ms, the copies' %.3f ms in all", sc.places, sc.placeYes, sc.placeDiffs, sc.reclaims,
            sc.reclaimFound, sc.reclaimDiffs, sc.liveMs, sc.snapMs);
+    if (snapMode >= 2 && sim.collectPropsSeen)
+      Logf(LogLevel::Info, "snapshots: of the reclaim lookups %zu passed an army mask (%zu found); in %zu the mask passed over "
+           "the prop the lookup without it gives", sc.masked, sc.maskedFound, sc.maskHid);
+  }
+  if (propsSeenLog > 0) {
+    const Sim::PropsSeenState& s = sim.propsSeen;
+    Logf(LogLevel::Info, "propsseen: %llu beats, %.4f ms a beat on average, the longest %.3f ms; %llu wreck tests; %zu wrecks "
+         "listed (%zu entries of grown sets); at the end %zu to test, %zu in the table; %zu wreck blueprints",
+         static_cast<unsigned long long>(s.beats), s.beats ? s.totalMs / s.beats : 0.0, s.maxMs,
+         static_cast<unsigned long long>(s.tested), psc.made, psc.grew, s.work.size(), s.armies.size(), s.wreckBps.size());
+    for (const auto& [bp, yes] : s.wreckBps) Logf(LogLevel::Info, "propsseen: wreck blueprint %s", bp->id.c_str());
+    if (propsSeenLog >= 2)
+      Logf(LogLevel::Info, "propsseen: check: %llu wreck answers against ReconAt, %llu differ; %zu grid points, %zu differ; "
+           "%zu wrecks listed first without their Create event", static_cast<unsigned long long>(s.verified),
+           static_cast<unsigned long long>(s.mismatches), psc.gridPoints, psc.gridMismatches, psc.unpaired);
   }
   if (vr.on)
     Logf(LogLevel::Info, "view reads: %zu beats read; a collection ran in the reads of %zu, the heap changed in %zu (%lld bytes)",

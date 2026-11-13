@@ -74,6 +74,17 @@ void ReconGridPoints(const Sim& sim, int a, int w, int h, int water, std::vector
 // ... and of an entity: 0xF for the army's own and its allies', a unit's held recon flags (Unit::recon), the
 // point's answer for anything else.
 uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e);
+// For the wrecks' seen sets (Sim::collectPropsSeen, sim/sim_view.cpp): out[i] = the armies (bit a for army index a,
+// a < 32) for which ReconAtPoint(sim, a, pts[i], 0) has the seen bit 8 now: the same rules on the same floats (the
+// army's and its allies' vision, the army's own vision counter-intel unless omni sees there; 0 outside the map),
+// the allies and the grids taken once per call. Reads only. known (optional, one per point): armies already known to
+// have seen it; they are not asked again (their bits in out may be 0), and only the grids of the others and of
+// their allies are read.
+void ArmiesSeeingPoints(const Sim& sim, const std::vector<Vec3>& pts, std::vector<uint32_t>* out,
+                        const std::vector<uint32_t>* known = nullptr);
+// Whether the session has fog of war (ScenarioInfo.Options.FogOfWar is not 'none'; false before the intel grids
+// are made). Without it ReconAtPoint's seen bit is set for every army everywhere on the map.
+bool FogOfWarOn(const Sim& sim);
 void RegisterIntelBindings(lua_State* L);
 
 }  // namespace moho

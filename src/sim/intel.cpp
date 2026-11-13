@@ -881,6 +881,89 @@ void ReconGridPoints(const Sim& sim, int a, int w, int h, int water, std::vector
       if (pz[z] < 0 || px[x] < 0 || px[x] > m->width() || pz[z] > m->height()) o[z * uw + x] = 0;
 }
 
+// ReconAtPoint(sim, a, p, 0) & 8 for every army a at once, point by point. In ReconAtPoint bit 8 comes from GridsSay of
+// the army and of each ally (vision g[0], or set everywhere without fog or without the grid); CounterIntel then
+// clears it where the army's own vision counter-intel (g[7]) is set, unless the result has omni (bit 4, from any of
+// them: g[4]). (Its early return for f == 0 changes nothing for bit 8: f has bit 8 then.) So per point: v = the
+// armies whose own vision says seen, o = those whose omni grid is set, c = those whose g[7] is set; army a sees it
+// when v meets a's set (a and its allies) and (o meets it or a is not in c).
+void ArmiesSeeingPoints(const Sim& sim, const std::vector<Vec3>& pts, std::vector<uint32_t>* out,
+                        const std::vector<uint32_t>* known) {
+  out->assign(pts.size(), 0);
+  const auto& armies = sim.armies();
+  const std::vector<ArmyIntel>& dbs = IS(sim).armies;
+  const size_t n = std::min<size_t>(std::min(armies.size(), dbs.size()), 32);
+  if (n == 0) return;
+  const size_t all = std::min(armies.size(), dbs.size());
+  if (all > 64) {  // (more armies than a mask holds: never in a game of 16; the plain calls)
+    for (size_t i = 0; i < pts.size(); ++i)
+      for (size_t a = 0; a < n; ++a)
+        if (ReconAtPoint(sim, static_cast<int>(a), pts[i], 0) & 8) (*out)[i] |= 1u << a;
+    return;
+  }
+  // a's set: a and every army j with Relation(j, a) == 2, as ReconAtPoint's loop takes them, at this beat
+  std::vector<uint64_t> sees(n, 0);
+  for (size_t a = 0; a < n; ++a) {
+    sees[a] = uint64_t{1} << a;
+    for (size_t j = 0; j < all; ++j)
+      if (j != a && combat::Relation(armies[j].get(), armies[a].get()) == 2) sees[a] |= uint64_t{1} << j;
+  }
+  const TerrainMap* m = sim.map();
+  const uint64_t everyone = all >= 64 ? ~uint64_t{0} : (uint64_t{1} << all) - 1;
+  uint32_t lastKnown = 0;
+  uint64_t lastNeed = 0;
+  bool needMade = false;
+  for (size_t i = 0; i < pts.size(); ++i) {
+    const Vec3 p = pts[i];
+    if (m && (p.x < 0 || p.z < 0 || p.x > m->width() || p.z > m->height())) continue;  // (0 outside the map)
+    // the armies to ask (not yet known), and the grids that can answer for them: theirs and their allies'
+    const uint32_t kn = known ? (*known)[i] : 0;
+    if (!needMade || kn != lastKnown) {
+      lastNeed = 0;
+      for (size_t a = 0; a < n; ++a)
+        if (!(kn & (1u << a))) lastNeed |= sees[a];
+      lastKnown = kn;
+      needMade = true;
+    }
+    const uint64_t need = lastNeed & everyone;
+    if (!need) continue;
+    uint64_t v = 0;
+    for (uint64_t left = need; left; left &= left - 1) {
+      const size_t j = static_cast<size_t>(__builtin_ctzll(left));
+      const ArmyIntel& d = dbs[j];
+      if (!d.fog || !d.g[0] || d.g[0]->Visible(p)) v |= uint64_t{1} << j;
+    }
+    if (!v) continue;
+    uint64_t o = 0;
+    bool omniRead = false;
+    uint32_t r = 0;
+    for (size_t a = 0; a < n; ++a) {
+      if (kn & (1u << a)) continue;
+      if (!(v & sees[a])) continue;
+      if (!dbs[a].g[7] || !dbs[a].g[7]->Visible(p)) {
+        r |= 1u << a;
+        continue;
+      }
+      if (!omniRead) {  // (the omni grids, once per point, only when an army's counter-intel is set there)
+        omniRead = true;
+        for (uint64_t left = need; left; left &= left - 1) {
+          const size_t j = static_cast<size_t>(__builtin_ctzll(left));
+          if (dbs[j].g[4] && dbs[j].g[4]->Visible(p)) o |= uint64_t{1} << j;
+        }
+      }
+      if (o & sees[a]) r |= 1u << a;
+    }
+    (*out)[i] = r;
+  }
+}
+
+bool FogOfWarOn(const Sim& sim) {
+  const std::vector<ArmyIntel>& dbs = IS(sim).armies;
+  for (const ArmyIntel& d : dbs)
+    if (d.fog) return true;
+  return false;
+}
+
 uint32_t ReconOfEntity(const Sim& sim, int a, const Entity* e) {
   const auto& armies = sim.armies();
   if (!e || a < 0 || static_cast<size_t>(a) >= armies.size() || a >= 16) return 0;

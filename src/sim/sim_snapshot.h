@@ -91,8 +91,10 @@ uint32_t SnapshotTick(const PlacementSnapshot& snap);  // the sim's tick it was 
 // object, not destroy-queued; box = SizeX x SizeZ times the prop's scale; nearest edge within `within`, then nearer
 // centre, then the props' order), from props' current places. out->id, blueprint, position, sizeX / sizeZ as the
 // live call; out->mass and out->energy are -1: not copied (they live in the prop's script table; the live call
-// keeps them).
-bool ReclaimableAt(const ReclaimSnapshot& snap, const float at[3], float within, ReclaimableView* out);
+// keeps them). armyMask: as the live call's (0 = every prop; otherwise a prop none of the mask's armies had seen at
+// the snapshot's sync point is passed over: PropSeenBy as it answered there).
+bool ReclaimableAt(const ReclaimSnapshot& snap, const float at[3], float within, ReclaimableView* out,
+                   uint32_t armyMask = 0);
 uint32_t SnapshotTick(const ReclaimSnapshot& snap);
 
 }  // namespace moho
