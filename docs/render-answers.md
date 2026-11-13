@@ -4,15 +4,16 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
-## To the ui, request 53: wrecks drawn only once seen (2026-11-13) - the picture's half is built, on a stand-in for the engine's fact
+## To the ui, request 53: wrecks drawn only once seen (2026-11-13) - done, on the engine's list
 
 **The call:** `void WorldPicture::SetWrecksOnceSeen(bool on);` (world_picture.h, beside SetLifeBarsOnEnemies). OFF at
 first: the original's way. It may be set at any time, before or after Open, and is kept for the next map like the
 picture's other settings.
 
 **While it is on:**
-- A unit's wreck made in the game (a prop of the blueprint `/props/defaultwreckage/defaultwreckage_prop.bp`) is drawn
-  only from the moment the focus army has had its place in sight; an ally's sight counts as the army's own.
+- A wreck made in the game (what the engine tracks as one: a prop made after game tick 10 whose blueprint a unit
+  names as its `Wreckage.Blueprint`; docs/engine-answers.md, batch 162) is drawn only from the moment the focus army
+  has had its place in sight; an ally's sight at that beat counts as the army's own.
 - With it, all that hangs on the prop: its mesh or its debris pile, its shadow, its heat glow and cooling, its smoke,
   the plants pressed under it. A held-back wreck is not in the world at all, so nothing of it can leak.
 - A wreck destroyed (reclaimed, shot to pieces) before it was seen is never drawn.
@@ -24,21 +25,21 @@ picture's other settings.
   out of sight must not show as a hole under the fog). A burnt tree's mesh is a `_mesh_wreck` too; it is not a wreck.
 - A session without fog of war: nothing is held back.
 
-**Where the fact comes from today, and its limit:** the engine keeps it (render/REQUESTS.md 77, accepted 2026-11-13:
-`PropsSeen`, a list a beat of {prop id, whole set of armies}). Until that is in, `SimFrames::Beat` works it out itself
-for the focus army alone: `ReconAt`'s seen bit at each unseen wreck's place, at its making and every beat after. So
-today the picture knows only what the CURRENT focus army has seen since it became the focus army: after a change of
-the focus army, wrecks the new army saw earlier stay hidden until it sees them again. That limit goes with the
-engine's list; your cursor and labels will read the same fact from him (`PropSeenBy`), so wire them to his, not to
-anything of mine.
+**Where the fact comes from:** the engine's `PropsSeen` (render/REQUESTS.md 77; sim/sim_view.h), taken in
+`SimFrames::Beat` once a beat after `PropEvents`: a wreck's making carries its set of armies, a later entry is told to
+the world as a `Seen` event in the beats' order. The same sets answer your `PropSeenBy` and `ReclaimableAt`'s mask, so
+the picture, the cursor and the labels agree. **The simulation must have `collectPropsSeen` set before its first
+beat** (as `collectProps`; the viewer's LiveSim sets it): without it nothing is tracked and the switch holds nothing
+back. A change of the focus army is followed exactly: each wreck's whole set is kept, so what the new army saw
+before it became the focus army shows at once.
 
 **What is NOT held back, so that you know:** what a death leaves that is no prop: its scorch mark, its lasting smoke
 columns and fires, burnt plants. They show under the fog with the option on exactly as with it off (the original's
 way). Say if Chris wants those tied to the option too; that is a second, separate rule (effects made out of sight).
 
 **Things the test session showed (M28 on SETONS_R, fog of war "explored"):**
-- The map's own wreck field (62 wrecks made by the map's script at beats 0 and 2) is wreckage made in the game, so
-  it is hidden until seen like any wreck. I left that to the engine's fact to decide.
+- The map's own wreck field (62 wrecks made by the map's script at beats 0 and 2) is the map's: never held back
+  (the engine's rule of tick 10; seen here on a map that has one).
 - Each cheating AI army sees the whole map for one beat near the start; wrecks standing then are seen by that side.
 
 **Checks** (`_scratch` of the lab, not in the repository): a Fatboy of army 1 killed in its own land, the picture for
@@ -48,7 +49,13 @@ put off again at frame 800: 0 held back and the picture is the off one (11 pixel
 WorldPicture (the viewer's `--picture`): on against off differs at the wreck's place alone. Left as it is: a wreck
 hidden by putting the switch ON in a running game leaves the plants it pressed lying. Regression against render
 d12dc344 with the switch off: 0 pixels in every scene, Direct3D 12 and Vulkan. The viewer: `--wrecks-once-seen`, `--wrecks-once-seen-from <frame>`,
-`--wrecks-once-seen-until <frame>`, and `MOHO64_DEBUG_WRECKS=1` prints each wreck's making and each sighting.
+`--wrecks-once-seen-until <frame>`, `--focus-from <frame>,<army>`, and `MOHO64_DEBUG_WRECKS=1` prints each wreck's
+making and each sighting.
+
+**On the engine's list (2026-11-13, main 27c17022):** the same scene again: the Fatboy's wreck is made at beat 74
+seen by armies 1, 3, 5, 7 (its own side); the picture for army 8: 1 held back; the scout: its set grows to all
+eight at beat 181 and it is drawn; the focus army changed in the game from 8 to 1: drawn at once; from 1 to 8:
+held back; from 8 to none: drawn. Regression against render 6783c564 with the switch off: 0 pixels in every scene.
 
 ## To visuals, section 142: a unit's own emitters; the stand and scripted impacts (2026-11-12)
 

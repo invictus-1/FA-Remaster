@@ -34,9 +34,14 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
-## 77. To the ENGINE track: which armies have seen a prop made after the start, as a list a beat (2026-11-13; for ui's option "wrecks appear only once seen", Chris: "lets add them"; not blocking)
+## 77. To the ENGINE track: which armies have seen a prop made after the start, as a list a beat (2026-11-13; for ui's option "wrecks appear only once seen", Chris: "lets add them"; not blocking) - DONE
 
-**OPEN (asked 2026-11-13 13:03).**
+**DONE 2026-11-13 (engine batch 162, main 27c17022; docs/engine-answers.md, top entry): `PropsSeen` as asked, in use
+in `SimFrames::Beat` in place of the stand-in. His rules: a wreck = a prop made after game tick 10 whose blueprint a
+unit names as `Wreckage.Blueprint` (so the map's own wreck field counts as the map's); every wreck has an entry in
+the beat of its making, also with an empty set; a Create with no entry is no wreck.**
+
+As it was asked (2026-11-13 13:03):
 
 Who: renderer. Why: ui's request 53 to me (the picture's half of his request 61 to you; read that one first). With the
 player's option on, the picture draws a prop made after the start only once one of the viewer's armies has seen its

@@ -11,6 +11,7 @@
 // Use, with a simulation `sim` and the game's files mounted in `vfs`:
 //   sim.collectEffects = true;                       before the simulation's first beat
 //   sim.collectProps = true;                         the same, for the scenery's changes (wreckage, trees)
+//   sim.collectPropsSeen = true;                     the same, for SetWrecksOnceSeen (which armies have seen a wreck)
 //   sim.collectHits = sim.collectImpacts = sim.collectHealth = true;
 //                                                    the same, for the looks that answer hits (marks on units,
 //                                                    ripples, blast waves; about 1% of a beat's time)

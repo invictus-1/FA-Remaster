@@ -320,6 +320,8 @@
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --wrecks-once-seen  [wrecksseen] a wreck made in the game is drawn only once the army the picture is for (--focus) has
 //           had its place in sight (World::wrecksOnceSeen; off: the original's way, drawn under the fog at once)
+// --focus-from <frame>,<army>  (checks) from that frame of a game the picture is for that army (0: for no one army), as
+//           an observer's change of army in a replay (the viewer's own world, not --picture)
 // --wrecks-once-seen-from <frame>, --wrecks-once-seen-until <frame>  (checks) the same, put on from that frame and / or
 //           off again from that one, in the running game (the viewer's own world, not --picture)
 // --no-hidden-outlines  no outlines of units hidden behind trees, cliffs and buildings (World::hiddenOutlines,
@@ -1184,6 +1186,7 @@ struct Options {
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool wrecksOnceSeen = false;          // --wrecks-once-seen [wrecksseen]
   int wrecksFrom = -1, wrecksUntil = -1;  // --wrecks-once-seen-from, --wrecks-once-seen-until (frames; -1: not given)
+  int focusFromFrame = -1, focusFromArmy = 0;  // --focus-from <frame>,<army> (checks: the focus army changed in the game)
   bool hotMetal = false;                // --hot-metal
   bool hotScorchOriginal = false;       // [softscorch] --hot-scorch bright
   int wreckTest = 0;                    // --wreck-test
@@ -2029,6 +2032,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
     else if (a == "--wrecks-once-seen-from") o->wrecksFrom = atoi(v);
+    else if (a == "--focus-from") {
+      if (sscanf(v, "%d,%d", &o->focusFromFrame, &o->focusFromArmy) != 2) return false;
+    }
     else if (a == "--wrecks-once-seen-until") o->wrecksUntil = atoi(v);
     else if (a == "--weather") o->weather = v;
     else if (a == "--wet") o->wet = static_cast<float>(atof(v));
@@ -3900,6 +3906,10 @@ int main(int argc, char** argv) {
     const double limiterMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - limiterFrom).count();
     double simulationWaitMs = 0;
     if (!window->Pump(&events)) break;
+    if (opt.focusFromFrame >= 0 && frameCount == opt.focusFromFrame) {  // (--focus-from)
+      live.SetFocusArmy(opt.focusFromArmy);
+      world.focusArmy = opt.focusFromArmy > 0 ? opt.focusFromArmy - 1 : -1;
+    }
     if (opt.wrecksFrom >= 0 || opt.wrecksUntil >= 0)  // [wrecksseen] (--wrecks-once-seen-from / -until: switched in the game)
       world.wrecksOnceSeen = frameCount >= std::max(opt.wrecksFrom, 0) && (opt.wrecksUntil < 0 || frameCount < opt.wrecksUntil);
     if (opt.hitchEvery > 0 && frameCount > 0 && frameCount % opt.hitchEvery == 0) {  // (--hitch: a long frame)
