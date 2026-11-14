@@ -80,7 +80,10 @@ class Water {
   //    water; the fifth and sixth: only for a line of sight low over the water, the share let go from that sine of its angle
   //    to the water to the next, so that from the game's height the far sea keeps its drawn waves' light;
   //    water). Low over the sea the far water's pixels are drawn out toward the eye: only there does the term change.
-  int mirrorGrain = 0;
+  // THE DEFAULT (the lead's choice, 2026-11-14, from the helper's numbers and pictures): 1 + 8. At 3840x2160 with FSR 3
+  // at 0.59 they take 28 % of the mirror's grain (4 with 1: 31 %), leave the sea near the eye as it is (4 flattens its
+  // wave faces by two thirds) and do nothing from the game's height. 0 (the viewer's --mirror-grain 0): as before.
+  int mirrorGrain = 9;
   float mirrorFoot[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};  // [mirrorgrain] (8: a, b, the waves' length, the view, the low sight; built in)
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while

@@ -198,6 +198,9 @@
 //           sets from the game): their life bars and pause marks show as the focus army's own
 // --shell-start-old  [shellstart] a new shell drawn from its first place on, one step out of its muzzle, as before (not
 //           from where it was made: SimFrames::shellStart)
+// --mirror-grain <bits>  [mirrorgrain] the mirror's grain trials named by their bits (Water::mirrorGrain: 1 the rain's fade,
+//           2 the Fresnel by a calmer surface, 4 by the waves' true slopes, 8 by the pixel's footprint; the default is 9;
+//           0: as before 2026-11-14); the four switches named above add theirs to none
 // --fog-frame-old  [fogframe] the fog of war's dimming outside the map let go from the edge on, as before (not held as far
 //           out as the farthest zoom shows)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
@@ -1105,7 +1108,7 @@ struct Options {
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
-  int mirrorGrain = 0;                                         // [mirrorgrain] --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4, --mirror-fresnel-footprint 8
+  int mirrorGrain = -1;                                        // [mirrorgrain] --mirror-grain <bits> (-1: the water's own, 9); --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4, --mirror-fresnel-footprint 8 add to none
   float mirrorFoot[6] = {-1, 0, 0, 0, 0, 0};                   // [mirrorgrain] --mirror-fresnel-footprint a,b,length,view,low,lower (-1: the water's own)
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
@@ -1459,11 +1462,11 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--no-mirror-fine") o->mirrorFine = false;  // [mirrorfine]
-    else if (a == "--rain-tilt-fade") o->mirrorGrain |= 1;  // [mirrorgrain]
-    else if (a == "--mirror-fresnel-calm") o->mirrorGrain |= 2;
-    else if (a == "--mirror-true-slopes") o->mirrorGrain |= 4;
+    else if (a == "--rain-tilt-fade") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 1;  // [mirrorgrain]
+    else if (a == "--mirror-fresnel-calm") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 2;
+    else if (a == "--mirror-true-slopes") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 4;
     else if (a == "--mirror-fresnel-footprint") {  // [mirrorgrain] (its numbers are optional)
-      o->mirrorGrain |= 8;
+      o->mirrorGrain = std::max(o->mirrorGrain, 0) | 8;
       if (i + 1 < argc && argv[i + 1][0] != '-') {
         float f[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};
         if (sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5]) < 3) return false;
@@ -2072,6 +2075,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
+    else if (a == "--mirror-grain") o->mirrorGrain = atoi(v);  // [mirrorgrain]
     else if (a == "--allies") {  // [pausemark2] (checks)
       for (const char* s = v; *s;) {
         const int army = atoi(s);
@@ -2661,7 +2665,7 @@ int main(int argc, char** argv) {
     world.surroundAhead = opt.surroundAhead;
     // [mirrorfine] [edgesea] (built into the water's pipelines, made as the map opens: Water::KeepVariants)
     world.water.mirrorFine = opt.mirrorFine;
-    world.water.mirrorGrain = opt.mirrorGrain;  // [mirrorgrain]
+    if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;  // [mirrorgrain]
     if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
     if (opt.surroundEdgeBandWater >= 0) world.water.ownEdgeBand = opt.surroundEdgeBandWater > 0;
     if (!world.Open(opt.map, wo, &error)) {
@@ -2735,7 +2739,7 @@ int main(int argc, char** argv) {
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.mirrorFine = opt.mirrorFine;        // [mirrorfine]
-  world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
+  if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
   if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
