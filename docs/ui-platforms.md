@@ -93,10 +93,25 @@ So what a headless Linux run can show, it shows right; the sound, the window, th
 wait for the SDL build (a download: Chris's word), and letter case for a copy of the files on ext4 (space in the
 WSL disk: Chris's word).
 
+## The same jobs from a copy on ext4 (2026-11-14, 10:52 to 10:54): letter case, and the slow drive
+
+Chris, 2026-11-14, asked whether a copy of the game's files might go into the Linux disk: "Yeah you can do that".
+`_scratch/ui/suite/wsl/copy_to_ext4.sh` copied what the tests read (the game's gamedata, movies, sounds, maps and
+fonts, the lab's gamedata, overlay and vault, FAF's map vault, the repository's `data`, `mods`, `ui/data` and
+`ui/tests`, the sessions) to `~/supcomlab` in the Ubuntu: 15 GB, every folder's and file's name as it is on
+Windows. `run_ext4.sh` runs `suite_wsl.sh` on it with `init_ext4.lua`.
+
+- **Letter case: no fault found.** The 47 jobs gave 41 times the Windows counts, the 6 others being the sound
+  jobs and checks and the camera shake of the build without them (above). The game's file system looks files up
+  without regard to case on Linux too (the mounted folders are logged in small letters and found).
+- **The slow drive is confirmed as the cause of `postgame`'s failure:** from ext4 it passes, 91 ok as on Windows.
+- **Speed:** the 47 jobs took 1 minute 50 seconds in all, three at a time (26 minutes through `/mnt/c`); the small
+  lobby 12 s against 79 s. A Linux player's files are on such a file system; `/mnt/c` is no measure of anything.
+
 ## What is left
 
-0. Linux, next (each needs Chris's word): the same run from a copy of the files on ext4 (letter case; and the
-   postgame scan without the slow files); the SDL build for the window, the sound and the text.
+0. Linux, next: the SDL build in WSL for the window, the sound and the text (SDL3 from source; Chris said yes on
+   2026-11-14; the Ubuntu packages its build needs were put to him as one more question).
 1. The first run on a Linux machine and on a Mac: the window and its keys, the sound, the text, and
    the world's picture (the renderer's Vulkan on the SDL window's surface: `SDL_WINDOW_VULKAN`,
    `SDL_Vulkan_GetInstanceExtensions` / `SDL_Vulkan_CreateSurface` handed to
