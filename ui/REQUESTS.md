@@ -2834,7 +2834,7 @@ Who: ui. Why: Chris failed the photo key again, "Game freezes for a second": whi
 world's picture stands still (your StartPhoto shows the world as it was), and the key asked for twice the view's size:
 ten frames of 75 to 146 ms at 4K in his game, 0.93 s. Measured this morning (docs/ui-benchmarks.md, "The photo
 key"): the cost is the size, not the supersampling (at 7680x4320 your own choice is `by` 1). The key's photo is now
-the view's own size, drawn once (`remaster_photo fine` gives the old one): nine frames in 0.15 to 0.28 s.
+the view's own size, drawn once (`remaster_photo fine` gives the old one): nine frames in 0.15 to 0.45 s.
 
 Asked, if it is cheap for you: a photo that needs fewer settling frames when it is of the size and camera the window
 has just drawn (the clouds and the light in the air are settled there already): a StartPhoto argument like

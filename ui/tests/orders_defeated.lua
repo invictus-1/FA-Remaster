@@ -7,7 +7,7 @@
 -- went. A game without cheats is the original's in this (simorder.lua's lobby game checks that nothing is stamped).
 -- One run, from the skirmish lobby into the game:
 --   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --no-world
---            --lua ui/tests/orders_defeated.lua --game-lua ui/tests/orders_defeated.lua --frames 6500 --log out.log
+--            --lua ui/tests/orders_defeated.lua --game-lua ui/tests/orders_defeated.lua --frames 10000 --log out.log
 -- The lobby: cheats on, two AIs, no teams, Launch Game. The game: the option is in the scenario's options; the
 -- player's commander is destroyed, the army is out of the game and the two AIs play on; three tanks are made for the
 -- defeated army by the game's cheat callback; the army taken again (the console's SetFocusArmy, as a click on its name
@@ -51,7 +51,9 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
             waited = waited + 0.5
         end
         check("the player's army is out of the game", GetArmiesTable().armiesTable[own].outOfGame, true)
-        WaitSeconds(4)
+        -- (FAF's defeat destroys the army's units some seconds after it: units made before that is through die with
+        -- them. Chris's were made minutes later.)
+        WaitSeconds(15)
         check("the game goes on for the others", SessionIsGameOver(), false)
 
         -- three tanks for the defeated army, and the army taken again
@@ -78,6 +80,7 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
         local function middle()
             local m = {0, 0, 0}
             for _, u in tanks do
+                if IsDestroyed(u) then return nil end
                 local q = u:GetPosition()
                 for i = 1, 3 do m[i] = m[i] + q[i] / 3 end
             end
@@ -96,10 +99,12 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
         WaitSeconds(1)
         local queue = tanks[1]:GetCommandQueue() or {}
         check("the simulation took the order: a move is in the first tank's queue", queue[1] and queue[1].type or "none", "Move")
-        WaitSeconds(6)
+        WaitSeconds(5)
         local to = middle()
+        check("the tanks are still there", to ~= nil, true)
+        to = to or from
         local went = math.sqrt((to[1] - from[1]) * (to[1] - from[1]) + (to[3] - from[3]) * (to[3] - from[3]))
-        LOG(string.format("TEST note: the tanks went %.1f in seven seconds (from %.0f,%.0f)", went, from[1], from[3]))
+        LOG(string.format("TEST note: the tanks went %.1f in six seconds (from %.0f,%.0f)", went, from[1], from[3]))
         check("and the tanks go where they were sent", went > 5 and to[1] > from[1] + 4, true)
         SetFrontEndData('orders_defeated_lobby', nil)
         LOG("TEST done: " .. failed .. " failed")

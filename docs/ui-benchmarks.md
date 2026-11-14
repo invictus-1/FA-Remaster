@@ -484,16 +484,19 @@ view's size took ten frames of 75 to 146 ms, 0.93 s (`_scratch\bigtest\game_prev
 Measured here: a game from `session_ai.lua` at twelve seconds, headless at 3840x2160 with the world drawn, the test
 template's preferences (every look on), the side build of 2026-11-14 06:10, pinned to CPUs 16-31; three photos each
 way, 8 to 10 s apart; the numbers are the renderer's own (`LastPhotoNumbers`, now in the log's line "the photo's
-frames: ..."). The engine's gate 164 ran until about 06:12, so the CPU was shared for the first runs.
+frames: ..."). Three series: 06:06 and 06:10 (the engine's gate 164 ran until about 06:12) and 06:22 (seven of the
+engine's programs were running): the CPU was shared each time, and the series differ by a factor of two; within
+each series the two sizes are a factor of about three apart.
 
 | The photo | Size | Frames | The picture stands still | Put together (on a thread) |
 |---|---|---|---|---|
-| twice the view, the renderer's supersampling (as until 2026-11-13; now `remaster_photo fine`) | 7680x4320, drawn once | 9 | 0.42, 0.49, 0.91 s (06:10); 0.74, 0.82, 1.10 s (06:06) | 0.14 to 0.17 s |
+| twice the view, the renderer's supersampling (as until 2026-11-13; now `remaster_photo fine`) | 7680x4320, drawn once | 9 | 0.74, 0.82, 1.10 s (06:06); 0.42, 0.49, 0.91 s (06:10); 0.87, 1.00, 1.33 s (06:22) | 0.14 to 0.17 s |
 | twice the view, supersample 1 (the first fix tried) | 7680x4320, drawn once | 9 | 0.92, 1.29, 1.42 s (06:06) | 0.14 to 0.15 s |
-| the view's own size, drawn once (the key since 2026-11-14) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10) | 0.04 s |
+| the view's own size, drawn once (the key since 2026-11-14) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10); 0.32, 0.38, 0.45 s (06:22) | 0.04 to 0.05 s |
 
 What they say: asking for no supersampling changes nothing, because at 7680x4320 the renderer's own choice is
-already to draw once (`by` 1): the cost is the size. A photo of the view's own size stands still for a sixth to a
-third of a second. What is left is the renderer's nine frames (eight settle the clouds and the light in the air at
+already to draw once (`by` 1): the cost is the size. A photo of the view's own size stands still for 0.15 to 0.45 s
+here, about a third of the larger one's time in the same series. Not measured: his own late game in a window on his
+screen (the log's new line will say it the next time he presses the key). What is left is the renderer's nine frames (eight settle the clouds and the light in the air at
 the photo's size): fewer of them for a photo of the view's own size would bring it under a tenth of a second
 (ui/REQUESTS.md 56).
