@@ -547,6 +547,9 @@
 //           seen, a thin line at rest, wider at the bow under way, torn by noise streaming aft, swelling as waves run up it
 // --storm-foam n  [stormfoam] how much more a storm's sea foams (Ocean::stormFoam, 1; 0: as before; up to 3): more crests,
 //           wider and longer-lived patches, longer streaks downwind; none on a sea calmer than 0.6 (rain's and calmer)
+// --rain-foam n  [rainfoam] what a sea that is no storm keeps of its whitecaps (Ocean::rainFoam, 0.8; 1: all, as before)
+// --foam-gusts n  [rainfoam] the wind in gusts: the crests break sooner in patches going with the wind, later between
+//           them (Ocean::foamGusts, 0.6 of the fold's deviations; 0: none, as before)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
@@ -1089,6 +1092,7 @@ struct Options {
   std::string unitLog;                  // --unit-log (far step)
   bool hullWashOld = false;             // [livewash] --hull-wash old
   float stormFoam = 1;                  // [stormfoam] --storm-foam
+  float rainFoam = -1, foamGusts = -1;  // [rainfoam] --rain-foam, --foam-gusts
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
@@ -1823,6 +1827,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf-view") o->surfView = atoi(v);
     else if (a == "--hull-wash") o->hullWashOld = std::string(v) == "old";  // [livewash]
     else if (a == "--storm-foam") o->stormFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 3.0f);  // [stormfoam]
+    else if (a == "--rain-foam") o->rainFoam = static_cast<float>(atof(v));  // [rainfoam]
+    else if (a == "--foam-gusts") o->foamGusts = static_cast<float>(atof(v));  // [rainfoam]
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
@@ -2748,6 +2754,8 @@ int main(int argc, char** argv) {
   world.water.surf.view = opt.surfView;
   world.water.ocean.liveWash = !opt.hullWashOld;  // [livewash]
   world.water.ocean.stormFoam = opt.stormFoam;    // [stormfoam]
+  if (opt.rainFoam >= 0) world.water.ocean.rainFoam = opt.rainFoam;  // [rainfoam]
+  if (opt.foamGusts >= 0) world.water.ocean.foamGusts = opt.foamGusts;
   world.groundCover = opt.groundCover;
   world.plantsFar = opt.plantsFar;  // [plantlod]
   world.plantsRound = opt.plantsRound;

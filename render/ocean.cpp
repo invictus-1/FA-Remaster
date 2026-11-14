@@ -46,6 +46,15 @@ float StormShare(float rough) {
   const float t = std::clamp((rough - 0.6f) / 0.4f, 0.0f, 1.0f);
   return t * t * (3 - 2 * t);
 }
+// [rainfoam] The gusts' pattern (kFoam, Gusts): its larger patches' size (world units; not a share of a square's length),
+// how fast it goes with the wind (world units a second), and how much farther out the crests must be for the gusts to
+// leave the sea's white as much as without them (per deviation, by the gusts' strength squared). Measured on a rain's sea
+// near and far, with the patches made small enough for one picture to hold many: the gusts alone left 5 and 9 % more
+// white without it, 2 % less and 1 % more with it (a Gaussian tail's own reckoning: 0.01 for the crests breaking, the
+// white shown going about as their square).
+constexpr float kGustSize = 230.0f;
+constexpr double kGustSpeed = 2.0;
+constexpr double kGustsMore = 0.018;
 // [stormfoam] How fast a storm's foam is drawn out downwind into streaks (world units a second, at its full share: the
 // residue's patches lengthen by this as they drift, as a storm's wind rows do).
 constexpr float kStormStreak = 0.15f;  // ([stormfoam2] 0.4 -> 0.15: Chris, 2026-11-08, all of it streaming one way)
@@ -136,6 +145,7 @@ cbuffer OceanSim : register(b1) {
   float4 mapInfo;  // x, y the map's width and height
   float4 foamMore; // [whitecaps] xy the field's shift since the last frame in whole cells (foamOld.w 0); z the share of the fresh foam kept this frame;
                    // w [foamseed] the foam laid in cells the old field does not cover (the sea's mean share, as beyond the field)
+  float4 gust;     // [rainfoam] the gusts' pattern: xy how far it has gone with the wind; z how much it moves the Jacobian it foams below (0: none); w 1 / its patches' size
 };
 static const float kPi = 3.14159265;
 SamplerState samplerLinearClamp : register(s1);  // (the fixed samplers, gfx.h)
@@ -388,6 +398,18 @@ float GroundAt(float2 xz) {
   float d = heights.Load(int3(min(c + int2(0, 1), most), 0)), e = heights.Load(int3(min(c + int2(1, 1), most), 0));
   return lerp(lerp(a, b, t.x), lerp(d, e, t.x), t.y) * foamMake.w;
 }
+// [rainfoam] The wind in gusts: a soft pattern of patches over the sea (two sizes, neither a share of a square's length),
+// -0.5 .. 0.5, going with the wind. The crests break a little sooner in a gust and a little later between them.
+float GustHash(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+float GustNoise(float2 p) {
+  float2 i = floor(p), f = frac(p);
+  f = f * f * (3 - 2 * f);
+  return lerp(lerp(GustHash(i), GustHash(i + float2(1, 0)), f.x), lerp(GustHash(i + float2(0, 1)), GustHash(i + float2(1, 1)), f.x), f.y);
+}
+float Gusts(float2 world) {
+  float2 g = (world - gust.xy) * gust.w;
+  return GustNoise(g) * 0.65 + GustNoise(g * 2.7 + 17.3) * 0.35 - 0.5;
+}
 [numthreads(8, 8, 1)] void Foam(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= uint(foamNew.w))) return;
   float2 world = foamNew.xy + (float2(id.xy) + 0.5) * foamNew.z;
@@ -422,7 +444,13 @@ float GroundAt(float2 xz) {
   f += fold1.SampleLevel(samplerLinear, world * lengths.y + 0.5 / 256, l1).xyz;
   f += fold2.SampleLevel(samplerLinear, world * lengths.z + 0.5 / 256, l2).xyz;
   float J = (1 + f.x) * (1 + f.y) - f.z * f.z;
-  float make = saturate((foamMake.x - J) * foamMake.y) * saturate((depth - 0.3) / 1.5);
+  // ([rainfoam] the gusts: the crests break unevenly over the sea, not as much in every one of the squares' repeats.
+  // Chris's test of 2026-11-13, "the foam during rain starts up all uniform like a grid": measured at the farthest zoom
+  // the lattice of 180 units stays as it was with them - there the crests the water's shader draws (OceanWhitecapsParts)
+  // read the same repeating fold without the gusts, and the field's cells are coarse enough that its spread far exceeds
+  // the deviation the threshold is set in - so they do not mend that)
+  float below = foamMake.x + (gust.z > 0 ? gust.z * Gusts(world) : 0);
+  float make = saturate((below - J) * foamMake.y) * saturate((depth - 0.3) / 1.5);
   // (a crest breaking for a third of a second lays a full cover, and keeps it fresh while it breaks)
   foamOut[id.xy] = float2(min(old.x * foamMove.z + make * foamMove.w * 3, 1.2), min(old.y * foamMore.z + make * foamMove.w * 6, 1));
 }
@@ -433,6 +461,7 @@ struct SimConstants {
   float foamNew[4], foamOld[4], foamMove[4], foamMake[4];
   float lengths[4], mapInfo[4];
   float foamMore[4];  // [whitecaps]
+  float gust[4];      // [rainfoam]
 };
 
 float BandFrom(int c) { return c == 0 ? 1e-6f : 2 * kPi * kBandHarmonic / kCascadeLength[c]; }
@@ -657,9 +686,11 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   const float foamNew[4] = {x0, z0, cell, static_cast<float>(kFoamCells)};
   const float foamOld[4] = {foamArea_[0], foamArea_[1], foamArea_[2], foamFresh_ ? 2.0f : sameCells ? 0.0f : 1.0f};
   const float foamMove[4] = {wind_[0] * drift, wind_[1] * drift, static_cast<float>(std::exp(-dt / life)), static_cast<float>(dt)};
+  // [rainfoam] what a sea that is no storm keeps of its foam (Ocean::rainFoam; a storm's as it was)
+  const float calm = 1 - StormShare(r), rainKeeps = 1 + (std::clamp(rainFoam, 0.05f, 1.0f) - 1) * calm;
   const float foamMore[4] = {static_cast<float>(ox - foamX_), static_cast<float>(oz - foamZ_),
                               static_cast<float>(std::exp(-dt / (kFreshLife * (1 + 0.6f * storm)))),  // ([stormfoam] fresh longer)
-                              0.04f * r * r * (1 + 1.5f * storm)};  // [foamseed] (look2[1])
+                              0.04f * r * r * (1 + 1.5f * storm) * rainKeeps};  // [foamseed] (look2[1])
   // (the Jacobian's spread: about the choppiness times the root of the slopes' mean square, of the waves the field's cells
   // hold, longer than about two cells)
   const double kCut = kPi / (2 * cell);
@@ -674,7 +705,21 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   }
   const double mss = slopes_;
   // ([stormfoam] a storm's: more crests break, 0.45 deviations nearer the mean, and lay their foam faster)
-  foamThreshold_ = static_cast<float>(1 - Choppiness(r) * std::sqrt(mss) * std::max(FoamDeviations(r) - 0.45f * storm, 0.5f));
+  // ([rainfoam] the Jacobian's deviation; the crests that break are those past `deviations` of it. For a share `rainKeeps`
+  // of the white the sea shows, half of ln(1 / share) / deviations farther out: that much farther leaves that share of the
+  // crests breaking (the bell's tail falls as exp(-x^2 / 2)), but the white shown goes about as the square of the foam
+  // laid (the residue's lace is cut the thinner the less of it there is): measured on a rain's sea, near and far, the
+  // whole of it took the white 35 % down for a share of 0.8, the half 19-20 %. The gusts move it by `foamGusts`
+  // deviations from their calmest to their strongest, and as the tail is steeper nearer, a little farther out again, so
+  // that the gusts alone leave as much white as before: kGustsMore, measured)
+  const float sigmaJ = static_cast<float>(Choppiness(r) * std::sqrt(mss));
+  double deviations = std::max(FoamDeviations(r) - 0.45f * storm, 0.5f);
+  const float gusts = std::clamp(foamGusts, 0.0f, 2.0f);
+  deviations += 0.5 * std::log(1 / rainKeeps) / deviations + kGustsMore * gusts * gusts * deviations;
+  foamThreshold_ = static_cast<float>(1 - Choppiness(r) * std::sqrt(mss) * deviations);
+  gustX_ = std::fmod(gustX_ + wind_[0] * kGustSpeed * dt, 1.0e5);
+  gustZ_ = std::fmod(gustZ_ + wind_[1] * kGustSpeed * dt, 1.0e5);
+  const float gust[4] = {static_cast<float>(gustX_), static_cast<float>(gustZ_), gusts * sigmaJ, 1 / kGustSize};
   const float foamMake[4] = {foamThreshold_, 4.0f * (1 + storm), level_, heightUnit};
   // [stormfoam] (the share of a cell upwind drawn into each this frame: kStormStreak world units a second; only while the
   // field keeps its cells, kFoam)
@@ -684,6 +729,7 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   std::memcpy(k.foamMove, foamMove, sizeof foamMove);
   std::memcpy(k.foamMake, foamMake, sizeof foamMake);
   std::memcpy(k.foamMore, foamMore, sizeof foamMore);
+  std::memcpy(k.gust, gust, sizeof gust);  // [rainfoam]
   device_->Mark("ocean: foam");
   device_->SetPipeline(foam_);
   device_->SetConstants(1, &k, sizeof k);
@@ -724,7 +770,7 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look[2] = foamStrength;
   constants_.look[3] = static_cast<float>(this->view);
   constants_.look2[0] = hs_;
-  constants_.look2[1] = 0.04f * r * r * (1 + 1.5f * storm);  // ([stormfoam] the far sea a storm's whiter)
+  constants_.look2[1] = 0.04f * r * r * (1 + 1.5f * storm) * rainKeeps;  // ([stormfoam] the far sea a storm's whiter; [rainfoam])
   constants_.look2[2] = tilt;
   constants_.look2[3] = lift ? 1.0f : 0.0f;
   constants_.look3[0] = foamThreshold_;

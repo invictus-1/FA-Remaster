@@ -591,6 +591,14 @@ class Ocean {
   // streaks (StormStreak), the far sea's mean share of white two and a half times, and in the water's shader the foam
   // thicker (its strength 1.6 times), its streaks 2.5 times as long along the wind and dimmed less far off. 0: as
   // before (viewer --storm-foam 0); more than 1 more of all of it (up to 3).
+  // [rainfoam] (Chris's test of 2026-11-13: "the foam from the rain is a bit much tone it down by like 20%" and "the foam
+  // during rain starts up all uniform like a grid") `rainFoam`: what a sea that is no storm keeps of its whitecaps (a
+  // rain's, showers', snow's: roughness up to 0.6; a storm's own stay as they are; 1: all, as before; viewer --rain-foam).
+  // `foamGusts`: the wind in gusts, a soft pattern of patches going with it in which the crests break a little sooner,
+  // later between them, by this many of the fold's deviations from the calmest to the strongest (0: none, as before;
+  // viewer --foam-gusts). (The grid seen from the farthest zoom is not mended by it: measured, kFoam's note.)
+  float rainFoam = 0.8f;
+  float foamGusts = 0.6f;
   float stormFoam = 0.15f;  // (2026-11-04: 0.25, about 6 % white and 30 % lace; Chris's third test, 2026-11-05: "the white a bit much: tone down by about 20-30%" -> 0.15, about 24 % lace)
   // [livewash] (Chris's second test, 2026-11-04: the white round a ship "needs to be a lot more I guess realistic right now
   // its like a barrier around the ship vs water") The hulls' wash (water.cpp, LiveWash) measured from the hull as the eye
@@ -663,6 +671,7 @@ class Ocean {
   float foamCell_ = 0;
   int foamX_ = 0, foamZ_ = 0;
   double driftX_ = 0, driftZ_ = 0;  // [whitecaps] how far the foam has drifted since the field began (world units)
+  double gustX_ = 0, gustZ_ = 0;    // [rainfoam] how far the gusts' pattern has gone with the wind
   float foamArea_[4] = {0, 0, 0, 0};
   float sim_[16] = {};  // (the compute passes' spectrum numbers: Spectrum)
   double seaAlpha_ = 0, swellAlpha_ = 0, wp_ = 1;
