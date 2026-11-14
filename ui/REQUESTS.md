@@ -2844,7 +2844,18 @@ a quarter of a second is a blink.
 
 ### 57. An estimate of the card's memory for a set of settings, by part (the options' "graphics memory" strip) (2026-11-14, Chris's wish; not blocking)
 
-**OPEN (proposed 2026-11-14 14:55; the interface between us to be agreed, then built).**
+**AGREED, NOT BUILT (the renderer, 2026-11-14 ~14:50, by message; proposed 14:49).** The shape below stands, with his
+three changes: (1) each part carries `measured` (bool): he stands behind what he measured on 2026-11-14 (SETONS_R,
+eight M28 armies, full looks, 1440p: the base by texture detail 7,800 / 5,300 / 3,350 MB, about 130 MB a megapixel of
+window size, the sun's shadow map, ray tracing, what is made ahead); the parts not measured yet (clouds, ground
+detail, weather, the land outside, frame generation, samples, FSR 3's own share) come back as 0 with measured =
+false: the strip shows them as "not counted yet", never as free. (2) the game's size is a named choice (small /
+medium / large); only "large" (8 armies, a 1024 map, a late game) is measured, the two others return measured =
+false; the margin is his: +-10 % of the sum for the measured case, wider where parts are unmeasured. (3) the ids
+are stable strings ("textures", "made_ahead", "shadows", "ray_tracing", "window" ...): he adds ids without notice
+and never renames one, so the strip shows an id it does not know by the plain name he gives with it. His half
+(a static function of plain arithmetic) and mine (the strip) may both be built in the Opus days; the measuring runs
+for the missing parts are his.
 
 Who: ui, for Chris (through the engine, ~14:25): "Vram calculator ... very accurate so as you turn on and off
 settings there is a small vram calculator spot that tells you how much vram it'll eat and if too much is on it'll
