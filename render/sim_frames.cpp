@@ -628,6 +628,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     std::memcpy(p.position, v.position, sizeof p.position);
     std::memcpy(p.orientation, v.orientation, sizeof p.orientation);
     std::memcpy(p.velocity, v.velocity, sizeof p.velocity);
+    std::memcpy(p.previous, v.previous, sizeof p.previous);  // [shellstart]
+    p.hasPrevious = v.stepped;
     // its age: since it was first seen here
     auto since = shellSince_.find(v.id);
     const uint32_t first = since != shellSince_.end() ? since->second : sim.tick();
@@ -921,12 +923,12 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
       // one whole step in the same beat (the engine's answer of 2026-11-14: Sim::Tick's order, as the original's), so
       // the first place the picture gets is the muzzle and one step, 3 units for a tank's shell, and that is where it
       // first showed, as its muzzle's flash came (Chris's test of 2026-11-13: the Pillar's "projectile starts a tad far
-      // from barrels"). Over this first beat it is drawn from where it was made (its place less this beat's step) to
+      // from barrels"). Over this first beat it is drawn from where it was made (the engine's `previous`) to
       // where the next beat has it: it leaves the muzzle with the flash and is where the game has it from the next
       // beat on, its hit as before.
       float from[3], to[3];
       for (int k = 0; k < 3; ++k) {
-        from[k] = p.position[k] - p.velocity[k] * 0.1f;
+        from[k] = p.hasPrevious ? p.previous[k] : p.position[k] - p.velocity[k] * 0.1f;
         to[k] = next ? next->position[k] : p.position[k] + p.velocity[k] * span;
         p.position[k] = from[k] + (to[k] - from[k]) * t;
       }
