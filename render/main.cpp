@@ -549,7 +549,7 @@
 //           wider and longer-lived patches, longer streaks downwind; none on a sea calmer than 0.6 (rain's and calmer)
 // --rain-foam n  [rainfoam] what a sea that is no storm keeps of its whitecaps (Ocean::rainFoam, 0.8; 1: all, as before)
 // --foam-gusts n  [rainfoam] the wind in gusts: the crests break sooner in patches going with the wind, later between
-//           them (Ocean::foamGusts, 0.6 of the fold's deviations; 0: none, as before)
+//           them, by n of the fold's deviations (Ocean::foamGusts; 0, off, by default; 0.6 the strength tried)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).

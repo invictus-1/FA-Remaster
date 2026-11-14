@@ -593,12 +593,15 @@ class Ocean {
   // before (viewer --storm-foam 0); more than 1 more of all of it (up to 3).
   // [rainfoam] (Chris's test of 2026-11-13: "the foam from the rain is a bit much tone it down by like 20%" and "the foam
   // during rain starts up all uniform like a grid") `rainFoam`: what a sea that is no storm keeps of its whitecaps (a
-  // rain's, showers', snow's: roughness up to 0.6; a storm's own stay as they are; 1: all, as before; viewer --rain-foam).
+  // rain's, showers', snow's: roughness up to 0.6; a storm's own stay as they are; 1: all, as before; viewer --rain-foam):
+  // measured 19-20 % less white near and far.
   // `foamGusts`: the wind in gusts, a soft pattern of patches going with it in which the crests break a little sooner,
-  // later between them, by this many of the fold's deviations from the calmest to the strongest (0: none, as before;
-  // viewer --foam-gusts). (The grid seen from the farthest zoom is not mended by it: measured, kFoam's note.)
+  // later between them, by this many of the fold's deviations from the calmest to the strongest (viewer --foam-gusts).
+  // Off (0): they did not mend the grid seen from the farthest zoom (kFoam's note), and at their patches' real size one
+  // place showed 42 % less white where the sea's mean was 20 % less - calm and rough patches, not the fifth less Chris
+  // asked for. 0.6 was the strength tried (kGustsMore is tuned for it).
   float rainFoam = 0.8f;
-  float foamGusts = 0.6f;
+  float foamGusts = 0;
   float stormFoam = 0.15f;  // (2026-11-04: 0.25, about 6 % white and 30 % lace; Chris's third test, 2026-11-05: "the white a bit much: tone down by about 20-30%" -> 0.15, about 24 % lace)
   // [livewash] (Chris's second test, 2026-11-04: the white round a ship "needs to be a lot more I guess realistic right now
   // its like a barrier around the ship vs water") The hulls' wash (water.cpp, LiveWash) measured from the hull as the eye

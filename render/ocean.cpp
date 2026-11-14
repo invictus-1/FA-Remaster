@@ -709,9 +709,9 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   // of the white the sea shows, half of ln(1 / share) / deviations farther out: that much farther leaves that share of the
   // crests breaking (the bell's tail falls as exp(-x^2 / 2)), but the white shown goes about as the square of the foam
   // laid (the residue's lace is cut the thinner the less of it there is): measured on a rain's sea, near and far, the
-  // whole of it took the white 35 % down for a share of 0.8, the half 19-20 %. The gusts move it by `foamGusts`
-  // deviations from their calmest to their strongest, and as the tail is steeper nearer, a little farther out again, so
-  // that the gusts alone leave as much white as before: kGustsMore, measured)
+  // whole of it took the white 35 % down for a share of 0.8, the half 19-20 %. The gusts (off by default) move it by
+  // `foamGusts` deviations from their calmest to their strongest, and as the tail is steeper nearer, a little farther
+  // out again, so that the gusts alone leave as much white as before: kGustsMore, measured)
   const float sigmaJ = static_cast<float>(Choppiness(r) * std::sqrt(mss));
   double deviations = std::max(FoamDeviations(r) - 0.45f * storm, 0.5f);
   const float gusts = std::clamp(foamGusts, 0.0f, 2.0f);
