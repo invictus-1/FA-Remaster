@@ -15,6 +15,7 @@
 #include "effect_files.h"
 #include "exhausts.h"  // (unitsfx)
 #include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

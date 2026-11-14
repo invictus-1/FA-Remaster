@@ -15,6 +15,7 @@
 #include <dbghelp.h>
 #include <tlhelp32.h>
 #endif
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {
@@ -37,7 +38,7 @@ using SymGetLineFromAddr64Fn = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_
 void Dump() {
   HMODULE help = LoadLibraryA("dbghelp.dll");
   if (!help) {
-    std::fprintf(stderr, "render: hang dump: no dbghelp.dll\n");
+    fprintf(stderr, "render: hang dump: no dbghelp.dll\n");
     return;
   }
   auto init = reinterpret_cast<SymInitializeFn>(GetProcAddress(help, "SymInitialize"));
@@ -78,7 +79,7 @@ void Dump() {
         f.AddrFrame.Mode = AddrModeFlat;
         f.AddrStack.Offset = c.Rsp;
         f.AddrStack.Mode = AddrModeFlat;
-        std::fprintf(stderr, "render: hang dump: thread %lu\n", te.th32ThreadID);
+        fprintf(stderr, "render: hang dump: thread %lu\n", te.th32ThreadID);
         for (int k = 0; k < 40 && walk(IMAGE_FILE_MACHINE_AMD64, process, t, &f, &c, nullptr, access, base, nullptr) && f.AddrPC.Offset; ++k) {
           char buffer[sizeof(SYMBOL_INFO) + 256] = {};
           auto* s = reinterpret_cast<SYMBOL_INFO*>(buffer);
@@ -94,7 +95,7 @@ void Dump() {
           char module[MAX_PATH] = "?";
           const DWORD64 at = base(process, f.AddrPC.Offset);
           if (at) GetModuleFileNameA(reinterpret_cast<HMODULE>(at), module, MAX_PATH);
-          std::fprintf(stderr, "    %s%s%s:%lu  [%s+0x%llx]\n", named ? s->Name : "?", lined ? " " : "", lined ? l.FileName : "", lined ? l.LineNumber : 0ul,
+          fprintf(stderr, "    %s%s%s:%lu  [%s+0x%llx]\n", named ? s->Name : "?", lined ? " " : "", lined ? l.FileName : "", lined ? l.LineNumber : 0ul,
                        std::strrchr(module, '\\') ? std::strrchr(module, '\\') + 1 : module, static_cast<unsigned long long>(f.AddrPC.Offset - at));
         }
       }
@@ -126,7 +127,7 @@ void HangDumpStart() {
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
       const int64_t beat = gBeat.load(std::memory_order_relaxed);
       if (beat != dumped && Now() - beat > wait) {
-        std::fprintf(stderr, "render: hang dump: no frame for %.1f s\n", static_cast<double>(Now() - beat) / 1000);
+        fprintf(stderr, "render: hang dump: no frame for %.1f s\n", static_cast<double>(Now() - beat) / 1000);
         Dump();
         dumped = beat;
       }

@@ -59,6 +59,18 @@ class WorldPicture {
   // Without it Open fails with the same sentence as its error (no device is made: it used to go on with Direct3D's old
   // compiler and hang at the first map frame).
   static bool ShaderCompilerReady(std::string* message);
+  // [logsink] Where the renderer's lines go (render/log_print.h). One sink for the whole program, shared by every
+  // picture: the host installs it first thing, before any picture is made or opened, so that the device's report is
+  // caught; no picture ever sets or resets it. `sink` is handed EVERY line the renderer prints, the card's start-up
+  // report ("card: ...") and the looks' report ("looks: ...") among them, one whole line per call, without its
+  // newline and without the lead "render: " (the host puts its own "render:" before it; the few lines without that
+  // lead come as they are). `level` is the engine's log's (moho::LogLevel): 1 info for what was printed on stdout,
+  // 2 warning for what was printed on stderr. It is called on the thread that printed (the renderer prints from
+  // several), so it must be safe to call from any thread at once. With a sink nothing goes to stdout or stderr;
+  // nullptr: back to them. A thread's unfinished line is handed over when the thread ends; render::LogFlush hands
+  // the calling thread's over at once: a HOST CALLS render::LogFlush (render/log_print.h) BEFORE IT WRITES A CRASH
+  // REPORT and at the program's end, so that a line the renderer was half-way through printing is in the log.
+  static void SetLogSink(void (*sink)(int level, const char* line));
 
   // --- [devicelost] the graphics device lost, and made again (Chris, 2026-11-09, the review's A4) ---
   // The card's device can go while a game runs: the driver is reset (another program's fault, or the card's: it happened

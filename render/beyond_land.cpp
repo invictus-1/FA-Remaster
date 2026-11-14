@@ -12,6 +12,7 @@
 #include "jobs.h"
 #include "lighting.h"
 #include "terrain.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

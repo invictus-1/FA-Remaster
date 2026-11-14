@@ -37,6 +37,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 
@@ -713,6 +714,7 @@ bool WorldPicture::RestartMap() {
 // --- [devicelost] the graphics device lost, and made again (world_picture.h) ---
 
 bool WorldPicture::ShaderCompilerReady(std::string* message) { return gfx::ShaderCompilerReady(message); }  // [nodxc]
+void WorldPicture::SetLogSink(void (*sink)(int level, const char* line)) { render::SetLogSink(sink); }  // [logsink]
 
 bool WorldPicture::DeviceLost() const { return impl_->Lost(); }
 std::string WorldPicture::DeviceLostReason() const { return impl_->device ? impl_->device->LostReason() : impl_->recovery.why; }

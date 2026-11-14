@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iterator>
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

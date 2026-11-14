@@ -20,6 +20,7 @@
 #include "window.h"
 #include "world.h"
 #include "world_picture.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

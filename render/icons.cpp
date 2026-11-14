@@ -8,6 +8,7 @@
 #include "bp_reader.h"
 #include "core/vfs.h"
 #include "dds.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

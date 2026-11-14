@@ -127,6 +127,13 @@
 //           simulation's wait left out), the longest frame's stages, and a line "render: --timings-stats: key=value ..."
 //           for scripts; --timings-csv <file> (turns --timings on): every counted frame a row, every stage a column
 //           (render/tools/bench_render.py, the renderer's benchmark set, reads them)
+// --log-sink-test <file>  [logsink] the renderer's lines through a sink as a host installs one (render/log_print.h,
+//           WorldPicture::SetLogSink), set before the device is made: each line appended to <file> as "<level> <line>"
+//           (1 info: printed on stdout, 2 warning: on stderr; the lead "render: " cut off), nothing to stdout or stderr.
+//           First a self-check of the lines' gathering per thread: 8 threads at once print 200 lines each in three
+//           pieces with a whole stderr line between the first two, and one ends with an unfinished line (handed over
+//           as it ends); every "sinktest:" line in the file must be whole and alone (1600 "line <n> in pieces end",
+//           1600 "warning <n>", the unfinished one, and "8 threads done" after them all).
 // --shells-as-before  (shell curve) with a game: shells, beams and the scripts' entities between two beats as they were
 //           drawn before (on along the first beat's speed; SimFrames::shellBlend). --shell-log <file>: every frame a line
 //           per shell ("s <beat> <id> <x> <y> <z>") and per beam ("b <beat> <id> <start> <end>") as drawn
@@ -1008,6 +1015,7 @@
 #include "load_test.h"  // [bgload]
 #include "recover_test.h"  // [devicelost]
 #include "core/trace.h"  // [tracy]
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 using namespace render;
 
@@ -1035,6 +1043,7 @@ struct Options {
   bool marks = false;                   // --marks: how full each fixed room got, printed at the end (marks.h)
   int timingsFrom = 2;                  // --timings-from
   std::string timingsCsv;               // [rbench] --timings-csv
+  std::string logSinkTest;              // [logsink] --log-sink-test
   int fightScan = 0;                    // [rbench] --fight-scan
   FxStandSetup fx;                      // --fx, --fx-shot and their places
   bool fxAt = false, fxFrom = false, fxTo = false, fxRepeat = false;
@@ -1777,6 +1786,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--movement-dust-test") o->movementDustTest = v;
     else if (a == "--timings-from") o->timingsFrom = std::max(0, atoi(v));
     else if (a == "--timings-csv") o->timingsCsv = v, o->timings = true;  // [rbench]
+    else if (a == "--log-sink-test") o->logSinkTest = v;  // [logsink]
     else if (a == "--clouds-mix") o->cloudsMix = static_cast<float>(atof(v));  // [cloudmix]
     else if (a == "--fight-scan") o->fightScan = std::max(0, atoi(v));    // [rbench]
     else if (a == "--movement-dust-radius") o->movementDustRadius = std::max(1.0f, static_cast<float>(atof(v)));
@@ -2337,6 +2347,43 @@ int MostShotsNear(const Frame& frame, size_t* best) {
 
 }  // namespace
 
+// [logsink] --log-sink-test <file>: a sink of the viewer's own, as a host's would be (one lock around each line, the
+// file opened once), then the self-check of the lines' gathering per thread (the option's text at the top).
+static bool InstallLogSinkTest(const std::string& file) {
+  struct Sink {
+    std::mutex lock;
+    FILE* file = nullptr;
+  };
+  static Sink* sink = new Sink;  // (never freed: a thread may still print while the program ends)
+  sink->file = fopen(file.c_str(), "wb");
+  if (!sink->file) {
+    fprintf(stderr, "render: --log-sink-test: cannot write %s\n", file.c_str());
+    return false;
+  }
+  render::SetLogSink([](int level, const char* line) {
+    std::lock_guard<std::mutex> hold(sink->lock);
+    fputc('0' + level, sink->file);
+    fputc(' ', sink->file);
+    fputs(line, sink->file);
+    fputc('\n', sink->file);
+    fflush(sink->file);
+  });
+  std::vector<std::thread> threads;
+  for (int t = 0; t < 8; ++t)
+    threads.emplace_back([t] {
+      for (int i = 0; i < 200; ++i) {
+        printf("render: sinktest: thread %d line %d", t, i);
+        fprintf(stderr, "render: sinktest: thread %d warning %d\n", t, i);
+        printf(" in pieces");
+        printf(" end\n");
+      }
+      if (t == 0) printf("render: sinktest: thread 0 ends without a newline");
+    });
+  for (std::thread& t : threads) t.join();
+  printf("render: sinktest: 8 threads done\n");
+  return true;
+}
+
 int main(int argc, char** argv) {
   MOHO_THREAD_NAME("render");  // [tracy] (the viewer's main thread; docs/profiling.md 2.6)
   render::HangDumpStart();  // [hangdump] (MOHO64_HANG_DUMP=<seconds>)
@@ -2352,6 +2399,7 @@ int main(int argc, char** argv) {
                     "                  [--cam x,z,distance,pitch,heading] [--frames N] [--screenshot file.png]\n");
     return 2;
   }
+  if (!opt.logSinkTest.empty() && !InstallLogSinkTest(opt.logSinkTest)) return 2;  // [logsink]
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   // (crash report) A fault writes its place, the build and the frames to stderr and to the log (core/crash.h). A run
   // a person watches (no --frames) also keeps a dated log of its own beside the shader cache when --simlog names none

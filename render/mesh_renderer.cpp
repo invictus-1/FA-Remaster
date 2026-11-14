@@ -23,6 +23,7 @@
 #include "under_snow.h"  // [undersnow]
 #include "unit_grime.h"  // [grime]
 #include "unit_wear.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

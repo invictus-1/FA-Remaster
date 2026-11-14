@@ -23,6 +23,9 @@ class TextureCache {
   // The texture at a virtual path ("/env/evergreen2/layers/evgrass005_albedo.dds"). A missing or
   // unreadable file is reported once and gives `fallback`.
   gfx::Texture Get(const std::string& path, gfx::Texture fallback = {});
+  // [logsink] The same for a texture that may well not be there (a look's optional picture): a missing file is said once
+  // as information on stdout, not as a warning on stderr (a host's log counts warnings).
+  gfx::Texture GetOptional(const std::string& path, gfx::Texture fallback = {});
   // A texture from .dds bytes held in memory (the ones inside a map file). Not cached.
   gfx::Texture FromDds(std::string_view file, const char* what);
   // A cube map with a full chain of mip levels made here, each a blurrier copy of the one above
