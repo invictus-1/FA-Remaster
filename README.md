@@ -41,8 +41,15 @@ on every beat, every army's economy, and every random draw in the same order. Th
 games made for the tests; the other three are high-level multiplayer games from FAF's replay vault, an
 18-minute 2v2 on Funeral Plains, a 20-minute 1v1 on Abhor and a 31-minute 4v4 on Seton's Clutch with
 eight players, the last of them identical to its final beat since 1 November 2026. Twenty-two more
-high-level games from FAF's vault (1v1 to 6v6) are being matched now: two of them play out identically
-through their whole recordings, and the other twenty match for their first 10 to 18 minutes so far.
+high-level games from FAF's vault (1v1 to 6v6) were taken up in early November: two of them play out
+identically through their whole recordings, and the other twenty matched for their first 10 to 18 minutes
+when that work paused for the multicore work; it is picked up again after it.
+
+Beside the replays there is a **weapons range**: 79 small scenes (stock units, mod units, AI armies) with
+1,347 measured cases of who fires at what, when, and with what result, each equal to the original game's.
+And on 14 November a **sweep of every stock unit** of all four factions (448 units created and killed, about
+4,900 builds through their real factories and engineers on four more maps, every weapon in every layer it
+can reach, transports, shields, commander upgrades, nukes, mobile factories) found one fault, since fixed.
 
 A skirmish can be started from the game's own main menu and lobby. It runs in the new simulation, is
 drawn by the new renderer inside the game's own interface, and can be played: select, order, build,
@@ -60,14 +67,18 @@ The work runs in three tracks that share this repository, plus one outside it:
 | Simulation | `src/` | `moho64` | Plays whole AI games headless; 16 of 16 replays identical to the original to the last beat; big battles on several cores |
 | Renderer | `render/` | `moho64view` | Direct3D 12 and Vulkan; ground, water and a real ocean, units, effects, shadows; day and night, weather, lamps on units |
 | Interface | `ui/` | `moho64ui` | The game's own interface scripts run: menu, lobby, in-game panels, orders, sound, replays |
-| Remastered art | not in this repository | – | Remade models of every UEF unit and building, remade effects, and a remade Seton's Clutch, made separately |
+| Remastered art | not in this repository | – | Remade models of every UEF unit and building (the land units and structures since rebuilt from the originals' own shapes), the Cybran commander and Cybran tier 1 and 2 land units, remade effects, and a remade Seton's Clutch, made separately |
 
 ## What is new, and how to switch it
 
 Every new look is a choice, and the original's way is always one of the choices. New looks that
 change the whole game are **game options in the lobby**, chosen with the game's other options; looks
 that are a matter of taste or of the graphics card are **each player's options** in the game's
-Options menu (Video tab). None of them changes the simulation: they are only seen.
+Options menu. None of them changes the simulation: they are only seen.
+
+*The tables below were written in early November. Since then the remaster's own options have moved into a
+**Remastered** tab of the Options menu, in groups, with a preset at the top, and more have been added (listed
+after the tables); a name in the game may differ a little from the table's.*
 
 **In the lobby (game options):**
 
@@ -76,7 +87,7 @@ Options menu (Video tab). None of them changes the simulation: they are only see
 | Time of Day | A real sky with sun and moon instead of the map's fixed light: the light follows the hour, nights have stars and a moon | **Map's Own Light** (default), Dawn, Morning, Noon, Afternoon, Dusk, Night, Random |
 | Length of Day | How long a whole day and night take in game time | Time Stands Still, 5 to 120 minutes |
 | Weather | Clouds and their shadows, rain, storms with lightning, fog, snow. It follows from the game's seed, so every player and every replay sees the same weather | Changing (temperate, cold or dry), or one kind for the whole game: None, Clear, Cloudy, Overcast, Rain, Storm, Fog, Snow. With **Map's Own Light** there is no weather |
-| Map Edge | What lies round the map, where no unit can go | No Machinery (default: land and sea go on past the edge, greyed out), **Machinery** (the original's frame) |
+| Map Edge | What lies round the map, where no unit can go | Land round the map (default: the land and the sea go on past the edge, faintly dimmed), the map mirrored outward, **Machinery** (the original's frame) |
 
 Rain wets the ground (darker and shinier, with puddles that mirror the sky, and rings where drops
 fall); snow settles in patches, then covers the land, steep slopes last, and melts back into wet
@@ -97,8 +108,22 @@ ground. Rain and snow are one choice, so they cannot be had together.
 | Frame Rate | Held to the screen, or capped, or free | Vertical Sync (default), Uncapped, 60, 120, 144 |
 | Graphics API | Vulkan needs `dxcompiler.dll` beside the program (see Licences); takes effect from the next map | Direct3D 12 (default), Vulkan |
 
-The game's own graphics settings in the same tab (Fidelity, Shadow Fidelity, Texture Detail,
-Anti-Aliasing, Level Of Detail, and the presets) drive the new renderer and mean what they say.
+The game's own graphics settings (Fidelity, Shadow Fidelity, Texture Detail, Anti-Aliasing, Level Of
+Detail, and the presets) drive the new renderer and mean what they say.
+
+**Added since the tables (to 14 November):**
+
+- **Render Scale** and **FSR 3** upscaling (AMD FidelityFX Super Resolution 3), beside FSR 1.
+- **A real ocean** on maps made for it, with waves that ships ride, and **Effects Mirrored in Water**: the
+  battle's flashes and fires seen in the sea.
+- **Cloud Layout**, with a "Varied" sky of mixed cloud.
+- **Ground relief by material**: the ground's fine relief follows what it is made of (on by default).
+- **Head Lamp Colour**: the units' lamps in white, in the faction's colour or in the team's.
+- **Allies' Pause Marks**: the pause mark on your allies' paused units, as the original shows it, or only on
+  your own.
+- **Wrecks Appear Once Seen**: off by default (the original shows every wreck at once); when on, a wreck
+  appears on your screen only once your army has seen it.
+- In the lobby, **Simulation Order**: Remastered (many cores) or Original (see "Several cores" below).
 
 **At night** the battle lights itself: shots in flight and weapons' beams light the ground and the
 units around them (they do by day too, where it shows less), and hot tracers stand out against the
@@ -119,7 +144,10 @@ The remastered units try to stay faithful to the original designs. They are also
 modelling for me and Claude, the AI this project is built with, so please don't expect anything
 revolutionary. So far every UEF unit and building has had its final polish (land, air, navy,
 experimentals, and all factories and structures from tier 1 to tier 3, the factories with working
-build machinery), and there are first, rough versions of some commanders. The models, the remade effects and the remade Seton's Clutch are not in this
+build machinery). In November the UEF land units and most UEF structures were rebuilt a second time, this
+time starting from the originals' exact shapes, with their fine detail as real parts, wheels and tracks
+that turn, and lamps for the night (weapon turrets included). The Cybran commander and the Cybran tier 1
+and 2 land units are done the same way, and there are first, rough versions of some other commanders. The models, the remade effects and the remade Seton's Clutch are not in this
 repository and are not released yet. An early look at them is below.
 
 ## A first look
@@ -260,14 +288,24 @@ original always keep the original's exact order. The lobby's **Simulation Order*
 Remastered (default, many cores) or Original (the original's order, one core at a time). Design:
 [docs/parallel-mode.md](docs/parallel-mode.md).
 
+What it gains so far, measured on 13 November on a 16-core processor (the parallel order on 16 threads
+against the original's order on one): a battle of 16,000 units runs 2.05 times faster, one of 50,000 units
+1.90 times (which keeps 50,000 units in real time), and a game of four M28 AIs only 1.06 times, because
+the AI's scripts are most of that work and run on one core. That is short of the aim of 3 to 6 times:
+what was moved onto the worker threads runs 9 to 16 times faster, but about three quarters of a beat still
+runs on one core. A first round on that (five changes, each worth 2 to 9% of a beat) landed on 14 November;
+the larger pieces (unit orders, firing, formations) are still to come. The same game results on any number
+of threads are checked after every change. Numbers: [docs/benchmarks.md](docs/benchmarks.md).
+
 ### Our own AI
 
 A new AI written for this engine (in Lua, with a few native helpers), offered in the lobby as
 **Remastered AI** at four levels, with a small settings dialog (personality, aggression, economy,
 teacher mode). It reads the map into zones and chokepoints, rates every unit from its blueprint (mods
 included), estimates battles, scouts, expands, reclaims, and plays with fair vision; cheating is only
-a named option. Today it beats the game's own AI and matches M28's economy for the first ten minutes,
-but M28 still beats it. M28's ideas helped shape it; none of M28's code is in it. Design and progress:
+a named option. In test games on Seton's Clutch (16 a set, each compared with the same game before a change) it now wins
+24 of 32 against FAF's two AIs. M28 still wins all 16 against it: its navy is too small and its commander
+too easily lost, which is what the current work is about. M28's ideas helped shape it; none of M28's code is in it. Design and progress:
 [docs/ai-design-goals.md](docs/ai-design-goals.md), [docs/ai-architecture.md](docs/ai-architecture.md).
 
 ## Renderer (`render/`)
@@ -289,11 +327,13 @@ simulation through plain data. Details, measurements and known gaps: [render/REA
   blips, the unseen ground darkened), what is under the mouse, life bars, range rings.
 - **Two looks:** the original's light formulas for each faction are kept beside the modern ones
   (the Look option above).
-- **In work, a lighting upgrade of the modern look:** light you can see in the air (fog, the sun's
-  shafts, lamps' beams; a first version is in), then AMD's FSR 3 upscaler, reflections in screen
-  space and softer shadows, volumetric clouds, and ray-traced reflections, bounce light and shadows
-  on Direct3D 12 and Vulkan. Each piece is a player option, off by default, with today's look as the
-  fallback. Order and state: [docs/render-lighting.md](docs/render-lighting.md).
+- **A lighting upgrade of the modern look**, in first versions: light you can see in the air (fog, the
+  sun's shafts, lamps' beams), AMD's FSR 3 upscaler, a real ocean, and ray tracing on Direct3D 12 and
+  Vulkan. Each piece is a player option with the earlier look as the fallback. What is in, what is
+  not and in which order: [docs/render-lighting.md](docs/render-lighting.md).
+- **Not optimised yet.** Measured on 14 November, a late game at 2560 x 1440 holds 7.7 to 7.9 GB of the
+  graphics card's memory with full textures, 5.3 GB with Medium and 3.3 GB with Low. Making it lighter
+  for ordinary cards is planned work; the game now reports the card and what it falls back to at start.
 
 ## Interface (`ui/`)
 
@@ -319,9 +359,13 @@ unchanged. Details: [ui/README.md](ui/README.md); what is left and in which orde
 - **Sound:** the game's own sound banks read and mixed: interface sounds, music, voices, and the
   world's sounds at their place, heard only where the player's army sees.
 
-In work: the campaign (operations start from the main menu and reach their first objectives).
 - **Movies:** the game's own films (.sfd) play in their screens, with their sound from the game's
   sound banks as the scripts start it.
+- **Added lately:** a timeline with bookmarks for replays, a report after a game, a second view of the
+  world (the original's split screen) and a follow camera, a window that keeps its place and size, and
+  the remaster's options in a tab of their own.
+
+In work: the campaign (operations start from the main menu and reach their first objectives).
 
 Not yet: saved games.
 
@@ -332,19 +376,28 @@ Not yet: saved games.
 **Processor:** any 64-bit processor from about 2009 on (Intel Nehalem, AMD Bulldozer or newer). The
 program is built for the `x86-64-v2` level (SSE4.2, POPCNT) and will not start on older ones.
 
-**Linux and macOS: support exists in parts, untested.** Nobody working on the project has a Linux
-machine or a Mac, so read this as "may work, expect problems":
+It has only ever been played on one PC (a 16-core processor and a high-end graphics card at 3840 x 2160).
+How it runs on an ordinary machine is not known yet; a test on a mid-range PC is planned before anything
+is called ready for others.
+
+**Linux and macOS: support exists in parts, untested on real hardware.** Nobody working on the project has
+a Linux machine or a Mac, so read this as "may work, expect problems":
 
 - The headless simulation (`moho64`) builds for Linux (x86-64) and for macOS on Apple Silicon
   (`py tools/build_zig.py --target x86_64-linux-gnu` or `--target aarch64-macos`; CMake or
-  `./build.sh` on Linux itself). It ran on Linux early in the project with results identical to
-  Windows; it has never run on macOS.
+  `./build.sh` on Linux itself). On 14 November 2026 the Linux build, run in Ubuntu 24.04 under Windows
+  (WSL 2), played all sixteen test replays, games with our own AI and with M28, on one thread and on
+  sixteen, and the parallel order, each beat for beat as on Windows. It has never run on macOS.
 - The renderer's Vulkan backend has code for Linux (X11 and Wayland) and macOS (through MoltenVK).
-  It compiles for both but has never run on either.
+  It compiles for both. Its first run off Windows was on 14 November, in the game's window on Linux under
+  WSL 2 with a software driver; it has never run on a real Linux graphics driver or on a Mac.
 - The game itself (`moho64ui`) has its Linux and macOS parts written: the window, keys, mouse, sound
   and clipboard through SDL 3, the game's fonts through stb_truetype, and the world drawn by the
   renderer's Vulkan backend on the window. Cross-built from Windows it compiles for both; built on
-  Linux or a Mac it links to the system's SDL 3 (`py ui/build_ui.py`). It has never run on either.
+  Linux or a Mac it links to the system's SDL 3 (`py ui/build_ui.py`). On 14 November it ran in the same
+  Ubuntu under WSL 2: its front-end and game tests with the results it has on Windows (46 of 47), and a
+  window with the main menu over the map, drawn by the Vulkan backend on a software driver (slowly). It
+  has never run on real Linux hardware or on a Mac.
   Some of these parts were tried on Windows through the same code (the SDL input, the stb fonts),
   but a first run on each system is still to come. Details: [docs/ui-platforms.md](docs/ui-platforms.md).
 
