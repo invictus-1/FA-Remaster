@@ -2842,6 +2842,39 @@ has just drawn (the clouds and the light in the air are settled there already): 
 key's photo under a tenth of a second. If the settled pictures cannot be carried over, say so and this is closed:
 a quarter of a second is a blink.
 
+### 57. An estimate of the card's memory for a set of settings, by part (the options' "graphics memory" strip) (2026-11-14, Chris's wish; not blocking)
+
+**OPEN (proposed 2026-11-14 14:55; the interface between us to be agreed, then built).**
+
+Who: ui, for Chris (through the engine, ~14:25): "Vram calculator ... very accurate so as you turn on and off
+settings there is a small vram calculator spot that tells you how much vram it'll eat and if too much is on it'll
+recommend to lower a few settings ... helps people find out what is eating the most vram." His aim: most players have
+weak PCs; as close to the highest settings as their machine carries.
+
+What I show (mine): a strip at the foot of the Options dialog on the Video and Remastered tabs: "Graphics memory:
+about 6.1 of 8.0 GB" with a bar; under the mouse or by a click its parts, largest first; over the card's budget a
+warning and the settings that give the most back, each with how much. It follows every change before Apply.
+
+What I need from you (proposed shape; say what does not fit how you count):
+1. `struct CardMemoryChoice`: everything the estimate depends on, as plain values a caller fills WITHOUT a picture or
+   a map: the picture's width and height, the upscale share, temporal upscaling, frame generation, the scene's
+   samples, texture detail, ray tracing, atmosphere / clouds, shadow fidelity and soft shadows, ground detail,
+   weather effects, the land outside the map, and whatever else moves the number; and the game's size as ONE plain
+   choice (for example "a late game on a 20 km map": you say which case your measures stand for).
+2. `static CardMemoryEstimate WorldPicture::EstimateCardMemory(const CardMemoryChoice&)`: `parts` (a stable id,
+   megabytes), their sum, and the margin you stand behind (so that I can write "about" honestly). Pure arithmetic:
+   no device, no file, any thread, cheap enough to call some fifty times for one change of an option. That is how
+   I find "what gives the most back": I ask it again with each option one step lower and show the differences, so no
+   table of hints is needed and the advice is exact by construction.
+3. The card: total and the budget the system gives this program now (you print both in the card's report), by a
+   call that works once any picture is open (the menu's): `CardMemory()` -> totalMB, budgetMB, usedMB (the live
+   figure, for the strip while a game runs and for your proof).
+4. The parts' ids with a plain name each ("Textures", "Ray tracing", ...): the names are shown to the player, so they
+   are yours to give once and mine to show.
+Proof, yours: the estimate against the measured late-game figure for each preset and a few mixed setups, within the
+margin. Mine: a suite job (the strip's text and bar for fixed choices; the warning and its advice with
+SetCardImitation at 4 and 8 GB; that the advice's differences are the estimate's own).
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
