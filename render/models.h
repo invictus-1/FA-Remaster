@@ -163,6 +163,12 @@ struct ScmAhead;  // [spikes] (models.cpp: a mesh made ahead)
 struct Model {
   bool ok = false;
   bool scrolls = false;  // one of its levels' treads scroll (ModelLod::scrolling)
+  // [treadpace] what the simulation's two scroll amounts are multiplied by for this model (a remastered unit's
+  // <file>_treads.bp, Treads { Pace = n }; 1: as they are). The amounts go by the unit's own blueprint (how far each
+  // side moved forward times its ScrollMultiplier, in texture units: the Striker's 0.75 a world unit), made for the
+  // original's texture; a remastered belt whose u runs once round a loop of length L (world units) passes at the
+  // ground's speed with Pace = 1 / (that multiplier x L).
+  float treadPace = 1;
   std::vector<ModelLod> lods;  // finest first
   float scale = 1;             // model units to world units (the blueprint's Display.UniformScale)
   Vec3 boundsMin, boundsMax;   // of the finest level, in model units
