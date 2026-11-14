@@ -256,6 +256,14 @@ struct ProjectileView {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
+  // Where this beat's step began (render request, 2026-11-14: "Pillar: projectile starts a tad far from
+  // barrels"). A shell made in a beat takes its first step in that same beat (the weapons stage fires before the
+  // projectiles' stage), so the first view that lists it has `position` one step out already; `previous` is then
+  // the place it was made at (the muzzle). In every later beat it is the place of the view before, and for a shell
+  // that did not step this beat (stopped on a hit) it equals `position`. A host that draws moves the shell from
+  // `previous` to `position` over the beat, as the original does between an entity's two transforms.
+  float previous[3] = {0, 0, 0};
+  bool stepped = false;  // it took a step in this beat (previous != position unless it stood still)
   // Entity:SetScale(x, y, z) as last set (1, 1, 1 unless a script set it, or the blueprint's MeshScaleRange drew
   // another size at launch), and Entity:SetDrawScale: the raw numbers, kept for hosts that used them. They are
   // NOT factors on Display.UniformScale (an earlier line here said so): use `size` below.

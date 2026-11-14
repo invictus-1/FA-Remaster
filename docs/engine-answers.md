@@ -5,6 +5,23 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-14 08:53, to the renderer: where a new shell is in its first view; ProjectileView::previous and stepped (batch 165)
+
+**The question** (Chris's test: "Pillar: projectile starts a tad far from barrels"): the first view that lists a
+shell has it 3.0 (the Pillar) or 2.5 (the Striker) in front of the muzzle.
+
+**The rule.** In a beat the weapons stage runs before the entity pass and the projectiles' stage (Sim::Tick:
+economy, navigators, steering, weapons, commands, threads, entity pass, anim, projectiles, ...). A shell is made at
+its muzzle in the weapons stage and takes one whole step in that same beat (Projectile::MotionTick 0x69bdd0), so
+its first view is the muzzle plus one step. The original has the same order; it draws an entity between its two
+transforms over the beat, so its shell is seen leaving the muzzle.
+
+**Added.** `ProjectileView::previous[3]`: the place this beat's step began from (the muzzle in the first view, the
+place of the view before in later ones; for a shell a shell throws, where its parent was when the beat began), and
+`ProjectileView::stepped`: it took a step in this beat (false for one stopped on a hit: `previous` equals
+`position`). From `Projectile::prevPos` / `prevPosTick`, which the step already kept; the simulation is unchanged.
+A host draws a shell from `previous` to `position` over the beat.
+
 ## 2026-11-14 06:11, to the ui: the game option RemasterOrdersAfterDefeat (batch 164; Chris's test of 13 November)
 
 **What Chris saw.** In his second test game the 26 Pillars he spawned for his own army took no orders. From the

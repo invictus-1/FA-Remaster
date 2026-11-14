@@ -564,6 +564,11 @@ void ProjectileViews(const Sim& sim, std::vector<ProjectileView>* out) {
     v.position[0] = p->position.x;
     v.position[1] = p->position.y;
     v.position[2] = p->position.z;
+    v.stepped = p->prevPosTick == sim.tick();
+    const Vec3 from = v.stepped ? p->prevPos : p->position;  // (the place its step of this beat began from)
+    v.previous[0] = from.x;
+    v.previous[1] = from.y;
+    v.previous[2] = from.z;
     v.orientation[0] = p->orientation.x;
     v.orientation[1] = p->orientation.y;
     v.orientation[2] = p->orientation.z;

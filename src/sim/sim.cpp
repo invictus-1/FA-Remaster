@@ -1155,6 +1155,12 @@ float Sim::BpUniform(float base, float range) {
 }
 namespace {
 thread_local Sim::DeferSink* tl_deferSink = nullptr;  // (the worker's own list while a phase's turn runs on the pool)
+thread_local std::vector<std::pair<uint64_t, Unit*>>* tl_econAdders = nullptr;  // (phase D on the pool: the worker's own adders)
+}
+
+void Sim::NoteEconAdder(Unit* u) {
+  if (std::vector<std::pair<uint64_t, Unit*>>* v = tl_econAdders) v->emplace_back(u->entSeq, u);
+  else econAdders_.emplace_back(u->entSeq, u);
 }
 
 void Sim::RunTurns(const char* stage, size_t n, const std::function<void(size_t)>& turn) {
@@ -1247,9 +1253,15 @@ void Sim::RunDeferredScriptCalls() {
   if (deferred_.empty()) return;
   std::vector<DeferredCall> calls;
   calls.swap(deferred_);
-  std::stable_sort(calls.begin(), calls.end(), [](const DeferredCall& a, const DeferredCall& b) { return a.key < b.key; });
+  // (2026-11-13: the order is had from (key, place) pairs, not by moving the calls themselves, and only when the
+  // list is not in order already: the workers' lists, each in its turns' order, mostly join in order. The place
+  // breaks ties as the stable sort did, so the order is that sort's, exactly.)
+  std::vector<std::pair<uint64_t, uint32_t>> order(calls.size());
+  for (size_t i = 0; i < calls.size(); ++i) order[i] = {calls[i].key, static_cast<uint32_t>(i)};
+  if (!std::is_sorted(order.begin(), order.end())) std::sort(order.begin(), order.end());
   lua_State* L = this->L();
-  for (DeferredCall& c : calls) {
+  for (const auto& [key, at] : order) {
+    DeferredCall& c = calls[at];
     if (c.action) {
       c.action();
       continue;
@@ -3539,9 +3551,65 @@ void Sim::Tick() {
     runPhase("entity pass C", all, PhaseOnPool("C2"), [&](size_t i) {
       if (hows[i] == kTurnMoved) turnPose(motionOrder[i], prevOris[i]);
     });
-    runPhase("entity pass D", all, false, [&](size_t i) {
-      if (hows[i] != kTurnReordered) turnEconomy(motionOrder[i], hows[i]);
-    });
+    // D (2026-11-13: on the worker pool). A turn of D is turnEconomy's own part, the unit's economy step
+    // (UnitEconomyTick): it writes its own unit, its requests and economy events (the write trap), its script calls
+    // and silo step are deferred (phase B), its addition to the army is kept on the unit and its note goes to the
+    // worker's own list (NoteEconAdder). turnEconomy's two shared writes come after every turn, on the sim's thread, in
+    // the turns' order, before the commit, as each turn made them at its end before: a pod's assist order (an engine
+    // command id) and a factory's queue check (its initial rally: a command id). No economy step reads what they write
+    // (a unit's commands, the command ids) nor they what a later unit's economy step writes (that unit), so the result
+    // is the one of the turns one after another; their deferred calls take the turn's key after its own (seq 2^31 on).
+    {
+      const bool dPool = onPool && PhaseOnPool("D");
+      if (wtrap::On()) trapPhase.emplace(tick_, "entity pass D");
+      deferring_ = true;
+      auto econTurn = [&](uint32_t i) {
+        if (hows[i] != kTurnReordered) UnitEconomyTick(*this, motionOrder[i]);
+      };
+      if (dPool) {
+        const size_t nw = static_cast<size_t>(workers().Threads());
+        if (econAddersW_.size() < nw) econAddersW_.resize(nw);
+        workers().ParallelFor("entity pass D", all.size(), checked ? 1 : 16, [&](size_t b, size_t e, int w) {
+          DeferSink& sink = deferSinks_[static_cast<size_t>(w)];
+          tl_deferSink = &sink;
+          tl_econAdders = &econAddersW_[static_cast<size_t>(w)];
+          for (size_t k = b; k < e; ++k) {
+            const uint32_t i = all[k];
+            wtrap::Turn trapTurn(motionOrder[i]);
+            sink.key = i;
+            sink.seq = 0;
+            econTurn(i);
+          }
+          tl_deferSink = nullptr;
+          tl_econAdders = nullptr;
+        });
+        MergeDeferSinks();
+        for (std::vector<std::pair<uint64_t, Unit*>>& v : econAddersW_) {
+          econAdders_.insert(econAdders_.end(), v.begin(), v.end());
+          v.clear();
+        }
+      } else {
+        for (size_t k = 0; k < all.size(); ++k) {
+          const uint32_t i = all[k];
+          wtrap::Turn trapTurn(motionOrder[i]);
+          DeferTurn(i);
+          econTurn(i);
+        }
+      }
+      trapPhase.reset();
+      for (size_t k = 0; k < all.size(); ++k) {  // (turnEconomy's end: the shared writes, in the turns' order)
+        const uint32_t i = all[k];
+        if (hows[i] == kTurnReordered || hows[i] == kTurnCargo) continue;
+        deferKey_ = i;
+        deferSeq_ = 0x80000000u;
+        Unit* u = motionOrder[i];
+        if (u->isPod && u->commands.empty() && !u->dead) IssuePodAssist(*this, u);
+        if (u->destroyQueued) continue;
+        if (u->isFactoryBuilder) ValidateFactoryCommandQueue(*this, u);
+      }
+      deferring_ = false;
+      RunDeferredScriptCalls();
+    }
     // (the units' additions to their armies, unit by unit in creation order, after the phase's commit: step 4.5)
     SumUnitEconomy();
   }
