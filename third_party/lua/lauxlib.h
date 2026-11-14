@@ -75,9 +75,12 @@ LUALIB_API int luaL_loadbuffer (lua_State *L, const char *buff, size_t sz,
 #define luaL_checkstring(L,n)	(luaL_checklstring(L, (n), NULL))
 #define luaL_optstring(L,n,d)	(luaL_optlstring(L, (n), (d), NULL))
 #define luaL_checkint(L,n)	((int)luaL_checknumber(L, n))
-#define luaL_checklong(L,n)	((long)luaL_checknumber(L, n))
+/* moho64: through int, so that a number beyond 32 bits gives what it gives where long is 32 bits (the original's
+** 32-bit build and Windows: the conversion's "integer indefinite", -2^31), also on a system whose long is 64 bits
+** (Linux, Mac). string.sub('abcdef', 2, 3e9) was 'bcdef' on Linux and '' on Windows (linsim, 2026-11-14). */
+#define luaL_checklong(L,n)	((long)(int)luaL_checknumber(L, n))
 #define luaL_optint(L,n,d)	((int)luaL_optnumber(L, n,(lua_Number)(d)))
-#define luaL_optlong(L,n,d)	((long)luaL_optnumber(L, n,(lua_Number)(d)))
+#define luaL_optlong(L,n,d)	((long)(int)luaL_optnumber(L, n,(lua_Number)(d)))
 
 
 /*

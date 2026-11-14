@@ -5,6 +5,30 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-14 11:41, for every layer: the engine on Linux, and two changes in third_party/lua (batch 166)
+
+**The headless engine plays the same game on Linux as on Windows, beat for beat** (helper linsim, 2026-11-14, WSL2's
+Ubuntu 24.04, the lab's files read in place): all 16 gate replays (MP1 whole, at 16 threads on Linux), eight of our
+own AIs for 4001 beats at 1 and 16 threads, four and eight M28 AIs (12,001 beats at 16 threads), and parallel order
+at 1 and 16 threads: 25 fingerprint compares, all identical, and the Windows side equal to the gate's own files.
+No source change was needed: `py tools/build_zig.py --target x86_64-linux-gnu --out <dir>` gives an ELF that needs
+glibc only. Run it with an init file whose absolute paths are the Linux ones.
+
+**Two latent differences, met by no run, are closed in third_party/lua** (the interface program carries the same Lua):
+- `lauxlib.h`: `luaL_checklong` / `luaL_optlong` go through `int`. `long` is 64 bits on Linux and Mac, so
+  `string.sub`, `string.byte` and `string.find` took another position for numbers of 2^31 or more than on Windows
+  and in the original's 32-bit build (`string.sub('abcdef', 2, 3e9)`: '' on Windows, 'bcdef' on Linux). Windows'
+  object files are byte-identical with the change.
+- `llimits.h`: `Instruction` is `unsigned int` (it was `unsigned long`: 8 bytes on Linux), so the Lua heap's count
+  and the collector's threshold on Linux match Windows'.
+
+**Known and left for later:** three places call the C library's float math directly (`sim/ai_build.cpp`
+OrderBuildStructure's sin / cos, `sim/combat.cpp`'s slave manipulator with a rate, `ai/unit_index.cpp`'s pow); the
+two C libraries differ there in the last bit for 1 to 8% of inputs. A patch that routes them through dmath exists
+(the helper's folder); it waits until the two sites of the original's behaviour are read against the original.
+Letter case: 37 mod and map folders differ in case from what FAF's init asks for; hostfs's fallback finds them.
+`tools/build_zig.py` now keeps each file's warnings in `<out>/warnings.txt`.
+
 ## 2026-11-14 08:53, to the renderer: where a new shell is in its first view; ProjectileView::previous and stepped (batch 165)
 
 **The question** (Chris's test: "Pillar: projectile starts a tad far from barrels"): the first view that lists a
