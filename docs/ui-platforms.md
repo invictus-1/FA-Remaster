@@ -108,10 +108,52 @@ Windows. `run_ext4.sh` runs `suite_wsl.sh` on it with `init_ext4.lua`.
 - **Speed:** the 47 jobs took 1 minute 50 seconds in all, three at a time (26 minutes through `/mnt/c`); the small
   lobby 12 s against 79 s. A Linux player's files are on such a file system; `/mnt/c` is no measure of anything.
 
+## The full build on Linux: SDL window, sound, text and the Vulkan picture (2026-11-14, 14:15 to 14:35)
+
+Chris, 2026-11-14: "Yeah you can do that and sdl3", and for the shader compiler "Yes you can download". He installed
+the Ubuntu's build packages himself (cmake, ninja, pkg-config and the X11, Wayland, sound and Vulkan headers).
+
+- **SDL 3.4.18** from its release archive (the sha256 of `ui/third_party/SDL3/README`), built in the Ubuntu into
+  `~/supcomlab/sdl3` (`_scratch/ui/suite/wsl/build_sdl3.sh`; X11, Wayland, Vulkan, PulseAudio, ALSA, PipeWire on).
+- **The shader compiler:** Microsoft's DXC for Linux, release v1.9.2609 (the Windows dll's version), from its
+  GitHub release, the release page's sha256 checked (`get_dxc.sh`): `libdxcompiler.so` in `~/supcomlab/dxc/lib`.
+  Without it the program stops at its start and says so ("the shader compiler is missing: libdxcompiler.so").
+- **The build:** cross-built and linked on Windows: `py ui/build_ui.py --target x86_64-linux-gnu.2.39 --sdl-lib <a
+  folder with the Ubuntu's libSDL3.so> --out <dir>` (all 274 objects, the renderer's among them). The `.2.39` is the
+  Ubuntu's C library: without it the link fails on SDL3's `GLIBC_2.38` names.
+- **Without a window** (`run_sdl.sh`): 46 of the 47 plain jobs give the Windows counts; the camera shake and the
+  sound tests pass now; `sound_device` has 6 ok against 12 because six of its checks are of Windows' own output
+  (they are skipped, none fails): "sound: SDL output, 48000 frames a second".
+- **A FAULT FOUND AND FIXED: the sound's files on Linux.** The sound system took a file's place on disk in the
+  engine's display form (backslashes, small letters) and gave it to `mmap` and `fopen` as it was. No Linux file
+  system finds that: every wave bank was read whole into the program's own memory (99 banks, 400 MB) and the
+  streamed music had no wave ("the cue's wave is not there (bank Music, cue Main_Menu)"). `HostPath` in
+  `ui/sound/sound_system.cpp` now resolves the name as every other read does (`hostfs::Resolve`) off Windows:
+  "78 wave banks mapped (406 MB of files), 9 streamed, 0 read whole", and `sound_banks` passes (17).
+- **The window** (`window_try.sh`, 1280x720, through WSLg, three times about a minute each): SDL makes the window
+  on screen 1 (it sees both 3840x2160 screens), the main menu is drawn with the game's fonts through stb_truetype,
+  the renderer's picture opens on the window's surface ("the window's picture (no map yet) opened in 0.42 s"), the
+  menus' background map opens behind and is shown: the sea, the shores and the trees of the dusk map under the
+  menu, read back from the window (`--window-capture`; the picture is in the lab's scratch,
+  `ui-b1110/wsl/linux_window_cap2.png`). The menu's music played through SDL in the first run (120 s mixed).
+- **What it also showed:**
+  - Vulkan in WSL is llvmpipe, a software card: 217 to 232 ms a frame with the world shown. It proves the path
+    (SDL's surface, the swap chain, the shaders through DXC to SPIR-V), nothing about speed or a real driver.
+  - Without a window there is no world picture on Linux ("the world picture needs the host's window on this
+    system (UseNativeWindow)"): the suite's world jobs cannot run there headless as they do on Windows.
+  - The sound output opened in one window run and not in the two others ("SDL: ALSA: Couldn't open audio device":
+    WSLg's sound server was not reached from that start); the program went on silent and put its notice on the menu
+    ("No sound device was found: the game is silent until one is there"), as on Windows. Read as WSLg's, not ours.
+  - The menu's flight fell back to the dusk map at once: its map, SETONS_R, is in the lab's `visuals/maps`, which
+    the copy on ext4 does not hold and the run did not name (`--maps`).
+- Not tried: a click or a key in the window by a person, a game in the window, full screen, a second screen,
+  Wayland by name (SDL chose for itself), a real graphics driver.
+
 ## What is left
 
-0. Linux, next: the SDL build in WSL for the window, the sound and the text (SDL3 from source; Chris said yes on
-   2026-11-14; the Ubuntu packages its build needs were put to him as one more question).
+0. Linux, next, when Chris asks for more: a game played in the WSL window by hand; then real drivers (a live USB
+   stick, an external SSD or an outside tester). A release for Linux needs libSDL3 and libdxcompiler.so beside
+   the program, built for an old enough C library (today's test build asks for 2.39).
 1. The first run on a Linux machine and on a Mac: the window and its keys, the sound, the text, and
    the world's picture (the renderer's Vulkan on the SDL window's surface: `SDL_WINDOW_VULKAN`,
    `SDL_Vulkan_GetInstanceExtensions` / `SDL_Vulkan_CreateSurface` handed to

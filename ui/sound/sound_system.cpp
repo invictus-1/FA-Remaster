@@ -9,6 +9,7 @@
 #include <cstring>
 #include <thread>
 
+#include "core/hostfs.h"
 #include "core/log.h"
 #include "core/vfs.h"
 
@@ -23,9 +24,19 @@ float Linear(float decibels) { return decibels <= -95.0f ? 0.0f : std::pow(10.0f
 
 // Where a file of the game's file system is on disk (the file system names it for scripts'
 // error messages: "@" and the path).
+// Off Windows that name is the engine's display form (backslashes, small letters), which no file function of the
+// system finds: the file as the system has it, found without regard to letter case as every other read of the
+// game's files is (hostfs::Resolve). Until 2026-11-14 the name went to mmap and fopen as it was: on Linux every wave
+// bank was read whole into the program's own memory (400 MB of them) and the streamed music had no wave ("the cue's
+// wave is not there"). Found by the first runs in WSL (ui/tests/sound_banks.lua; docs/ui-platforms.md).
 std::string HostPath(const Vfs* vfs, const std::string& vpath) {
   std::string chunk = vfs->ChunkName(vpath);
-  return chunk.empty() ? chunk : chunk.substr(1);
+  if (chunk.empty()) return chunk;
+#if defined(_WIN32)
+  return chunk.substr(1);
+#else
+  return hostfs::Resolve(chunk.substr(1));
+#endif
 }
 
 }  // namespace
