@@ -104,6 +104,7 @@ class LiveSim {
   bool FrameAt(double tick, Frame* out);
   // (shell curve) false: shells, beams and entities between beats as they were drawn before (SimFrames::shellBlend).
   void SetShellBlend(bool on) { frames_.shellBlend = on; }
+  void SetShellStart(bool on) { frames_.shellStart = on; }  // [shellstart] (SimFrames::shellStart)
   // (far step) how far a unit may go in a beat and still be drawn on the way (SimFrames::farStep); 0: any distance.
   void SetFarStep(float units) { frames_.farStep = units; }
   // The effect events of the beats computed since the last call, in order (each says its beat).

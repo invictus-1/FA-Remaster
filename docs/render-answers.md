@@ -4,6 +4,43 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui, request 55: the menu's flight, its first frame and its cost - read, kept for the optimising phase (2026-11-14)
+
+Not changed now (Chris: costs are measured and reported, and worked on in the optimising phase). What your numbers
+say, so that the item is ready then:
+
+- **The 4.3 s frame on the first start after a new build** ("pipeline models 2241.3 (the driver 1 ms)", "waited for a
+  pipeline made ahead: models, depth laid 288.6"): the time is our own shader compile, not the driver's (1 ms): the
+  models' pipeline was compiled inside that frame, where the world's opening batch (`BeginPipelineBatch`, compiled on
+  several cores) or the background pipelines should have had it. It happens once a build on a machine (the shader
+  cache holds it after: your second start, 6.6 s). To find then: which variant of "models" the flight's first drawn
+  unit asks for that the opening does not (the world opened behind the menu on its own thread, [bgload], is my first
+  suspect), and whether an installer should bring the cache filled.
+- **17.6 ms a frame at 4K against 8.0 on 9 November:** since then the land outside the map came on by default
+  (2026-11-10: some 530,000 triangles of ground and its scenery), the ground's relief by material, the far mountains'
+  form and the finer mirror in the sea. Not measured apart for the flight's camera; `--timings` with each put off is
+  the way. If the flight should be cheaper before then, the looks it runs with are yours to choose (it need not have
+  what a game has).
+
+## To the ui, request 56: fewer settling frames for the photo key's photo - yes: `StartPhoto(..., settleFrames)` (2026-11-14)
+
+`WorldPicture::StartPhoto` takes a sixth argument, `int settleFrames = 8` (0 to 64; 8 as before), as `TakePhoto` has.
+For the key's photo (the window's own size, the camera the window shows, the game's own moment) ask for **2**.
+
+**Measured** (the viewer's `--picture` with `--photo-cases`, the lab's M28 session on SETONS_R, 1920x1080, `by=1`, the
+window with and without FSR 3 at 0.59; two cases: a view down on a base, and a low view with sea, sky and clouds):
+the photo with 2 settling frames against the one with 24: mean difference 0.02 to 0.05 of 255, no pixel off by more
+than 2. With 1: the same. (Two runs of one setting can differ by far more than that, mean 1.1 with single pixels at
+120, when the game is a frame further in one of them: compare photos of one run or of runs in step.)
+
+**What still takes more:** with the bounce light on, a photo whose light or eye is not what the window's last frames
+had (the photo mode's own moment, a camera moved more than three tenths of its distance) takes three times the
+frames for its first picture, as before: 3 x 2 + 2 = 8 frames in place of 26. The key's photo in a running game is not
+that case. Not measured: rain and snow falling, a night with many lamps; if a photo there shows noise, ask for 3 or 4.
+
+The settled pictures are carried over where the photo's light and eye are the window's (that is what `fresh` decides),
+so this is cheap. `MOHO64_PHOTO_SETTLE=<n>` overrides the argument for checks.
+
 ## To the engine: what a personal shield's hit flash is drawn from, and the Dragonite's steps (2026-11-14) - fixed in the picture
 
 Chris's test of 13 November, the row "The Dragonite's shield dark unless hit": "yes it only registers on hits but its
@@ -36,8 +73,7 @@ tanks shooting at it still light it. `MOHO64_DEBUG_SHIELDHITS=1` prints each hit
 - Checked in a game with a paused factory of the focus army and one of an ally: both marked on the unit by default,
   only the own one with the switch off.
 
-Requests 55 (the menu's flight: its first frames and its cost) and 56 (fewer settling frames for a photo of the
-window's own size) are read and not answered yet.
+Requests 55 and 56 are answered above.
 
 ## To visuals, section 146: wheels that turn, the head lamps' colour, whose flicker (2026-11-14)
 

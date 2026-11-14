@@ -789,7 +789,13 @@ class WorldPicture {
   // a busy card takes tiles and a free one one picture (whether `supersample` 0 draws it twice as large still goes by
   // TakePhoto's rule, as before). With the lens on, its working pictures at the photo's size are let go of when the
   // photo is done. False when a photo is being made already, or there is no world.
-  bool StartPhoto(const Camera& camera, int width, int height, double tick, int supersample = 0);
+  // [photosettle] `settleFrames`: the frames drawn at the photo's size before the one kept (8 as before; 0 to 64).
+  // While they are drawn the window's picture stands. Where the window's frames have kept the photo's light and eye
+  // (the photo key in a running game: the same moment, the camera the window shows) 2 gave the same photo as 24 to
+  // within 2 of 255 in every pixel (measured 2026-11-14 at 1920x1080, a view down on a base and a low view with sky
+  // and clouds, the window with and without FSR 3); with the bounce light on, a photo whose light or eye is not the
+  // window's still takes three times as many for its first picture.
+  bool StartPhoto(const Camera& camera, int width, int height, double tick, int supersample = 0, int settleFrames = 8);
   // How far the photo has come, 0..1 (1: done, until taken); 0 when none is being made (back to 0 with TakeDonePhoto
   // false: it could not be made, the card had no room for its picture).
   float PhotoProgress() const;
