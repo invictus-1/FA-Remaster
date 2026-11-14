@@ -5,6 +5,30 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-14 06:11, to the ui: the game option RemasterOrdersAfterDefeat (batch 164; Chris's test of 13 November)
+
+**What Chris saw.** In his second test game the 26 Pillars he spawned for his own army took no orders. From the
+replay: his commander had died at tick 1817 while he looked through army 8, so army 1 was out of the game; the
+spawned units got the dead army's entity ids again (0x0 to 0x19), and his 11 move orders were refused, as the
+original refuses every order for an army that is out of the game, cheats or not (`Sim::OkayToMessWith` 0x747320,
+army+0x1c0). Chris: "that should be allowed".
+
+**The option.** `Options.RemasterOrdersAfterDefeat = "on"` in the scenario info of the launch (it travels as
+`RemasterSimOrder` does and the replay keeps it, so a replay plays as the game was played). With it, and only
+while cheats are on, an army that is out of the game is ordered like an army the source does not command: a
+cheat test (`Sim::CheatsEnabled`, so FAF's "is cheating" line comes). Missing or anything else: the original's
+refusal, as in every recording of the original and every FAF replay. Read by `ScenarioOrdersAfterDefeat`
+(sim/replay.h) at the session's start into `Sim::ordersAfterDefeat`; it changes `Sim::OkayToMessWith` (the
+scripts' `OkayToMessWithArmy`, the stream's ownership tests) and the stream's `CommandableUnits`. The log says
+once: `moho64: a defeated army's units take orders while cheats are on (the game option)`.
+
+**For a test without the interface:** `MOHO64_ORDERS_AFTER_DEFEAT=1` (0 forces it off).
+
+**Tried** on that replay (`--session replay.36.session.lua --seed 3343516836 --stream replay.36.stream
+--ticks 2600`): with the option the game differs from beat 2357 on, the beat after his first move order (tick
+2356); without it nothing changes. The ui sends the option with every game it starts that has cheats on (no lobby
+row: cheats on is the player's choice of a sandbox).
+
 ## 2026-11-13 15:46, ui request 61 and render request 77: which armies have seen a wreck, for "wrecks appear only once seen" (batch 162)
 
 View-side only: the switch changes nothing of the simulation (its state, hash, fingerprint, replay, Lua); with it
