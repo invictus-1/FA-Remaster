@@ -3,6 +3,15 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 78 (render/REQUESTS.md): Head Lamp Colour as a player option; and his answer to ui 54 used (2026-11-14)
+
+- The row "Head Lamp Colour" is in Options > Remastered > Units & Readability, after Unit Glow Colour:
+  `remaster_head_lamp_colour`, White / Faction colour / Team colour = `World::headLampColour` 0 / 1 / 2, Team by
+  default (Chris: "follow the color of your team color is best"); console `remaster_head_lamp_colour
+  white|faction|team`. In no preset. docs/ui-options-layout.md 7.
+- The row "Allies' Pause Marks" (`remaster_allies_pause_marks`, on by default = the original's way) sets your
+  `WorldPicture::SetAlliesPauseMarks`, at a picture's start and on every change.
+
 ## Chris's test of 2026-11-13 (the engine's split, `_scratch\engine\TEST_RESULTS_2026-11-13.md`): the interface's part (2026-11-14)
 
 His build was cb9caa01; his words are in the verdicts file, the causes below were read from his logs
@@ -14,7 +23,7 @@ His build was cb9caa01; his words are in the verdicts file, the causes below wer
 | FAIL the photo key: "Game freezes for a second" | The renderer shows the world as it was while a photo is made; `remaster_photo` asked for twice the view's size and left the supersampling to the renderer: ten frames of 75 to 146 ms, 0.93 s (his log, frames 546548-546557). The change of 2026-11-13 had only moved the second from one frame to ten | The key's photo is the view's own size, drawn once: 9 frames in 0.15 to 0.45 s at 4K against 0.42 to 1.33 s, a third in each series (measured, docs/ui-benchmarks.md "The photo key"). Asking only for no supersampling changed nothing (at 7680x4320 the renderer draws once anyway): found by the measure. `remaster_photo fine` gives the photo of twice the size as before; each photo's cost is in the log |
 | "it says cancelled brush stroke" (a camera drag with a second button) | FAF's own text: its map painting (`lua/ui/game/painting/PaintingBrush.lua` OnCancel, called when a dragger is cancelled); his right-button drag was a brush stroke | nothing |
 | "now there is a perma attack marker" (after the rally point row) | His log: a right press with Shift and Alt on a selected factory (`RULEUCC_Move +Shift +Alt`): an attack-move point in the factory's rally route, which stays as rally points do. The order's feedback mark went (the log shows it) | nothing |
-| "yellow icon that shows where the units are docking doesn't appear" (air staging) | Ours, probed 2026-11-14: the Dock order (the order panel's button, `IssueDockCommand`) draws FAF's yellow line (ddffff00) and `repair_btn_up` mark to the platform while Shift is held; a right click on the platform is `TransportLoadUnits` (the original's 0x820e01): line dd654bc2, mark `load_btn_up`. His click was a right click, on an ally's platform | asked him which mark he means (a question, through the engine's list) |
+| "yellow icon that shows where the units are docking doesn't appear" (air staging) | Ours, probed 2026-11-14: the Dock order (the order panel's button, `IssueDockCommand`) draws FAF's yellow line (ddffff00) and `repair_btn_up` mark to the platform while Shift is held; a right click on the platform is `TransportLoadUnits` (the original's 0x820e01): line dd654bc2, mark `load_btn_up`. His click was a right click, on an ally's platform | He answered (2026-11-14): the icon that flashes briefly at every platform the aircraft are sent to when the Dock button is pressed, without Shift. That is the script's order feedback (FAF's commandmode.OnCommandIssued: its default blips for a Dock, which has no mesh of its own): `IssueDockCommand` did not tell the script of its orders. It does now (`ui/user/user_units.cpp`; `ui/tests/dock.lua` checks the flash at the platform) |
 | picture "I don't think I should be able to see what allies pause" | The original's: its icon pass marks a paused unit when the focus army IsAlly of the unit's army (0x85bd99, re-read). It draws the mark centred on the unit's icon place (RenderUnitIcon 0x85d9a0: one centre for the icon's quad and the pause picture's); ours floated above the unit | Chris: "make it an option and have it stick closer to the unit": ui/REQUESTS.md 54 to the renderer (the place; a switch for allies' units); the option's row is the interface's |
 | his notes were cut at about 200 characters | the note line's limit (`retest.lua`) | 2000; `ui/tests/retest.lua` types a note of 599 characters |
 | spawned units of his defeated army took no orders ("that should be allowed") | the original's simulation refuses every order for an army out of the game (Sim::OkayToMessWith 0x747320) | the next entry |

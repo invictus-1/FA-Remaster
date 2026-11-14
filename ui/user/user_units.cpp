@@ -2771,7 +2771,8 @@ int l_GetIsSubmerged(lua_State* L) {
 // their distance from the units' middle (each unit's place, or with `clear` false where its last
 // order goes): all go to the nearest when it has room for all; else the platforms within 100 of the
 // nearest's distance share them by their room (each takes ceil(room * max(1, units / all their
-// room)), the roomiest first), one Dock order (39, the platform as its target) per platform.
+// room)), the roomiest first), one Dock order (39, the platform as its target) per platform, each told to the
+// script (OnCommandIssued: its feedback flash at the platform).
 // Without a platform the first selected unit's army hears PlayNoStagingPlatformsVO, with none free
 // PlayBusyStagingPlatformsVO. Ours: units in the order of their ids (the original's: memory
 // addresses), and a last order without a place counts as the unit's own place (the original's
@@ -2848,6 +2849,21 @@ int l_IssueDockCommand(lua_State* L) {
     d.target.type = 1;
     d.target.entity = platform;
     IssueToUnits(L, ids, d, clear);
+    // The script hears of it as of every order issued for the player (OnCommandIssued, 0x8b0599): FAF's commandmode
+    // has no mesh of its own for a Dock order and flashes its default blips at the target's place, the platform's:
+    // one flash at each platform the aircraft go to. (Left out until 2026-11-14; Chris's test of 11-13: "yellow icon
+    // that shows where the units are docking doesn't appear ... it flashes briefly to let you know where the air units
+    // are landing. Shift doesn't need to be held".)
+    std::vector<UserUnit*> units;
+    for (uint32_t id : ids) {
+      auto it = store.units.find(id);
+      if (it != store.units.end()) units.push_back(it->second.get());
+    }
+    auto at = store.units.find(platform);
+    if (at != store.units.end()) {
+      const float* p = at->second->view.position;
+      ReportCommandIssued(L, "Dock", units, p[0], p[1], p[2], clear, std::string(), platform);
+    }
   };
   if (!platforms.empty()) {
     std::sort(platforms.begin(), platforms.end(), [](const Platform& a, const Platform& b) {

@@ -373,3 +373,26 @@ wreck blueprint at the map's four corners and beside the commander): off, all ar
 take no reclaim cursor and their labels are held back while the one beside the commander has both; a scout of ours
 beside one: cursor and label come; switched off: the held label shows; switched on in the middle: it goes again.
 The picture's half is the renderer's own check.
+
+## 7. "Allies' Pause Marks" and "Head Lamp Colour" (built 2026-11-14; Chris's test of 13 November)
+
+Two rows in the Remastered tab's section Units & Readability (57 rows on the page now), set by no preset level.
+
+**Allies' Pause Marks** (`remaster_allies_pause_marks`, console the same; ON by default). Chris's picture "I don't
+think I should be able to see what allies pause.png"; told that the original marks allies too: "yeah lets make it an
+option and have it stick closer to the unit vs floating up so high". On is the original's way: its icon pass marks
+a paused or switched-off unit of every army allied to the focus army (0x85bd99 `IArmy::IsAlly`); off, the mark is on
+the focus army's own units only. The renderer's `WorldPicture::SetAlliesPauseMarks` (`LookSettings::alliesPauseMarks`;
+ui request 54). The mark's place is no option: the original draws the pause picture centred on the unit's icon place
+(its RenderUnitIcon 0x85d9a0: one centre for the icon's quad and the pause picture's), ours floated above the unit
+until render e4a967c1 and is there now.
+
+**Head Lamp Colour** (`remaster_head_lamp_colour`, console `white|faction|team` or 0|1|2; Team by default). The
+renderer's request 78 for Chris, on the redone units' head lamps: "option for either or follow the color of your team
+color is best". White: as the units' files have the lamps (a flashlight's warm white); Faction: the faction's own
+colour (the UEF's blue); Team: the army's colour. `World::headLampColour` through `WorldLooks`
+(`LookSettings::headLampColour`). The lamps are the remaster's (the original's units have none), so there is no
+original's way to keep; the row starts at Team on his "is best".
+
+Test: `ui/tests/options_tabs.lua` (both at their defaults, switched by the console as the rows' `set` does, and
+back). What the picture then shows is the renderer's own check.

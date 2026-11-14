@@ -654,6 +654,19 @@ struct LookSettings {
   // own wrecks and a death's scorch and smoke are never held back; an observer sees everything. Console
   // remaster_wrecks_once_seen 0|1.
   bool wrecksOnceSeen = false;
+  // Allies' Pause Marks (ours, Chris 2026-11-13: "I don't think I should be able to see what allies pause", then, told
+  // that the original marks them too, "yeah lets make it an option"): the pause mark on allies' paused or switched-off
+  // units as on one's own (true, the default: the original's icon pass marks every unit of an allied army, 0x85bd99
+  // IArmy::IsAlly) or on the focus army's own units only. The renderer's WorldPicture::SetAlliesPauseMarks (his answer
+  // to ui request 54, render e4a967c1; the mark itself now sits on the unit's icon place as the original's). Console
+  // remaster_allies_pause_marks 0|1.
+  bool alliesPauseMarks = true;
+  // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
+  // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
+  // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's
+  // colour: the default here, Chris's "is best"; the renderer's own default is 0). The lamps are the remaster's: the
+  // original's units have none. Console remaster_head_lamp_colour white|faction|team (0|1|2).
+  int headLampColour = 2;
   // Scorch Glow (the renderer's HotMetal::softScorch, render 5d77cf6; Chris: the remastered look the default, the old one
   // kept): a death's fresh scorch on the ground with hot metal on: soft (true, the default: a deep-red bed with bright
   // cracks) or bright (the earlier orange-hot sheet). Console remaster_scorch soft|bright.

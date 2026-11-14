@@ -101,6 +101,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.remasteredBuild = looks.battleEffects;  // (render 6b8109e: the build effects remade; with the remastered effects and the modern look)
   w.energyShields = looks.energyShields;
   w.lampsTeamColour = looks.lampsTeamColour;  // (Unit Glow Colour: team or faction, render 1fd45da)
+  w.headLampColour = std::min(2, std::max(0, looks.headLampColour));  // (Head Lamp Colour: white, faction, team; render e4a967c1)
   w.heat.softScorch = looks.softScorch;        // (Scorch Glow: soft or bright, render 5d77cf6)
   // (the renderer's looks from Chris's big test, each with the earlier look as Off: LookSettings)
   w.water.ocean.glitter = looks.oceanGlitter ? 1 : 0;  // (Ocean Glitter)
@@ -153,6 +154,7 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
   p.SetFrameGeneration(looks.frameGeneration);
   p.SetHiddenOutlines(looks.hiddenOutlines);
   p.SetWrecksOnceSeen(looks.wrecksOnceSeen);
+  p.SetAlliesPauseMarks(looks.alliesPauseMarks);
   p.SetMinimapMeshes(looks.minimapLod != 0);
 }
 // A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
@@ -702,6 +704,8 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.hiddenOutlines != lookNow.hiddenOutlines) picture.SetHiddenOutlines(looks.hiddenOutlines);
     // (Wrecks Appear Once Seen, ours: the renderer's answer to ui request 53)
     if (!lookApplied || looks.wrecksOnceSeen != lookNow.wrecksOnceSeen) picture.SetWrecksOnceSeen(looks.wrecksOnceSeen);
+    // (Allies' Pause Marks, ours: the renderer's answer to ui request 54)
+    if (!lookApplied || looks.alliesPauseMarks != lookNow.alliesPauseMarks) picture.SetAlliesPauseMarks(looks.alliesPauseMarks);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).

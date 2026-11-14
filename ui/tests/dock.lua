@@ -41,7 +41,23 @@ ForkThread(function()
     UISelectionByCategory("AIRSTAGINGPLATFORM", false, false, false, false)
     local pad = ownOf("ueb5202")[1]
     SelectUnits(bombers)
+    local function flashes()
+        local n, last = 0, nil
+        for _, m in moho64ui_WorldMeshes() do
+            if m.shader == "CommandFeedback" or m.shader == "CommandFeedback2" then n, last = n + 1, m end
+        end
+        return n, last
+    end
+    WaitSeconds(1.5)  -- (the marks of the orders before are gone)
+    local before = flashes()
     IssueDockCommand(true)
+    -- the script hears of the Dock order as of every order (OnCommandIssued) and flashes its marks where the aircraft
+    -- go: at the platform. FAF's commandmode has no mesh of its own for a Dock: its default blips. (Left out until
+    -- 2026-11-14; Chris's test of 11-13: the icon that flashes where the air units are landing was missing.)
+    local n, mark = flashes()
+    local pp = pad and pad:GetPosition() or {0, 0, 0}
+    check("the Dock order flashes the game's feedback marks", before .. " " .. tostring(n > before), "0 true")
+    check("at the platform's place", mark ~= nil and math.abs(mark.x - pp[1]) < 1 and math.abs(mark.z - pp[3]) < 1, true)
     WaitSeconds(0.5)
     q = bombers[1]:GetCommandQueue() or {}
     check("with a platform both get the Dock order", (q[1] and q[1].type or "none") .. " " ..

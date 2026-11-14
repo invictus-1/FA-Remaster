@@ -2781,7 +2781,7 @@ not under the cursor; a scout flies over; it is both.
 
 ### 54. The pause mark: on the unit's icon place as the original, and a switch for allies' units (2026-11-14, Chris's test of 11-13; not blocking)
 
-**OPEN (asked 2026-11-14 05:53).**
+**DONE (renderer, 2026-11-14: render e4a967c1, in main e662c77c: the mark centred on the unit's icon place, `WorldPicture::SetAlliesPauseMarks`; `docs/render-answers.md`, "To the ui, request 54").** The row "Allies' Pause Marks" is wired (docs/ui-options-layout.md 7).
 
 Who: ui. Why: Chris's picture "I don't think I should be able to see what allies pause.png" (a red pause mark well
 above an ally's unit icon), and his word through the engine once he heard that the original marks allies too: "yeah
