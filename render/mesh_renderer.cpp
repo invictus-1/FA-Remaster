@@ -2059,8 +2059,9 @@ MeshRenderer::Entry MeshRenderer::MakeEntry(const Model* model, const Mat4& worl
   e.instance.bones[3] = tint ? tint->z : 0;
   if (treads) {  // (marked by y -1, which no tint has; the amounts kept small, the texture repeats)
     e.instance.bones[1] = -1;
-    e.instance.bones[2] = treads[0] - std::floor(treads[0]);
-    e.instance.bones[3] = treads[1] - std::floor(treads[1]);
+    const float left = treads[0] * model->treadPace, right = treads[1] * model->treadPace;  // [treadpace]
+    e.instance.bones[2] = left - std::floor(left);
+    e.instance.bones[3] = right - std::floor(right);
   }
   e.sizeRadius = e.radius;
   for (const ModelLod& lod : model->lods) e.flags |= lod.glass ? kHasGlass : kHasSolid;

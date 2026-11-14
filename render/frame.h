@@ -94,6 +94,11 @@ struct FrameProjectile {
   float position[3] = {0, 0, 0};
   float orientation[4] = {0, 0, 0, 1};
   float velocity[3] = {0, 0, 0};  // world units per second
+  // [shellstart] where this beat's step began, as the engine tells it (ProjectileView::previous): for a shell in its
+  // first beat the place it was made at (its muzzle; a shell a shell threw: where its parent was), later the place of
+  // the beat before. hasPrevious false: not told (a recording): its place less a beat of its speed stands in.
+  float previous[3] = {0, 0, 0};
+  bool hasPrevious = false;
   bool seen = true;               // by the army the picture is for
   // The size its mesh is drawn at, per axis, as the simulation holds it (the engine's
   // ProjectileView::size, docs/engine-answers.md, render 16): the blueprint's UniformScale at

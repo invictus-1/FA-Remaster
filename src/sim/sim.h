@@ -664,6 +664,10 @@ class Sim {
   // made after it are not in that order and wait for the next pass, as before).
   std::vector<Unit*> combatPending_;
   uint64_t combatCutoff_ = 0;
+  // (a unit noted for the sum: into econAdders_, or, inside phase D's turns on the worker pool, into its worker's own
+  // list (econAddersW_), joined to econAdders_ after the phase; the sum sorts them by creation serial either way)
+  void NoteEconAdder(Unit* u);
+  std::vector<std::vector<std::pair<uint64_t, Unit*>>> econAddersW_;
   uint32_t deferKey_ = 0, deferSeq_ = 0;
   void DeferTurn(uint32_t key) {
     deferKey_ = key;
