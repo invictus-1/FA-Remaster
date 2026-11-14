@@ -4,6 +4,50 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 145: a night look at the redone UEF units' lamps: how bright, how many (2026-11-13)
+
+Looked at from the game's camera at hour 23 in clear air, each unit alone on open grass, and blocks of 25 (stills and
+sheets in the lab's scratch, not in the repository). Measured: the ground's brightness (0 to 255), the lit pool = the
+pixels over twice the dark ground (about 40), its area in a 1920x1080 near view, and its brightest hundredth.
+
+| Unit | Beams | Pool, pixels | Brightest 1 % | Reads as |
+|---|---|---|---|---|
+| Striker UEL0201 | 2 | 13,658 | 161 | right: the yardstick |
+| Sparky XEL0209 | 2 | 17,914 | 172 | right |
+| T2 Engineer UEL0208 | 4 | 47,456 | 180 | a little much; fine with 2 |
+| Pillar UEL0202 | 6 | 54,987 | 206 | too much: a block of 25 is a searchlight battery |
+| Spearhead XEL0306 | 4 | 98,468 | 182 | wide and bright for a launcher; fine with 2 |
+| SACU UEL0301 | 1 | 228,635 | 150 | a floodlight: nearly the commander's pool (242,573) |
+| T3 mass fabricator UEB1303 | 6 windows | 30,310 | 254 | its windows' light is right; its lit bands clip to white |
+
+**The rule I would use (per kind):**
+1. At most TWO beams a unit: the foremost pair on the hull. Strength 1 (the pair may differ as the tool sets it), Cone
+   70, Glow 0.15, Radius as the tool sets it. Beams that face the same way do not read as more lamps, they add up into
+   one whiter pool, and each is a light the renderer must shadow and draw.
+2. Every further lamp is a small glow to all sides: no Direction, no Cone; Kind 'work' (or 'window'); Strength 0.3;
+   Radius about a quarter of the head lamps' (12 where the heads have 45). The lamp's glass still shines; it throws no
+   beam.
+3. Order in the list as now: the two beams, the hull glow, then the glows. With many units in view each unit lights
+   only the first of its list, so what matters most stands first.
+
+**Per unit:**
+- **Pillar:** keep the two hull beams, make the four on Turret / Turret_Barrel glows (rule 2). Tried on a copy: alone
+  the pool's brightest hundredth falls from 206 to 182 and its area from 54,987 to 45,907; a block of 25 lights 29,943
+  pixels in place of 42,165 and reads as tanks with head lamps.
+- **T2 Engineer:** keep the two hull beams; the two on Muzzle_Pivot as glows. (If the build arm should carry a work
+  lamp, ONE beam there at Strength 0.5 is the most I would give it.)
+- **Spearhead:** keep the outer pair (the lamps at x = 11.71 and x = -14.59) at their strengths, the inner two as glows.
+- **Striker, Sparky:** right as written.
+- **SACU:** Radius 40 and Strength 0.8 in place of 55 and 1. Tried on a copy: the pool is 78,041 pixels, a third of the
+  commander's, six times the Striker's: a big unit's lamp, not a second commander. The commander's eye beams are in the
+  UEF's blue (0.27, 0.61, 1.00); the SACU's are warm white. Which is right for the SACU's eyes is yours and Chris's.
+- **T3 mass fabricator:** the six window lights are right as written (a small pool round its foot). Its lit bands are
+  the brightest thing in the whole sheet: 2,388 pixels over 230 in the near view. If they should read as bands and not
+  as a white core, their emissive wants to come down by about a third. The material is yours; no renderer change.
+
+**For your books:** a 'window' light with a Direction and a Cone is a beam to the renderer too (it goes by the fields,
+not by the Kind; only 'hull' is read, for the army's colour): a wide soft one, and it counts against rule 1's two.
+
 ## To the ui, request 53: wrecks drawn only once seen (2026-11-13) - done, on the engine's list
 
 **The call:** `void WorldPicture::SetWrecksOnceSeen(bool on);` (world_picture.h, beside SetLifeBarsOnEnemies). OFF at
