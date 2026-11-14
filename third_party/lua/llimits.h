@@ -113,8 +113,10 @@ typedef LUA_UACNUMBER l_uacNumber;
 /*
 ** type for virtual-machine instructions
 ** must be an unsigned with (at least) 4 bytes (see details in lopcodes.h)
+** moho64: 32 bits on every system (unsigned long is 64 bits on Linux and Mac): the same code size there, so the same
+** heap count (nblocks) and collector threshold as on Windows and in the original (linsim, 2026-11-14)
 */
-typedef unsigned long Instruction;
+typedef unsigned int Instruction;
 
 
 /* maximum depth for calls (unsigned short) */

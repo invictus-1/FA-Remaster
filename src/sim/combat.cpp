@@ -5453,10 +5453,13 @@ int l_arm_SetPrecedence(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
+// IAniManipulator:Destroy (0x63bf40, one binding for every manipulator class): GetIAniManipulatorOpt (0x63ceb0) answers
+// null for a destroyed one and the call does nothing, so a second Destroy (a TrashBag holding a manipulator that a
+// script destroyed already: trashbag.lua asks for an idempotent Destroy) raises nothing.
 int l_arm_Destroy(lua_State* L) {
-  BuilderArm* a = CheckArm(L);
-  a->alive = false;
-  a->UnbindLua();
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* a = dynamic_cast<BuilderArm*>(o)) a->alive = false;
+  if (o) o->UnbindLua();
   return 0;
 }
 }  // namespace
@@ -5575,10 +5578,10 @@ int l_rot_Disable(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
-int l_rot_Destroy(lua_State* L) {
-  RotateManipulator* r = CheckRot(L);
-  r->alive = false;
-  r->UnbindLua();
+int l_rot_Destroy(lua_State* L) {  // (idempotent as IAniManipulator:Destroy 0x63bf40: see l_arm_Destroy)
+  ScriptObject* o = GetObject(L, 1);
+  if (auto* r = dynamic_cast<RotateManipulator*>(o)) r->alive = false;
+  if (o) o->UnbindLua();
   return 0;
 }
 

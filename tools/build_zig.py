@@ -108,6 +108,7 @@ def main():
             os.path.getmtime(j[1]) < max(os.path.getmtime(j[0]), newest_header)]
     print(f"build_zig: {len(todo)} of {len(jobs)} objects to compile, {a.jobs} jobs, target {target or 'native'}")
     failed = []
+    warned = []  # (file, the compiler's text) of the objects that compiled with something to say: <out>/warnings.txt
     with cf.ThreadPoolExecutor(a.jobs) as ex:
         futs = {ex.submit(subprocess.run, j[2], capture_output=True, text=True): j for j in todo}
         for fu in cf.as_completed(futs):
@@ -115,6 +116,13 @@ def main():
             if r.returncode != 0:
                 failed.append(j[0])
                 sys.stderr.write(f"--- {os.path.relpath(j[0], ROOT)}\n{r.stderr}\n")
+            elif r.stderr.strip():
+                warned.append((os.path.relpath(j[0], ROOT), r.stderr))
+    with open(os.path.join(a.out, "warnings.txt"), "w", encoding="utf-8") as wf:
+        for name, text in sorted(warned):
+            wf.write(f"--- {name}\n{text}\n")
+    if warned:
+        print(f"build_zig: {len(warned)} file(s) with warnings (this build's compiled files): {os.path.join(a.out, 'warnings.txt')}")
     if failed:
         sys.exit(f"build_zig: {len(failed)} file(s) failed")
     exe = os.path.join(a.out, "moho64.exe" if windows else "moho64")
