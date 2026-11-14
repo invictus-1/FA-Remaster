@@ -80,6 +80,7 @@ struct wl_surface;
 #include "gfx_vulkan_dxc.h"
 #include "hitch_log.h"  // [hitches]
 #include "render_trace.h"  // [tracy]
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 // (Vulkan's structures are begun with their type alone, the rest zero)
 #if defined(__clang__)

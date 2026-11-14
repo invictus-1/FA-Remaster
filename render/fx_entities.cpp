@@ -13,6 +13,7 @@
 #include "core/vfs.h"
 #include "models.h"
 #include "script/script_state.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 
@@ -38,11 +39,11 @@ int Watch(lua_State* L) {
 void StandWatchdog(lua_State* L, lua_Debug*) {
   if (++gStandSteps < 500) return;
   gStandSteps = 0;
-  std::fprintf(stderr, "render: fx stand: a script ran on for half a billion steps without waiting; stopped at:\n");
+  fprintf(stderr, "render: fx stand: a script ran on for half a billion steps without waiting; stopped at:\n");
   lua_Debug ar;
   for (int level = 0; level < 12 && lua_getstack(L, level, &ar); ++level) {
     lua_getinfo(L, "Sln", &ar);
-    std::fprintf(stderr, "  %s:%d %s\n", ar.short_src, ar.currentline, ar.name ? ar.name : "");
+    fprintf(stderr, "  %s:%d %s\n", ar.short_src, ar.currentline, ar.name ? ar.name : "");
   }
   luaL_error(L, "fx stand: a script ran on without waiting");
 }

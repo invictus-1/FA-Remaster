@@ -17,6 +17,7 @@
 #include "sim/sim_view.h"
 #include "sim/units.h"  // [byunit] (a shell's launcher)
 #include "sim/terrain.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

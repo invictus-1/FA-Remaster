@@ -8,6 +8,7 @@
 #include "lighting.h"
 #include "lights.h"
 #include "sunlight.h"  // [sunlight]
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

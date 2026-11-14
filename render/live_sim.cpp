@@ -25,6 +25,7 @@
 #include "sim/sim.h"
 #include "sim/terrain.h"  // [pings] (the ground where a ping is placed)
 #include "sim/sim_view.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

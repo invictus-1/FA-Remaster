@@ -12,6 +12,7 @@
 #include "frame.h"
 #include "lights.h"
 #include "models.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

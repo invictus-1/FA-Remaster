@@ -23,6 +23,7 @@
 #include "hitch_log.h"  // [hitches]
 #include "machinery.h"  // [machinery]
 #include "unit_wear.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

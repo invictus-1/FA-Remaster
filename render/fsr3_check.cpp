@@ -11,6 +11,7 @@
 
 #include "fsr3.h"
 #include "png.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

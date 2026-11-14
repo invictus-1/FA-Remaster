@@ -9,6 +9,7 @@
 #include "lighting.h"
 #include "plants.h"  // [plants]
 #include "ray_scene.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

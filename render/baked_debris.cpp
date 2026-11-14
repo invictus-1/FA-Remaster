@@ -14,6 +14,7 @@
 #include "mesh_renderer.h"
 #include "models.h"
 #include "particles.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {

@@ -11,6 +11,7 @@
 
 #include "lighting.h"
 #include "original_shield.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {
@@ -611,7 +612,7 @@ std::string IcosahedronBlock() {
         put(&A, a), put(&B, b), put(&C, c);
         ++faces;
       }
-  if (faces != 20) std::fprintf(stderr, "render: energy shields: the icosahedron has %d faces\n", faces);
+  if (faces != 20) fprintf(stderr, "render: energy shields: the icosahedron has %d faces\n", faces);
   return "static const float3 kIcoA[20] = {" + A + "};\nstatic const float3 kIcoB[20] = {" + B + "};\nstatic const float3 kIcoC[20] = {" + C + "};\n";
 }
 

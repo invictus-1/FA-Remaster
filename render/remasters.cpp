@@ -8,6 +8,7 @@
 #include "core/hostfs.h"
 #include "core/vfs.h"
 #include "effect_files.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

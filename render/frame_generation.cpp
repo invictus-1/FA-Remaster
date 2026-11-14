@@ -11,6 +11,7 @@
 #include <initializer_list>
 #include <string>
 #include <utility>
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 // What AMD's runtime does on the processor for frame generation (FidelityFX SDK v2.3.0, framegeneration/fsr3/internal/:
 // ffx_provider_fsr3framegeneration.cpp's CreateContext and Dispatch, which drive the optical flow

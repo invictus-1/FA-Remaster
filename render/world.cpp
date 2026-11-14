@@ -21,6 +21,7 @@
 #include "snow_ground.h"  // [snow ground]
 #include "volfx_log.h"  // (MOHO64_DEBUG_VOLFX)
 #include "bp_reader.h"  // [dents]
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

@@ -1008,6 +1008,7 @@
 #include "load_test.h"  // [bgload]
 #include "recover_test.h"  // [devicelost]
 #include "core/trace.h"  // [tracy]
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 using namespace render;
 

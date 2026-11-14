@@ -13,6 +13,7 @@
 #include "third_party/fsr1/ffx_a.h"
 #include "third_party/fsr1/ffx_fsr1.h"
 #pragma clang diagnostic pop
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 

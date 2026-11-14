@@ -10,6 +10,7 @@
 #include "lighting.h"
 #include "ocean.h"
 #include "weather.h"
+#include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
 namespace {
