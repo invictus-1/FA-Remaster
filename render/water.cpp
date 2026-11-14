@@ -621,9 +621,17 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   N = normalize(N + float3(-swell.y, 0, -swell.z) * lerp(1.0, 2.5, saturate(-toPixel.y * 2.5)));
 #endif
 #if MIRROR_CALM_N
-  // [mirrorgrain] (Water::mirrorGrain 1 and 8) the surface the mirror goes off: the waves and the swell, without the fine ripples
-  // and the rain's rings and roughening below (the ripples' field and the surf's waves are added to it too)
+  // [mirrorgrain] (Water::mirrorGrain 2 and 4) the surface the Fresnel term goes by: the waves and the swell, without the fine
+  // ripples and the rain's rings and roughening below (the ripples' field and the surf's waves are added to it too)
   float3 calmN = N;
+#if OCEAN && MIRROR_TRUE_SLOPES
+  {
+    // (4: the ocean's waves by their true slopes, not the steeper ones drawn for their shading: as the glint, below, takes
+    // them; seen low, the steeper faces turned the Fresnel term from mirror to water and back from one pixel to the next)
+    float trueTilt = max(oceanLook2.z * lerp(1.0, 2.0, saturate(-toPixel.y * 2.5)), 0.05);
+    calmN = normalize(float3(-ocean.slope.x / trueTilt, 1, -ocean.slope.y / trueTilt));
+  }
+#endif
 #endif
   // near the eye: fine ripples, two sizes of them crossing, which the game's wave textures are too
   // coarse to show (Chris, 2026-10-13: "if you go up close it looks very pixelated"). Each size is
@@ -656,7 +664,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     float away = length(from);
     float ring = saturate(1 - abs(away - age * 0.5) * 7) * (1 - age) * step(h, 0.08 + 0.3 * falling.x) * saturate(1 - distance / 220);
 #if RAIN_FADE
-    // [mirrorgrain] (Water::mirrorGrain 16) the rings (a band about a fifteenth of a unit wide) and the roughening (a noise of
+    // [mirrorgrain] (Water::mirrorGrain 1) the rings (a band about a fifteenth of a unit wide) and the roughening (a noise of
     // nine to a unit) left out where they are finer than about two pixels, as the fine ripples above are: there each pixel
     // took a tilt of its own, a point of mirror or of water at random
     ring *= saturate(1.5 - grain * 2.2 * 7 * 2);
@@ -735,11 +743,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float2 mirrorToEye = normalize(-toPixel.xz + 1e-6);
   float2 mirrorStep = 0;
   {
-#if MIRROR_CALM
-    float2 lean = float2(0.3 * dot(calmN.xz, mirrorToEye) / max(calmN.y, 0.05), 0.5 * asin(saturate(-toPixel.y)));  // [mirrorgrain]
-#else
     float2 lean = float2(0.3 * dot(N.xz, mirrorToEye) / max(N.y, 0.05), 0.5 * asin(saturate(-toPixel.y)));
-#endif
     mirrorStep = abs(ddx(lean)) + abs(ddy(lean));
   }
 #endif
@@ -1113,14 +1117,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       // (And where the lean changes from one row of the picture to the next by as much as it is, the rows no longer show
       // the waves but pick one each at random: by that share the lean is not kept but counted into the spread. Far off
       // the image then stands as off calm water, drawn out toward the eye and soft, where it was torn row by row.)
-#if MIRROR_CALM
-      // [mirrorgrain] (Water::mirrorGrain 1) off the calmer surface (calmN, above); the lean the fine ripples and the rain
-      // add toward the eye counted into the spread below, as the waves too small for the pixel are
-      float2 kept = 0.3 * calmN.xz / max(calmN.y, 0.05);
-      float fineLean = dot(0.3 * N.xz / max(N.y, 0.05) - kept, mirrorToEye);
-#else
       float2 kept = 0.3 * N.xz / max(N.y, 0.05);
-#endif
       float along = dot(kept, mirrorToEye);
       float leanStep = mirrorStep.x;
 #if WINTER
@@ -1136,20 +1133,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
         spread2 += 0.09 * max(mirrorToEye.x * mirrorToEye.x * s.x + mirrorToEye.y * mirrorToEye.y * s.y + 2 * mirrorToEye.x * mirrorToEye.y * s.z, 0);
       }
 #endif
-#if MIRROR_CALM
-      spread2 += fineLean * fineLean;  // [mirrorgrain]
-#endif
       float spread = min(sqrt(spread2), 0.25);
-#if MIRROR_JITTER
-      // [mirrorgrain] (Water::mirrorGrain 4) the kept lean moved each frame by a draw from the bell curve of the spread (three
-      // even draws summed: near enough), the frame's own by the clock: FSR 3's history, which follows the picture over the
-      // frames, averages the pixel's water's many leans where one frame takes one
-      {
-        uint draw = RayHash(seed ^ asuint(time * 60.0 + 0.5) * 0x9e3779b9u);
-        float3 u = float3(draw & 1023, (draw >> 10) & 1023, (draw >> 20) & 1023) / 1023.0;
-        kept += mirrorToEye * (spread * 2 * (u.x + u.y + u.z - 1.5));
-      }
-#endif
       float3 from = i.world + float3(0, 0.05, 0);
       float3 way[2];
       RayHit met[2];
@@ -1185,23 +1169,6 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
           count += 1;
         }
       }
-#if MIRROR_RAYS
-      // [mirrorgrain] (Water::mirrorGrain 2) where something is met, four more rays spread over the leans the pixel's water
-      // takes in (at -1, -1/3, 1/3 and 1 spread about the kept lean, toward the eye), the colours of those that meet averaged
-      // with the two above: what the pixel mirrors is many places of the shore, not the one or two its rays met
-      [branch] if (count > 0 && spread > 1e-5) {
-        for (int more = 0; more < 4; ++more) {
-          float3 d = MirrorOff(toPixel, kept + mirrorToEye * (spread * (more * 0.6667 - 1)));
-          RayHit h;
-          [branch] if (RayTrace(from, d, 0.05, rayEffects.y, 0x01, seed + 8 + more, h)) {
-            float3 hit = from + d * h.t, hitAlbedo, n;
-            RaySurfaceAt(h, hit, d, rayEffects.zw, hitAlbedo, n);
-            lit += ThroughAirTo(RayLitAt(hit, n, hitAlbedo, seed + 8 + more, 8), hit);
-            count += 1;
-          }
-        }
-      }
-#endif
       mirrored = count > 0 ? lerp(mirror, lit / count, share) : mirror;
     }
 #else
@@ -1240,15 +1207,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // (and it goes off the calmer surface the rays' mirror goes off, above, the waves' tilt kept at 45%: off the full tilt,
     // drawn steeper than the waves are for their shading, the faces of the waves near the eye turned away from it mirrored
     // the ship's hull in sharp-edged patches far below it, lying amid the sky's mirror image of the faces round them)
-#if MIRROR_CALM
-    float3 marchR = reflect(toPixel, normalize(lerp(calmN, float3(0, 1, 0), 0.55)));  // [mirrorgrain] (off the calmer surface)
-#else
     float3 marchR = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), 0.55)));
-#endif
-    marchR.y = max(marchR.y, 0.02);
-    marchR = normalize(marchR);
-#elif MIRROR_CALM
-    float3 marchR = reflect(toPixel, calmN);  // [mirrorgrain] (off the calmer surface)
     marchR.y = max(marchR.y, 0.02);
     marchR = normalize(marchR);
 #else
@@ -1308,11 +1267,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   // and down the picture: a tilt toward the eye moves the image far more than one across). Laid over what the march and
   // the rays found (fire adds, smoke covers by its alpha), and so under the Fresnel term and the foam with them.
   [branch] if (fxMirror.x > 0.5) {
-#if MIRROR_CALM && OCEAN
-    float3 fxN = normalize(lerp(calmN, float3(0, 1, 0), 0.25));  // [mirrorgrain] (the calmer surface)
-#elif MIRROR_CALM
-    float3 fxN = calmN;
-#elif OCEAN
+#if OCEAN
     float3 fxN = normalize(lerp(N, float3(0, 1, 0), 0.25));  // (calmer than drawn, as the march above goes off; less so: a soft image may break up)
 #else
     float3 fxN = N;
@@ -1339,7 +1294,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     mirror = mirror * (1 - saturate(fx.a)) + fx.rgb;
   }
 #if MIRROR_FRESNEL
-  // [mirrorgrain] (Water::mirrorGrain 8) how much the water mirrors, by the calmer surface: seen low, the share goes as the
+  // [mirrorgrain] (Water::mirrorGrain 2 and 4) how much the water mirrors, by the calmer surface: seen low, the share goes as the
   // fifth power of how near the line of sight lies to the surface, and the rain's roughening and the fine ripples, which far
   // off change from one pixel to the next, turned it from mirror to water and back pixel by pixel
   float facing = saturate(dot(-toPixel, calmN));
@@ -1446,12 +1401,9 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
                        (ocean && lift ? "#define LIFT 1\n" : "") +    // [lift]
                        "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt)
                        (mirrorFineBuilt_ ? "#define MIRROR_FINE 1\n" : "") +  // [mirrorfine] (KeepVariants)
-                       ((mirrorGrainBuilt_ & 1) ? "#define MIRROR_CALM 1\n" : "") +    // [mirrorgrain] (trials, KeepVariants)
-                       ((mirrorGrainBuilt_ & 2) ? "#define MIRROR_RAYS 1\n" : "") +
-                       ((mirrorGrainBuilt_ & 4) ? "#define MIRROR_JITTER 1\n" : "") +
-                       ((mirrorGrainBuilt_ & 8) ? "#define MIRROR_FRESNEL 1\n" : "") +
-                       ((mirrorGrainBuilt_ & 9) ? "#define MIRROR_CALM_N 1\n" : "") +
-                       ((mirrorGrainBuilt_ & 16) ? "#define RAIN_FADE 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 1) ? "#define RAIN_FADE 1\n" : "") +       // [mirrorgrain] (trials, KeepVariants)
+                       ((mirrorGrainBuilt_ & 6) ? "#define MIRROR_FRESNEL 1\n#define MIRROR_CALM_N 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 4) ? "#define MIRROR_TRUE_SLOPES 1\n" : "") +
                        (ownEdgeBandBuilt_ ? "#define EDGE_SEA 1\n#define BEYOND_BAND (beyondMore.x > 0 ? beyondMore.x : beyondLand.y)\n" : "") +  // [edgesea] (lighting.h; KeepVariants)
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                        kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + (ocean ? kOceanShaderBlock : "") +

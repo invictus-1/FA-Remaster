@@ -221,12 +221,11 @@
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
 //           device has ray tracing): smooth surfaces mirror what their rays meet; [mirrorfine] on the water the mirror image
 //           of what stands far off with soft edges (Water::mirrorFine; --no-mirror-fine: two rays a pixel, all or
-//           nothing, as before: flat bars at a low angle); [mirrorgrain] trials, none on by default (Water::mirrorGrain):
-//           --mirror-calm the mirror off a calmer surface (without the rain's rings and roughening and the fine ripples:
-//           their tilt counted into its soft spread), --mirror-rays four more rays a pixel over that spread, their colours
-//           averaged, --mirror-jitter the rays' lean drawn anew each frame from that spread (for FSR 3's history),
-//           --mirror-fresnel-calm how much the water mirrors by that calmer surface, --rain-tilt-fade the rain's rings and
-//           roughening of the water left out where they are finer than about two pixels (as the fine ripples are)
+//           nothing, as before: flat bars at a low angle); [mirrorgrain] trials against the grain of the mirror image seen
+//           low in the rain, none on by default (Water::mirrorGrain): --rain-tilt-fade the rain's rings and roughening of the
+//           water left out where they are finer than about two pixels (as the fine ripples are); --mirror-fresnel-calm how
+//           much the water mirrors (the Fresnel term) by a calmer surface, without them and the fine ripples;
+//           --mirror-true-slopes that, and the ocean's waves in it by their true slopes, not the steeper ones drawn
 // --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
 //           --ray-reflections; where the device has ray tracing): flashes, shots and lamps shadowed by what stands between;
 //           `rays` the most a place casts (1..4; 4 unless given), `all`: one for every light (exact, to compare with)
@@ -1102,7 +1101,7 @@ struct Options {
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
-  int mirrorGrain = 0;                                         // [mirrorgrain] --mirror-calm 1, --mirror-rays 2, --mirror-jitter 4, --mirror-fresnel-calm 8, --rain-tilt-fade 16
+  int mirrorGrain = 0;                                         // [mirrorgrain] --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -1455,11 +1454,9 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--no-mirror-fine") o->mirrorFine = false;  // [mirrorfine]
-    else if (a == "--mirror-calm") o->mirrorGrain |= 1;  // [mirrorgrain]
-    else if (a == "--mirror-rays") o->mirrorGrain |= 2;
-    else if (a == "--mirror-jitter") o->mirrorGrain |= 4;
-    else if (a == "--mirror-fresnel-calm") o->mirrorGrain |= 8;
-    else if (a == "--rain-tilt-fade") o->mirrorGrain |= 16;
+    else if (a == "--rain-tilt-fade") o->mirrorGrain |= 1;  // [mirrorgrain]
+    else if (a == "--mirror-fresnel-calm") o->mirrorGrain |= 2;
+    else if (a == "--mirror-true-slopes") o->mirrorGrain |= 4;
     else if (a == "--soak-old") o->soakOld = true;  // [soakfix]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;

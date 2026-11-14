@@ -65,18 +65,15 @@ class Water {
   bool ownEdgeBand = true;
   // [mirrorgrain] (Chris's game test of 2026-11-13: the shore's mirror image in the sea, seen low over it in the rain, "looks
   // a bit low res": a stipple of bright and dark pixels where the water round it is smooth.) Trials, each a bit, none on by
-  // default; built into the modern pipelines as mirrorFine is (MIRROR_CALM, MIRROR_RAYS, MIRROR_JITTER: KeepVariants):
-  //  1 (viewer --mirror-calm): the mirror's rays, the picture's march and the effects' mirror go off a calmer surface than
-  //    the one drawn: without the rain's rings and roughening and the fine ripples near the eye, which far off change from
-  //    one pixel to the next by more than the waves do (the rain's roughening is not faded by what a pixel takes in); what
-  //    they tilt is counted into the soft edge's spread instead;
-  //  2 (--mirror-rays): four more rays a pixel spread over the leans the pixel's water takes in, their colours averaged with
-  //    the two of before (where any of them meets something);
-  //  4 (--mirror-jitter): the rays' lean drawn anew each frame from that spread, for FSR 3's history to average;
-  //  8 (--mirror-fresnel-calm): how much the water mirrors (the Fresnel term) by that calmer surface: seen low it goes as the
-  //    fifth power of how near the line of sight lies to the surface, and the rain's roughening turned it pixel by pixel;
-  //  16 (--rain-tilt-fade): the rain's rings and roughening of the water left out where they are finer than about two pixels
-  //    (RAIN_FADE), as the fine ripples are: for the whole of the water's look, not the mirror alone.
+  // default; built into the modern pipelines as mirrorFine is (RAIN_FADE, MIRROR_FRESNEL, MIRROR_TRUE_SLOPES: KeepVariants):
+  //  1 (viewer --rain-tilt-fade): the rain's rings and roughening of the water left out where they are finer than about two
+  //    pixels, as the fine ripples are (far off each pixel took a tilt of its own: a point of mirror or of water at random);
+  //    for the whole of the water's look, not the mirror alone;
+  //  2 (--mirror-fresnel-calm): how much the water mirrors (the Fresnel term) by a calmer surface than the one drawn, without
+  //    the rain's rings and roughening and the fine ripples: seen low it goes as the fifth power of how near the line of
+  //    sight lies to the surface, and they turned it from mirror to water and back pixel by pixel;
+  //  4 (--mirror-true-slopes): 2, and the ocean's waves in that surface by their true slopes, not the steeper ones drawn for
+  //    their shading (as the sun's glint takes them).
   int mirrorGrain = 0;
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
