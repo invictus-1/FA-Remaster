@@ -104,6 +104,10 @@ class SimFrames {
   // move), turns it from the one beat's direction to the other's, moves a beam's ends with it, and turns and sizes the
   // scripts' entities as it moved them. false: as it was (a test's "before").
   bool shellBlend = true;
+  // [shellstart] A shell new in a beat is drawn over that beat from where it was made (its muzzle: its place less the
+  // step the simulation moved it in the beat that made it) to where the next beat has it. False: from its first place
+  // on, one step out of the muzzle, as before.
+  bool shellStart = true;
   // (far step) A unit that was teleported or set elsewhere by a script (Warp) was drawn flying there for a beat, and
   // what goes by its drawn place with it. A unit farther than this from where it was a beat before (world units for
   // each beat between the two; the fastest aircraft do about 3) is not drawn on the way: it stands as before for the

@@ -196,6 +196,8 @@
 //           original's); --pause-marks-own: over the focus army's own units only (World::pauseMarksOnAllies off)
 // --allies <army>,<army>,...  (checks) the armies allied with --focus's (from 1; World::alliedArmies, which the interface
 //           sets from the game): their life bars and pause marks show as the focus army's own
+// --shell-start-old  [shellstart] a new shell drawn from its first place on, one step out of its muzzle, as before (not
+//           from where it was made: SimFrames::shellStart)
 // --fog-frame-old  [fogframe] the fog of war's dimming outside the map let go from the edge on, as before (not held as far
 //           out as the farthest zoom shows)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
@@ -1070,6 +1072,7 @@ struct Options {
   bool wakesRemade = false;             // --wakes-remade [wakes]
   bool fixedStep = false;               // --fixed-step [wakes]
   bool shellBlend = true;               // --shells-as-before (shell curve)
+  bool shellStart = true;               // --shell-start-old [shellstart]
   std::string shellLog;                 // --shell-log (shell curve)
   float farStep = -1;                   // --far-step (far step; -1: the frames' own)
   std::string unitLog;                  // --unit-log (far step)
@@ -1505,6 +1508,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--shells-as-before") o->shellBlend = false;  // (shell curve)
+    else if (a == "--shell-start-old") o->shellStart = false;  // [shellstart]
     else if (a == "--surf") o->surf = true;
     else if (a == "--ocean") o->oceanWaves = true;  // [ocean]
     else if (a == "--ocean-lift") o->oceanWaves = o->oceanLift = true;  // [lift]
@@ -2536,6 +2540,7 @@ int main(int argc, char** argv) {
     setup.lua = opt.luaOrders;      // [r7] --orders
     live.SetFocusArmy(opt.focus);
     live.SetShellBlend(opt.shellBlend);  // (shell curve)
+    live.SetShellStart(opt.shellStart);  // [shellstart]
     if (opt.farStep >= 0) live.SetFarStep(opt.farStep);  // (far step)
     picture.SetVulkan(opt.vulkan);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)

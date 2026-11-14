@@ -633,6 +633,14 @@ void SimFrames::Beat(const moho::Sim& sim) {
     const uint32_t first = since != shellSince_.end() ? since->second : sim.tick();
     shellSinceNext_[v.id] = first;
     p.age = static_cast<float>(sim.tick() - first) * 0.1f;
+    if (since == shellSince_.end() && getenv("MOHO64_DEBUG_SHELLSTART")) {  // (checks: where a shell is when it is first listed)
+      const auto f = firedBy.find(v.id);
+      const float speed = std::sqrt(v.velocity[0] * v.velocity[0] + v.velocity[1] * v.velocity[1] + v.velocity[2] * v.velocity[2]);
+      if (f != firedBy.end() && f->second) {
+        const float dx = v.position[0] - f->second->position.x, dy = v.position[1] - f->second->position.y, dz = v.position[2] - f->second->position.z;
+        printf("render: shell start: beat %u: %s first listed %.2f from its launcher's place (%.2f level), speed %.1f (%.2f a beat)\n", sim.tick(), v.blueprint.c_str(), std::sqrt(dx * dx + dy * dy + dz * dz), std::sqrt(dx * dx + dz * dz), speed, speed * 0.1f);
+      }
+    }
     {  // [byunit]
       uint32_t by = 0;
       if (auto known = shellBy_.find(v.id); known != shellBy_.end()) by = known->second;
@@ -908,7 +916,29 @@ bool SimFrames::FrameAt(double tick, Frame* out) {
       const int32_t at = shellNext_[n];
       if (at >= 0 && static_cast<size_t>(at) < b->projectiles.size() && b->projectiles[at].id == p.id) next = &b->projectiles[at];
     }
-    if (next && next->stopped) {
+    if (shellStart && p.age <= 0 && !p.stopped) {
+      // [shellstart] one new in this beat: the simulation makes a shell at its muzzle in the weapons' stage and moves it
+      // one whole step in the same beat (the engine's answer of 2026-11-14: Sim::Tick's order, as the original's), so
+      // the first place the picture gets is the muzzle and one step, 3 units for a tank's shell, and that is where it
+      // first showed, as its muzzle's flash came (Chris's test of 2026-11-13: the Pillar's "projectile starts a tad far
+      // from barrels"). Over this first beat it is drawn from where it was made (its place less this beat's step) to
+      // where the next beat has it: it leaves the muzzle with the flash and is where the game has it from the next
+      // beat on, its hit as before.
+      float from[3], to[3];
+      for (int k = 0; k < 3; ++k) {
+        from[k] = p.position[k] - p.velocity[k] * 0.1f;
+        to[k] = next ? next->position[k] : p.position[k] + p.velocity[k] * span;
+        p.position[k] = from[k] + (to[k] - from[k]) * t;
+      }
+      if (next) {
+        const Quat q = Nlerp({p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]},
+                             {next->orientation[0], next->orientation[1], next->orientation[2], next->orientation[3]}, t);
+        p.orientation[0] = q.x;
+        p.orientation[1] = q.y;
+        p.orientation[2] = q.z;
+        p.orientation[3] = q.w;
+      }
+    } else if (next && next->stopped) {
       // [shellstop] one that hits within this beat (the next beat has it stopped where it hit) is moved toward its
       // hit, not on along its velocity past it (Chris's 2026-11-08 test: an ACU's bolt drawn up to two units past the
       // unit it hit, then snapping back)

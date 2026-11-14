@@ -4,6 +4,24 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui, request 55: the menu's flight, its first frame and its cost - read, kept for the optimising phase (2026-11-14)
+
+Not changed now (Chris: costs are measured and reported, and worked on in the optimising phase). What your numbers
+say, so that the item is ready then:
+
+- **The 4.3 s frame on the first start after a new build** ("pipeline models 2241.3 (the driver 1 ms)", "waited for a
+  pipeline made ahead: models, depth laid 288.6"): the time is our own shader compile, not the driver's (1 ms): the
+  models' pipeline was compiled inside that frame, where the world's opening batch (`BeginPipelineBatch`, compiled on
+  several cores) or the background pipelines should have had it. It happens once a build on a machine (the shader
+  cache holds it after: your second start, 6.6 s). To find then: which variant of "models" the flight's first drawn
+  unit asks for that the opening does not (the world opened behind the menu on its own thread, [bgload], is my first
+  suspect), and whether an installer should bring the cache filled.
+- **17.6 ms a frame at 4K against 8.0 on 9 November:** since then the land outside the map came on by default
+  (2026-11-10: some 530,000 triangles of ground and its scenery), the ground's relief by material, the far mountains'
+  form and the finer mirror in the sea. Not measured apart for the flight's camera; `--timings` with each put off is
+  the way. If the flight should be cheaper before then, the looks it runs with are yours to choose (it need not have
+  what a game has).
+
 ## To the ui, request 56: fewer settling frames for the photo key's photo - yes: `StartPhoto(..., settleFrames)` (2026-11-14)
 
 `WorldPicture::StartPhoto` takes a sixth argument, `int settleFrames = 8` (0 to 64; 8 as before), as `TakePhoto` has.
@@ -55,8 +73,7 @@ tanks shooting at it still light it. `MOHO64_DEBUG_SHIELDHITS=1` prints each hit
 - Checked in a game with a paused factory of the focus army and one of an ally: both marked on the unit by default,
   only the own one with the switch off.
 
-Request 56 is answered above. Request 55 (the menu's flight: its first frames and its cost) is read and not
-answered yet.
+Requests 55 and 56 are answered above.
 
 ## To visuals, section 146: wheels that turn, the head lamps' colour, whose flicker (2026-11-14)
 
