@@ -50,6 +50,7 @@ struct ModelLight {
   float cone = 0;        // a beam: its whole opening angle, degrees; 0: it shines to all sides
   float glow = 0.15f;    // a beam: the share that still shines to all sides close to the lamp
   bool hull = false;     // Kind 'hull': the unit's own faint glow, drawn in its army's colour
+  bool head = false;     // Kind 'head': a head lamp (its colour by World::headLampColour) [headcolour]
 };
 
 struct ModelLod {

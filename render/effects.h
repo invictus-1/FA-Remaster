@@ -77,7 +77,13 @@ class Effects {
   void Clear();
   // Where emitters that stay where they were made were moved out to since the last call (OffsetEmitter:
   // a shield's hit effects are made at its centre and moved out to where it was struck).
-  void TakeHits(std::vector<Vec3>* out) {
+  // [stephit] `entity`: what the emitter was made on (a shield's hit effects on the shield's own impact entity, never
+  // on a unit; a walking unit's footfall dust on the unit itself, moved out to its foot the same way).
+  struct MovedOut {
+    Vec3 at;
+    uint32_t entity = 0xffffffff;
+  };
+  void TakeHits(std::vector<MovedOut>* out) {
     out->swap(hits_);
     hits_.clear();
   }
@@ -253,7 +259,7 @@ class Effects {
   std::unordered_set<uint64_t> shotCells_;  // squares of ground that have a shot's light this frame
   std::unordered_map<uint32_t, uint32_t> projectileAt_, beamAt_, entityAt_;  // this frame: entity id -> index in the frame's lists
   std::vector<std::string> armyFactions_;  // ArmyFaction's, for the beat armyFactionsTick_
-  std::vector<Vec3> hits_;                 // TakeHits
+  std::vector<MovedOut> hits_;             // TakeHits
   uint32_t armyFactionsTick_ = 0xffffffffu;
 };
 

@@ -34,6 +34,22 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 78. To the INTERFACE track: the head lamps' colour as an option (2026-11-14; Chris's test of 13 November; not blocking)
+
+**Who asks:** the renderer, for Chris: on the redone units' head lamps he said "the new units lights are regular
+flashlight colored vs the blue for faction color" and, asked which: "Its good just gotta consider either blue or normal
+flashlight color honestly option for either or follow the color of your team color is best".
+
+**What:** a row in Options, Remastered tab, Units & Readability (beside Unit Glow Colour), for example "Head Lamp
+Colour" with three states, setting `World::headLampColour` in your `WorldLooks`: 0 "White" (as the units' files have
+them: a flashlight's warm white), 1 "Faction" (the faction's own colour, the UEF's blue), 2 "Team" (the army's
+colour). The renderer's default is 0. Which state the row starts in is Chris's word: I read his sentence as Team
+preferred; I would start it at Team and put the row on his re-test list.
+
+**Why:** his decision at the test; visuals has the same note (her section 146, B).
+
+**OPEN (asked 2026-11-14).**
+
 ## 77. To the ENGINE track: which armies have seen a prop made after the start, as a list a beat (2026-11-13; for ui's option "wrecks appear only once seen", Chris: "lets add them"; not blocking) - DONE
 
 **DONE 2026-11-13 (engine batch 162, main 27c17022; docs/engine-answers.md, top entry): `PropsSeen` as asked, in use

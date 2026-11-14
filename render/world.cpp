@@ -1041,6 +1041,22 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
   bool litBefore = false;  // (steadyLamps: one of its lamps was lit the frame before)
   // [buildingglow] a structure's glow and lamps by their own rule, while the glow is toned down (hullShare)
   const bool buildingRule = structure && hullBuildings && hullShare;
+  // [headcolour] the head lamps' colour when it is not the file's: the faction's (the unit's own hull glow's colour in
+  // its file, deepened as light: the UEF's (0.27, 0.61, 1.0) to about (0.06, 0.34, 1.0)) or the army's
+  Vec3 headColour;
+  bool headGiven = false;
+  if (headLampColour == 1) {
+    for (const ModelLight& l : model->lights)
+      if (l.hull) {
+        headColour = {std::pow(std::max(l.color.x, 0.0f), 2.2f), std::pow(std::max(l.color.y, 0.0f), 2.2f), std::pow(std::max(l.color.z, 0.0f), 2.2f)};
+        headGiven = true;
+        break;
+      }
+  } else if (headLampColour == 2 && armyColor) {
+    headColour = {std::pow(std::max(armyColor->x, 0.0f), 2.2f), std::pow(std::max(armyColor->y, 0.0f), 2.2f), std::pow(std::max(armyColor->z, 0.0f), 2.2f)};
+    headGiven = true;
+  }
+  if (headGiven) headColour = headColour * (1 / std::max({headColour.x, headColour.y, headColour.z, 0.05f}));
   for (const ModelLight& light : model->lights) {
     const uint64_t lampKey = id ? (static_cast<uint64_t>(id) << 8 | static_cast<uint64_t>(&light - model->lights.data())) + 1 : 0;
     // (a lamp on a part the script has hidden is not there: a commander's upgrade not bought yet. [lamps hidden] One on
@@ -1130,6 +1146,17 @@ void World::AddLamps(const Model* model, Vec3 position, const Quat& orientation,
       const Vec3 c = light.color;
       tint = Vec3{std::pow(std::max(c.x, 0.0f), 2.5f), std::pow(std::max(c.y, 0.0f), 2.5f), std::pow(std::max(c.z, 0.0f), 2.5f)};
       tint = tint * (2.4f / std::max({tint.x, tint.y, tint.z, 0.05f}));
+    }
+    if (light.head && headGiven) {  // [headcolour]
+      // (as strong as the file's lamp at its strongest part, a fifth of the file's colour kept so that it still reads as
+      // a lamp; and the eye's share made up by the root of what it lost, at most 2.5 times: a pure blue is a twelfth
+      // as bright to the eye as the file's white)
+      const Vec3 file = light.color;
+      const float most = std::max({file.x, file.y, file.z, 0.05f});
+      const Vec3 mixed = headColour * (0.8f * most) + file * 0.2f;
+      const float eyeFile = 0.2126f * file.x + 0.7152f * file.y + 0.0722f * file.z;
+      const float eyeNow = std::max(0.2126f * mixed.x + 0.7152f * mixed.y + 0.0722f * mixed.z, 1e-3f);
+      tint = mixed * std::clamp(std::sqrt(eyeFile / eyeNow), 1.0f, 2.5f);
     }
     float lampRadius = light.radius * model->scale;
     float lampAir = 1;
@@ -3465,9 +3492,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
   CpuTimes::Part("units listed");
   {  // hits on personal shields: each the nearest unit with its shield up that the hit lies at (its
      // place on the model at rest, where the shield's lattice is painted), for the lattice to light there
-    std::vector<Vec3> hits;
+    std::vector<Effects::MovedOut> hits;
     effects.TakeHits(&hits);
-    for (const Vec3& hit : hits) {
+    for (const Effects::MovedOut& moved : hits) {
+      // ([stephit] not an effect made on a unit: the footfall dust of a walking unit is made on the unit and moved out
+      // to its foot as a shield's hit sparks are moved out to the hit (unit.lua, OnAnimCollision), and each step of a
+      // mod's walker with a personal shield lit the shield: Chris's test of 2026-11-13, "its registering his steps as
+      // hits causing shield to flicker". A shield's hit effects are made on the shield's own impact entity.)
+      if (moved.entity != 0xffffffff &&
+          std::any_of(frame.units.begin(), frame.units.end(), [&](const FrameUnit& u) { return u.id == moved.entity; })) {
+        if (getenv("MOHO64_DEBUG_SHIELDHITS")) printf("render: shield hits: an effect moved out on unit %u is no hit\n", moved.entity);  // (checks)
+        continue;
+      }
+      const Vec3 hit = moved.at;
       const FrameUnit* best = nullptr;
       float nearest = 1e30f, bestReach = 12;
       for (const FrameUnit& u : frame.units) {
@@ -3495,6 +3532,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       if (!best || nearest > bestReach) continue;  // (a bubble's hit, or one far from any)
       const Quat turn{best->orientation[0], best->orientation[1], best->orientation[2], best->orientation[3]};
+      if (getenv("MOHO64_DEBUG_SHIELDHITS")) printf("render: shield hits: unit %u hit (the effect made on %u)\n", best->id, moved.entity);  // (checks)
       std::vector<ShieldHit>& list = shieldHits_[best->id];
       list.push_back({Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_});
       if (list.size() > 8) list.erase(list.begin());
@@ -3723,10 +3761,18 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       // ([pausemark] ui request 42, Chris's big test: a switched-off extractor had no mark; the original marks an allied unit
       // that is paused or has a toggle off; [fogwar] none on a remembered photo)
-      if (workBars && friendly && !photo && (u.paused || u.ToggledOff())) {
+      // ([pausemark2] Chris's test of 2026-11-13, on an ally's paused unit: "make it an option and have it stick closer to
+      // the unit vs floating up so high": allies' units only with pauseMarksOnAllies; and the mark centred on the unit's
+      // icon place, as the original draws it (its RenderUnitIcon 0x85d9a0 lays the pause picture's quad round the same
+      // centre as the icon's, whether the icon is drawn or not: the interface session's reading), not above its top)
+      if (workBars && (own || (friendly && pauseMarksOnAllies)) && !photo && (u.paused || u.ToggledOff())) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
-        const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : kind->selectionZ * 1.1f + 0.4f;
-        icons.AddMark(pauseMark_, position + Vec3{0, top, 0}, 16);
+        if (pauseMarkAtIcon) {
+          icons.AddMark(pauseMark_, position, 0);
+        } else {
+          const float top = model && model->ok ? std::max(model->boundsMax.y * model->scale, 0.3f) + 0.35f : kind->selectionZ * 1.1f + 0.4f;
+          icons.AddMark(pauseMark_, position + Vec3{0, top, 0}, 16);
+        }
       }
     }
     float radius = 0.5f;
