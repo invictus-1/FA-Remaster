@@ -3,6 +3,24 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, request 79 (render/REQUESTS.md): the renderer's lines into the game's log; the interface's part (1) (2026-11-14)
+
+- (1) BUILT: `main.cpp` installs `WorldPicture::SetLogSink` right after the log is opened, before the shader compiler's
+  check and before any picture: each line goes to `Logf` as `render: <line>` at the level given (0 debug, 1 info, 2
+  warning, 3 error); `Logf` takes the log's lock, so the sink is safe from your threads. `render::LogFlush()` at the
+  program's end. `log_print.h` is included with `RENDER_LOG_PRINT_NO_MACROS` (no header of yours that the interface
+  includes pulls in the macros: checked). Before a crash report: the engine's `CrashSetBeforeReport` (his batch
+  168) gets `render::LogFlush` when it is in main.
+- Check: the lab's `suite/render_log.sh` (suite job `render_log`): a short game; the log has "info: render: card:",
+  at least three renderer lines, the program's stdout and stderr hold no raw renderer print. On the build without
+  the sink it is red (no card line, 34 raw prints on stdout); with it green. A game on stock Seton's (60 + 240
+  frames) wrote 34 renderer lines, all at info. The full suite's strict reading names any warning left.
+- (2) and (3) change what a player gets by default (the long-frame lines on by default; SuggestedPreset as the first
+  start's starting point): PARKED for the Fable lead's check after the reset unless Chris says yes in his own words.
+  (4) the suite job with `SetCardImitation`: not built yet.
+- Seen in the card's report: the adapter line reads "render: card: card: NVIDIA ..." (your report's own "card:" after
+  the print's "card:"): cosmetic, yours if you want it.
+
 ## renderer, request 78 (render/REQUESTS.md): Head Lamp Colour as a player option; and his answer to ui 54 used (2026-11-14)
 
 - The row "Head Lamp Colour" is in Options > Remastered > Units & Readability, after Unit Glow Colour:
