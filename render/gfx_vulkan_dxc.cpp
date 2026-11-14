@@ -98,6 +98,9 @@ std::wstring DxcBeside() {
 // [nodxc] (DxcLoad) why the library did not load, as the system said it (Windows: GetLastError's number; 0: it loaded,
 // or was not tried yet)
 unsigned long gDxcLoadError = 0;
+// [cardlog] (ShaderCountsNow) shaders compiled, refused, and read back from a cache; and whether DXC is loaded
+std::atomic<int> gCompiled{0}, gFailed{0}, gFromCache{0};
+std::atomic<bool> gDxcLoaded{false};
 
 // DXC's DxcCreateInstance, the library loaded the first time it is asked for (null: not there).
 CreateInstanceFn DxcCreate() {
@@ -117,6 +120,7 @@ CreateInstanceFn DxcCreate() {
 #endif
     return fn;
   }();
+  if (create) gDxcLoaded.store(true, std::memory_order_relaxed);  // [cardlog] (DxcPlace)
   return create;
 }
 
@@ -324,7 +328,9 @@ bool Run(const std::string& source, const std::vector<std::wstring>& args, std::
     if (missing) *missing = true;
     return false;
   }
-  return RunWith(compiler, source, args, out, error);
+  const bool made = RunWith(compiler, source, args, out, error);
+  ++(made ? gCompiled : gFailed);  // [cardlog]
+  return made;
 }
 // (the same with a given compiler)
 bool RunWith(DxcCompiler3* compiler, const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out,
@@ -373,7 +379,7 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
     std::memcpy(w.data(), bytes.data(), w.size() * 4);
     return w;
   };
-  if (!cached.empty() && ReadWhole(cached, &bytes) && Reflect(words(), out)) return true;
+  if (!cached.empty() && ReadWhole(cached, &bytes) && Reflect(words(), out)) return ++gFromCache, true;  // ([cardlog])
   *out = SpirvShader{};
   if (!Run(source, args, &bytes, error, nullptr)) return false;
   if (!Reflect(words(), out)) {
@@ -438,7 +444,8 @@ void Prewarm(const std::vector<ShaderJob>& jobs, const std::string& cacheDir, bo
     for (size_t i; (i = next.fetch_add(1)) < work.size();) {
       const Work& w = work[i];
       out.clear();
-      if (!RunWith(compiler, w.job->source, w.args, &out, &error)) continue;
+      if (!RunWith(compiler, w.job->source, w.args, &out, &error)) continue;  // (compiled again by its pipeline: counted there)
+      ++gCompiled;  // [cardlog]
       if (spirv) WriteWhole(w.file, out.data(), out.size() / 4 * 4);
       else if (IsSigned(out)) WriteWhole(w.file, out.data(), out.size());
     }
@@ -496,7 +503,7 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
                  std::string* error, bool* missing) {
   const std::vector<std::wstring> args = DxilArguments(source, entry, stage);
   const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, args, "dxil");
-  if (!cached.empty() && ReadWhole(cached, out) && IsSigned(*out)) return true;
+  if (!cached.empty() && ReadWhole(cached, out) && IsSigned(*out)) return ++gFromCache, true;  // ([cardlog])
   if (!Run(source, args, out, error, missing)) return false;
   if (!IsSigned(*out)) {
     if (error) *error = "DXC's shaders come out unsigned (an older DXC needs its dxil.dll beside the program)";
@@ -507,12 +514,57 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
   return true;
 }
 
+// [cardlog] (gfx_vulkan_dxc.h)
+ShaderCounts ShaderCountsNow() {
+  ShaderCounts c;
+  c.compiled = gCompiled.load();
+  c.failed = gFailed.load();
+  c.fromCache = gFromCache.load();
+  return c;
+}
+
+std::string DxcPlace(bool* loaded) {
+  if (loaded) *loaded = gDxcLoaded.load(std::memory_order_relaxed);
+#if defined(_WIN32)
+  const std::wstring path = DxcBeside();
+  std::string where;
+  const int n = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), static_cast<int>(path.size()), nullptr, 0, nullptr, nullptr);
+  where.assign(static_cast<size_t>(std::max(n, 0)), '\0');
+  if (n > 0) WideCharToMultiByte(CP_UTF8, 0, path.c_str(), static_cast<int>(path.size()), where.data(), n, nullptr, nullptr);
+  // (its file version, from its version resource where it is loaded: the fixed block's signature 0xfeef04bd, then the
+  // structure's version, then the file's four numbers, most significant first)
+  if (HMODULE lib = GetModuleHandleW(path.c_str())) {
+    if (HRSRC res = FindResourceW(lib, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(16))) {  // (16: RT_VERSION)
+      const DWORD size = SizeofResource(lib, res);
+      HGLOBAL held = LoadResource(lib, res);
+      const uint8_t* data = held ? static_cast<const uint8_t*>(LockResource(held)) : nullptr;
+      for (DWORD i = 0; data && i + 16 <= size; i += 4) {
+        uint32_t w[4];
+        std::memcpy(w, data + i, 16);
+        if (w[0] != 0xfeef04bdu) continue;
+        char v[64];
+        snprintf(v, sizeof v, ", version %u.%u.%u.%u", w[2] >> 16, w[2] & 0xffff, w[3] >> 16, w[3] & 0xffff);
+        where += v;
+        break;
+      }
+    }
+  }
+  return where;
+#elif defined(__APPLE__)
+  return "libdxcompiler.dylib (the system's library search)";
+#else
+  return "libdxcompiler.so (the system's library search)";
+#endif
+}
+
 void PrewarmSpirv(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, true); }
 void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir) { Prewarm(jobs, cacheDir, false); }
 
 bool CachedDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out) {  // [snowhitch]
   const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, DxilArguments(source, entry, stage), "dxil");
-  return !cached.empty() && ReadWhole(cached, out) && IsSigned(*out);
+  if (cached.empty() || !ReadWhole(cached, out) || !IsSigned(*out)) return false;
+  ++gFromCache;  // [cardlog]
+  return true;
 }
 
 bool CachedSpirv(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, SpirvShader* out) {  // [snowhitch]
@@ -523,7 +575,9 @@ bool CachedSpirv(const std::string& source, const char* entry, const char* stage
   std::vector<uint32_t> words(bytes.size() / 4);
   std::memcpy(words.data(), bytes.data(), words.size() * 4);
   *out = SpirvShader{};
-  return Reflect(words, out);
+  if (!Reflect(words, out)) return false;
+  ++gFromCache;  // [cardlog]
+  return true;
 }
 
 }  // namespace render::gfx

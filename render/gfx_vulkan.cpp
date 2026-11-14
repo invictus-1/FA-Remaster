@@ -649,6 +649,8 @@ class VulkanDevice final : public Device {
   void Destroy(Texture texture) override;
   void Destroy(Pipeline pipeline) override;
   bool RayTracing() const override { return rayTracing_; }
+  std::string RayTracingWhyNot() const override { return rayTracing_ ? std::string() : rayWhyNot_; }  // [cardlog]
+  std::vector<std::string> Report() override;                                                         // [cardlog]
   // [devicelost] (gfx.h)
   bool Lost() const override { return lost_.load(std::memory_order_acquire); }
   std::string LostReason() const override {
@@ -686,6 +688,15 @@ class VulkanDevice final : public Device {
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override { return memory_.DeviceLocalBytes(); }
   bool MemoryBudget(uint64_t* budget, uint64_t* used) override;  // (photofix2)
+  uint64_t CardMemory() override {  // [gtx1080] (the largest heap of the card's own)
+    if (cardMemory_ > 0) return cardMemory_;
+    VkPhysicalDeviceMemoryProperties m;
+    vkGetPhysicalDeviceMemoryProperties(physical_, &m);
+    uint64_t own = 0;
+    for (uint32_t i = 0; i < m.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i)
+      if (m.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) own = std::max<uint64_t>(own, m.memoryHeaps[i].size);
+    return own;
+  }
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override { *out = lastTimes_; }
   bool SetFrameGeneration(std::function<bool()> make) override;
   bool FrameGenerating() const override { return generating_; }
@@ -871,6 +882,10 @@ class VulkanDevice final : public Device {
   void RecordExtras(VkCommandBuffer cmd, std::vector<VkSemaphore>* waits, std::vector<VkSemaphore>* signals, bool windowRead);
   void PresentExtras();
   VkFormat swapFormat_ = VK_FORMAT_UNDEFINED;
+  VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;  // [cardlog] (the window's chain's, for the report)
+  // [cardlog] what the report says (Report): why ray tracing is off; [gtx1080] the card memory imitated (0: the card's own)
+  std::string rayWhyNot_;
+  uint64_t cardMemory_ = 0;
   std::vector<VkImage> swapImages_;
   std::vector<VkImageLayout> swapLayouts_;
   std::vector<VkSemaphore> rendered_;  // per swap chain image: the frame drawn, for its showing to wait on
@@ -1598,6 +1613,18 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   // operations they ask for), ray queries in any shader, and buffers' device addresses (what builds read from)
   bool rays = deviceOffers(physical_, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && deviceOffers(physical_, VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
               deviceOffers(physical_, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+  {  // [cardlog] why not, in words (the extensions the card lacks; the features: below)
+    std::string lacks;
+    for (const char* name : {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, VK_KHR_RAY_QUERY_EXTENSION_NAME, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME})
+      if (!deviceOffers(physical_, name)) lacks += (lacks.empty() ? "" : ", ") + std::string(name);
+    if (!lacks.empty()) rayWhyNot_ = "this card's Vulkan driver offers no " + lacks + " (ray queries need all three)";
+  }
+  if (desc.noRayTracing) {  // [gtx1080] (as on a card without it: no extension of it enabled)
+    rayWhyNot_ = std::string("switched off by --no-ray-tracing (DeviceDesc::noRayTracing; this card itself ") +
+                 (rays ? "offers the ray query extensions)" : "has none either: " + rayWhyNot_ + ")");
+    rays = false;
+  }
+  const bool raysOffered = rays;  // [cardlog]
   VkPhysicalDeviceVulkan12Features have12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
   VkPhysicalDeviceAccelerationStructureFeaturesKHR haveStructures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
   VkPhysicalDeviceRayQueryFeaturesKHR haveQueries{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
@@ -1610,6 +1637,9 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
   vkGetPhysicalDeviceFeatures2(physical_, &have);
   nullDescriptors_ = nullDescriptors_ && haveRobust.nullDescriptor;
   rays = rays && have12.bufferDeviceAddress && haveStructures.accelerationStructure && haveQueries.rayQuery;
+  if (raysOffered && !rays)  // [cardlog]
+    rayWhyNot_ = std::string("the driver offers the ray query extensions but not their features:") + (have12.bufferDeviceAddress ? "" : " bufferDeviceAddress") +
+                 (haveStructures.accelerationStructure ? "" : " accelerationStructure") + (haveQueries.rayQuery ? "" : " rayQuery");
   presentWait_ = presentWait_ && havePresentId.presentId && havePresentWait.presentWait;
   if (!have.features.textureCompressionBC) fprintf(stderr, "render: Vulkan: this card reads no BC textures (most of the game's)\n");
   // frame generation's presenter (SetFrameGeneration) shows from a queue of its own: a second one of the drawing
@@ -1722,6 +1752,8 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
 #define VK_HAVE(name) && name
   rayTracing_ = rays VK_RAY_FUNCTIONS(VK_HAVE);
 #undef VK_HAVE
+  if (rays && !rayTracing_) rayWhyNot_ = "the driver did not give all of the ray tracing calls (vkGetDeviceProcAddr)";  // [cardlog]
+  if (desc.cardMemoryMB > 0) cardMemory_ = static_cast<uint64_t>(desc.cardMemoryMB) << 20;                          // [gtx1080]
   if (presentWait_) vkWaitForPresent_ = reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(device_, "vkWaitForPresentKHR"));
   presentWait_ = presentWait_ && vkWaitForPresent_;
   if (calibration)
@@ -1955,6 +1987,7 @@ bool VulkanDevice::CreateSwapchain(std::string* error) {
   sci.preTransform = caps.currentTransform;
   sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
   sci.presentMode = mode;
+  presentMode_ = mode;  // [cardlog]
   sci.clipped = VK_TRUE;
   chainFirstId_ = presentIdNext_.load();  // (the present wait: ids before it were another chain's)
   VkResult r;
@@ -2235,6 +2268,13 @@ bool VulkanDevice::MemoryBudget(uint64_t* budget, uint64_t* used) {
   if (heap < 0 || !b.heapBudget[heap]) return false;
   *budget = b.heapBudget[heap];
   *used = b.heapUsage[heap];
+  // [gtx1080] (DeviceDesc::cardMemoryMB) a smaller card imitated: the driver's budget scaled by the two sizes, as Direct3D 12's
+  // (what other programs hold of this card not taken off: they are this machine's, not the imitated one's)
+  if (cardMemory_ > 0 && m.memoryHeaps[heap].size > 0) {
+    *budget = std::min<uint64_t>(*budget, static_cast<uint64_t>(static_cast<double>(*budget) * static_cast<double>(cardMemory_) /
+                                                                static_cast<double>(m.memoryHeaps[heap].size)));
+    return true;
+  }
   // no more than this program could still take of what all programs together leave free on the card (card_memory.h:
   // the driver's budget barely heeds the others), where the card's id is known
   VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
@@ -2251,6 +2291,113 @@ bool VulkanDevice::MemoryBudget(uint64_t* budget, uint64_t* used) {
     if (CardMemoryUsedByAll(low, high, &all)) *budget = std::min<uint64_t>(*budget, *used + (card > all ? card - all : 0));
   }
   return true;
+}
+
+// [cardlog] (gfx.h, Device::Report) Asked of the driver now; what it does not answer is said so.
+std::vector<std::string> VulkanDevice::Report() {
+  std::vector<std::string> out;
+  char buf[640];
+  const auto mb = [](uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); };
+  const auto version = [](uint32_t v) {
+    return std::to_string(VK_API_VERSION_MAJOR(v)) + "." + std::to_string(VK_API_VERSION_MINOR(v)) + "." + std::to_string(VK_API_VERSION_PATCH(v));
+  };
+  snprintf(buf, sizeof buf, "backend: Vulkan, the card's API %s (the program asks for 1.3%s); shaders by DXC (SPIR-V)", version(props_.apiVersion).c_str(),
+           props_.apiVersion >= VK_API_VERSION_1_3 ? "" : "; 1.2 with dynamic rendering and the second synchronization as extensions");
+  out.push_back(buf);
+  const char* kind = props_.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "a card of its own" : props_.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+                     ? "graphics in the processor" : props_.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "the processor itself (software)" : "another kind";
+  const uint32_t vendor = props_.vendorID;
+  const char* maker = vendor == 0x10de ? "NVIDIA" : vendor == 0x1002 ? "AMD" : vendor == 0x8086 ? "Intel" : vendor == 0x106b ? "Apple" : vendor == 0x13b5 ? "ARM"
+                      : vendor == 0x5143 ? "Qualcomm" : "another maker";
+  snprintf(buf, sizeof buf, "card: %s, vendor 0x%04x (%s), device 0x%04x, %s", props_.deviceName, vendor, maker, props_.deviceID, kind);
+  out.push_back(buf);
+  // its memory: the heaps, its own (device-local) and the computer's; the budget and the use of each where the driver says
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT b{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+  VkPhysicalDeviceMemoryProperties2 p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+  if (memoryBudget_) p.pNext = &b;
+  if (memoryProperties2_) memoryProperties2_(physical_, &p);
+  else vkGetPhysicalDeviceMemoryProperties(physical_, &p.memoryProperties);
+  const VkPhysicalDeviceMemoryProperties& m = p.memoryProperties;
+  uint64_t own = 0, shared = 0;
+  std::string heaps;
+  for (uint32_t i = 0; i < m.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i) {
+    const bool local = (m.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+    own = local ? std::max<uint64_t>(own, m.memoryHeaps[i].size) : own;
+    shared += local ? 0 : m.memoryHeaps[i].size;
+    snprintf(buf, sizeof buf, "%sheap %u %.0f MB %s", heaps.empty() ? "" : "; ", i, mb(m.memoryHeaps[i].size), local ? "the card's own" : "the computer's");
+    heaps += buf;
+    if (memoryBudget_ && memoryProperties2_) {
+      snprintf(buf, sizeof buf, " (budget %.0f MB, used %.0f MB)", mb(b.heapBudget[i]), mb(b.heapUsage[i]));
+      heaps += buf;
+    }
+  }
+  if (cardMemory_ > 0)
+    snprintf(buf, sizeof buf, "memory: its own %.0f MB IMITATED (--card-memory; the card's real own memory %.0f MB), the computer's it may use %.0f MB",
+             mb(cardMemory_), mb(own), mb(shared));
+  else
+    snprintf(buf, sizeof buf, "memory: its own %.0f MB (the largest heap of its own), the computer's it may use %.0f MB", mb(own), mb(shared));
+  out.push_back(buf);
+  uint64_t budget = 0, used = 0;
+  const bool budgeted = MemoryBudget(&budget, &used);
+  out.push_back("memory now: " + heaps + (memoryBudget_ && memoryProperties2_ ? "" : " (the driver offers no VK_EXT_memory_budget: no budget or use known)"));
+  if (budgeted) {
+    snprintf(buf, sizeof buf, "memory now: the budget the renderer goes by %.0f MB%s, used %.0f MB; this program's own blocks on the card %.0f MB", mb(budget),
+             cardMemory_ > 0 ? " (the driver's, scaled by --card-memory)" : " (less what other programs hold)", mb(used), mb(MemoryInUse()));
+    out.push_back(buf);
+  }
+  // the driver: its version as its maker numbers it, and its own name and words where the driver says them (Vulkan 1.2)
+  const uint32_t v = props_.driverVersion;
+  if (vendor == 0x10de)
+    snprintf(buf, sizeof buf, "driver: version %u.%02u (NVIDIA's numbering of 0x%08x)", (v >> 22) & 0x3ff, (v >> 14) & 0xff, v);
+  else if (vendor == 0x8086)
+#if defined(_WIN32)
+    snprintf(buf, sizeof buf, "driver: version %u.%u (Intel's numbering on Windows of 0x%08x)", v >> 14, v & 0x3fff, v);
+#else
+    snprintf(buf, sizeof buf, "driver: version %s (0x%08x)", version(v).c_str(), v);
+#endif
+  else
+    snprintf(buf, sizeof buf, "driver: version %s (Vulkan's numbering of 0x%08x)", version(v).c_str(), v);
+  std::string driver = buf;
+  if (props_.apiVersion >= VK_API_VERSION_1_2 && vkGetPhysicalDeviceProperties2) {
+    VkPhysicalDeviceDriverProperties dp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    p2.pNext = &dp;
+    vkGetPhysicalDeviceProperties2(physical_, &p2);
+    snprintf(buf, sizeof buf, "; the driver says: %s, %s (conformance %u.%u.%u.%u)", dp.driverName, dp.driverInfo, dp.conformanceVersion.major,
+             dp.conformanceVersion.minor, dp.conformanceVersion.subminor, dp.conformanceVersion.patch);
+    driver += buf;
+  } else {
+    driver += "; its own name and words not read (a Vulkan before 1.2)";
+  }
+  out.push_back(driver);
+  if (rayTracing_)
+    out.push_back("ray tracing: yes (VK_KHR_acceleration_structure and VK_KHR_ray_query): the looks that trace rays can be drawn");
+  else
+    out.push_back("ray tracing: NO: " + rayWhyNot_ + "; the looks that trace rays fall back (the looks' report says each)");
+  for (std::string& line : ShaderReport(shaderCache_)) out.push_back(std::move(line));
+  const char* mode = presentMode_ == VK_PRESENT_MODE_FIFO_KHR ? "fifo (vsync)" : presentMode_ == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox (no tearing, no vsync wait)"
+                     : presentMode_ == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate (tearing allowed)" : "another";
+  const char* format = swapFormat_ == VK_FORMAT_B8G8R8A8_UNORM ? "BGRA8" : swapFormat_ == VK_FORMAT_R8G8B8A8_UNORM ? "RGBA8" : "of another format";
+  snprintf(buf, sizeof buf, "output: %ux%u, swap chain %s (VkFormat %d), %zu images, present mode %s, vsync %s; the latency limiter %s (present wait %s); "
+           "whether the screen has variable refresh is not known to the program", swapExtent_.width, swapExtent_.height, format, static_cast<int>(swapFormat_),
+           swapImages_.size(), mode, vsync_ ? "on" : "off", latency_ ? "on" : "off", presentWait_ ? "offered" : "not offered");
+  out.push_back(buf);
+#if defined(_WIN32)
+  if (HMONITOR monitor = window_ ? MonitorFromWindow(static_cast<HWND>(window_), MONITOR_DEFAULTTONEAREST) : nullptr) {
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof mi;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof dm;
+    if (GetMonitorInfoW(monitor, &mi) && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)) {
+      char name[64] = {};
+      WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, name, sizeof name, nullptr, nullptr);
+      snprintf(buf, sizeof buf, "screen: %s, desktop %lux%lu at %lu Hz", name, dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
+      out.push_back(buf);
+    }
+  }
+#endif
+  out.push_back(SystemLine());
+  return out;
 }
 
 // (photomode) The picture a photo's frames draw their window into, and its depth (gfx.h).

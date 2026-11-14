@@ -460,6 +460,12 @@ class Surf {
   float fieldMs = 0;          // how long working out the field took (on its thread)
   float fieldMainMs = 0;      // [groundfix] and how long the frames took over it (the heights copied, the texture made)
   int fieldWaited = 0;        // [groundfix] frames the surf was on before its field was there
+  // [surfwait] (the viewer's counted runs, --frames: a picture of frame n must not hang on how long the frames before took)
+  // The surf's first frame waits for the field's thread (some 130 ms), so the field and its spray spots are there from
+  // that frame, in every run alike. Off in a game: there the frames go on and the surf fades in when the field is done.
+  // Found 2026-11-14: the regression's snow scene on the map that is not square (30 frames) had its spray only because a
+  // 340 ms wait of another kind fell after the surf's start; a change that moved that wait earlier left the scene without.
+  bool waitField = false;
 
  private:
   struct Spot {  // a place on a rocky shore that throws spray

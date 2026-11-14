@@ -382,6 +382,10 @@ class D3D12Device final : public Device {
   void Mark(const char* name) override;
   uint64_t MemoryInUse() override;
   bool MemoryBudget(uint64_t* budget, uint64_t* used) override;  // (photofix2)
+  uint64_t CardMemory() override {  // [gtx1080]
+    DXGI_ADAPTER_DESC1 d = {};
+    return cardMemory_ > 0 ? cardMemory_ : adapter3_ && SUCCEEDED(adapter3_->GetDesc1(&d)) ? static_cast<uint64_t>(d.DedicatedVideoMemory) : 0;
+  }
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
 
   void BeginFrame(const float clearColor[4]) override;
@@ -403,6 +407,8 @@ class D3D12Device final : public Device {
   void DrawIndexedIndirect(Buffer arguments, uint32_t offset) override;
   void EndFrame(std::vector<uint8_t>* capture, bool present) override;
   bool RayTracing() const override { return rayTracing_; }
+  std::string RayTracingWhyNot() const override { return rayTracing_ ? std::string() : rayWhyNot_; }  // [cardlog]
+  std::vector<std::string> Report() override;                                                         // [cardlog]
   // [devicelost] (gfx.h)
   bool Lost() const override { return lost_.load(std::memory_order_acquire); }
   std::string LostReason() const override {
@@ -765,6 +771,11 @@ class D3D12Device final : public Device {
 
   // ray tracing (DXR 1.1: inline ray queries with shader model 6.5)
   bool rayTracing_ = false;
+  // [cardlog] what the report says (Report): why ray tracing is off, the card's highest feature level and shader model, the
+  // driver's raytracing tier (-1: not read); [gtx1080] the card memory imitated (DeviceDesc::cardMemoryMB; 0: the card's own)
+  std::string rayWhyNot_;
+  int featureLevel_ = 0, shaderModel_ = 0, rayTier_ = -1;
+  uint64_t cardMemory_ = 0;
   Com<ID3D12Device5> device5_;
   Com<ID3D12GraphicsCommandList4> list4_;  // (list_, as the interface that builds the structures)
   std::vector<StructureRec> structures_;   // id = index + 1
@@ -1160,12 +1171,49 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
   {  // ray tracing: DXR 1.1 (inline ray queries), with DXC's shader model 6.5
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 o5 = {};
     D3D12_FEATURE_DATA_SHADER_MODEL m65 = {D3D_SHADER_MODEL_6_5};
-    rayTracing_ = dxil_ && SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof o5)) &&
-                  o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 &&
-                  SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &m65, sizeof m65)) &&
+    // ([cardlog] what the card has, read for the report whether or not it is used; [gtx1080] with noRayTracing nothing of ray
+    // tracing is asked of the driver beyond these two questions, as on a card without it)
+    const bool tierRead = SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &o5, sizeof o5));
+    const bool modelRead = SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &m65, sizeof m65));
+    rayTier_ = tierRead ? static_cast<int>(o5.RaytracingTier) : -1;
+    rayTracing_ = !desc.noRayTracing && dxil_ && tierRead && o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 && modelRead &&
                   m65.HighestShaderModel >= D3D_SHADER_MODEL_6_5 && SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(device5_.Put()))) &&
                   SUCCEEDED(list_->QueryInterface(IID_PPV_ARGS(list4_.Put())));
+    // [cardlog] why not, in words
+    const auto tierName = [](int t) {
+      return t < 0 ? std::string("not read (the driver did not answer)") : t == 0 ? std::string("0 (none)") : t == 10 ? std::string("1.0")
+             : t == 11 ? std::string("1.1") : std::to_string(t / 10) + "." + std::to_string(t % 10);
+    };
+    const bool cardCan = tierRead && o5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 && modelRead && m65.HighestShaderModel >= D3D_SHADER_MODEL_6_5;
+    if (rayTracing_) rayWhyNot_.clear();
+    else if (desc.noRayTracing)
+      rayWhyNot_ = std::string("switched off by --no-ray-tracing (DeviceDesc::noRayTracing; this card itself ") +
+                   (cardCan ? "has it: Direct3D raytracing tier " + tierName(rayTier_) + ")" : "has none either: Direct3D raytracing tier " + tierName(rayTier_) + ")");
+    else if (!dxil_)
+      rayWhyNot_ = "the shaders are compiled by Direct3D's old compiler (FXC, no DXIL), which has no ray queries";
+    else if (!tierRead || o5.RaytracingTier < D3D12_RAYTRACING_TIER_1_1)
+      rayWhyNot_ = "this card has no ray tracing the renderer can use: its Direct3D raytracing tier is " + tierName(rayTier_) +
+                   ", and inline ray queries (DXR 1.1) need tier 1.1";
+    else if (!modelRead || m65.HighestShaderModel < D3D_SHADER_MODEL_6_5)
+      rayWhyNot_ = "the driver takes no shader model 6.5, which ray queries need (an old driver: update it)";
+    else
+      rayWhyNot_ = "the driver gave no ID3D12Device5 or ID3D12GraphicsCommandList4 (the interfaces that build the structures)";
   }
+  {  // [cardlog] the card's highest feature level and shader model, for the report
+    const D3D_FEATURE_LEVEL levels[] = {static_cast<D3D_FEATURE_LEVEL>(0xc200), D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0,
+                                        D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    for (int first = 0; first < 2 && !featureLevel_; ++first) {  // (a runtime that does not know 12_2 refuses the list: then without it)
+      D3D12_FEATURE_DATA_FEATURE_LEVELS fl = {};
+      fl.NumFeatureLevels = static_cast<UINT>(std::size(levels) - first);
+      fl.pFeatureLevelsRequested = levels + first;
+      if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &fl, sizeof fl))) featureLevel_ = fl.MaxSupportedFeatureLevel;
+    }
+    for (int model = 0x69; model >= 0x60 && !shaderModel_; --model) {  // (the newest a runtime knows answers; one it does not know is refused)
+      D3D12_FEATURE_DATA_SHADER_MODEL sm = {static_cast<D3D_SHADER_MODEL>(model)};
+      if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof sm))) shaderModel_ = sm.HighestShaderModel;
+    }
+  }
+  if (desc.cardMemoryMB > 0) cardMemory_ = static_cast<uint64_t>(desc.cardMemoryMB) << 20;  // [gtx1080]
   list_->Close();
   firstList_ = list_;  // [mcrec]
   firstList4_ = list4_;
@@ -4459,12 +4507,126 @@ bool D3D12Device::MemoryBudget(uint64_t* budget, uint64_t* used) {
   *used = info.CurrentUsage;
   DXGI_ADAPTER_DESC1 desc = {};
   uint64_t all = 0;
-  if (SUCCEEDED(adapter3_->GetDesc1(&desc)) && desc.DedicatedVideoMemory > 0 &&
-      CardMemoryUsedByAll(desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart, &all)) {
+  // [gtx1080] (DeviceDesc::cardMemoryMB) a smaller card imitated: the system's budget scaled by the two cards' sizes (the
+  // share of its own memory the system grants a program kept). What other programs hold of this card is not taken off it:
+  // they are this machine's (other windows of the lab's), not the imitated machine's.
+  const bool described = SUCCEEDED(adapter3_->GetDesc1(&desc)) && desc.DedicatedVideoMemory > 0;
+  if (described && cardMemory_ > 0) {
+    *budget = std::min<uint64_t>(*budget, static_cast<uint64_t>(static_cast<double>(*budget) * static_cast<double>(cardMemory_) /
+                                                                static_cast<double>(desc.DedicatedVideoMemory)));
+    return true;
+  }
+  if (described && CardMemoryUsedByAll(desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart, &all)) {
     const uint64_t card = desc.DedicatedVideoMemory, left = card > all ? card - all : 0;
     *budget = std::min<uint64_t>(*budget, info.CurrentUsage + left);
   }
   return true;
+}
+
+// [cardlog] (gfx.h, Device::Report) Everything read here is asked of the system and the driver now; what they do not answer is
+// said so.
+std::vector<std::string> D3D12Device::Report() {
+  std::vector<std::string> out;
+  char buf[640];
+  const auto mb = [](uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); };
+  // the backend and its level
+  const auto levelName = [](int l) {
+    return l ? std::to_string(l >> 12) + "_" + std::to_string((l >> 8) & 0xf) : std::string("not read");
+  };
+  const std::string model = shaderModel_ ? std::to_string(shaderModel_ >> 4) + "." + std::to_string(shaderModel_ & 0xf) : std::string("not read");
+  snprintf(buf, sizeof buf, "backend: Direct3D 12, the card's highest feature level %s (the device made at 11_0), highest shader model %s; shaders by %s",
+           levelName(featureLevel_).c_str(), model.c_str(), dxil_ ? "DXC (DXIL, shader model 6.0; 6.5 where they trace rays)" : "Direct3D's old compiler (FXC, 5.1)");
+  out.push_back(buf);
+  // the card
+  DXGI_ADAPTER_DESC1 d = {};
+  const bool described = adapter3_ && SUCCEEDED(adapter3_->GetDesc1(&d));
+  if (described) {
+    const char* maker = d.VendorId == 0x10de ? "NVIDIA" : d.VendorId == 0x1002 || d.VendorId == 0x1022 ? "AMD" : d.VendorId == 0x8086 ? "Intel"
+                        : d.VendorId == 0x5143 ? "Qualcomm" : d.VendorId == 0x1414 ? "Microsoft" : "another maker";
+    snprintf(buf, sizeof buf, "card: %s, vendor 0x%04x (%s), device 0x%04x, subsystem 0x%08x, revision 0x%02x, adapter LUID %08lx:%08lx", adapterName_.c_str(),
+             d.VendorId, maker, d.DeviceId, d.SubSysId, d.Revision, static_cast<long>(d.AdapterLuid.HighPart), d.AdapterLuid.LowPart);
+    out.push_back(buf);
+    if (cardMemory_ > 0)
+      snprintf(buf, sizeof buf, "memory: its own %.0f MB IMITATED (--card-memory; the card's real own memory %.0f MB), the computer's it may use %.0f MB, "
+               "its own set aside in the computer's %.0f MB", mb(cardMemory_), mb(d.DedicatedVideoMemory), mb(d.SharedSystemMemory), mb(d.DedicatedSystemMemory));
+    else
+      snprintf(buf, sizeof buf, "memory: its own %.0f MB, the computer's it may use %.0f MB, its own set aside in the computer's %.0f MB", mb(d.DedicatedVideoMemory),
+               mb(d.SharedSystemMemory), mb(d.DedicatedSystemMemory));
+    out.push_back(buf);
+  } else {
+    out.push_back("card: " + adapterName_ + " (the adapter's description could not be read: no vendor, device or memory sizes)");
+  }
+  // its memory now: the system's budget for this program and its use, of the card's own memory and of the computer's
+  DXGI_QUERY_VIDEO_MEMORY_INFO local = {}, shared = {};
+  if (adapter3_ && SUCCEEDED(adapter3_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)) &&
+      SUCCEEDED(adapter3_->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &shared))) {
+    uint64_t budget = local.Budget, used = local.CurrentUsage;
+    if (cardMemory_ > 0 && described && d.DedicatedVideoMemory > 0)  // (as MemoryBudget scales it; without its look at the other programs)
+      budget = std::min<uint64_t>(budget, static_cast<uint64_t>(static_cast<double>(budget) * static_cast<double>(cardMemory_) / static_cast<double>(d.DedicatedVideoMemory)));
+    snprintf(buf, sizeof buf, "memory now: of the card's own, the system's budget for this program %.0f MB%s, used %.0f MB (reserved %.0f MB); of the "
+             "computer's, budget %.0f MB, used %.0f MB", mb(budget), budget != local.Budget ? " (scaled from the real one by --card-memory)" : "", mb(used),
+             mb(local.CurrentReservation), mb(shared.Budget), mb(shared.CurrentUsage));
+    out.push_back(buf);
+  } else {
+    out.push_back("memory now: not known (the system did not answer QueryVideoMemoryInfo)");
+  }
+  CardMemoryWarmUp();  // (what all programs use of the card: asked when a map has opened, World::Open; read ready on a thread now)
+  // the driver
+  LARGE_INTEGER umd = {};
+  if (adapter3_ && SUCCEEDED(adapter3_->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+    const unsigned a = static_cast<unsigned>(umd.HighPart) >> 16, b = static_cast<unsigned>(umd.HighPart) & 0xffff,
+                   c = static_cast<unsigned>(umd.LowPart) >> 16, e = static_cast<unsigned>(umd.LowPart) & 0xffff;
+    snprintf(buf, sizeof buf, "driver: user-mode driver version %u.%u.%u.%u", a, b, c, e);
+    std::string line = buf;
+    if (described && d.VendorId == 0x10de) {  // (NVIDIA's own number: the last five digits of the last two parts, as 560.94)
+      const unsigned n = (c % 10) * 10000 + e;
+      snprintf(buf, sizeof buf, " (NVIDIA's %u.%02u)", n / 100, n % 100);
+      line += buf;
+    }
+    out.push_back(line);
+  } else {
+    out.push_back("driver: its version could not be read (CheckInterfaceSupport refused)");
+  }
+  // ray tracing
+  if (rayTracing_)
+    out.push_back("ray tracing: yes (Direct3D raytracing tier " + std::to_string(rayTier_ / 10) + "." + std::to_string(rayTier_ % 10) +
+                  ", inline ray queries with shader model 6.5): the looks that trace rays can be drawn");
+  else
+    out.push_back("ray tracing: NO: " + rayWhyNot_ + "; the looks that trace rays fall back (the looks' report says each)");
+  // the shader compiler and its cache
+  for (std::string& line : ShaderReport(shaderCache_)) out.push_back(std::move(line));
+  // the window's output
+  DXGI_SWAP_CHAIN_DESC1 sc = {};
+  if (swapChain_ && SUCCEEDED(swapChain_->GetDesc1(&sc))) {
+    snprintf(buf, sizeof buf, "output: %ux%u, swap chain %s (DXGI format %d), %u buffers, flip-discard, vsync %s, tearing %s by the system%s; "
+             "the latency limiter %s", sc.Width, sc.Height, sc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ? "RGBA8" : "of another format", static_cast<int>(sc.Format),
+             sc.BufferCount, vsync_ ? "on" : "off", tearing_ ? "allowed" : "NOT allowed", tearing_ ? " (used without vsync: how variable refresh takes the "
+             "frames as they come; whether the screen has variable refresh, G-Sync or FreeSync, is not known to the program)" : "",
+             latency_ ? "on" : "off");
+    out.push_back(buf);
+  } else {
+    out.push_back("output: the swap chain's description could not be read");
+  }
+  Com<IDXGIOutput> output;
+  Com<IDXGIOutput6> output6;
+  DXGI_OUTPUT_DESC1 od = {};
+  if (swapChain_ && SUCCEEDED(swapChain_->GetContainingOutput(output.Put())) && SUCCEEDED(output->QueryInterface(IID_PPV_ARGS(output6.Put()))) &&
+      SUCCEEDED(output6->GetDesc1(&od))) {
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof mode;
+    const bool moded = EnumDisplaySettingsW(od.DeviceName, ENUM_CURRENT_SETTINGS, &mode) != FALSE;
+    char name[64] = {};
+    WideCharToMultiByte(CP_UTF8, 0, od.DeviceName, -1, name, sizeof name, nullptr, nullptr);
+    const bool hdr = od.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    snprintf(buf, sizeof buf, "screen: %s, desktop %ldx%ld at %s Hz, %u bits a colour, %s (the picture is drawn in plain 8-bit colours either way)", name,
+             od.DesktopCoordinates.right - od.DesktopCoordinates.left, od.DesktopCoordinates.bottom - od.DesktopCoordinates.top,
+             moded ? std::to_string(mode.dmDisplayFrequency).c_str() : "?", od.BitsPerColor, hdr ? "HDR on" : "HDR off");
+    out.push_back(buf);
+  } else {
+    out.push_back("screen: the window's screen could not be read (no output contains it now)");
+  }
+  out.push_back(SystemLine());
+  return out;
 }
 
 // [head2] Extra windows (gfx.h, the interface's request 48: the original's head 1 on the second screen). Each a swap chain

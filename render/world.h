@@ -1628,6 +1628,13 @@ class World {
   float frameSeconds_ = 1 / 60.0f;
   bool raysTried_ = false, raysGround_ = false;  // (RaysReady: its shaders tried; the open map's ground in it)
   bool bounceTried_ = false, bounceMade_ = false, bounceNow_ = false;  // (bounce light: tried, made, on this frame)
+  // [cardlog] The looks' report (TellLooks, at the end of Begin's choices each frame): every look that depends on what the card
+  // can, asked for and not drawn, why, and what is drawn in its place, said in the log once when a map's first frame is drawn
+  // and again whenever it changes (`looksKey_`: what was said last; ~0: nothing yet). Why the ray scene, bounce light, FSR 3
+  // and frame generation could not be made, as they said it.
+  uint64_t looksKey_ = ~uint64_t{0};
+  std::string raysWhy_, bounceWhy_, fsr3Why_, framegenWhy_;
+  void TellLooks();
   bool grassTried_ = false, grassMade_ = false, grassNow_ = false;  // (ground cover: its shader tried, made, on this frame)
   bool litSmokeNow_ = false, smokeNow_ = false;  // (lit smoke this frame; the smoke's shadow map drawn this frame)
   bool volumesOn_ = false, volumesDrawn_ = false;  // (volume explosions: on this frame; volumes drawn this frame)
