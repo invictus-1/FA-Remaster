@@ -862,27 +862,6 @@ void FlightFrameLooks(render::WorldPicture& p) {
   p.SetSoftShadows(looks.softShadows);
   p.SetGroundDetail(looks.groundDetail);
 }
-// A launch's options (the table on the stack's top): a game with cheats on takes orders for a defeated army's units
-// (ours, Chris 2026-11-13: in his test his commander died while he looked through another army, the 26 units he then
-// spawned for his own took no order: "that should be allowed"). The original's simulation refuses every order for an
-// army that is out of the game (Sim::OkayToMessWith 0x747320), cheats or not; the engine's game option
-// RemasterOrdersAfterDefeat = "on" (docs/engine-answers.md, batch 164) lifts that while cheats are on, and being in the
-// launch's options it is in the record, so a replay plays as the game went. Stamped only where the options say
-// CheatsEnabled "true" and nothing set it already: cheats on is the player's choice of a sandbox, so it has no row of
-// its own in the lobby; a game without cheats is the original's in this.
-void StampOrdersAfterDefeat(lua_State* L) {
-  if (!lua_istable(L, -1)) return;
-  lua_getfield(L, -1, "CheatsEnabled");
-  const bool cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
-  lua_pop(L, 1);
-  lua_getfield(L, -1, "RemasterOrdersAfterDefeat");
-  const bool given = !lua_isnil(L, -1);
-  lua_pop(L, 1);
-  if (!cheats || given) return;
-  lua_pushstring(L, "RemasterOrdersAfterDefeat");
-  lua_pushstring(L, "on");
-  lua_rawset(L, -3);
-}
 // A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
 // picture starts with, laid on the world shown (the menus', which has them; or a game's being left).
 void LetGoOfGameMap(render::WorldPicture& p) {
@@ -1185,6 +1164,27 @@ uint32_t ReplayBeats(const std::string& data, size_t at) {
     at += length;
   }
   return beats > 0xffffffffu ? 0xffffffffu : static_cast<uint32_t>(beats);
+}
+// A launch's options (the table on the stack's top): a game with cheats on takes orders for a defeated army's units
+// (ours, Chris 2026-11-13: in his test his commander died while he looked through another army, the 26 units he then
+// spawned for his own took no order: "that should be allowed"). The original's simulation refuses every order for an
+// army that is out of the game (Sim::OkayToMessWith 0x747320), cheats or not; the engine's game option
+// RemasterOrdersAfterDefeat = "on" (docs/engine-answers.md, batch 164) lifts that while cheats are on, and being in the
+// launch's options it is in the record, so a replay plays as the game went. Stamped only where the options say
+// CheatsEnabled "true" and nothing set it already: cheats on is the player's choice of a sandbox, so it has no row of
+// its own in the lobby; a game without cheats is the original's in this.
+void StampOrdersAfterDefeat(lua_State* L) {
+  if (!lua_istable(L, -1)) return;
+  lua_getfield(L, -1, "CheatsEnabled");
+  const bool cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "RemasterOrdersAfterDefeat");
+  const bool given = !lua_isnil(L, -1);
+  lua_pop(L, 1);
+  if (!cheats || given) return;
+  lua_pushstring(L, "RemasterOrdersAfterDefeat");
+  lua_pushstring(L, "on");
+  lua_rawset(L, -3);
 }
 }  // namespace
 
@@ -3652,6 +3652,10 @@ void GameSession::GiveBackdrop(WindowPicture& wp, int width, int height) {
   if (over != Over::None && (alpha != wp.overAlpha || wp.over != over)) p.SetBackdropLook(alpha), wp.overAlpha = alpha;
   wp.over = over;
 }
+#else
+// (A build without the world's picture, `--headless`: no window's picture to tell of, no flight to pace.)
+void GameSession::PushWindowInfo(lua_State*) const {}
+double GameSession::MenuFramePeriod() const { return 0.0; }
 #endif
 
 void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& changed) {
@@ -4150,6 +4154,7 @@ void GameSession::RedressGameWorld(Picture& pic) {
 }
 #endif
 
+#ifdef MOHO64UI_WORLD_PICTURE
 // The menus' map on the window's picture is gone (a recovery of the device could not open it again): the picture shows
 // no world, and the menu goes on as when its map would not open at the start (ServeWindowMap's failure): the flight
 // has failed (the background falls back to the still map, FollowMenuMode), any other menu map is not tried again.
@@ -4167,6 +4172,7 @@ void GameSession::MenuMapGone(WindowPicture& wp, const std::string& error) {
     failedMenuMap_ = map;
   }
 }
+#endif
 
 bool GameSession::AskDeviceRecovery(const std::string& mode, std::string* why) {
 #ifdef MOHO64UI_WORLD_PICTURE

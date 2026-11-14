@@ -21,6 +21,11 @@
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/cinecam.h"
 #endif
+#ifndef MOHO64UI_WORLD_PICTURE
+namespace render {
+class CinePath {};  // (a build without the world's picture has no camera path: the flight never starts there)
+}  // namespace render
+#endif
 
 namespace moho::ui {
 

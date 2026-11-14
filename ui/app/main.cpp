@@ -370,6 +370,7 @@ int main(int argc, char** argv) {
   // The shader compiler must be beside the program (dxcompiler.dll; the renderer's request 71 C, its answer to ui
   // request 51: without it Direct3D's old compiler was used and the first map frame never came). Asked before any
   // picture or window is made: the player is told in one sentence that names the full path, and nothing starts.
+#ifdef MOHO64UI_WORLD_PICTURE
   if (std::string why; !render::WorldPicture::ShaderCompilerReady(&why)) {
     const std::string line = "FA Remastered cannot start: " + why;
     std::fprintf(stderr, "moho64ui: %s\n", line.c_str());
@@ -384,6 +385,7 @@ int main(int argc, char** argv) {
 #endif
     return 3;
   }
+#endif
   if (fullScreen && !ui::Window::ScreenSize(&width, &height)) fullScreen = false;  // the head is the screen
   AnswerSystemFolders(o);
   Vfs vfs;
