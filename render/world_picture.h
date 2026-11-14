@@ -341,6 +341,10 @@ class WorldPicture {
   // "Always Show Enemy Lifebars": OFF at first, as the original). For no one army: every unit's.
   void SetAllies(const std::vector<int>& armies);
   void SetLifeBarsOnEnemies(bool on);
+  // [pausemark2] The game's pause mark (over a unit that is paused or has a toggle off) shows over the focus army's own
+  // units and, as the original, over its allies' (ON at first); off: over its own units only. A player's option
+  // (Chris, 2026-11-13). The mark is centred on the unit's icon place, as the original draws it.
+  void SetAlliesPauseMarks(bool on);
   // [wrecksseen] Wrecks appear only once seen (World::wrecksOnceSeen; ui request 53): OFF at first, the original's
   // way (a wreck made out of sight is drawn under the fog at once). On: a wreck made in the game is drawn only from
   // the moment the focus army or an ally has had its place in sight, with its heat, smoke, shadow and pile; one

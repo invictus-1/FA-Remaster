@@ -1708,6 +1708,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       light.direction = light.bone >= 0 ? Rotate(Conjugate(m->bones[static_cast<size_t>(light.bone)].rotation), facing) : facing;
       light.glow = static_cast<float>(entry["Glow"].NumberOr(0.15));
       light.hull = Lower(entry["Kind"].StringOr(std::string())) == "hull";
+      light.head = Lower(entry["Kind"].StringOr(std::string())) == "head";  // [headcolour]
       m->lights.push_back(light);
     }
   }

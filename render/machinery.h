@@ -16,6 +16,10 @@
 // period, phase, low, ease, state; the same timing as a lamp gives both one beat). A part's "building"
 // motion plays while the factory builds; its "idle" motion (keys or loop, optional) while it does not - a slow standby, so
 // that a base's factories are not dead still between builds; without one it rests.
+// [wheels] A part may be a wheel instead ("mode": "wheel" on the part itself, with "radius" in the model's units and
+// "axis", its axle in the model's axes at rest, [1, 0, 0] when left out): it turns about its head by how far its unit
+// has travelled forward over the ground, travel / radius, back again as the unit backs; a mobile unit's wheels, each on a
+// bone of its own after the simulation's. No state, no period: a standing unit's wheels stand, a paused game's too.
 // Building is the unit's work going on (0 < workProgress < 1, its progress moving within the last half second); the
 // parts blend between their rest and their work over the file's blend (0.5 s), on the game's clock: a paused game stops
 // them. The simulation never sees any of it.
@@ -94,6 +98,8 @@ struct MachinerySpec {
     Motion work, idle;           // while it builds, and while it does not (Still: at rest)
     std::vector<Emitter> emitters;
     Aim aim;    // [buildarms] (at -1: none)
+    float wheelRadius = 0;      // [wheels] over 0: a wheel of this radius (model units), turned by the unit's travel ...
+    Vec3 wheelAxis{1, 0, 0};    // ... about this axle (the model's axes at rest)
     std::vector<Beam> beams;  // [buildarms]
   };
   std::vector<Part> parts;  // parents before their children
@@ -106,6 +112,7 @@ struct MachinerySpec {
   std::vector<Glow> glowParts;
   bool glows = false;  // (glowParts not empty: the rows carry each bone's glow, MeshRenderer)
   bool scales = false;      // a key of a part scales it
+  bool wheels = false;      // [wheels] a part is a wheel
   size_t simBones = 0;      // Model::bones up to here are the simulation's
   float blend = 0.5f;       // seconds between rest and work
   // its belt (the first "scroll" part): the bone whose vertices are it, its axis (0: u, 1: v), where its strip begins along
@@ -148,6 +155,11 @@ class Machinery {
     double moved = -1e9;      // when that last changed
     double seen = -1;         // the clock it was last drawn at
     double belt = 0;          // how far its belt has moved (texture units)
+    // [wheels] how far it has travelled forward since it was first posed (world units; back counts back), and where
+    // it stood when that was last added up
+    double travel = 0;
+    Vec3 stood;
+    bool hasStood = false;
     std::vector<uint32_t> emitters;  // per part's emitter, flattened (0: none playing)
     std::vector<float> lamps;        // per lamp of the model's lights: its strength this frame (1: as listed)
   };

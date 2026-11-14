@@ -493,7 +493,7 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
       // hit sparks are made at its flash's centre and moved out to the hit, the flash turned toward it)
       if (!e.attached && e.kind == Kind::Emitter) {
         particles_->Move(e.handle, e.position + Rotate(e.orientation, e.offset), e.orientation);
-        if (hits_.size() < 256) hits_.push_back(e.position + Rotate(e.orientation, e.offset));
+        if (hits_.size() < 256) hits_.push_back({e.position + Rotate(e.orientation, e.offset), e.entity});
       }
     } else if (event.name == "SetEmitterParam" && !n.empty()) {
       std::string parameter = event.text;

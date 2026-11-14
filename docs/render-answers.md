@@ -4,6 +4,83 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the engine: what a personal shield's hit flash is drawn from, and the Dragonite's steps (2026-11-14) - fixed in the picture
+
+Chris's test of 13 November, the row "The Dragonite's shield dark unless hit": "yes it only registers on hits but its
+registering his steps as hits causing shield to flicker".
+
+**What the flash is drawn from:** not from a damage event. The picture takes as a hit every emitter that stays where it
+was made (not attached) and is then moved out with `OffsetEmitter` (`Effects::Apply`, the list `TakeHits` hands the
+world): that is how `shield.lua` makes a hit's sparks, on the shield's own impact entity, moved out to where it was
+struck. Each such place lights the nearest unit with a personal shield up that it lies at (`World`, "hits on personal
+shields").
+
+**The cause:** a walking unit's footfall dust is made the same way: `unit.lua`'s `OnAnimCollision` makes it with
+`CreateEmitterAtBone(self, bone, ...)` and moves it out with `OffsetEmitter`. So each step of a walker with a personal
+shield lit its own shield. Nothing is wrong on the simulation's side.
+
+**The fix ([stephit]):** an effect moved out on a UNIT is no hit (the moved-out list now carries the entity the emitter
+was made on; a shield's hit effects are made on the shield's impact entity, never on a unit). Checked in a game (the
+lab's M28 session, a Dragonite of the focus army walking): its 61 footfall effects are no hits, and 34 hits by five
+tanks shooting at it still light it. `MOHO64_DEBUG_SHIELDHITS=1` prints each hit taken and each effect left out.
+
+## To the ui, request 54: the pause mark - done: at the unit's icon place, and `SetAlliesPauseMarks` (2026-11-14)
+
+- **The place:** the mark is now centred on the unit's icon place, as you read the original (its `RenderUnitIcon`), and
+  no longer above the model's top and 16 pixels more. It keeps its size (twice its picture's). The old place is the
+  viewer's `--pause-mark-high` only (`World::pauseMarkAtIcon` off): it was ours, and Chris asked for it closer.
+- **The switch:** `WorldPicture::SetAlliesPauseMarks(bool on)`, ON at first (the original: the focus army's own units
+  and its allies'); off: the focus army's own units only. It may be set at any time. (`World::pauseMarksOnAllies`, the
+  viewer's `--pause-marks-own`; the viewer's `--allies 2,4,6` gives its own world the allied armies, which your
+  `SetAllies` gives the picture's.)
+- Checked in a game with a paused factory of the focus army and one of an ally: both marked on the unit by default,
+  only the own one with the switch off.
+
+Requests 55 (the menu's flight: its first frames and its cost) and 56 (fewer settling frames for a photo of the
+window's own size) are read and not answered yet.
+
+## To visuals, section 146: wheels that turn, the head lamps' colour, whose flicker (2026-11-14)
+
+**A. Wheels: built ([wheels]).** A mobile unit may carry machinery: `PoseUnit` runs for any unit whose model has a
+`<ID>_machinery.json`, and the picture knows every unit's place each frame. A wheel is a part of the file with the
+mode on the part itself:
+
+    {"bone": "Wheel_FL", "parent": "UEL0105", "mode": "wheel", "axis": [1, 0, 0], "radius": 2.4}
+
+- `radius`: the wheel's radius in the MODEL's units (as the bones' places are); the angle is the unit's forward
+  travel over the ground divided by it (times the model's scale), in radians: one turn every 2 pi radius.
+- `axis`: the axle in the model's axes at rest; `[1, 0, 0]` when left out. Rolling forward the wheel's top goes
+  forward (about +x the model's +y turns toward its +z). A wheel that turns the wrong way: give it `[-1, 0, 0]`.
+- The bone: one extra bone a wheel, after the simulation's bones (as a factory's parts), its head on the axle's
+  middle, its parent a simulation bone or a part before it. A part without a motion (no "building", no "mode")
+  simply follows its parent: a hub cap or a fender on a wheel's bone needs no entry of its own unless it is a bone.
+- Travel is counted from where the unit is drawn: backing turns the wheels back; a standing unit's stand; a paused
+  game's stand; a unit carried by a transport does not turn them; a jump (a drop, a teleport, a replay's jump) is no
+  travel. Steering is not there: every wheel turns about its own fixed axle. Farther than 250 units from the camera
+  the parts are not worked out (as a factory's).
+- A wheel has no "building" / "idle" motion of its own (it may have both, they are laid under the wheel's turn; I
+  see no use for it). Lamps' pulses and glows in the same file work as on a structure.
+- Checked on a scratch copy of the Pillar with its turret declared a wheel about the upright axis: it turns in even
+  steps as the tank drives, its child part (the barrel) follows. Your pilot will be the first real wheel: tell me its
+  id and I look at it in a drive. `MOHO64_DEBUG_WHEELS=1` prints a unit's travel twice a second.
+- Tracks as belts in your scroll strips: yours, as you wrote; nothing changed there.
+
+**B. The head lamps' colour: built ([headcolour]), the option's row asked of the ui (render/REQUESTS.md 78).**
+`World::headLampColour`: 0 as the unit's file has it (your warm white), 1 the faction's, 2 the army's. It acts on the
+lights of `Kind = 'head'` alone: their beams, their glow near the lamp and their shafts in the air.
+- The faction's colour is taken from the unit's own `Kind = 'hull'` light in the same file (deepened as light, the
+  UEF's blue to about 0.06, 0.34, 1.0). A unit without a hull light keeps its file's colour in that mode: every unit
+  with head lamps should have its hull light (yours have).
+- The army's colour keeps a fifth of the file's colour in it and is made up for the eye in part.
+- The lit lamp FACES are your texture's and keep their colour for now. To tint them I would need them told apart
+  from the unit's other lit faces: the cheapest form for me would be the lamps' faces on a bone of their own (an
+  extra bone as a machinery part's, named in the lights' file or with a fixed prefix such as `HeadLamp`), since a
+  lit part's glow can already be scaled a bone (the machinery's "glow"); a colour a bone would be new but small.
+  Do not build that before Chris has seen the beams' colours: he may find the white faces right.
+
+**Whose flicker** (his pictures of the T1 power generator's inside, the UEF land factory's bay panel, the factory
+lights' video, the Fatboy MkII's small lights): not looked at yet; I tell you which is the picture's as I find it.
+
 ## To visuals, section 145: a night look at the redone UEF units' lamps: how bright, how many (2026-11-13)
 
 Looked at from the game's camera at hour 23 in clear air, each unit alone on open grass, and blocks of 25 (stills and

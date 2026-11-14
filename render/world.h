@@ -207,6 +207,11 @@ class World {
   bool lifeBarsOnEnemies = false;
   int dyingDrawn = 0;    // units drawn in the last frame that are in their death (falling, sinking, toppling)
   bool workBars = true;  // the thin bar of a unit's work and the pause mark, also while the life bars are off
+  // [pausemark2] The pause mark over the allies' paused units too, as the original (WorldPicture::SetAlliesPauseMarks;
+  // false: over the focus army's own units only), and where it is drawn: centred on the unit's icon place, as the
+  // original (false, the viewer's --pause-mark-high: above the unit's top and 16 pixels more, as before 2026-11-14).
+  bool pauseMarksOnAllies = true;
+  bool pauseMarkAtIcon = true;
   int focusArmy = -1;    // the army the picture is for, counted from 0 (-1: no one army): whose work is shown
   // The strategic icons' colours by army (from 0), in place of the armies' own (the game's "team colour"
   // button, TeamColorMode: only the icons change, the models keep their army's colour); empty: the
@@ -699,7 +704,7 @@ class World {
   // Precipitation::steadyPace). False: one speed in the world and the sway by the zoom, as before.
   bool fallSteadyPace = true;
   // [fallhigh] (Chris, 2026-11-10) the falling rain and snow thin out to nothing as the camera rises past where their
-  // box can still fill the view (Precipitation::highFade, 560 to 1000 world units away); the snow lying and the
+  // box can still fill the view (Precipitation::highFade, 620 to 1100 world units away); the snow lying and the
   // clouds stay. False: from the farthest zoom the fall fills a square in the middle of the picture, as before.
   bool fallFadeHigh = true;
   // [falltrail] With FSR 3, what falls marked in its transparency and composition mask too (Fsr3::Inputs::composition): no
@@ -986,6 +991,14 @@ class World {
   // [lampcolour] (Chris, 2026-10-28) a unit's own faint glow (its lamps of kind 'hull') in its army's colour (true, as
   // before), or in its faction's own, the colour its lamps' file gives (UEF blue whatever its army's colour)
   bool lampsTeamColour = true;
+  // [headcolour] (Chris's test of 2026-11-13, on the redone units' head lamps: "option for either or follow the color of
+  // your team color is best") The colour of a unit's head lamps (its lights of Kind 'head': their beams, glows and
+  // shafts): 0 as its file has them (a flashlight's warm white on the redone units), 1 its faction's (the colour of its
+  // own 'hull' glow in the file, as light; a unit without one keeps its file's), 2 its army's (a fifth of the file's
+  // colour kept in it, and made up for the eye in part: a blue army's beam is not a third as bright as a yellow's).
+  // The lamps' lit faces on the model are its texture's and keep their colour. A player's option (the viewer's
+  // --head-lamp-colour file|faction|team).
+  int headLampColour = 0;
   // [hullglow] (Chris's big test of 2026-11-01: "lights being too bright at night", "a very bright red glow ... stacking on
   // top of other structures", "unit glow is a bit bright ... for battleship") a unit's own glow (its lamps of kind 'hull')
   // toned down: `hullGlow` times as strong and `hullReach` times as far as its lamps' file says (0.75 and 0.85, about half
