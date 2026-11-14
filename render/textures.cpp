@@ -653,6 +653,17 @@ std::optional<std::string> TextureCache::ReadFile(const std::string& path) {
   return out;
 }
 
+namespace {
+thread_local bool tOptional = false;  // [logsink] (GetOptional: a missing file is information)
+}  // namespace
+
+gfx::Texture TextureCache::GetOptional(const std::string& path, gfx::Texture fallback) {
+  tOptional = true;
+  const gfx::Texture t = Get(path, fallback);
+  tOptional = false;
+  return t;
+}
+
 gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   if (path.empty()) return fallback;
   std::string key = moho::Vfs::Normalize(path);
@@ -692,6 +703,8 @@ gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
                std::chrono::duration<double, std::milli>(read - start).count());
       made.Append(size);
     }
+  } else if (tOptional) {
+    printf("render: texture %s: not there (optional)\n", key.c_str());
   } else {
     fprintf(stderr, "render: texture %s: file not found\n", key.c_str());
   }

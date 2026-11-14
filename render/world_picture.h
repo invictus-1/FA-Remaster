@@ -68,7 +68,8 @@ class WorldPicture {
   // 2 warning for what was printed on stderr. It is called on the thread that printed (the renderer prints from
   // several), so it must be safe to call from any thread at once. With a sink nothing goes to stdout or stderr;
   // nullptr: back to them. A thread's unfinished line is handed over when the thread ends; render::LogFlush hands
-  // the calling thread's over at once (before a crash report, at the program's end).
+  // the calling thread's over at once: a HOST CALLS render::LogFlush (render/log_print.h) BEFORE IT WRITES A CRASH
+  // REPORT and at the program's end, so that a line the renderer was half-way through printing is in the log.
   static void SetLogSink(void (*sink)(int level, const char* line));
 
   // --- [devicelost] the graphics device lost, and made again (Chris, 2026-11-09, the review's A4) ---

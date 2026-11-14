@@ -516,7 +516,7 @@ bool World::Open(const std::string& mapPath, const Options& options, std::string
   // [energy shields] on as the map opens: its shaders made now, not at the first bubble in play (after the batch, so that
   // where they cannot be made the map still opens, with the plain bubbles)
   if (energyShields) energy.Prepare();
-  fprintf(stderr, "render: opened in steps: %s\n", steps.c_str());
+  printf("render: opened in steps: %s\n", steps.c_str());  // ([logsink] information, not a warning)
   return true;
 }
 
@@ -3821,7 +3821,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
         static double told = -1;
         if (whichId && u.id == whichId && clock_ - told >= 0.5) {
           told = clock_;
-          printf("render: unit pose: %u at %.1f s: turn %.3f %.3f %.3f %.3f, %u bones posed now, %u next, blend %.2f\n", u.id, clock, orientation.x, orientation.y, orientation.z, orientation.w, static_cast<unsigned>(pose.nowCount), static_cast<unsigned>(pose.nextCount), pose.blend);
+          printf("render: unit pose: %u at %.1f s: turn %.3f %.3f %.3f %.3f, %u bones posed now, %u next, blend %.2f\n", u.id, clock_, orientation.x, orientation.y, orientation.z, orientation.w, static_cast<unsigned>(pose.nowCount), static_cast<unsigned>(pose.nextCount), pose.blend);
           for (size_t b = 0; b < pose.nowCount && b < 12; ++b)
             printf("render: unit pose:   bone %u (%s): at %.2f %.2f %.2f, turn %.3f %.3f %.3f %.3f%s\n", pose.now[b].bone, pose.now[b].bone < model->bones.size() ? model->bones[pose.now[b].bone].name.c_str() : "?", pose.now[b].position[0], pose.now[b].position[1], pose.now[b].position[2], pose.now[b].orientation[0], pose.now[b].orientation[1], pose.now[b].orientation[2], pose.now[b].orientation[3], pose.now[b].hidden ? " hidden" : "");
         }

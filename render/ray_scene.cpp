@@ -189,7 +189,7 @@ static_assert(RayScene::kInstanceRows == 128 && RayScene::kTableRow == 256, "kRa
 
 RayScene::~RayScene() {
   if (refitted + rebuilt > 0)  // [cardcost] (refit)
-    fprintf(stderr, "render: the ray tracing scene: %llu frames refitted, %llu built to be refitted\n",
+    printf("render: the ray tracing scene: %llu frames refitted, %llu built to be refitted\n",  // ([logsink] information)
             static_cast<unsigned long long>(refitted), static_cast<unsigned long long>(rebuilt));
   for (auto& [serial, level] : levels_) device_->Destroy(level.structure);
   for (gfx::Structure s : {scene_, ground_, water_}) device_->Destroy(s);

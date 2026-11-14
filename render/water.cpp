@@ -1718,9 +1718,9 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
         for (size_t k = 0; k < 8 && k < list.size(); ++k)
           ocean.patchTurn[k] = static_cast<float>(list[k]["main_direction_deg"].NumberOr(0)) * 3.14159265f / 180;
       }
-      ocean.wake = textures_->Get("/remastered/env/remaster/sea_foam/foam_wake.dds", textures_->Black());  // [foamwake]
-      ocean.crest = textures_->Get("/remastered/env/remaster/sea_foam/foam_crest.dds", gfx::Texture{});  // [foamloop]
-      ocean.churn = textures_->Get("/remastered/env/remaster/sea_foam/foam_wake_churn.dds", gfx::Texture{});
+      ocean.wake = textures_->GetOptional("/remastered/env/remaster/sea_foam/foam_wake.dds", textures_->Black());  // [foamwake]
+      ocean.crest = textures_->GetOptional("/remastered/env/remaster/sea_foam/foam_crest.dds", gfx::Texture{});  // [foamloop]
+      ocean.churn = textures_->GetOptional("/remastered/env/remaster/sea_foam/foam_wake_churn.dds", gfx::Texture{});
       int found = 0;
       for (bool b : present) found += b;
       printf("render: the sea's foam patches: %d of 8%s\n", found, ocean.patches ? "" : " (none: the whitecaps' own pattern)");
