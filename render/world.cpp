@@ -3810,6 +3810,17 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       pose.next = frame.bones.data() + u.nextFirstBone;
       pose.nextCount = u.nextBoneCount;
       pose.blend = frame.blend;
+      {  // (checks: MOHO64_DEBUG_UNITPOSE=<unit id>: its turn and its posed bones as the picture has them, twice a second)
+        static const char* which = getenv("MOHO64_DEBUG_UNITPOSE");
+        static const uint32_t whichId = which ? static_cast<uint32_t>(strtoul(which, nullptr, 10)) : 0;
+        static double told = -1;
+        if (whichId && u.id == whichId && clock_ - told >= 0.5) {
+          told = clock_;
+          printf("render: unit pose: %u at %.1f s: turn %.3f %.3f %.3f %.3f, %u bones posed now, %u next, blend %.2f\n", u.id, clock, orientation.x, orientation.y, orientation.z, orientation.w, static_cast<unsigned>(pose.nowCount), static_cast<unsigned>(pose.nextCount), pose.blend);
+          for (size_t b = 0; b < pose.nowCount && b < 12; ++b)
+            printf("render: unit pose:   bone %u (%s): at %.2f %.2f %.2f, turn %.3f %.3f %.3f %.3f%s\n", pose.now[b].bone, pose.now[b].bone < model->bones.size() ? model->bones[pose.now[b].bone].name.c_str() : "?", pose.now[b].position[0], pose.now[b].position[1], pose.now[b].position[2], pose.now[b].orientation[0], pose.now[b].orientation[1], pose.now[b].orientation[2], pose.now[b].orientation[3], pose.now[b].hidden ? " hidden" : "");
+        }
+      }
       if (photo) {  // [fogwar] (as it stood when last seen: its bones then, not the rest pose)
         pose.now = pose.next = photo->bones.data();
         pose.nowCount = pose.nextCount = static_cast<uint32_t>(photo->bones.size());

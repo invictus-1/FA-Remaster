@@ -310,7 +310,7 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
       s.hasStood = true;
       static const bool told = std::getenv("MOHO64_DEBUG_WHEELS") != nullptr;  // (checks: a unit's travel, twice a second)
       if (told && static_cast<long long>(clock_ * 2) != static_cast<long long>((clock_ - dt) * 2))
-        printf("render: wheels: unit %u at %.1f s has travelled %.2f\n", unit.id, clock_, s.travel);
+        printf("render: wheels: unit %u at %.1f s has travelled %.2f, its treads' scroll %.4f %.4f\n", unit.id, clock_, s.travel, unit.treads[0], unit.treads[1]);
     }
   }
   const float w = s.work * s.work * (3 - 2 * s.work);  // (eased)

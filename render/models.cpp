@@ -1716,6 +1716,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
   // scroll on the strips at the foot of its texture as the original's do, on every level (they share the texture), and
   // whether its albedo's alpha holds their height there ([treads] the eye looks into the grooves: ModelLod::treadDepth)
   bool ownTreadsScroll = false, ownTreadsHeight = false;
+  float ownTreadsPace = 1;  // [treadpace]
   if (previewed && stem.empty()) {
     const std::string treads = preview + file + "_treads.bp";
     auto text = vfs_->Exists(treads) ? vfs_->ReadFile(treads) : std::nullopt;
@@ -1723,6 +1724,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     if (text && !ReadBlueprintFile(*text, &t)) fprintf(stderr, "render: %s: cannot be read\n", treads.c_str());
     ownTreadsScroll = t["Scrolling"].kind == BpValue::Bool && t["Scrolling"].boolean;
     ownTreadsHeight = ownTreadsScroll && t["Height"].kind == BpValue::Bool && t["Height"].boolean;
+    if (ownTreadsScroll) ownTreadsPace = static_cast<float>(t["Pace"].NumberOr(1));  // [treadpace]
   }
   // [wingtips] its own contrails besides its blueprint's (its folder's <file>_contrails.bp: Model::contrailBones)
   if (previewed && stem.empty()) {
@@ -1773,6 +1775,7 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
     lod.cutoff = s.cutoff;
     lod.scrolling = previewed ? ownTreadsScroll : s.scrolling;
     if (lod.scrolling) m->scrolls = true;
+    if (lod.scrolling && ownTreadsScroll) m->treadPace = ownTreadsPace;  // [treadpace]
     lod.shaderName = s.shader;
     // (the first game's names, which many blueprints still carry, mean today's techniques: the
     // original program's own table, docs/engine-answers.md, render 17; no name at all is "Unit")
