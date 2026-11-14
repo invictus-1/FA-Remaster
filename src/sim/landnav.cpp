@@ -1604,20 +1604,34 @@ void LandNavStageBegin(Sim& sim) {
 static void LandNavTickParallel(Sim& sim, const std::vector<Unit*>& all) {
   (void)Tables(sim);
   AirTiersReady(sim);
-  for (Unit* u : all) {
-    if (u->motion.bp) {
-      FootprintGrid(sim, *u->motion.bp);
-      if (!u->motion.bp->altFootprint.name.empty()) AltFootprintGrid(sim, *u->motion.bp);
+  // (2026-11-13: the per-unit snapshot on the worker pool, the spline's with it (SteeringSnapshotUnit). A unit's part
+  // reads that unit and its blueprint, writes that unit only. The footprint grids a blueprint still lacks (a shared
+  // cache, made at its first read) are made afterwards on the sim's thread, by the same units in the same order as the
+  // one loop made them: nothing the parts copy depends on them.)
+  const size_t n = all.size();
+  std::vector<uint8_t> needGrid(n, 0);
+  const void* navp = &sim.navigation();
+  sim.workers().ParallelFor("navigators snapshot", n, 256, [&](size_t b, size_t e, int) {
+    for (size_t i = b; i < e; ++i) {
+      Unit* u = all[i];
+      if (const MotionBlueprint* bp = u->motion.bp)
+        needGrid[i] = bp->gridOwner != navp || (!bp->altFootprint.name.empty() && bp->altGridOwner != navp);
+      u->snapLayer = u->layer;
+      u->snapStates = u->unitStates.Bits();
+      u->snapForm = u->form;
+      u->snapAltFp = u->altFootprintNav || u->altFootprintForced;
+      u->snapNavStatus = LandNavStatus(u);
+      u->snapNavGoodPath = LandNavHasGoodPath(u);
+      u->snapAirSteering = u->motion.air && u->motion.air->steering;
+      SteeringSnapshotUnit(u);
     }
-    u->snapLayer = u->layer;
-    u->snapStates = u->unitStates.Bits();
-    u->snapForm = u->form;
-    u->snapAltFp = u->altFootprintNav || u->altFootprintForced;
-    u->snapNavStatus = LandNavStatus(u);
-    u->snapNavGoodPath = LandNavHasGoodPath(u);
-    u->snapAirSteering = u->motion.air && u->motion.air->steering;
-  }
-  SteeringSnapshot(all);
+  });
+  for (size_t i = 0; i < n; ++i)
+    if (needGrid[i]) {
+      const MotionBlueprint& bp = *all[i]->motion.bp;
+      FootprintGrid(sim, bp);
+      if (!bp.altFootprint.name.empty()) AltFootprintGrid(sim, bp);
+    }
   sim.EnsureUnitGrid();
   std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns; the snapshot before and the commit after are serial)
   if (wtrap::On()) trap.emplace(sim.tick(), "navigators");

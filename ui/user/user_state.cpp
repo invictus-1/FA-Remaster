@@ -283,11 +283,11 @@ bool UserState::BuildSite(const std::string& blueprint, const float at[3], float
   return sim && moho::BuildSiteOf(*sim, blueprint, at, site, canBuild);
 }
 
-bool UserState::Reclaimable(const float at[3], float within, ReclaimableView* out) {
+bool UserState::Reclaimable(const float at[3], float within, ReclaimableView* out, uint32_t armyMask) {
   if (!config_.liveSim) return false;
-  if (auto snap = config_.liveSim->snapshots().Reclaim()) return moho::ReclaimableAt(*snap, at, within, out);
+  if (auto snap = config_.liveSim->snapshots().Reclaim()) return moho::ReclaimableAt(*snap, at, within, out, armyMask);
   Sim* sim = LiveSim("the reclaimable prop (before the first copy)");
-  return sim && moho::ReclaimableAt(*sim, at, within, out);
+  return sim && moho::ReclaimableAt(*sim, at, within, out, armyMask);
 }
 
 UserState* UserState::From(lua_State* L) { return static_cast<UserState*>(lua_getextra(L, 1)); }

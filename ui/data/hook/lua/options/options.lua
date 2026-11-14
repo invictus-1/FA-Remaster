@@ -630,6 +630,22 @@ local looks = {
         },
     },
     {
+        -- ours (Chris 2026-11-13): the renderer's WorldPicture::SetWrecksOnceSeen, the engine's PropSeenBy; off = the
+        -- original game's way; set by no preset level (it is no look: it changes what the player is shown)
+        title = "Wrecks Appear Once Seen",
+        key = 'remaster_wrecks_once_seen',
+        tip = "Off (the original game's way): a wreck shows at once, also one made out of your sight, under the fog. On: a unit's wreck shows, takes the reclaim cursor and gets its reclaim label only once your army or an ally has seen its place. Trees, rocks and the map's own wrecks always show.",
+        type = 'toggle',
+        default = 0,
+        set = Look("remaster_wrecks_once_seen"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's look 15, WorldPicture::SetHiddenOutlines: only what the player may see; none in the Original look
         title = "Hidden Unit Outlines",
         key = 'remaster_hidden_outlines',
@@ -656,6 +672,39 @@ local looks = {
             states = {
                 { text = "Faction colour", key = 0 },
                 { text = "Team colour", key = 1 },
+            },
+        },
+    },
+    {
+        -- the renderer's World::headLampColour (its request 78; Chris's test of 2026-11-13: "option for either or follow
+        -- the color of your team color is best"): Team at first; the lamps are the remaster's, so in no preset
+        title = "Head Lamp Colour",
+        key = 'remaster_head_lamp_colour',
+        tip = "The beams and lamps of the remastered units' head lights at night: a flashlight's white, the faction's own colour (UEF blue), or your army's colour.",
+        type = 'toggle',
+        default = 2,
+        set = Look("remaster_head_lamp_colour"),
+        custom = {
+            states = {
+                { text = "White", key = 0 },
+                { text = "Faction colour", key = 1 },
+                { text = "Team colour", key = 2 },
+            },
+        },
+    },
+    {
+        -- ours (Chris 2026-11-13): the renderer's WorldPicture::SetAlliesPauseMarks; on = the original game's way (it
+        -- marks every allied army's paused units); set by no preset level
+        title = "Allies' Pause Marks",
+        key = 'remaster_allies_pause_marks',
+        tip = "On (the original game's way): the red pause mark shows on your allies' paused or switched-off units as on your own. Off: on your own units only.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_allies_pause_marks"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
             },
         },
     },
@@ -944,9 +993,9 @@ local remasterSections = {
     { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
                             'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway',
                             'remaster_warpin_colours' } },
-    { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour',
+    { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour', 'remaster_head_lamp_colour',
                                'remaster_hidden_outlines', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look',
-                               'remaster_stealth_veil' } },
+                               'remaster_stealth_veil', 'remaster_wrecks_once_seen', 'remaster_allies_pause_marks' } },
     { "Picture & Camera", { 'remaster_photo_look', 'remaster_sharpen', 'remaster_lens' } },
 }
 local function Header(title)  -- (the game's header row: its box unseen, only its title; "expected everywhere": FAF's)

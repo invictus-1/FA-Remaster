@@ -51,6 +51,12 @@ bool ScenarioMarksFixes(const std::string& scenario);
 // or anything else (every recording of the original, every FAF replay). *version: the version, 0 when missing.
 int ScenarioSimOrder(const std::string& scenario, int* version);
 
+// Options.RemasterOrdersAfterDefeat = "on" in the scenario info of the header (Chris, 2026-11-13: units he spawned
+// for his own army after its defeat took no orders): with cheats on, a defeated army's units take orders. The host's
+// launch writes it with a game that has cheats on, and the replay keeps it. False for a missing field or anything
+// else (every recording of the original, every FAF replay): the original's refusal (Sim::OkayToMessWith 0x747320).
+bool ScenarioOrdersAfterDefeat(const std::string& scenario);
+
 // The FAF game version a session plays by (engine-ref/specs/faf3840.md): the number at the end of the header's
 // version line, "Supreme Commander v1.50.3839" -> 3839 (VCR_CreateReplay 0x876190 writes the exe's own, 0x87612c;
 // FAF 3840's exe is the same build with 0xf00 there). This engine knows the rules of two: 3839 (everything was read

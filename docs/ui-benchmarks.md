@@ -473,3 +473,40 @@ every frame the same as a full redraw, pixel for pixel.
 
 Early game for comparison (2026-10-15, before the change, the rebuilt Seton's at start): 1600x900 4.3 ms a frame
 (the interface's drawing 2.1 ms), 3840x2160 9.0 ms (3.7 ms).
+
+## The photo key (Ctrl-Alt-F12, `remaster_photo`): how long the world's picture stands still (2026-11-14)
+
+Why: Chris's test of 2026-11-13, "Game freezes for a second". The renderer shows the world as it was while a photo's
+frames are drawn (`WorldPicture::StartPhoto`: its settling frames, then the photo's), so the photo's draw time is the
+time the game's picture stands still. In his game (4K full screen, upscale 0.59, a late game) the photo of twice the
+view's size took ten frames of 75 to 146 ms, 0.93 s (`_scratch\bigtest\game_prev.log`, frames 546548-546557).
+
+Measured here: a game from `session_ai.lua` at twelve seconds, headless at 3840x2160 with the world drawn, the test
+template's preferences (every look on), the side build of 2026-11-14 06:10, pinned to CPUs 16-31; three photos each
+way, 8 to 10 s apart; the numbers are the renderer's own (`LastPhotoNumbers`, now in the log's line "the photo's
+frames: ..."). Three series: 06:06 and 06:10 (the engine's gate 164 ran until about 06:12) and 06:22 (seven of the
+engine's programs were running): the CPU was shared each time, and the series differ by a factor of two; within
+each series the two sizes are a factor of about three apart.
+
+| The photo | Size | Frames | The picture stands still | Put together (on a thread) |
+|---|---|---|---|---|
+| twice the view, the renderer's supersampling (as until 2026-11-13; now `remaster_photo fine`) | 7680x4320, drawn once | 9 | 0.74, 0.82, 1.10 s (06:06); 0.42, 0.49, 0.91 s (06:10); 0.87, 1.00, 1.33 s (06:22) | 0.14 to 0.17 s |
+| twice the view, supersample 1 (the first fix tried) | 7680x4320, drawn once | 9 | 0.92, 1.29, 1.42 s (06:06) | 0.14 to 0.15 s |
+| the view's own size, drawn once, 8 settling frames (the key from 06:56 to the next build) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10); 0.32, 0.38, 0.45 s (06:22) | 0.04 to 0.05 s |
+| the view's own size, drawn once, 2 settling frames (the key since the build after 08:00) | 3840x2160 | 3 | 0.17, 0.12, 0.12 s (08:00; the fine photo in that series: 1.08, 0.72, 0.75 s) | 0.04 s |
+
+What they say: asking for no supersampling changes nothing, because at 7680x4320 the renderer's own choice is
+already to draw once (`by` 1): the cost is the size. A photo of the view's own size stands still for 0.15 to 0.45 s
+here, about a third of the larger one's time in the same series. Not measured: his own late game in a window on his
+screen (the log's new line will say it the next time he presses the key). What is left is the renderer's nine frames (eight settle the clouds and the light in the air at
+the photo's size): fewer of them for a photo of the view's own size would bring it under a tenth of a second
+(ui/REQUESTS.md 56).
+
+**Two settling frames (the renderer's answer to 56, render 3e7618fa, `StartPhoto`'s `settleFrames`).** At the
+window's own size and camera the settled pictures are carried over, so the key's photo asks for 2: three frames in
+0.12 to 0.17 s, a sixth of the fine photo's time in the same series. That the photo is as settled as with eight:
+the three photos of the 08:00 series (2 frames) and the three of the 06:10 and 06:22 series (8 frames), each made
+small to 480x270, have the same mean colours to a tenth of 255 (77.9 / 73.8 / 44.6, 78.1 / 74.2 / 45.2, 77.7 / 73.9
+/ 44.6: the same game, seed and moments); the renderer's own compare of one run is in docs/render-answers.md (a mean
+difference of 0.02 to 0.05 of 255, no pixel off by more than 2). Not measured: falling rain or snow, a night with
+many lamps (his note: 3 or 4 frames if noise shows there).

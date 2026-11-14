@@ -54,6 +54,8 @@ is the PC's clock at the click, Build the program that was running (`moho::Build
 ## What the panel does to the game
 - It takes no key: only its note line, once clicked, has the keyboard (Enter keeps the note, Escape gives the kept
   one back, a click elsewhere keeps it too). It never pauses the game.
+- A note may be 2000 characters long (200 until 2026-11-13: Chris's notes of that day's test were cut; the line
+  shows its end while it is typed in).
 - While a dialog of the game holds the input (the Options dialog, the score screen), the panel's own controls still
   get the mouse (`maui/control.h` `overCapture`, set only while the panel is open): this is ours, the original gives
   such a dialog every click.

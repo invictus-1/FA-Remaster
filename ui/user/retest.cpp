@@ -175,8 +175,14 @@ std::string CellAt(const std::vector<std::string>& cells, int column) {
   return column >= 0 && column < static_cast<int>(cells.size()) ? Plain(cells[column]) : std::string();
 }
 
-// The screens a Where cell names (separated by commas or blanks; a word that is no screen's name is left out and
-// said once in the log).
+// The words of Where cells that are no screen's name, each once (a list read): said in ONE line when the list is read.
+// (Until 2026-11-13 each had a warning line of its own: Chris's list of that day, whose Where cells say where on the
+// map to look, put some three hundred lines at the head of every log.)
+std::mutex g_strangersLock;
+std::vector<std::string> g_strangers;
+
+// The screens a Where cell names (separated by commas or blanks; a word that is no screen's name is left out: an item
+// whose cell names no screen is shown on every screen).
 std::vector<std::string> Screens(const std::string& cell) {
   std::vector<std::string> out;
   std::string word;
@@ -185,14 +191,8 @@ std::vector<std::string> Screens(const std::string& cell) {
     if (!word.empty()) {
       const bool known = std::find_if(std::begin(kScreens), std::end(kScreens), [&](const char* s) { return word == s; }) != std::end(kScreens);
       if (known && std::find(out.begin(), out.end(), word) == out.end()) out.push_back(word);
-      static std::mutex saidLock;
-      static std::vector<std::string> said;
-      std::lock_guard<std::mutex> hold(saidLock);
-      if (!known && std::find(said.begin(), said.end(), word) == said.end()) {
-        said.push_back(word);
-        Logf(LogLevel::Warning, "moho64ui: the re-test list: \"%s\" in a Where cell is no screen (menu, lobby, game, replay, options, score): left out",
-             word.c_str());
-      }
+      std::lock_guard<std::mutex> hold(g_strangersLock);
+      if (!known && std::find(g_strangers.begin(), g_strangers.end(), word) == g_strangers.end()) g_strangers.push_back(word);
     }
     word.clear();
   };
@@ -318,7 +318,22 @@ void ReadListIfChanged() {
     Logf(LogLevel::Warning, "moho64ui: the re-test list: %s", g_error.c_str());
     return;
   }
+  {
+    std::lock_guard<std::mutex> hold(g_strangersLock);
+    g_strangers.clear();
+  }
   g_groups = ParseList(*text);
+  {
+    std::lock_guard<std::mutex> hold(g_strangersLock);
+    if (!g_strangers.empty()) {
+      std::string first;
+      for (size_t i = 0; i < g_strangers.size() && i < 5; ++i) first += (i ? ", " : "") + ("\"" + g_strangers[i] + "\"");
+      Logf(LogLevel::Info,
+           "moho64ui: the re-test list: %zu word(s) in Where cells are no screen (menu, lobby, game, replay, options, score) and are left out "
+           "(the first: %s); an item whose cell names no screen is shown on every screen",
+           g_strangers.size(), first.c_str());
+    }
+  }
   size_t items = 0;
   for (const Group& g : g_groups) items += g.items.size();
   Logf(LogLevel::Info, "moho64ui: the re-test list %s: %zu items in %zu groups (read %d)", g_file.c_str(), items, g_groups.size(), g_serial);

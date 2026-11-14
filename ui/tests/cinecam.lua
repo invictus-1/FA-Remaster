@@ -7,7 +7,7 @@
 --   the front end, then the replay (with the same preferences folder: --stage frontend --lua ui/tests/cinecam.lua
 --     --game-lua ui/tests/cinecam.lua --frames 2400): on, it follows the selected unit; the bars and marks are left
 --     out meanwhile and come back as they were; a wheel notch, the arrow keys, the middle button, a script's Reset
---     and the command itself hand the camera back, the picture easing back; the photo comes from it at twice the
+--     and the command itself hand the camera back, the picture easing back; the photo comes from it at the
 --     view's size. It is left on at the end, following the commander (for a --screenshot).
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
 local failed = 0
@@ -69,12 +69,14 @@ local function take()
     return table.concat(t, "|")
 end
 local view = import("/lua/ui/game/worldview.lua").viewLeft
--- The photo: the console's line says where; the file is a PNG at twice the main view's size.
+-- The photo: the console's line says where; the file is a PNG at the main view's size (the key's photo, since
+-- 2026-11-14: the world's picture stands still while a photo is made, and at twice the size that was a second at
+-- 4K), or with the word "fine" at twice that.
 -- (The file is written on a thread of its own, the review's item of 2026-11-09: the command comes back once the
 -- picture is made, and the line comes when the file is there. Call it from a thread: it waits for the line.)
-local function photo(what)
+local function photo(what, fine)
     local before = moho64ui_WallSeconds()
-    ConExecute("remaster_photo")
+    ConExecute(fine and "remaster_photo fine" or "remaster_photo")
     local took = moho64ui_WallSeconds() - before
     local line = take()
     check(what .. ": the command comes back before the file is written (no line yet)", line, "")
@@ -96,8 +98,9 @@ local function photo(what)
         string.find(path, "/screenshots/photo_%d%d%d%d%-%d%d%-%d%d_%d%d%-%d%d%-%d%d") ~= nil, true)
     local info = moho64ui_PngInfo(path)
     check(what .. ": the file is a PNG", info ~= nil, true)
-    local want = string.format("%dx%d", 2 * view.Width(), 2 * view.Height())
-    check(what .. ": at twice the view's size", info and (info.width .. "x" .. info.height), want)
+    local k = fine and 2 or 1
+    local want = string.format("%dx%d", k * view.Width(), k * view.Height())
+    check(what .. (fine and ": at twice the view's size" or ": at the view's size"), info and (info.width .. "x" .. info.height), want)
     check(what .. ": and holds the pixels (stored: 3 bytes each)", info and info.bytes > info.width * info.height * 3, true)
     check(what .. ": the host says so too", moho64ui_CineCamera().photo, path)
 end
@@ -119,6 +122,8 @@ if not SessionIsReplay() then
         check("on as well", take(), "remaster_cinecam: the cinematic camera is for replays; in a game you play it stays off")
         check("and it stays off", bools(moho64ui_CineCamera().on, moho64ui_CineCamera().camera == ""), "false true")
         photo("in a game one plays")
+        WaitSeconds(1)
+        photo("the fine photo", true)
         WaitSeconds(16)
         local profile = import("/lua/user/prefs.lua").GetCurrentProfile().Name
         CopyCurrentReplay(profile, REPLAY)

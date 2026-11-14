@@ -339,3 +339,60 @@ stand 143 outside the panel on the left: the five get 138 each, the textures dra
 (section 4). Tooltip: `options_tab_defaults` (ui/data/hook/lua/ui/help/tooltips.lua). Test: `ui/tests/options_tabs.lua`
 (every option of the tab at its default in the working set, another tab's option untouched, nothing kept before OK,
 Cancel leaves all, every button's label inside its button; at 1920x1080 and 3840x2160).
+
+## 6. "Wrecks Appear Once Seen" (built 2026-11-13; Chris: "lets add them")
+
+A toggle in the Remastered tab's section Units & Readability (`remaster_wrecks_once_seen`, console the same; set by
+no preset level: it is no look). OFF by default, Chris's word: "default to how the og game performed". Off is the
+original's and FAF's way (the review of 2026-11-09, row L: FAF's wreckage.lua leaves wrecks visible to every army
+on purpose): a wreck made out of sight is drawn under the fog at once, takes the reclaim cursor and has its reclaim
+label.
+
+On, a unit's wreck is in the picture, under the reclaim cursor and among the reclaim labels only once the player's
+army or an ally has had its place in sight. Trees, rocks, the map's own wrecks and whatever else is no unit's wreck
+are never held back; nor a death's scorch mark, smoke and burnt plants (Chris: "leave it as is"). An observer, and a
+replay showing all armies, see everything. A wreck reclaimed out of sight goes at once, as before. Nothing of the
+simulation changes: no order, no checksum, no replay.
+
+Three layers, one fact:
+- the engine keeps, beside the simulation, which armies have seen each wreck (`Sim::collectPropsSeen`, set by the
+  host before the first beat in every game so that the option can be switched in the middle of one; `PropSeenBy`,
+  `ReclaimableAt`'s `armyMask`; ui request 61, `docs/engine-answers.md` 2026-11-13);
+- the renderer leaves an unseen wreck out of the picture (`WorldPicture::SetWrecksOnceSeen`; ui request 53);
+- the interface (`LookSettings::wrecksOnceSeen`): the reclaim cursor and the right click's reclaim order ask
+  `ReclaimableAt` with the focus army's bit (`ReclaimTargetAt`, user_units.cpp), and FAF's reclaim labels go through
+  our hook `ui/data/hook/lua/ui/game/reclaim.lua`: a point the simulation tells of for an unseen wreck is held back
+  and handed to the game's `UpdateReclaim` once `moho64ui_PropSeen(id)` says so (asked each beat for the held ones;
+  every label judged anew when the option is switched or the view goes to another army).
+
+A prop's entity id does not fit a Lua number (a 32-bit float; ids from 0x2ff00000): ids go as their texts, as FAF's
+own scripts have them (`Sync.Reclaim`'s keys).
+
+Test: `ui/tests/wrecks_seen.lua` (the suite's job `wrecks_seen`; fog of war, FAF's cheat prop spawn makes a unit's
+wreck blueprint at the map's four corners and beside the commander): off, all are the view's; on, the corner wrecks
+take no reclaim cursor and their labels are held back while the one beside the commander has both; a scout of ours
+beside one: cursor and label come; switched off: the held label shows; switched on in the middle: it goes again.
+The picture's half is the renderer's own check.
+
+## 7. "Allies' Pause Marks" and "Head Lamp Colour" (built 2026-11-14; Chris's test of 13 November)
+
+Two rows in the Remastered tab's section Units & Readability (57 rows on the page now), set by no preset level.
+
+**Allies' Pause Marks** (`remaster_allies_pause_marks`, console the same; ON by default). Chris's picture "I don't
+think I should be able to see what allies pause.png"; told that the original marks allies too: "yeah lets make it an
+option and have it stick closer to the unit vs floating up so high". On is the original's way: its icon pass marks
+a paused or switched-off unit of every army allied to the focus army (0x85bd99 `IArmy::IsAlly`); off, the mark is on
+the focus army's own units only. The renderer's `WorldPicture::SetAlliesPauseMarks` (`LookSettings::alliesPauseMarks`;
+ui request 54). The mark's place is no option: the original draws the pause picture centred on the unit's icon place
+(its RenderUnitIcon 0x85d9a0: one centre for the icon's quad and the pause picture's), ours floated above the unit
+until render e4a967c1 and is there now.
+
+**Head Lamp Colour** (`remaster_head_lamp_colour`, console `white|faction|team` or 0|1|2; Team by default). The
+renderer's request 78 for Chris, on the redone units' head lamps: "option for either or follow the color of your team
+color is best". White: as the units' files have the lamps (a flashlight's warm white); Faction: the faction's own
+colour (the UEF's blue); Team: the army's colour. `World::headLampColour` through `WorldLooks`
+(`LookSettings::headLampColour`). The lamps are the remaster's (the original's units have none), so there is no
+original's way to keep; the row starts at Team on his "is best".
+
+Test: `ui/tests/options_tabs.lua` (both at their defaults, switched by the console as the rows' `set` does, and
+back). What the picture then shows is the renderer's own check.

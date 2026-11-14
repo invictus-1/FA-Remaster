@@ -192,7 +192,7 @@ std::vector<Unit*> CommandableUnits(Sim& sim, const std::vector<uint32_t>& ids, 
     if (!e) continue;
     bool okay = true;
     if (Army* a = e->army) {
-      if (a->outOfGame) okay = false;
+      if (a->outOfGame) okay = sim.DefeatedArmyTakesOrders() && sim.CheatsEnabled();  // (ours: the game option)
       else if (!(sim.commandSource != 0xff && HasSource(a, sim.commandSource))) okay = sim.CheatsEnabled();
     } else {
       okay = sim.CheatsEnabled();  // 0x7493c2
@@ -267,7 +267,8 @@ void CommandStream::CountIds(const Sim& sim, const std::vector<uint32_t>& ids) {
     ++n.asked;
     const Entity* e = sim.FindEntityById(id);
     if (!e) ++n.missing;
-    else if (const Army* a = e->army; a && (a->outOfGame || !(sim.commandSource != 0xff && HasSource(a, sim.commandSource))))
+    else if (const Army* a = e->army; a && ((a->outOfGame && !sim.DefeatedArmyTakesOrders()) ||
+                                            !(sim.commandSource != 0xff && HasSource(a, sim.commandSource))))
       ++n.refused;
   }
 }

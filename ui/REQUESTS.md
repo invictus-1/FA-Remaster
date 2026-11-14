@@ -1428,7 +1428,7 @@ where the others are. The ui then binds them with l_UnitSwitch and adds a check 
 
 ### 61. Which armies have seen a prop made after the start (for the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
 
-**OPEN (asked 2026-11-13 13:03).**
+**ANSWERED (engine, 2026-11-13 15:46, batch 162, main 27c17022; the top entry of `docs/engine-answers.md`).** `Sim::collectPropsSeen`, `PropSeenBy`, `ReclaimableAt`'s `armyMask` (live and snapshot); wreckage only, allies' vision counted at that beat. The ui's half is built on it (the option's row, the reclaim cursor, the reclaim labels; `ui/tests/wrecks_seen.lua`).
 
 NARROWED 13:05 on the renderer's point (his render/REQUESTS.md 77 to you; I agree): only WRECKAGE (a unit's wreck)
 holds a set of armies; every other prop made after the start (the single trees a tree group breaks into: 5,240 of
@@ -1470,7 +1470,7 @@ Kept simple on purpose, say if you see it differently: a wreck that is reclaimed
 
 ### 62. third_party/lua/lgcinc.c does not compile for Linux (2026-11-13 13:52, a finding, not blocking)
 
-**OPEN.**
+**ANSWERED (engine, 2026-11-13, batch 162, main 27c17022).** Confirmed by the ui's compile-only build for Linux the same afternoon (see the handoff).
 
 Who: ui. Found by a compile-only build for Linux (`py ui/build_ui.py --target x86_64-linux-gnu --out <folder>`, run to
 check my SDL window code): 273 of 274 objects compile, one fails: `third_party/lua/lgcinc.c` line 976, `nowus`
@@ -2761,7 +2761,7 @@ offer; his answer of 2026-11-11: **yes**, he wants the line.
 
 ### 53. A wreck drawn only once the viewer's armies have seen its place (the option "wrecks appear only once seen") (2026-11-13, Chris: "lets add them"; not blocking)
 
-**OPEN (asked 2026-11-13 13:03).**
+**DONE (renderer, 2026-11-13: render 6783c564 `WorldPicture::SetWrecksOnceSeen`, on the engine's sets since render 16f6490e; the top entry of `docs/render-answers.md`).** Chris through the renderer: off by default, a death's scorch, smoke and burnt plants stay outside the option.
 
 Who: ui. Why: Chris said yes on 2026-11-13 to a player option "Wrecks appear only once seen", OFF by default (off =
 the original's and FAF's way: a wreck made out of sight is drawn under the fog at once). The whole of it is in my
@@ -2778,6 +2778,69 @@ of {prop id, armies} for each prop whose set grew). The interface's half (the op
 rollover, the reclaim labels) is mine and asks the engine the same fact, so the picture and the cursor agree.
 A test I will add when both are in: a wreck made out of sight is not in the picture (a pixel read at its place) and
 not under the cursor; a scout flies over; it is both.
+
+### 54. The pause mark: on the unit's icon place as the original, and a switch for allies' units (2026-11-14, Chris's test of 11-13; not blocking)
+
+**DONE (renderer, 2026-11-14: render e4a967c1, in main e662c77c: the mark centred on the unit's icon place, `WorldPicture::SetAlliesPauseMarks`; `docs/render-answers.md`, "To the ui, request 54").** The row "Allies' Pause Marks" is wired (docs/ui-options-layout.md 7).
+
+Who: ui. Why: Chris's picture "I don't think I should be able to see what allies pause.png" (a red pause mark well
+above an ally's unit icon), and his word through the engine once he heard that the original marks allies too: "yeah
+lets make it an option and have it stick closer to the unit vs floating up so high".
+
+(1) The place. The original draws the pause picture CENTRED ON THE UNIT'S ICON PLACE, not above the unit: its
+RenderUnitIcon (0x85d9a0) draws the icon's quad at 0x85dda4..0x85de82 and the pause picture's at 0x85de8d..0x85df7e
+(the entry's texture +0x1c, its flag +0x2d) round the SAME centre ([esp+0x40], [esp+0x44], read at 0x85dddf / 0x85ddf6
+and again at 0x85dedc / 0x85def3), each half its own texture's width and height to either side; where the icon is
+not drawn (the entry's flag +0x2f: zoomed in) the pause picture still is, at that centre. Read by me today. Ours
+(world.cpp, your [pausemark] block: `position + Vec3{0, top, 0}` with top = the model's height + 0.35) floats above
+the unit. Asked: the mark at the unit's icon place, as the original; that is what Chris asks for, so no switch for
+the old height unless you see a reason.
+
+(2) The switch. A call like `SetAlliesPauseMarks(bool)`, ON at first (the original's way: own and allied units,
+0x85bd99 IArmy::IsAlly); off: only the focus army's own units wear the mark (no focus army: as on). The option's row
+is mine (Options > Remastered > Units & Readability, "Allies' Pause Marks", on by default, in no preset); tell me the
+call's name and I wire it the day it is in main.
+
+### 55. The menu's flight: the first start after a new build, and one frame of 4.3 s as it comes in (2026-11-14, numbers from Chris's test of 11-13; a report, not blocking)
+
+**ANSWERED (renderer, 2026-11-14, `docs/render-answers.md` "To the ui, request 55"): read and kept for the optimising phase.** The 4.3 s frame is the models' pipeline compiled inside the frame, once a build on a machine; the 17.6 ms are the land outside the map, the relief by material, the far mountains' form and the finer sea mirror, added since 9 November.
+
+Who: ui. Why: Chris failed the row "The menu has a background at once": "starts up like the background but its
+frozen ... only runs our new make briefly before switching to old background". The switching was mine (my cost limit
+of 12 ms a frame, a guess; his card takes 17.6 ms at 4K with upscale 0.59 and every look on, 16.2 ms in a window of
+3658x2054; the limit is now 33.3 ms: docs/ui-menuflight.md). The "frozen" is the kept picture shown until the flight
+is live, and how long that takes is yours. From `_scratch\bigtest\game_prev.log` (the start of 18:33:42, the first
+with the build cb9caa01; my suite was still running for its first half minute, so the CPU was shared) and `game.log`
+(the start of 19:5x):
+- first start: `ready after 33.7 s (open 10.7 s, ready 33.7 s; 7865 frames meanwhile; the frames' share 1329 ms in
+  2482 asks, at most 3.6 ms in one; 4 warm frames, the longest 16 ms)`; second start: `ready after 6.6 s (open 5.6 s,
+  ready 6.6 s; 936 frames meanwhile; ... 1039 ms in 2502 asks ...)`. So the first start after a new build spends 23 s
+  between open and ready that the next does not (a cold pipeline cache, I take it).
+- the frame in which the flight came in at the first start: `long frame 7865 (37.9 s): 4284.5 ms ... showing 4268.1
+  (the world's picture 4266.4); in it: render: pipeline models (the driver 1 ms) 2241.3, render: waited for a pipeline
+  made ahead: models, depth laid 288.6 ...`, then 419 ms (`files read ahead: 138`, eleven `model ...` lines) and 332 ms.
+  The models' pipeline was not ready when the flight's first units came (they are made at its first beat, after the
+  warm frames, which see a map without units).
+- the flight's cost, for your books (optimise at the end): 21.4 ms of the card a frame over its first ten seconds,
+  17.6 ms over the next five (4K full screen); 16.2 ms in the window. Your measure of 2026-11-09 was 8.0 ms.
+Asked: nothing urgent. If the models' pipeline can be made before the swap when a session is handed to the map
+(PrepareSession knows the units' blueprints), the 4.3 s frame goes; say if I should hand you something more for it.
+
+### 56. A photo of the view's own size: fewer settling frames (2026-11-14, from Chris's test of 11-13; not blocking)
+
+**DONE (renderer, 2026-11-14: render 3e7618fa, in main ef79fd9c: `StartPhoto`'s sixth argument `settleFrames`; the top entries of `docs/render-answers.md`).** Wired: the key's photo asks for 2 (three frames in 0.12 to 0.17 s at 4K; docs/ui-benchmarks.md).
+
+Who: ui. Why: Chris failed the photo key again, "Game freezes for a second": while a photo's frames are drawn the
+world's picture stands still (your StartPhoto shows the world as it was), and the key asked for twice the view's size:
+ten frames of 75 to 146 ms at 4K in his game, 0.93 s. Measured this morning (docs/ui-benchmarks.md, "The photo
+key"): the cost is the size, not the supersampling (at 7680x4320 your own choice is `by` 1). The key's photo is now
+the view's own size, drawn once (`remaster_photo fine` gives the old one): nine frames in 0.15 to 0.45 s.
+
+Asked, if it is cheap for you: a photo that needs fewer settling frames when it is of the size and camera the window
+has just drawn (the clouds and the light in the air are settled there already): a StartPhoto argument like
+`settleFrames` (as TakePhoto's), or your own rule for that case. Two or three frames in place of nine would put the
+key's photo under a tenth of a second. If the settled pictures cannot be carried over, say so and this is closed:
+a quarter of a second is a blink.
 
 ## To the visuals track
 

@@ -42,6 +42,27 @@ by equal fingerprints against today's parallel runs; the commands stage, the fir
 formations and the Lua stages are the optimisation phase's and the AI track's. Step 5.7 (the collector's marking
 in batches) stays held: the collector's step is 0.23-0.35 ms of a beat.
 
+**The wrap-up round, first three items (batch 164, 2026-11-14).** Landed, the game identical in both orders: (1)
+`SumUnitEconomy` keeps each adder's creation serial beside it and sorts only when the list is not already in
+order; (2) the combat data prefill reads only the units made since the last prefill (`combatPending_`), in the
+pass's order; (3) the beat-start snapshot's per-unit part runs on the worker pool, and what is shared (the
+footprint grids, the held shapes' list, the guard formations) stays on the sim's thread in the pass's order.
+Proof (helper mcwrap, the key runs repeated on the lead's build): parallel order at 1 thread, 16 threads and
+shuffled turns equal to the references of 13 November on b8 6000, B3 2000, 50,000 units 600 and B1 12000 beats;
+the write trap sees no cross-unit write; the original order's 15 gate keys unchanged; gate 164. Measured for
+item 1 alone: 4.8% off a beat of B3-16k at 16 threads, 8.7% off one of 50,000 units.
+
+**Items 4 and 5 (batch 165, 2026-11-14).** Landed, the game identical in both orders: (4) the navigators' per-unit
+snapshot and the steering's spline snapshot run on the worker pool (a unit's part reads and writes that unit only;
+missing footprint grids are made afterwards on the sim's thread in the stage's order), and the deferred script
+calls are ordered through (key, place) pairs, sorted only when out of order; (5) phase D's turns, the units'
+economy steps, run on the worker pool: a turn's deferred calls go to its worker's list, its note for the army's
+sum to its worker's list (joined after the phase, summed by creation serial as before), and the turn's two shared
+writes (a pod's assist order, a factory's queue check: engine command ids) follow on the sim's thread in the
+turns' order, before the commit, their deferred calls keyed after the turn's own. Proof as for items 1-3, with
+B1 36000 beats at 16 threads, reversed and shuffled turns with the Lua check, and three write traps (0 writes);
+the lead's seven runs on main's build; gate 165. The timing of items 2-5 is being taken.
+
 ## For Chris: the short version
 
 **What it is.** Today our simulation copies the original game's order of work exactly: one unit after another, each

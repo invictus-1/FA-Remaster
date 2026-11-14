@@ -1314,23 +1314,29 @@ void SteeringNavStageArmy(Sim& sim, int army) { sim.navStageArmy = army; }
 
 // Parallel order's spline snapshot (step 5.2; the navigators' stage takes it too, step 5.3): every unit's spline as
 // the stage begins, what another unit's prediction reads (SeenSpline).
-void SteeringSnapshot(const std::vector<Unit*>& all) {
-  for (Unit* u : all) {
-    UnitMotion& m = u->motion;
-    // (step 5.2b: a unit without a spline needs no points; a changed batch is copied into the buffer kept from the
-    // last beat when nothing else holds it, so most beats allocate nothing)
-    if (m.hasSpline && (u->snapSplineVersion != m.splineVersion || !u->snapSpline)) {
-      if (u->snapSpline && u->snapSpline.use_count() == 1) *u->snapSpline = m.spline;
-      else u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>(m.spline);
-      u->snapSplineVersion = m.splineVersion;
-    } else if (!u->snapSpline) {
-      u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>();
-      u->snapSplineVersion = 0xffffffffu;
-    }
-    u->snapSplineIdx = m.splineIdx;
-    u->snapHasSpline = m.hasSpline;
-    u->snapSplineMode = m.splineMode;
+void SteeringSnapshotUnit(Unit* u) {
+  UnitMotion& m = u->motion;
+  // (step 5.2b: a unit without a spline needs no points; a changed batch is copied into the buffer kept from the
+  // last beat when nothing else holds it, so most beats allocate nothing)
+  if (m.hasSpline && (u->snapSplineVersion != m.splineVersion || !u->snapSpline)) {
+    if (u->snapSpline && u->snapSpline.use_count() == 1) *u->snapSpline = m.spline;
+    else u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>(m.spline);
+    u->snapSplineVersion = m.splineVersion;
+  } else if (!u->snapSpline) {
+    u->snapSpline = std::make_shared<std::vector<UnitMotion::SplinePoint>>();
+    u->snapSplineVersion = 0xffffffffu;
   }
+  u->snapSplineIdx = m.splineIdx;
+  u->snapHasSpline = m.hasSpline;
+  u->snapSplineMode = m.splineMode;
+}
+// (2026-11-13: on the worker pool. A unit's part reads and writes that unit only: its spline and its snapshot copy; the
+// copy's buffer is that unit's own, kept from the last beat when no message holds it, which no other unit's part
+// touches. So any order of the units gives the same snapshots.)
+void SteeringSnapshot(Sim& sim, const std::vector<Unit*>& all) {
+  sim.workers().ParallelFor("steering snapshot", all.size(), 256, [&](size_t b, size_t e, int) {
+    for (size_t i = b; i < e; ++i) SteeringSnapshotUnit(all[i]);
+  });
 }
 
 void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xac: creation order inside the army)
@@ -1339,7 +1345,7 @@ void SteeringTickUnits(Sim& sim, const std::vector<Unit*>& all) {  // (brain+0xa
     // Parallel order (docs/parallel-mode.md 3.1, step 5.2): every unit's spline as the stage begins (its snapshot:
     // what another unit's prediction reads), then the turns, which write no other unit (their writes into another
     // are messages), then the stage's commit, in the turns' order.
-    SteeringSnapshot(all);
+    SteeringSnapshot(sim, all);
     std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns; the snapshot before and the commit after are serial)
     if (wtrap::On()) trap.emplace(sim.tick(), "steering");
     sim.RunTurns("steering", all.size(), [&](size_t i) {

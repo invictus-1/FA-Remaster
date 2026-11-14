@@ -427,3 +427,35 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     extractor mass lost (p 0.015); against FAF's veteran AI -1.4 (p 0.79), 7 and 7; against M28 +1.3 (p 0.11), 10
     better and 4 worse, no win. Not taken: the games say the bombers that die over ships are not a plain loss, and
     what to do with that mass instead is a question for the combined-arms candidates, not for a ban.
+
+43. **A ledger of the games lost to M28, and the navy's factories (helper aicore8, 2026-11-13).** No more blind
+    rules: the 16 full games of 42's build against M28 were taken apart from their logs (what killed our mass,
+    where, when; four replayed with a read-only probe that gives every kill its place, proven identical beat for
+    beat). Over the 16 games we lose 2,407k mass and kill 438k (5.5 to 1). The five largest causes: (1) *ships
+    shelling our coastal base*, 818k, a third of all we lose (a BlackOps bombardment ship 495k, cruisers 232k), from
+    100-150 away; M28's navy is 23.9k mass by minute 20 against our 2.5k, and our aircraft go at the ships one at a
+    time (112k of anti-ship aircraft lost for 111k of ships killed by air); (2) *mobile artillery*, 607k, the
+    largest killer before minute 20: it takes the outlying extractors (24 a game by minute 20, half of them by
+    artillery never seen) while our army stands in the base; (3) *the base's defence feeds units into fire it
+    cannot answer*: 68 defence decisions had the estimate at 0.82 and the real share at 0.18; (4) M28's tanks and
+    bots finishing the base, 335k; (5) gunships, 206k, and our commander in 7 of 16 games. Against FAF's veteran
+    AI, whose army is mostly direct fire, the same army trades 0.77 to 1.
+    *Why our navy did not exist:* not the ships wanted (the rule of 22 asked for more than we had) but the
+    factories: one naval factory until minute 16-18 where M28 has four by minute 10; that one stops building to go
+    to T2; factories ordered after minute 14 are killed half built (of 38 finished naval factories lost over the
+    16 games, 26 went to torpedo bombers); and under fog the known enemy ship mass is about half the real one.
+    *The change (landed as batch 163):* on a naval map two naval factories from minute 5 and one more every two
+    minutes, up to four, built while the sea is still empty. Full games on main 3f942bb3, 16 seeds a set, paired
+    by seed against 42's build (tools/board.py --games ea8w nvy1w): against M28 score +2.7 (p 0.021), 13 seeds
+    better and 3 worse, the games last 29.2 minutes against 26.0, still no win (0 of 16); against FAF's veteran AI
+    12 of 16 won as before (+1.7, p 0.71, 8 and 8); against FAF's rush AI 12 of 16 as before (-0.2, p 0.95, 9 and
+    7). It is the first change that moves the M28 result beyond the noise, and it is not worse against FAF: the
+    kept rule's sense (better beyond the noise somewhere, not worse elsewhere). It serves 39's deterrent force at
+    sea and 22's answer to ships from the sea, and adds no turret. In its 21-minute screens nothing moved: the
+    ships' damage falls after minute 15-20, so a navy change needs full games to be judged. The next limit, seen
+    in its first game: the four factories stand idle once the ships wanted (22's rule, by the known enemy mass) are
+    built, while M28 has two to four times that.
+    Four more candidates from the same ledger are in screens (one change each over 42's build): the anti-ship
+    aircraft strike as one wing; a defence that loses the real trade rests and the army regroups; the commander's
+    refuge is the inland base zone our mobile anti-air covers most; the ships fight only as a gathered fleet.
+    Nothing new was proposed for cause (2): 36, 41 and 42 already tried near it.

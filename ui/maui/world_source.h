@@ -407,10 +407,21 @@ class WorldSource {
   virtual bool StartPhoto(int, int) { return false; }
   // The same for the console's remaster_photo (ours, Chris 2026-11-13: the photo no longer holds a frame for a
   // second): a photo begun from the cinematic camera while it is on, else from the game's camera `game`, made over the
-  // next frames and taken with TakeDonePhoto as the photo mode's.
-  virtual bool StartPhotoFrom(const WorldCamera&, int, int) { return false; }
+  // next frames and taken with TakeDonePhoto as the photo mode's. `supersample`: how many times larger again the
+  // renderer draws it for smooth edges (0: his own choice, twice where the card's memory allows; 1: not larger).
+  // `settleFrames`: the frames drawn at the photo's size before the one kept (8 as the renderer's own; 2 is enough
+  // for a photo of the size and camera the window has just drawn: his answer to ui request 56).
+  virtual bool StartPhotoFrom(const WorldCamera&, int, int, int supersample = 0, int settleFrames = 8) { return false; }
   virtual float PhotoProgress() const { return 0; }
   virtual bool TakeDonePhoto(std::vector<uint32_t>*, int*, int*) { return false; }
+  // What the photo last taken cost (WorldPicture::LastPhotoNumbers): its frames and the seconds they took (the world's
+  // picture is held meanwhile: the renderer shows the world as it was when the photo began), how many times larger
+  // again it was drawn, its tiles, and the seconds of putting it together (on a thread). For the log's line.
+  struct PhotoCost {
+    int frames = 0, by = 1, columns = 1, rows = 1;
+    double drawSeconds = 0, assembleSeconds = 0;
+  };
+  virtual PhotoCost LastPhotoCost() const { return {}; }
 };
 
 }  // namespace moho::ui

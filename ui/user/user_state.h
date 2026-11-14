@@ -314,7 +314,9 @@ class UserState {
   // simulation's copies made at each sync point (the engine's SyncSnapshots, sim/sim_snapshot.h: the same code, exact),
   // so no wait for a running beat; through LiveSim only until the first copy exists. False: no such blueprint / none.
   bool BuildSite(const std::string& blueprint, const float at[3], float site[3], bool* canBuild);
-  bool Reclaimable(const float at[3], float within, ReclaimableView* out);
+  // (armyMask: 0 every prop; else a wreck none of those armies has seen is passed over: the option "Wrecks appear
+  // only once seen", LookSettings::wrecksOnceSeen)
+  bool Reclaimable(const float at[3], float within, ReclaimableView* out, uint32_t armyMask = 0);
   // What the scripts ask of the simulation every frame, copied when a beat's sync comes (the
   // simulation is idle then), so that asking never waits for a beat: the focus army's economy
   // (EconomyTotals of sim/sim_view.h, its twelve numbers in order). session_bindings.cpp.
@@ -644,6 +646,27 @@ struct LookSettings {
   // its army's colour (true, the default: Team colour) or in its faction's own (Faction colour: UEF blue for a red
   // player's units). Console remaster_lamp_colour team|faction.
   bool lampsTeamColour = true;
+  // Wrecks Appear Once Seen (ours, Chris 2026-11-13; OFF by default = the original's and FAF's way: a wreck made out
+  // of sight shows under the fog at once and the reclaim cursor and labels answer over it). On: a unit's wreck is in
+  // the picture (the renderer's WorldPicture::SetWrecksOnceSeen), under the reclaim cursor and among FAF's reclaim
+  // labels only once the focus army or an ally has had its place in sight (the engine's PropSeenBy and
+  // ReclaimableAt's armyMask, Sim::collectPropsSeen; ui requests engine 61, renderer 53). Trees, rocks, the map's
+  // own wrecks and a death's scorch and smoke are never held back; an observer sees everything. Console
+  // remaster_wrecks_once_seen 0|1.
+  bool wrecksOnceSeen = false;
+  // Allies' Pause Marks (ours, Chris 2026-11-13: "I don't think I should be able to see what allies pause", then, told
+  // that the original marks them too, "yeah lets make it an option"): the pause mark on allies' paused or switched-off
+  // units as on one's own (true, the default: the original's icon pass marks every unit of an allied army, 0x85bd99
+  // IArmy::IsAlly) or on the focus army's own units only. The renderer's WorldPicture::SetAlliesPauseMarks (his answer
+  // to ui request 54, render e4a967c1; the mark itself now sits on the unit's icon place as the original's). Console
+  // remaster_allies_pause_marks 0|1.
+  bool alliesPauseMarks = true;
+  // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
+  // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
+  // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's
+  // colour: the default here, Chris's "is best"; the renderer's own default is 0). The lamps are the remaster's: the
+  // original's units have none. Console remaster_head_lamp_colour white|faction|team (0|1|2).
+  int headLampColour = 2;
   // Scorch Glow (the renderer's HotMetal::softScorch, render 5d77cf6; Chris: the remastered look the default, the old one
   // kept): a death's fresh scorch on the ground with hot metal on: soft (true, the default: a deep-red bed with bright
   // cracks) or bright (the earlier orange-hot sheet). Console remaster_scorch soft|bright.
@@ -961,7 +984,7 @@ void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], floa
 // or a script's move of that camera hands it back. remaster_photo: the world at twice the view's size, as a PNG in
 // <the preferences' folder>/screenshots, named by the PC clock's date and time (in any game).
 void CineCameraCommand(lua_State* L, const std::string& value);
-void CinePhotoCommand(lua_State* L);
+void CinePhotoCommand(lua_State* L, const std::string& rest = std::string());
 // cam_SetLOD <camera> <scale> (worldview.cpp): the LOD scale of a camera, as the original's console command sets it.
 void CameraLodCommand(lua_State* L, const std::string& rest);
 // UI_TrackUnit <camera> ... (worldview.cpp): each named camera follows the selection, or lets go (the original's).
