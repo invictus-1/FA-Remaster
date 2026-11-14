@@ -43,13 +43,16 @@ compile, "FSR 3 cannot be used", a lost device) go to stderr as they always did.
 that**: a game.log of 2026-11-14 (4,856 lines) has no line of the renderer's, not even the card's name. A game started
 from a shortcut has no console, so on an outside machine every word of the renderer is lost.
 
-**What (1, the blocking part):** the program's stdout and stderr taken into the log file the game writes (--log and
-the always-on log alike), from before the world picture is opened, so that every "render: ..." line lands there in
-order with the interface's own. How is yours: the file handles redirected when the log opens, or the lines read and
-logged. What the renderer needs is only that nothing printed is lost, and that a line is in the file by the time a
-crash or a hang ends the program (no long buffering).
+**What (1, the blocking part; the way decided by the engine track the same day):** not a redirect of stdout into
+the log file (the log has its own handle; two writers tear lines), but a SINK. The renderer routes every one of its
+prints through one wrapper ([logsink], being built): with no sink set it prints as today; with one set every whole
+line goes to it. **Yours:** before the picture's device is made (before Open, so that the card's report is caught)
+call `WorldPicture::SetLogSink(void (*sink)(int level, const char* line))` with a function that hands the line to the
+log at that level with your "render:" prefix. Levels as core/log's; lines that were on stdout arrive as info, those
+that were on stderr as warning; the renderer's own leading "render: " is cut; the sink is called from whichever
+thread printed. I tell you the commit when it is in render.
 
-**What arrives then, with no call of yours:** for each device made (the menu's, a recovered one's) about 13 lines
+**What arrives then:** for each device made (the menu's, a recovered one's) about 13 lines
 "render: card: ..." (backend and level, the card and its ids, its memory and the budget now, the driver's version, ray
 tracing yes or NO and why, the shader compiler and its version, the shader cache, the output and screen, the system);
 at a map's first frame and whenever it changes "render: looks: ..." (each look that depends on the card, asked for and
