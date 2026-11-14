@@ -621,12 +621,12 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   N = normalize(N + float3(-swell.y, 0, -swell.z) * lerp(1.0, 2.5, saturate(-toPixel.y * 2.5)));
 #endif
 #if MIRROR_CALM_N
-  // [mirrorgrain] (Water::mirrorGrain 2 and 4) the surface the Fresnel term goes by: the waves and the swell, without the fine
+  // [mirrorgrain] (Water::mirrorGrain 2, 4 and 8) the surface the Fresnel term goes by: the waves and the swell, without the fine
   // ripples and the rain's rings and roughening below (the ripples' field and the surf's waves are added to it too)
   float3 calmN = N;
 #if OCEAN && MIRROR_TRUE_SLOPES
   {
-    // (4: the ocean's waves by their true slopes, not the steeper ones drawn for their shading: as the glint, below, takes
+    // (4 and 8: the ocean's waves by their true slopes, not the steeper ones drawn for their shading: as the glint, below, takes
     // them; seen low, the steeper faces turned the Fresnel term from mirror to water and back from one pixel to the next)
     float trueTilt = max(oceanLook2.z * lerp(1.0, 2.0, saturate(-toPixel.y * 2.5)), 0.05);
     calmN = normalize(float3(-ocean.slope.x / trueTilt, 1, -ocean.slope.y / trueTilt));
@@ -1302,6 +1302,23 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
   float facing = saturate(dot(-toPixel, N));
 #endif
   float fresnel = 0.02 + 0.98 * pow(1 - facing, 5);
+#if MIRROR_FOOTPRINT
+  // [mirrorgrain] (Water::mirrorGrain 8) by the drawn surface where a pixel is small against the waves, by the calm one of
+  // their true slopes (calmN) where it takes in a wave's face or more: blended by the water one pixel covers along the line of
+  // sight (`grain`, from xz's change to the next pixel: a pixel's own width in the world over the sine of the angle it meets
+  // the water at), against a length of the waves that turn the term (MIRROR_FOOT: from a to b of that length, the length,
+  // and 1 to show the share in red and the footprint over the length in green instead of the water). Low over the sea the
+  // far water's pixels are drawn out toward the eye many times their width: there the term went from mirror to water and
+  // back pixel by pixel, while near the eye a wave's face covers many pixels and its contrast is the sea's look. Only for a
+  // low line of sight (MIRROR_GRAZE: from that sine of the angle it meets the water at the share lets go, by the second it is
+  // gone): looked down on, the term hardly turns with the tilt, and from the game's height a pixel takes in so much water
+  // that the far sea would lose the sky's light on the steeper faces drawn for it, which is what shows of the waves there.
+  {
+    float wide = smoothstep(MIRROR_FOOT.x, MIRROR_FOOT.y, grain / MIRROR_FOOT.z) * (1 - smoothstep(MIRROR_GRAZE.x, MIRROR_GRAZE.y, -toPixel.y));
+    if (MIRROR_FOOT.w > 0.5) return float4(wide, saturate(grain / MIRROR_FOOT.z), 0, 1);
+    fresnel = lerp(fresnel, 0.02 + 0.98 * pow(1 - saturate(dot(-toPixel, calmN)), 5), wide);
+  }
+#endif
 #if OCEAN
   [branch] if (oceanMore.z > 0) {  // [sparkle] the steepest faces looked down on catch the sky (Ocean::nearSparkle)
     float steep = saturate((1 - N.y) * 8);
@@ -1402,8 +1419,14 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
                        "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt)
                        (mirrorFineBuilt_ ? "#define MIRROR_FINE 1\n" : "") +  // [mirrorfine] (KeepVariants)
                        ((mirrorGrainBuilt_ & 1) ? "#define RAIN_FADE 1\n" : "") +       // [mirrorgrain] (trials, KeepVariants)
-                       ((mirrorGrainBuilt_ & 6) ? "#define MIRROR_FRESNEL 1\n#define MIRROR_CALM_N 1\n" : "") +
-                       ((mirrorGrainBuilt_ & 4) ? "#define MIRROR_TRUE_SLOPES 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 6) ? "#define MIRROR_FRESNEL 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 14) ? "#define MIRROR_CALM_N 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 12) ? "#define MIRROR_TRUE_SLOPES 1\n" : "") +
+                       ((mirrorGrainBuilt_ & 8) ? "#define MIRROR_FOOTPRINT 1\n#define MIRROR_FOOT float4(" + std::to_string(mirrorFootBuilt_[0]) + ", " +
+                                                      std::to_string(mirrorFootBuilt_[1]) + ", " + std::to_string(mirrorFootBuilt_[2]) + ", " +
+                                                      std::to_string(mirrorFootBuilt_[3]) + ")\n#define MIRROR_GRAZE float2(" +
+                                                      std::to_string(mirrorFootBuilt_[4]) + ", " + std::to_string(mirrorFootBuilt_[5]) + ")\n"
+                                                : "") +
                        (ownEdgeBandBuilt_ ? "#define EDGE_SEA 1\n#define BEYOND_BAND (beyondMore.x > 0 ? beyondMore.x : beyondLand.y)\n" : "") +  // [edgesea] (lighting.h; KeepVariants)
                        "#define SAMPLES " + std::to_string(gSceneSamples) + "\n" + kViewShaderBlock + RayShaders() + kLightingShaderBlock +
                        kGlintShaderBlock + (winter ? kWinterWaterShaderBlock : "") + (surf ? kSurfShaderBlock : "") + (ocean ? kOceanShaderBlock : "") +
@@ -1434,9 +1457,14 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
 // (the ones of the variants made the first time they are wanted: when next wanted). Called first by every Prepare and
 // by DrawWith.
 void Water::KeepVariants() {
-  if (!modern_ || (mirrorFine == mirrorFineBuilt_ && ownEdgeBand == ownEdgeBandBuilt_ && mirrorGrain == mirrorGrainBuilt_)) return;
+  if (!modern_ || (mirrorFine == mirrorFineBuilt_ && ownEdgeBand == ownEdgeBandBuilt_ && mirrorGrain == mirrorGrainBuilt_ &&
+                   std::equal(mirrorFoot, mirrorFoot + 6, mirrorFootBuilt_)))
+    return;
   const bool wasFine = mirrorFineBuilt_, wasBand = ownEdgeBandBuilt_;
   const int wasGrain = mirrorGrainBuilt_;  // [mirrorgrain]
+  float wasFoot[6];
+  std::copy(mirrorFootBuilt_, mirrorFootBuilt_ + 6, wasFoot);
+  std::copy(mirrorFoot, mirrorFoot + 6, mirrorFootBuilt_);
   mirrorFineBuilt_ = mirrorFine;
   ownEdgeBandBuilt_ = ownEdgeBand;
   mirrorGrainBuilt_ = mirrorGrain;
@@ -1447,6 +1475,8 @@ void Water::KeepVariants() {
     mirrorFine = mirrorFineBuilt_ = wasFine;  // (kept as they were made)
     ownEdgeBand = ownEdgeBandBuilt_ = wasBand;
     mirrorGrain = mirrorGrainBuilt_ = wasGrain;
+    std::copy(wasFoot, wasFoot + 6, mirrorFoot);
+    std::copy(wasFoot, wasFoot + 6, mirrorFootBuilt_);
     return;
   }
   auto drop = [&](gfx::Pipeline& p) {
@@ -1542,6 +1572,7 @@ bool Water::Load(const MapData* map, std::string* error) {
     mirrorFineBuilt_ = mirrorFine;  // [mirrorfine]
     ownEdgeBandBuilt_ = ownEdgeBand;  // [edgesea]
     mirrorGrainBuilt_ = mirrorGrain;  // [mirrorgrain]
+    std::copy(mirrorFoot, mirrorFoot + 6, mirrorFootBuilt_);
     pipeline_ = PlainPipeline(error);
     if (!pipeline_) return false;
     const float corners[12] = {0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1};

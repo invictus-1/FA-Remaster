@@ -73,8 +73,15 @@ class Water {
   //    the rain's rings and roughening and the fine ripples: seen low it goes as the fifth power of how near the line of
   //    sight lies to the surface, and they turned it from mirror to water and back pixel by pixel;
   //  4 (--mirror-true-slopes): 2, and the ocean's waves in that surface by their true slopes, not the steeper ones drawn for
-  //    their shading (as the sun's glint takes them).
+  //    their shading (as the sun's glint takes them);
+  //  8 (--mirror-fresnel-footprint [a,b,length]): the Fresnel term by the drawn surface where a pixel is small against the
+  //    waves, by 4's calm surface where a pixel takes in a wave's face or more, blended by the water one pixel covers along
+  //    the line of sight over `length` (mirrorFoot: from a to b of it; the fourth number 1 shows the share instead of the
+  //    water; the fifth and sixth: only for a line of sight low over the water, the share let go from that sine of its angle
+  //    to the water to the next, so that from the game's height the far sea keeps its drawn waves' light;
+  //    water). Low over the sea the far water's pixels are drawn out toward the eye: only there does the term change.
   int mirrorGrain = 0;
+  float mirrorFoot[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};  // [mirrorgrain] (8: a, b, the waves' length, the view, the low sight; built in)
   void PrepareSurf(bool ripples, bool winter, bool wet = false);  // ([shore] wet: World::waterDetail's wet beach, SURF_WET)
   // [ocean] The wind sea worked out on the card (ocean.h; World::oceanWaves): the water draws with its ocean pipelines while
   // ocean.Active(), each variant (with the ripples' field or not, winter, the surf, the wet beach) made by PrepareOcean the
@@ -129,6 +136,7 @@ class Water {
   bool mirrorFineBuilt_ = true;  // [mirrorfine] (the mirror's way the modern pipelines were made with)
   bool ownEdgeBandBuilt_ = true;  // [edgesea] (and the edge's band)
   int mirrorGrainBuilt_ = 0;      // [mirrorgrain] (and the mirror's trials)
+  float mirrorFootBuilt_[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};
   void KeepVariants();
   gfx::Pipeline PlainPipeline(std::string* error);  // [edgesea] (the classic look's water)
   gfx::Pipeline modernWinter_[2];  // (winter water: without and with the ripples' field; made the first time wanted)

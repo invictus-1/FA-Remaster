@@ -225,7 +225,11 @@
 //           low in the rain, none on by default (Water::mirrorGrain): --rain-tilt-fade the rain's rings and roughening of the
 //           water left out where they are finer than about two pixels (as the fine ripples are); --mirror-fresnel-calm how
 //           much the water mirrors (the Fresnel term) by a calmer surface, without them and the fine ripples;
-//           --mirror-true-slopes that, and the ocean's waves in it by their true slopes, not the steeper ones drawn
+//           --mirror-true-slopes that, and the ocean's waves in it by their true slopes, not the steeper ones drawn;
+//           --mirror-fresnel-footprint [a,b,length[,view]] the Fresnel term by the drawn surface where a pixel is small
+//           against the waves, by that calm one where it takes in a wave's face or more: blended by the water a pixel covers
+//           along the line of sight over `length` world units, from a to b of it (0.0125,0.05,2); view 1: the share in red;
+//           low,lower: only for a line of sight low over the water, let go from that sine of its angle to the next (0.15,0.3)
 // --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
 //           --ray-reflections; where the device has ray tracing): flashes, shots and lamps shadowed by what stands between;
 //           `rays` the most a place casts (1..4; 4 unless given), `all`: one for every light (exact, to compare with)
@@ -1101,7 +1105,8 @@ struct Options {
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
-  int mirrorGrain = 0;                                         // [mirrorgrain] --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4
+  int mirrorGrain = 0;                                         // [mirrorgrain] --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4, --mirror-fresnel-footprint 8
+  float mirrorFoot[6] = {-1, 0, 0, 0, 0, 0};                   // [mirrorgrain] --mirror-fresnel-footprint a,b,length,view,low,lower (-1: the water's own)
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -1457,6 +1462,14 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--rain-tilt-fade") o->mirrorGrain |= 1;  // [mirrorgrain]
     else if (a == "--mirror-fresnel-calm") o->mirrorGrain |= 2;
     else if (a == "--mirror-true-slopes") o->mirrorGrain |= 4;
+    else if (a == "--mirror-fresnel-footprint") {  // [mirrorgrain] (its numbers are optional)
+      o->mirrorGrain |= 8;
+      if (i + 1 < argc && argv[i + 1][0] != '-') {
+        float f[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};
+        if (sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5]) < 3) return false;
+        std::copy(f, f + 6, o->mirrorFoot);
+      }
+    }
     else if (a == "--soak-old") o->soakOld = true;  // [soakfix]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
@@ -2649,6 +2662,7 @@ int main(int argc, char** argv) {
     // [mirrorfine] [edgesea] (built into the water's pipelines, made as the map opens: Water::KeepVariants)
     world.water.mirrorFine = opt.mirrorFine;
     world.water.mirrorGrain = opt.mirrorGrain;  // [mirrorgrain]
+    if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
     if (opt.surroundEdgeBandWater >= 0) world.water.ownEdgeBand = opt.surroundEdgeBandWater > 0;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
@@ -2722,6 +2736,7 @@ int main(int argc, char** argv) {
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.mirrorFine = opt.mirrorFine;        // [mirrorfine]
   world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
+  if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
