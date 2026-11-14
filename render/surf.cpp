@@ -674,6 +674,8 @@ void Surf::Begin(float time, bool on, bool side, float rough, const float wind[2
   // [groundfix] the field on a thread of its own, the frames going on; taken in when it is done, the surf fading in over a
   // second from then (at once when it was there from the surf's first frame)
   if (!tried_) StartField();
+  if (waitField && !field_ && worker_.joinable())  // [surfwait] (surf.h)
+    while (!workDone_) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   if (!field_ && TakeField()) fade_ = fieldWaited > 0 ? 0.0f : 1.0f;
   if (!field_ && worker_.joinable()) ++fieldWaited;
   if (lastTime_ >= 0 && time < lastTime_ - 1) puffs_.clear();  // (the clock went back: a run started over)

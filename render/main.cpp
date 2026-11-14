@@ -2772,6 +2772,7 @@ int main(int argc, char** argv) {
   if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
   if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
   world.water.ocean.tilt = opt.oceanTilt;
+  world.water.surf.waitField = automatic;  // [surfwait] (a counted run: the surf's field there from its first frame, surf.h)
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
   if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
