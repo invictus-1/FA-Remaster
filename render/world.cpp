@@ -3765,7 +3765,9 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       // the unit vs floating up so high": allies' units only with pauseMarksOnAllies; and the mark centred on the unit's
       // icon place, as the original draws it (its RenderUnitIcon 0x85d9a0 lays the pause picture's quad round the same
       // centre as the icon's, whether the icon is drawn or not: the interface session's reading), not above its top)
-      if (workBars && (own || (friendly && pauseMarksOnAllies)) && !photo && (u.paused || u.ToggledOff())) {
+      // (a toggle counts only on a finished unit: one still under construction has not had its shield switched on yet,
+      // which is no switch a player put off - every shielded unit in a factory's bay carried the mark)
+      if (workBars && (own || (friendly && pauseMarksOnAllies)) && !photo && (u.paused || (u.ToggledOff() && fractionComplete >= 1 && !u.beingBuilt))) {
         if (pauseMark_ == -2) pauseMark_ = icons.MarkIcon("pause");
         if (pauseMarkAtIcon) {
           icons.AddMark(pauseMark_, position, 0);
