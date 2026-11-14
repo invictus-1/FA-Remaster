@@ -34,6 +34,16 @@ local kNavalReach = 250
 local kNavalFrom = 5
 local kNavalSecond = 12
 local kNavalGrow = 150
+-- (2026-11-13, aicore8's navy ledger: in the 16 M28 duels our navy had 0.8k mass invested by minute 15 and 2.5k by 20
+-- against M28's 8.2k and 23.9k, and its ships killed 818k of ours. The cause was not the ships wanted - FactoryPick's
+-- floor (1,350 at minute 10) was above what we had - but the factories: our single naval factory finished at minute 10
+-- and stayed alone until minute 16-18 (snap lines: 300 mass of naval factories against M28's 1,200 at minute 10 and
+-- 2,100-3,800 at minute 12-14). In seed 4004 (navy probe) it spent 1,100 of its 2,600 ticks upgrading to T2 and died
+-- doing so, and of the 15 factories ordered after minute 14, on a shore the enemy's ships and bombers then reached, 3
+-- were started and none finished. So on a naval map kNavalFirst naval factories from kNavalFrom and one more every
+-- kNavalEvery minutes, up to kMaxFactories, built while the sea is empty; kNavalSecond is no longer used.)
+local kNavalFirst = 2
+local kNavalEvery = 2
 local kNavalMax = 4000
 
 -- the naval candidates by naval factory tech (blueprint suffixes): frigate, submarine; destroyer, cruiser; battleship
@@ -136,7 +146,8 @@ function WantFactories(brain)
     if not HomeWater(brain) then return 0 end
     local peak = R.enemyNavalPeak or 0
     local minutes = GetGameTick() / 600
-    local map = NavalMap(brain) and minutes >= kNavalFrom and (minutes >= kNavalSecond and 2 or 1) or 0
+    local map = NavalMap(brain) and minutes >= kNavalFrom and
+        math.min(kMaxFactories, kNavalFirst + math.floor((minutes - kNavalFrom) / kNavalEvery)) or 0
     if peak < 200 and (R.coastMass or 0) <= 0 then return map end
     return math.max(map, math.min(kMaxFactories, 1 + math.floor(peak / kFactoryMass)))
 end
