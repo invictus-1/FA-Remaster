@@ -2716,7 +2716,7 @@ float WorldPicture::FocusAt(float x, float y) {
   return m.focus->Read(w.post.Depth(), w.view.width, w.view.height, x * sx, y * sy, false, w.camera, water);
 }
 
-bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, double tick, int supersample) {
+bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, double tick, int supersample, int settleFrames) {
   Impl& m = *impl_;
   Impl::Photo& p = m.photo;
   if (p.assembling && p.ready) {  // (one put together and never asked for)
@@ -2759,7 +2759,8 @@ bool WorldPicture::StartPhoto(const Camera& camera, int width, int height, doubl
   }
   p.camera = camera;
   p.tick = tick;
-  p.settle = 8;
+  p.settle = std::clamp(settleFrames, 0, 64);  // [photosettle]
+  if (const char* e = getenv("MOHO64_PHOTO_SETTLE")) p.settle = std::clamp(atoi(e), 0, 64);  // (checks: how few frames settle a photo)
   p.frame = 0;
   p.tile = 0;
   // (photofix) whether what the window's frames kept is the photo's: the same light for some frames (the moment as it
