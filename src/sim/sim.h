@@ -653,9 +653,17 @@ class Sim {
   std::vector<DeferredCall> deferred_;
   bool deferring_ = false;
   // parallel order's phase D (step 4.5): the units whose economy step added to their army this beat (Unit::econAdd),
-  // and the sum of those additions into the armies, unit by unit in creation order (rule 7: a fixed order of float sums)
-  std::vector<Unit*> econAdders_;
+  // and the sum of those additions into the armies, unit by unit in creation order (rule 7: a fixed order of float sums).
+  // Each kept with its creation serial (Unit::entSeq, set once in AddUnitToLists, before any economy step of the unit),
+  // so the order is had from the list alone, without a read of every unit.
+  std::vector<std::pair<uint64_t, Unit*>> econAdders_;
   void SumUnitEconomy();
+  // parallel order: the units made since the entity pass's last combat data prefill (MakeCombatData). Only they can
+  // still lack their combat data (Unit::combat is set at its first read and never cleared), so the prefill reads
+  // these instead of every unit of the pass. combatCutoff_: entSeqNext_ when the pass's order was taken (the units
+  // made after it are not in that order and wait for the next pass, as before).
+  std::vector<Unit*> combatPending_;
+  uint64_t combatCutoff_ = 0;
   uint32_t deferKey_ = 0, deferSeq_ = 0;
   void DeferTurn(uint32_t key) {
     deferKey_ = key;
@@ -736,6 +744,11 @@ class Sim {
   bool frozen = false;                // sim+0x8dd (= endGame after the next Sync): beats do nothing
   bool Paused() const { return frozen || (pauseOwner != -1 && !singleStep); }
   bool OkayToMessWith(const Army* a) const;  // 0x747320
+  // Ours, a game option (replay.h ScenarioOrdersAfterDefeat; MOHO64_ORDERS_AFTER_DEFEAT=1 for a test): with cheats
+  // on, an army that is out of the game is ordered as any other army the source does not command (a cheat test).
+  // Off: the original's, no orders for it at all.
+  bool ordersAfterDefeat = false;
+  bool DefeatedArmyTakesOrders() const { return ordersAfterDefeat && cheats; }
   // Sim::CheatsEnabled 0x747180: every cheat test of the sim goes through it (the stream's CreateUnit, CreateProp,
   // WarpEntity, ExecuteLuaInSim, a DestroySelf order, a debug command that is not safe; OkayToMessWith when the
   // source does not command the army; the scripts' CheatsEnabled() and OkayToMessWithArmy). With cheats off it

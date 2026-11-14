@@ -14,7 +14,7 @@ cbuffer SightCamera : register(b1) {
   float4 cameraUp;     // w: aspect
   float4 cameraBack;   // w: near distance
   float4 mapInfo;      // x, y: 1 / the map's size; z: what an unseen place keeps of its light; w: a place never seen
-  float4 cover;        // x: what an unseen place under radar keeps; y: the water's level
+  float4 cover;        // x: what an unseen place under radar keeps; y: the water's level; z: [fogframe] how far outside the map the dimming is held (0: let go from the edge on)
   float4 playable;     // BoundaryPS: the part of the map that can be played now, x0, z0, x1, z1
   float4 boundary;     // BoundaryPS: x what lies outside keeps of its light (0: black); y 1: only on the map
 };
@@ -57,7 +57,11 @@ float4 PS(float4 position : SV_Position) : SV_Target {
     // ground the army knows and does not see, less and less the farther out
     float outside = OutsideMap(world);
     if (outside <= 0) return 1;
-    float3 far = lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, saturate(outside * beyond.z * 1.5));
+    // [fogframe] held as far out as the game's farthest zoom shows (cover.z), let go over as far again: let go from
+    // the edge on, the land outside was at its full light some 700 units out, and at the farthest zoom a paler frame
+    // lay round the dimmed map (and the clouds under the eye there undimmed), coming and going with the wheel
+    float let = cover.z > 0 ? saturate((outside - cover.z) / cover.z) : saturate(outside * beyond.z * 1.5);
+    float3 far = lerp(float3(0.85, 0.95, 1.2) * mapInfo.z, 1, let);
     // (beyondland) the soft edge: going on from what the fog of war is at the edge over twice the soft edge's
     // width, not dimmed all at once there
     [branch] if (beyondLand.x > 0.5) far = lerp(SightKeeps(saturate(uv), world), far, smoothstep(0, beyondLand.y * 2, outside));
@@ -164,11 +168,18 @@ void SightShade::Draw(const View& view, const Camera& camera, gfx::Texture scene
   if (!texture_ || mapWidth <= 0 || mapHeight <= 0 || view.height <= 0) return;
   Vec3 right, up, back;
   camera.Axes(&right, &up, &back);
+  // [fogframe] how far outside the map the game's farthest zoom shows in a view of this shape (the map takes 1 / 1.4 of
+  // the view: cloud_zoom.h, ZoomPath; the interface's camera), to its corner, and a third more for a camera one notch
+  // nearer moved to the map's edge
+  const float aspect = static_cast<float>(view.width) / static_cast<float>(view.height);
+  const float across = std::max(mapWidth * 1.4f, mapHeight * 1.4f * aspect);
+  const float reachX = std::max((across - mapWidth) * 0.5f, 0.0f), reachZ = std::max((across / aspect - mapHeight) * 0.5f, 0.0f);
+  const float held = holdOutside ? std::sqrt(reachX * reachX + reachZ * reachZ) * 1.3f : 0.0f;
   const float constants[28] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
-                               up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(view.height),
+                               up.x, up.y, up.z, aspect,
                                back.x, back.y, back.z, camera.zNear,
                                1 / mapWidth, 1 / mapHeight, darkness, neverSeen,
-                               std::max(covered, darkness), waterLevel, 0, 0,
+                               std::max(covered, darkness), waterLevel, held, 0,
                                0, 0, 0, 0,
                                0, 0, 0, 0};
   device_->SetPipeline(pipeline_);

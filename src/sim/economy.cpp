@@ -245,7 +245,7 @@ void NoteEconAdd(Sim& sim, Unit* u) {
   u->econAddTick = sim.tick();
   u->econAdd[0] = u->econAdd[1] = 0;
   u->econStorageAdd[0] = u->econStorageAdd[1] = 0;
-  sim.econAdders_.push_back(u);
+  sim.econAdders_.emplace_back(u->entSeq, u);
 }
 void ArmyStorage(Sim& sim, Unit* u, int sign, const float amount[2]) {
   if (!u->army) return;

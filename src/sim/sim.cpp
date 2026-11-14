@@ -107,30 +107,66 @@ bool PhaseOnPool(const char* name) {
   return !v || strstr(v, name) != nullptr;
 }
 
+// (2026-11-13: the per-unit part on the worker pool. A turn of it reads its own unit and writes its own unit only: the
+// snapshot's fields and the held shape's own copy (Sim::HoldShape's first half). What is shared stays on the sim's
+// thread, in the pass's order, from flags the turns leave: a blueprint's footprint grids still to make (a shared lazy
+// cache, made by the first unit of the order that needs it, as before), the held shapes' list, and the guard
+// formations (their formation code reads Lua). The game is the same as the one serial loop's: no turn reads what
+// another writes; the grids and the list are made by the same units in the same order; the guard formations go as
+// the loop went, and from the first call on (its Lua could in principle change another unit's guards) the rest of the
+// order is tested as it stands, as the loop did.)
 void BeatStartSnapshot(Sim& sim, const std::vector<Unit*>& order) {
   AirTiersReady(sim);  // (shared caches a turn would make at its first read: made here, step 4.6)
-  for (Unit* u : order) {
-    if (u->motion.bp) {
-      FootprintGrid(sim, *u->motion.bp);
-      if (!u->motion.bp->altFootprint.name.empty()) AltFootprintGrid(sim, *u->motion.bp);
+  enum : uint8_t { kNeedGrid = 1, kHeld = 2, kGuard = 4 };
+  const size_t n = order.size();
+  std::vector<uint8_t> flags(n, 0);
+  const void* nav = &sim.navigation();
+  sim.workers().ParallelFor("beat-start snapshot", n, 256, [&](size_t b, size_t e, int) {
+    for (size_t i = b; i < e; ++i) {
+      Unit* u = order[i];
+      uint8_t f = 0;
+      if (const MotionBlueprint* bp = u->motion.bp)
+        if (bp->gridOwner != nav || (!bp->altFootprint.name.empty() && bp->altGridOwner != nav)) f |= kNeedGrid;
+      if (!u->shapeHeld) {  // (Sim::HoldShape, but the list: below)
+        u->shapeHeld = true;
+        u->shapePos = u->position;
+        u->shapeOri = u->orientation;
+        f |= kHeld;
+      }
+      u->snapLayer = u->layer;
+      u->snapStates = u->unitStates.Bits();
+      u->snapVelocity = UnitVelocity(u);
+      u->snapMotionVel = u->motion.vel;
+      u->snapForm = u->form;
+      if (u->motion.air) {
+        const QuatW& q = u->motion.air->body.q;
+        u->snapBodyQ[0] = q.w;
+        u->snapBodyQ[1] = q.x;
+        u->snapBodyQ[2] = q.y;
+        u->snapBodyQ[3] = q.z;
+        u->snapBodyL = u->motion.air->body.L;
+      }
+      if (!u->parentId && !u->guarders.empty() && !u->guardForm) f |= kGuard;
+      flags[i] = f;
     }
-    sim.HoldShape(u);
-    u->snapLayer = u->layer;
-    u->snapStates = u->unitStates.Bits();
-    u->snapVelocity = UnitVelocity(u);
-    u->snapMotionVel = u->motion.vel;
-    u->snapForm = u->form;
-    if (u->motion.air) {
-      const QuatW& q = u->motion.air->body.q;
-      u->snapBodyQ[0] = q.w;
-      u->snapBodyQ[1] = q.x;
-      u->snapBodyQ[2] = q.y;
-      u->snapBodyQ[3] = q.z;
-      u->snapBodyL = u->motion.air->body.L;
+  });
+  for (size_t i = 0; i < n; ++i) {
+    if (flags[i] & kNeedGrid) {
+      const MotionBlueprint& bp = *order[i]->motion.bp;
+      FootprintGrid(sim, bp);
+      if (!bp.altFootprint.name.empty()) AltFootprintGrid(sim, bp);
+    }
+    if (flags[i] & kHeld) sim.heldShapes_.push_back(order[i]);
+  }
+  bool called = false;  // (a guard formation's code has run: from here on every unit is tested as it stands)
+  for (size_t i = 0; i < n; ++i) {
+    Unit* u = order[i];
+    if (!called && !(flags[i] & kGuard)) continue;
+    if (!u->parentId && !u->guarders.empty() && !u->guardForm) {
+      UpdateGuardFormation(sim, u);
+      called = true;
     }
   }
-  for (Unit* u : order)
-    if (!u->parentId && !u->guarders.empty() && !u->guardForm) UpdateGuardFormation(sim, u);
   sim.EnsureUnitGrid();
 }
 }  // namespace
@@ -1188,8 +1224,14 @@ void Sim::DeferAction(std::function<void()> action) {
 
 void Sim::SumUnitEconomy() {
   if (econAdders_.empty()) return;
-  std::sort(econAdders_.begin(), econAdders_.end(), [](const Unit* a, const Unit* b) { return a->entSeq < b->entSeq; });
-  for (Unit* u : econAdders_) {
+  // (By the creation serials kept beside the units: phase D's turns come in the pass's order, which is creation order
+  // but for the units sent to the pass's end and the ones made in it, so the list is mostly sorted already and is
+  // sorted only when it is not. A unit is noted once a beat, so the keys are unique: the order is that of the earlier
+  // sort of every unit by entSeq, exactly; the sort no longer reads the units, 2026-11-13.)
+  auto byKey = [](const std::pair<uint64_t, Unit*>& a, const std::pair<uint64_t, Unit*>& b) { return a.first < b.first; };
+  if (!std::is_sorted(econAdders_.begin(), econAdders_.end(), byKey))
+    std::sort(econAdders_.begin(), econAdders_.end(), byKey);
+  for (const auto& [seq, u] : econAdders_) {
     if (!u->army || u->econAddTick != tick_) continue;
     ArmyEconomy& e = u->army->econ;
     for (int i = 0; i < 2; ++i) {
@@ -1594,6 +1636,9 @@ bool Sim::Start(const SessionDescription& session) {
     order = want ? SimOrder::kParallel : SimOrder::kOriginal;
     if (egrid_) egrid_->SetCanonical(order == SimOrder::kParallel);  // (before any entity is placed: Start(header))
     orderVersion = want ? kSimOrderVersion : 0;
+    ordersAfterDefeat = ScenarioOrdersAfterDefeat(session.header.scenario);
+    if (const char* o = getenv("MOHO64_ORDERS_AFTER_DEFEAT"); o && *o) ordersAfterDefeat = *o != '0';
+    if (ordersAfterDefeat) Logf(LogLevel::Info, "moho64: a defeated army's units take orders while cheats are on (the game option)");
     Logf(LogLevel::Info, "moho64: the beat's order: %s", want ? "parallel (docs/parallel-mode.md)" : "the original's");
   }
   // (what is deleted during the game: Sim::FreeDeadLevel)
@@ -2333,8 +2378,13 @@ void Sim::AddUnitToLists(Unit* u) {
   InsertById(units_, u);
   if (u->army) InsertById(u->army->units, u);
   if (entityPassOpen_) madeInEntityPass_.push_back(u);
+  if (order == SimOrder::kParallel) combatPending_.push_back(u);  // (the next combat data prefill)
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
+  if (order == SimOrder::kParallel && !combatPending_.empty()) {
+    auto it = std::find(combatPending_.begin(), combatPending_.end(), u);
+    if (it != combatPending_.end()) combatPending_.erase(it);
+  }
   gridDirty_ = true;
   dirtyOrderDirty_ = true;
   cmdOrderDirty_ = true;
@@ -2567,7 +2617,8 @@ void EvaluateStatTriggers(Sim& sim, Army& a) {
 
 bool Sim::OkayToMessWith(const Army* a) const {
   if (!a) return cheats;
-  if (a->outOfGame) return false;  // army+0x1c0, even with cheats
+  // army+0x1c0, even with cheats (ours with the game option: a cheat, as an army the source does not command)
+  if (a->outOfGame) return DefeatedArmyTakesOrders() && CheatsEnabled();
   if (commandSource != 0xff && std::find(a->sources.begin(), a->sources.end(), commandSource) != a->sources.end())
     return true;
   return CheatsEnabled();  // 0x747355 (also feeds the beat checksum in the original)
@@ -3044,6 +3095,7 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kThreads);
   MOHO_LAP(lap, "entitypass");
   std::vector<Unit*> motionOrder = MotionOrder();  // (a copy: a unit sent to the pass's end is appended to it)
+  combatCutoff_ = entSeqNext_;  // (every unit of that order has entSeq <= this; one made from here on is not in it)
   entityPassOpen_ = true;  // (the units made from here on take their first turn at the pass's end: see the shells)
   madeInEntityPass_.clear();
   coordsPending = true;
@@ -3386,8 +3438,22 @@ void Sim::Tick() {
     projectilesBefore(0xffffffffu);
     BeatStartSnapshot(*this, motionOrder);
     // (what the turns read of a unit's blueprint through Lua, made here, at every thread count alike: a unit made since
-    // the weapons stage has had no first read yet, and a turn on the pool may not make it)
-    MakeCombatData(motionOrder);
+    // the weapons stage has had no first read yet, and a turn on the pool may not make it). Only the units made since the
+    // last prefill can lack it (combatPending_), and of them the ones in this pass's order, read in that order (by
+    // motSeq, the order's key, unchanged since it was taken): the same first reads, in the same order, as a walk of
+    // every unit of the pass (2026-11-13). Units removed from the lists left the pending list with them; nothing
+    // leaves the lists between the order's copy and here (ProcessDestroyQueue runs at the beat's end).
+    {
+      std::vector<Unit*> fill;
+      size_t keep = 0;
+      for (Unit* u : combatPending_) {
+        if (u->entSeq <= combatCutoff_) fill.push_back(u);
+        else combatPending_[keep++] = u;  // (made after the order was taken: the next pass's)
+      }
+      combatPending_.resize(keep);
+      std::sort(fill.begin(), fill.end(), [](const Unit* a, const Unit* b) { return a->motSeq < b->motSeq; });
+      MakeCombatData(fill);
+    }
     std::vector<Quat> prevOris(motionOrder.size());
     std::vector<uint8_t> hows(motionOrder.size(), static_cast<uint8_t>(kTurnReordered));
     std::vector<uint32_t> a1, a2;  // (indices into motionOrder)

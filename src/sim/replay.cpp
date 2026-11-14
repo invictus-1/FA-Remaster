@@ -137,6 +137,23 @@ int ScenarioSimOrder(const std::string& scenario, int* version) {
   return order;
 }
 
+bool ScenarioOrdersAfterDefeat(const std::string& scenario) {
+  lua_State* L = lua_open();
+  if (!L) return false;
+  bool on = false;
+  if (PushSerializedLua(L, scenario) && lua_istable(L, -1)) {
+    lua_pushstring(L, "Options");
+    lua_rawget(L, -2);
+    if (lua_istable(L, -1)) {
+      lua_pushstring(L, "RemasterOrdersAfterDefeat");
+      lua_rawget(L, -2);
+      on = lua_type(L, -1) == LUA_TSTRING && !std::strcmp(lua_tostring(L, -1), "on");
+    }
+  }
+  lua_close(L);
+  return on;
+}
+
 int HeaderGameVersion(const std::string& versionLine) {
   size_t e = versionLine.size();
   while (e > 0 && (versionLine[e - 1] == ' ' || versionLine[e - 1] == '\r' || versionLine[e - 1] == '\n')) --e;

@@ -40,6 +40,11 @@ class SightShade {
   // beyondLand set), the softer edge of the map's own instead: dimmed little by little, a soft shadow for the line.
   void DrawBoundary(const View& view, const Camera& camera, gfx::Texture sceneDepth, const float rect[4], float mapWidth, float mapHeight, bool dimmed);
   float outsideKeeps = 0.45f;  // `dimmed`: how much of its light what lies outside keeps
+  // [fogframe] (Chris's test of 2026-11-13: "the high-up view still pulses ... look at bottom right corner and just the
+  // edges") The world beyond the map's edge stays dimmed as unseen ground as far out as the game's farthest zoom shows
+  // it, and comes back to its full light over as far again. Off (the viewer's --fog-frame-old): let go from the edge
+  // on, as before: at the farthest zoom a paler frame of land lay round the dimmed map.
+  bool holdOutside = true;
 
   float darkness = 0.5f;  // how much of the light an unseen place keeps
   // How much a place never seen keeps: the same, when the game's map is known from the start
