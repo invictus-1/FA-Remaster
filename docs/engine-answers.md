@@ -5,6 +5,39 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-14 16:05, for every layer: a crash names its place (the report bundle, the engine's share; batch 167)
+
+**A crash now says where it was, beside the tick and the stack** (core/crash.h `CrashPlace`). After the
+`crash: build` line, four kinds of line follow:
+
+    crash: stage commands
+    crash: entity 0x00000001 (ueb0101), callback OnHealthChanged
+    crash: script gamedata\lua.nx2\lua\system\trashbag.lua (entering it)
+    crash: script gamedata\lua.nx2\lua\sim\unit.lua:1478
+    crash: script gamedata\lua.nx2\lua\sim\unit.lua:1435
+
+(The lines above are a real run: the skirmish with `MOHO64_CRASH_TEST_AT=200`. unit.lua 1435 is OnHealthChanged
+calling ManageDamageEffects, and 1478 is `damageEffectsBags[2]:Destroy()`.)
+- **stage**: the beat's stage, from the `trace::Lap` names that every build already has. On a worker it is the pool
+  job's name (`entity pass C`, `recon detect ahead`, ...). It reads `none` between stages.
+- **entity**: the entity whose turn runs (every `wtrap::Turn`: the entity pass, weapons, navigators, projectiles)
+  or whose script callback runs (`Sim::CallMethod`; a weapon names its unit). Its blueprint id and the callback's
+  method name come with it.
+- **script**: the Lua frames, innermost first (at most 12 per state). It lists the Lua thread being resumed (the
+  thread scheduler), then the beat's state (`Sim::Tick` sets it). A binding between Lua frames shows as
+  `(an engine function)`. Each frame's line is read from the Lua core's own structures, as `ldebug.c` does, without
+  calling Lua. Every pointer is checked first (`CrashReadable`), so a broken object gives fewer lines, not a second
+  fault.
+
+Each thread keeps its own place (thread_local). Nothing of the simulation reads it: the gate's fingerprints are
+unchanged. The cost is a few stores per entity turn and per callback.
+
+**For the interface** (nothing you must do): a crash on your beats' thread lists the sim's Lua frames. To have
+your own interface state's frames listed too, set `moho::g_crashPlace.luaMain = <your lua_State*>` on the thread
+that runs it (a thread that runs both has the sim's set again each beat). Your report window and the `.dmp` stay as
+they are. **Test switch:** `MOHO64_CRASH_TEST_AT=<beat>` faults on purpose in the first Lua call of that beat or later
+that has two Lua frames under it (a call hook on the sim's state). Nothing else reads it.
+
 ## 2026-11-14 11:41, for every layer: the engine on Linux, and two changes in third_party/lua (batch 166)
 
 **The headless engine plays the same game on Linux as on Windows, beat for beat** (helper linsim, 2026-11-14, WSL2's

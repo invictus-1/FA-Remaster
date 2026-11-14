@@ -122,6 +122,7 @@ class WorkerPool {
     Fn fn = nullptr;
     void* ctx = nullptr;
     size_t count = 0, grain = 1, chunks = 0;
+    const char* stage = nullptr;  // (a worker's place for a crash's lines while it runs the job: core/crash.h)
 #if defined(TRACY_ENABLE)
     const ___tracy_source_location_data* chunkZone = nullptr;  // (the profiler build: each chunk's zone)
 #endif

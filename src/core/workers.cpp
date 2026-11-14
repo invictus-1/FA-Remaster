@@ -225,6 +225,11 @@ void WorkerPool::WorkerMain(int index) {
 void WorkerPool::RunChunks(int worker, bool timed) {
   SimFpScope fp;  // (every task in the sim's floating-point state, core/fpenv.h)
   TaskScope task;
+  struct Place {  // the job's stage is this thread's place for a crash's lines (core/crash.h) while it runs chunks
+    const char* prev = g_crashPlace.stage;
+    explicit Place(const char* s) { g_crashPlace.stage = s; }
+    ~Place() { g_crashPlace.stage = prev; }
+  } place(job_.stage);
   WorkerStats& st = stats_[static_cast<size_t>(worker)];
   for (;;) {
     const size_t c = nextChunk_.fetch_add(1, std::memory_order_relaxed);
@@ -265,6 +270,11 @@ void WorkerPool::RunChecked(const char*, size_t count, Fn fn, void* ctx) {
 void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void* ctx) {
   if (count == 0) return;
   if (grain == 0) grain = 1;
+  struct Place {  // the calling thread's place for a crash's lines (core/crash.h) while the stage runs
+    const char* prev = g_crashPlace.stage;
+    explicit Place(const char* s) { g_crashPlace.stage = s; }
+    ~Place() { g_crashPlace.stage = prev; }
+  } place(stage);
 #if defined(TRACY_ENABLE)
   // (the profiler build: the call's zone, named by its stage; the places are made once per stage name)
   const bool traced = trace::Connected();
@@ -306,6 +316,7 @@ void WorkerPool::Run(const char* stage, size_t count, size_t grain, Fn fn, void*
   if (timed)
     for (WorkerStats& s : stats_) s = WorkerStats{};
   job_ = Job{fn, ctx, count, grain, (count + grain - 1) / grain};
+  job_.stage = stage;
 #if defined(TRACY_ENABLE)
   job_.chunkZone = chunkZone;
 #endif

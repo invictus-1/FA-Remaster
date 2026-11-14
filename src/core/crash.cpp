@@ -19,6 +19,7 @@
 #endif
 #include <windows.h>
 #elif defined(__linux__)
+#include <fcntl.h>
 #include <ucontext.h>
 #include <unistd.h>
 #endif
@@ -26,8 +27,11 @@
 namespace moho {
 
 volatile int64_t g_crashTick = -1;
+thread_local CrashPlace g_crashPlace;
 
 namespace {
+
+CrashLuaReader g_luaReader = nullptr;
 
 volatile long g_inCrash = 0;  // a fault inside the handler: the process just ends
 
@@ -48,6 +52,45 @@ void Line(const char* fmt, ...) {
 void TickText(char* out, size_t n) {
   if (g_crashTick >= 0) std::snprintf(out, n, "tick %lld", static_cast<long long>(g_crashTick));
   else std::snprintf(out, n, "tick ?");
+}
+
+// A string of the place, copied with each page checked first ("?" when it cannot be read).
+const char* SafeText(const char* s, char* out, size_t n) {
+  size_t i = 0;
+  for (; s && i + 1 < n; ++i) {
+    if ((i == 0 || (reinterpret_cast<uintptr_t>(s + i) & 4095) == 0) && !CrashReadable(s + i, 1)) break;
+    if (!s[i]) break;
+    out[i] = s[i];
+  }
+  out[i] = 0;
+  return i ? out : "?";
+}
+
+void ScriptLine(const char* text) { Line("crash: script %s", text); }
+
+// The faulting thread's place (CrashPlace), after the frames and the build: what it reads is checked first, and a
+// fault in here ends the process with the lines above already in the log.
+void PlaceLines() {
+  const CrashPlace& p = g_crashPlace;
+  char a[128], b[128], c[128];
+  Line("crash: stage %s", p.stage ? SafeText(p.stage, a, sizeof a) : "none");
+  if (p.entity)
+    Line("crash: entity 0x%08x (%s)%s%s", p.entity, p.blueprint ? SafeText(p.blueprint, b, sizeof b) : "no blueprint",
+         p.callback ? ", callback " : "", p.callback ? SafeText(p.callback, c, sizeof c) : "");
+  else if (p.callback)
+    Line("crash: callback %s", SafeText(p.callback, c, sizeof c));
+  LogFlush();
+  if (g_luaReader) {
+    if (p.lua) {
+      Line("crash: script frames of the Lua thread being resumed (%p):", p.lua);
+      g_luaReader(p.lua, 12, ScriptLine);
+    }
+    if (p.luaMain && p.luaMain != p.lua) {
+      Line("crash: script frames of the beat's Lua state (%p):", p.luaMain);
+      g_luaReader(p.luaMain, 12, ScriptLine);
+    }
+    LogFlush();
+  }
 }
 
 #if defined(_WIN32)
@@ -178,6 +221,7 @@ LONG WINAPI OnException(EXCEPTION_POINTERS* ep) {
 #endif
   Line("crash: build %s", BuildStamp());
   LogFlush();
+  PlaceLines();
   Report(ep);
   InterlockedExchange(&g_inCrash, 0);
   return g_previous ? g_previous(ep) : EXCEPTION_CONTINUE_SEARCH;
@@ -193,12 +237,14 @@ void OnAbort(int) {
   for (int i = 0; i < n; ++i) Line("crash: frame %d +0x%llx", i, static_cast<unsigned long long>(ImageOffset(fr[i])));
   Line("crash: build %s", BuildStamp());
   LogFlush();
+  PlaceLines();
   Report(nullptr);
 }
 
 #elif defined(__linux__)
 
 alignas(16) char g_altStack[64 * 1024];
+int g_probe[2] = {-1, -1};  // CrashReadable's pipe: a write from memory that cannot be read fails with EFAULT
 
 void OnSignal(int sig, siginfo_t* si, void* uc) {
   if (__sync_lock_test_and_set(&g_inCrash, 1) != 0) return;
@@ -217,6 +263,7 @@ void OnSignal(int sig, siginfo_t* si, void* uc) {
   for (int i = 0; i < n; ++i) Line("crash: frame %d +0x%llx", i, static_cast<unsigned long long>(ImageOffset(fr[i])));
   Line("crash: build %s", BuildStamp());
   LogFlush();
+  PlaceLines();
   // SA_RESETHAND: returning re-runs the fault (or abort re-raises) with the default action
 }
 
@@ -247,6 +294,31 @@ void CrashSetReport(const char* logFile, const char* dumpFile, bool messageBox) 
 #endif
 }
 
+void CrashSetLuaReader(CrashLuaReader reader) { g_luaReader = reader; }
+
+bool CrashReadable(const void* p, size_t n) {
+  if (!p) return false;
+#if defined(_WIN32)
+  return !IsBadReadPtr(p, n);
+#elif defined(__linux__)
+  if (g_probe[1] < 0) return false;
+  const char* s = static_cast<const char*>(p);
+  char sink[512];
+  while (n) {
+    const size_t k = n < sizeof sink ? n : sizeof sink;
+    const ssize_t w = write(g_probe[1], s, k);
+    if (w > 0) (void)!read(g_probe[0], sink, static_cast<size_t>(w));
+    if (w != static_cast<ssize_t>(k)) return false;
+    s += k;
+    n -= k;
+  }
+  return true;
+#else
+  (void)n;
+  return false;
+#endif
+}
+
 void InstallCrashHandler() {
 #if defined(_WIN32)
   // room on the stack for the handler after a stack overflow (this thread's; the simulation runs on it)
@@ -255,6 +327,8 @@ void InstallCrashHandler() {
   g_previous = SetUnhandledExceptionFilter(OnException);
   std::signal(SIGABRT, OnAbort);
 #elif defined(__linux__)
+  if (g_probe[0] < 0 && pipe(g_probe) == 0)
+    for (int fd : g_probe) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
   stack_t ss{};
   ss.ss_sp = g_altStack;
   ss.ss_size = sizeof g_altStack;

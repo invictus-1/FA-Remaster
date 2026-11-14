@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "core/backtrace.h"
+#include "core/crash.h"
 #include "core/dmath.h"
 #include "core/log.h"
 #include "core/profile.h"
@@ -1681,6 +1682,13 @@ bool Sim::CallMethod(lua_State* L, ScriptObject* obj, const char* method, int na
       hitchLabel += " (a weapon of " + w->unit->blueprint->id + ")";
     if (!hitchNested) prof::NextLabel("callback " + hitchLabel);
   }
+  // A crash inside the callback names its entity and method (core/crash.h CrashPlace); a weapon's is its unit's.
+  const Entity* placeOf = !obj ? nullptr
+                          : (obj->typeBits & kTypeEntity) ? static_cast<const Entity*>(obj)
+                          : (obj->typeBits & kTypeWeapon) ? static_cast<const UnitWeapon*>(obj)->unit
+                                                          : nullptr;
+  CrashEntityScope crashPlace(placeOf ? placeOf->id : 0,
+                              placeOf && placeOf->blueprint ? placeOf->blueprint->id.c_str() : nullptr, method);
 #if defined(TRACY_ENABLE)  // the profiler build (core/trace.h): the callback is a zone "callback <method>"
   const bool traced = trace::Connected();
   const TracyCZoneCtx zone = ___tracy_emit_zone_begin(traced ? trace::PlaceFor(method, "callback ", 0xe67e22) : nullptr, traced);

@@ -18,6 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/crash.h"
+
 namespace moho {
 
 class Entity;
@@ -43,7 +45,8 @@ class Phase {
   bool active_ = false;
 };
 
-// One entity's turn inside a phase: its own pages writable; another turn inside it (rare) restores this one after
+// One entity's turn inside a phase: its own pages writable; another turn inside it (rare) restores this one after.
+// In every build, with or without the trap: the entity is the turn's place for a crash's lines (core/crash.h).
 class Turn {
  public:
   explicit Turn(Entity* e);
@@ -52,6 +55,7 @@ class Turn {
   Turn& operator=(const Turn&) = delete;
 
  private:
+  CrashEntityScope crash_;
   Entity* prev_ = nullptr;
   Entity* self_ = nullptr;
   bool active_ = false;

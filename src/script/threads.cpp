@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/crash.h"
 #include "core/log.h"
 #include "core/profile.h"
 #include "core/trace.h"
@@ -320,7 +321,10 @@ void ThreadScheduler::Step(Thread& t) {
   const TracyCZoneCtx zone = ___tracy_emit_zone_begin(static_cast<const ___tracy_source_location_data*>(t.traceZone),
                                                       t.traceZone != nullptr);
 #endif
+  void* const crashLuaPrev = g_crashPlace.lua;  // (a crash inside lists this thread's Lua frames: core/crash.h)
+  g_crashPlace.lua = t.co;
   int rc = lua_resume(t.co, nargs);
+  g_crashPlace.lua = crashLuaPrev;
 #if defined(TRACY_ENABLE)
   ___tracy_emit_zone_end(zone);
 #endif

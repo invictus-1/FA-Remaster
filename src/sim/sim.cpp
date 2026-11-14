@@ -1106,6 +1106,7 @@ Sim::~Sim() {
   ReleaseAnimators(*this);
   armies_.clear();
   threads_.reset();
+  if (state_ && g_crashPlace.luaMain == state_->L()) g_crashPlace.luaMain = nullptr;  // (core/crash.h)
   state_.reset();
   // per-sim tables kept by address: last, as the teardown above may still use them
   LandNavForget(*this);
@@ -1443,6 +1444,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   state_ = std::make_unique<ScriptState>(ScriptState::Kind::Sim, vfs_);
   state_->gameVersion = gameVersion;  // (GetVersion: the session's, Start(SessionDescription))
   lua_State* L = state_->L();
+  g_crashPlace.luaMain = L;  // a crash on this thread lists this state's Lua frames (core/crash.h); also each beat's
   // The collector (third_party/lua/lgcinc.c, gc_design.md). With the fixes the incremental one: stepped only at the
   // beat's end, by object counts, so its moments are the same on every machine and a collection never stops a beat
   // for long. Without them Lua 5.0's classic one, exactly the collector the original's replays were compared with.
@@ -2961,6 +2963,16 @@ void Sim::PausedBeat() {
   if (keepSnapshots) snapshots_->Update(*this);  // (sim/sim_snapshot.h: the sync point's copies, reads only)
 }
 
+// MOHO64_CRASH_TEST_AT=<beat>: the crash report's own test (core/crash.h): from that beat the first Lua function
+// the sim's state calls with at least two Lua frames under it faults on purpose (a call hook), so the report shows a
+// stage, an entity, its callback and Lua frames with their lines. Nothing else reads it.
+static void CrashTestHook(lua_State* L, lua_Debug*) {
+  lua_Debug below;
+  if (!lua_getstack(L, 2, &below)) return;
+  volatile uintptr_t nowhere = 16;
+  *reinterpret_cast<volatile int*>(nowhere) = 1;
+}
+
 void Sim::Tick() {
   // The beat in the sim's floating-point state (core/fpenv.h), whatever thread the host runs it on. Seen
   // 2026-10-20: a played game run with MXCSR FTZ + DAZ (as a library could leave a thread) differs from beat 6496
@@ -3000,6 +3012,14 @@ void Sim::Tick() {
   beatStarted_ = true;
   ++tick_;
   g_crashTick = tick_;  // (named by a crash's log line, core/crash.h)
+  g_crashPlace.luaMain = L();  // (and its Lua frames: the thread that runs the beats, core/crash.h)
+  {
+    static const long crashAt = getenv("MOHO64_CRASH_TEST_AT") ? std::atol(getenv("MOHO64_CRASH_TEST_AT")) : -1;
+    if (crashAt >= 0 && tick_ == static_cast<uint32_t>(crashAt)) {
+      Logf(LogLevel::Info, "moho64: MOHO64_CRASH_TEST_AT: faulting on purpose in the first Lua call of beat %u", tick_);
+      lua_sethook(L(), CrashTestHook, LUA_MASKCALL, 0);
+    }
+  }
   if (!phaseTimer) {
     phaseTimer = std::make_shared<PhaseTimer>();
     phaseTimer->parallel = workers_->Stats();  // (shared: the timer reports when it goes, after the pool)
