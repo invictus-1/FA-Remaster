@@ -142,6 +142,12 @@ void Report() {
 namespace wtrap {
 
 namespace {
+// A turn's entity for a crash's lines (Turn's crash_)
+uint32_t CrashIdOf(const Entity* e) { return e ? e->id : 0; }
+const char* CrashBlueprintOf(const Entity* e) { return e && e->blueprint ? e->blueprint->id.c_str() : nullptr; }
+}  // namespace
+
+namespace {
 
 // MOHO64_PAR_WRITETRAP=reads: other entities not even readable during a turn, so every READ of another unit, shell
 // or army is listed too (step 4.4's audit: what a turn reads that a parallel phase must read from a snapshot)
@@ -457,7 +463,7 @@ Phase::~Phase() {
   ReleaseSRWLockExclusive(&g_lock);
 }
 
-Turn::Turn(Entity* e) {
+Turn::Turn(Entity* e) : crash_(CrashIdOf(e), CrashBlueprintOf(e), nullptr) {
   if (!On() || !g_phase) return;
   AcquireSRWLockExclusive(&g_lock);
   active_ = true;
@@ -600,7 +606,7 @@ void* Alloc(size_t n, Kind) { return ::operator new(n); }
 void Free(void* p) { ::operator delete(p); }
 Phase::Phase(uint32_t, const char*) {}
 Phase::~Phase() {}
-Turn::Turn(Entity*) {}
+Turn::Turn(Entity* e) : crash_(CrashIdOf(e), CrashBlueprintOf(e), nullptr) {}
 Turn::~Turn() {}
 void NoteLua(const char*, const void*) {}
 void Report() {}

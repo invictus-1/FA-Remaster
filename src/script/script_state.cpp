@@ -55,6 +55,7 @@ ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
     lua_gpg_fopen_hook = ScriptFopen;
     lua_gpg_remove_hook = ScriptRemove;
     lua_gpg_rename_hook = ScriptRename;
+    InstallCrashLuaReader();
     return true;
   }();
   (void)hooked;

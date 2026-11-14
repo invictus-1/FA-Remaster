@@ -44,6 +44,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/crash.h"  // (a stage is also a crash's place: LayerStages)
+
 namespace moho::trace {
 
 // The overlay's layers (docs/profiling.md 7): what a time belongs to. The sim's are per beat (10 a second), the
@@ -88,15 +90,21 @@ class LayerScope {
   uint64_t t0_;
 };
 
-// A Lap's stages, timed for the overlay: Next ends the open stage's time (if any) and starts the next.
+// A Lap's stages, timed for the overlay: Next ends the open stage's time (if any) and starts the next. The stage's
+// name is also this thread's place for a crash's lines (core/crash.h CrashPlace::stage) until the next stage, and
+// the place before the Lap comes back when it goes (a Lap inside another's stage).
 class LayerStages {
  public:
-  explicit LayerStages(Layer layer) : layer_(layer) {}
-  ~LayerStages() { End(); }
+  explicit LayerStages(Layer layer) : layer_(layer), prevStage_(g_crashPlace.stage) {}
+  ~LayerStages() {
+    End();
+    g_crashPlace.stage = prevStage_;
+  }
   LayerStages(const LayerStages&) = delete;
   LayerStages& operator=(const LayerStages&) = delete;
   void Next(const char* name) {
     End();
+    g_crashPlace.stage = name;
     if (!LayersOn()) return;
     slot_ = LayerSlot(layer_, name);
     t0_ = LayerNow();
@@ -109,6 +117,7 @@ class LayerStages {
 
  private:
   Layer layer_;
+  const char* prevStage_;
   int slot_ = -1;
   uint64_t t0_ = 0;
 };

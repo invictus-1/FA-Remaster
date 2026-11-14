@@ -112,6 +112,10 @@ int LoadScriptWithHooks(lua_State* L, const std::string& vpath);
 
 void RegisterCoreBindings(ScriptState& state);
 
+// A crash lists the Lua frames of the thread being resumed and of the beat's state (core/crash.h; script/crash_lua.cpp).
+// Done by every ScriptState's constructor; once is enough for the process.
+void InstallCrashLuaReader();
+
 // Set __active_mods from the selected mod uids (in that order), as the mod manager does.
 void SetActiveMods(ScriptState& st, const std::vector<std::string>& uids);
 
