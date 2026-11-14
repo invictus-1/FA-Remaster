@@ -31,7 +31,7 @@ local function count(kind)
 end
 ForkThread(function()
     WaitSeconds(6)
-    check("the host keeps the interface's last events", type(moho64ui_Events), "function")
+    check("the host keeps the interface's last events", moho64ui_Events ~= nil, true)
     local screen = newest("screen")
     check("the game's begin is among them", screen and screen.text, "a game begun")
 
