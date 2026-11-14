@@ -174,6 +174,12 @@ std::shared_ptr<const MachinerySpec> ReadMachinery(const std::string& text, cons
     auto vec3 = [](const JsonValue& v, Vec3 d) {
       return v.items.size() >= 3 ? Vec3{static_cast<float>(v.items[0].NumberOr(d.x)), static_cast<float>(v.items[1].NumberOr(d.y)), static_cast<float>(v.items[2].NumberOr(d.z))} : d;
     };
+    if (b["mode"].StringOr("") == "wheel") {  // [wheels]
+      part.wheelRadius = std::max(static_cast<float>(b["radius"].NumberOr(0)), 0.0f);
+      part.wheelAxis = Vector(b["axis"], {1, 0, 0});
+      part.wheelAxis = Length(part.wheelAxis) < 1e-5f ? Vec3{1, 0, 0} : Normalize(part.wheelAxis);
+      spec->wheels = spec->wheels || part.wheelRadius > 0;
+    }
     const JsonValue& aim = b["aim"];
     if (aim.kind != JsonValue::Null) {
       part.aim.at = BoneNamed(bones, aim["at"].StringOr(""));
@@ -292,6 +298,20 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
     s.seen = clock_;
     s.belt = std::fmod(s.belt + spec.beltSpeed * s.work * dt, static_cast<double>(spec.beltLength));  // (its belt slows and stops with it)
     if (s.belt < 0) s.belt += spec.beltLength;
+    // [wheels] its travel: how far it has moved along the way it faces since the frame before. Not a jump (a transport's
+    // drop, a teleport, a replay's jump: faster than anything drives, kWheelFastest), nor while it is carried in the air.
+    if (spec.wheels) {
+      constexpr float kWheelFastest = 60;  // world units a second
+      if (s.hasStood && dt > 0 && !(unit.layer & 0x30u)) {
+        const Vec3 moved = at - s.stood;
+        if (Length(moved) <= kWheelFastest * dt) s.travel += Dot(moved, Rotate(turn, Vec3{0, 0, 1}));
+      }
+      s.stood = at;
+      s.hasStood = true;
+      static const bool told = std::getenv("MOHO64_DEBUG_WHEELS") != nullptr;  // (checks: a unit's travel, twice a second)
+      if (told && static_cast<long long>(clock_ * 2) != static_cast<long long>((clock_ - dt) * 2))
+        printf("render: wheels: unit %u at %.1f s has travelled %.2f\n", unit.id, clock_, s.travel);
+    }
   }
   const float w = s.work * s.work * (3 - 2 * s.work);  // (eased)
   const float offset = UnitOffset(unit.id);
@@ -327,6 +347,12 @@ float Machinery::PoseUnit(const FrameUnit& unit, const Model& model, Vec3 at, co
     if (w > 0) Evaluate(part.work, cycle(part.work), &workR, &workMove, &workHidden, &workScale);
     r = Nlerp(r, workR, w);
     move = Lerp(move, workMove, w);
+    if (part.wheelRadius > 0) {  // [wheels] (rolling forward its top goes forward: about +x, the model's y toward its z)
+      const double round = 2 * 3.14159265358979 * static_cast<double>(part.wheelRadius * model.scale);
+      const float angle = static_cast<float>(std::fmod(s.travel, round) / static_cast<double>(part.wheelRadius * model.scale));
+      const float h = std::sin(angle * 0.5f);
+      r = Mul(Quat{part.wheelAxis.x * h, part.wheelAxis.y * h, part.wheelAxis.z * h, std::cos(angle * 0.5f)}, r);
+    }
     scaled[i] = Lerp(scale, workScale, w);
     hidden[i] = w >= 0.5f ? workHidden : idleHidden;
     // the parent as posed now (the simulation's bone, or a part before this one), and this part on it as it stands to it

@@ -120,8 +120,11 @@ class Precipitation {
   // `highFrom` world units away (where the box stops growing) to none at `highTo`: fewer and fewer flakes, each as
   // it was (the last ones fade as the ladder's do, none pops). The snow lying and the clouds are not the fall's and
   // stay. False: the square, as before.
+  // (Chris's test of 2026-11-13: "you can barely see it snowing make it a bit more visible like 10%": the fade a tenth
+  // farther out, 560 .. 1000 before: at 780 away, where the box no longer fills a 16:9 view, three quarters of the
+  // flakes are left and not half; the last tenth of them is gone at 1100)
   bool highFade = true;
-  float highFrom = 560, highTo = 1000;
+  float highFrom = 620, highTo = 1100;
 
  private:
   gfx::Pipeline Make(bool lit, std::string* error);

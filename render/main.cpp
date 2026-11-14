@@ -192,6 +192,10 @@
 // --rain-under-shadow  [rainover] a storm's rain keeps to where its clouds' shadow lies, as before (World::rainUnderClouds
 //           off; by default it falls under the clouds themselves)
 // --no-storm-cells  [stormcells] a storm's 3D clouds as before (not in a few towering cells with dark bases)
+// --pause-mark-high  [pausemark2] the pause mark above the unit's top, as before (not centred on its icon place, the
+//           original's); --pause-marks-own: over the focus army's own units only (World::pauseMarksOnAllies off)
+// --allies <army>,<army>,...  (checks) the armies allied with --focus's (from 1; World::alliedArmies, which the interface
+//           sets from the game): their life bars and pause marks show as the focus army's own
 // --fog-frame-old  [fogframe] the fog of war's dimming outside the map let go from the edge on, as before (not held as far
 //           out as the farthest zoom shows)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
@@ -263,6 +267,8 @@
 // --leaf-light  the sun's light through leaves, grass blades and plants (World::leafLight; modern look)
 // --lamp-colour team|faction  [lampcolour] a unit's own faint glow (its 'hull' lamps) in its army's colour (team, the
 //           default) or its faction's own (faction: UEF blue whatever the army's colour; World::lampsTeamColour)
+// --head-lamp-colour file|faction|team  [headcolour] the colour of the units' head lamps (their lights of Kind 'head'):
+//           as their files have them (the default), their faction's, or their army's (World::headLampColour)
 // --hull-glow old|<strength>  [hullglow] a unit's own glow as before (old: as strong and as far as its lamps' list says, the
 //           army's colour as it is, all of it in the air, glows lying over each other adding up), or that strength (0.75 unless
 //           given; World::hullGlow, hullReach, hullEvenColours, hullAir, hullShare)
@@ -1154,6 +1160,7 @@ struct Options {
   int energyTest = 0;                   // --energy-test
   int energyShell = 1;                  // --energy-shell plain|lit ([litshell])
   bool lampsTeamColour = true;          // --lamp-colour team|faction ([lampcolour])
+  int headLampColour = 0;               // --head-lamp-colour file|faction|team ([headcolour])
   float hullGlow = 0.75f;               // --hull-glow ([hullglow]; < 0: old)
   float buildingGlow = -1;              // --building-glow ([buildingglow]; -1: its own, -2: old)
   float statusLights = -1;              // --status-lights ([statuslights]; -1: its own; old: 1)
@@ -1223,6 +1230,8 @@ struct Options {
   float cloudsMix = -1;                 // [cloudmix] --clouds-mix
   bool stormCells = true;               // [stormcells] --no-storm-cells
   bool fogFrameOld = false;             // [fogframe] --fog-frame-old
+  bool pauseMarkHigh = false, pauseMarksOwn = false;  // [pausemark2] --pause-mark-high, --pause-marks-own
+  uint64_t allies = 0;                  // --allies
   bool rainUnderClouds = true;          // [rainover] --rain-under-shadow
   bool starryNight = true;              // [starry] --plain-night
   bool cloudsFull = false;              // --clouds-full (the same, marched at the picture's own size)
@@ -1579,6 +1588,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--clouds-full") o->clouds3d = o->cloudsFull = true;
     else if (a == "--no-storm-cells") o->stormCells = false;  // [stormcells]
     else if (a == "--fog-frame-old") o->fogFrameOld = true;  // [fogframe]
+    else if (a == "--pause-mark-high") o->pauseMarkHigh = true;  // [pausemark2]
+    else if (a == "--pause-marks-own") o->pauseMarksOwn = true;  // [pausemark2]
     else if (a == "--rain-under-shadow") o->rainUnderClouds = false;  // [rainover]
     else if (a == "--plain-night") o->starryNight = false;  // [starry]
     else if (a == "--cloud-zoom") o->cloudZoom = true;  // (cloudzoom)
@@ -1800,6 +1811,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--building-glow") o->buildingGlow = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [buildingglow]
     else if (a == "--status-lights") o->statusLights = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [statuslights]
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
+    else if (a == "--head-lamp-colour") o->headLampColour = std::string(v) == "faction" ? 1 : std::string(v) == "team" ? 2 : 0;  // [headcolour]
     else if (a == "--hull-glow") o->hullGlow = std::string(v) == "old" ? -1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hullglow]
     else if (a == "--lamp-budget") o->lampsNearFirst = std::string(v) != "even";  // [lampbudget]
     else if (a == "--hot-metal-lights") o->hotLights = std::max(0, atoi(v));
@@ -2035,6 +2047,14 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
+    else if (a == "--allies") {  // [pausemark2] (checks)
+      for (const char* s = v; *s;) {
+        const int army = atoi(s);
+        if (army >= 1 && army <= 64) o->allies |= 1ull << (army - 1);
+        while (*s && *s != ',') ++s;
+        if (*s == ',') ++s;
+      }
+    }
     else if (a == "--wrecks-once-seen-from") o->wrecksFrom = atoi(v);
     else if (a == "--focus-from") {
       if (sscanf(v, "%d,%d", &o->focusFromFrame, &o->focusFromArmy) != 2) return false;
@@ -2807,6 +2827,7 @@ int main(int argc, char** argv) {
   world.effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast]
   world.unitEmitters = opt.unitEmitters;  // [unitfx]
   world.lampsTeamColour = opt.lampsTeamColour;  // [lampcolour]
+  world.headLampColour = opt.headLampColour;  // [headcolour]
   if (opt.hullGlow < 0) {  // [hullglow] (old: all as before)
     world.hullGlow = world.hullReach = world.hullAir = 1;
     world.hullEvenColours = world.hullShare = false;
@@ -2872,6 +2893,9 @@ int main(int argc, char** argv) {
   if (opt.cloudsMix >= 0) world.clouds.mix = opt.cloudsMix;  // [cloudmix]
   world.stormCells = opt.stormCells;  // [stormcells]
   world.sight.holdOutside = !opt.fogFrameOld;  // [fogframe]
+  world.pauseMarkAtIcon = !opt.pauseMarkHigh;  // [pausemark2]
+  world.pauseMarksOnAllies = !opt.pauseMarksOwn;
+  if (opt.allies) world.alliedArmies = opt.allies;  // (--allies)
   world.rainUnderClouds = opt.rainUnderClouds;  // [rainover]
   world.starryNight = opt.starryNight;  // [starry]
   if (opt.photoLook) {  // (photolook)
