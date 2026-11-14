@@ -51,6 +51,15 @@ bool DxcPresent();
 // (the file is not there, or it is and the system could not load it). gfx.h's ShaderCompilerReady makes the player's
 // sentence of the two.
 bool DxcLoad(std::string* where, std::string* why);
+// [cardlog] What the compiler has done in this program so far (any thread): shaders DXC compiled, those it refused (its
+// messages went to the pipeline's error), and shaders read back from a cache instead of compiled.
+struct ShaderCounts {
+  int compiled = 0, failed = 0, fromCache = 0;
+};
+ShaderCounts ShaderCountsNow();
+// [cardlog] Where DXC is taken from (Windows: the full path beside the program; elsewhere the library's name) and whether it is
+// loaded now (it is loaded at the first shader, or by DxcLoad).
+std::string DxcPlace(bool* loaded);
 
 // Compiles `source` at `entry` for `stage` ("vs", "ps" or "cs") into DXIL, shader model 6.0, for Direct3D 12,
 // signed (by DXC itself, or by an older DXC's dxil.dll beside the program). Kept in `cacheDir` as

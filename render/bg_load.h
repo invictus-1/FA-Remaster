@@ -133,6 +133,8 @@ class LoadingDevice final : public gfx::Device {
   void Destroy(gfx::Texture texture) override;
   void Destroy(gfx::Pipeline pipeline) override;
   bool RayTracing() const override { return real_->RayTracing(); }
+  std::string RayTracingWhyNot() const override { return real_->RayTracingWhyNot(); }  // [cardlog] (the device's own)
+  std::vector<std::string> Report() override { return real_->Report(); }
   bool Lost() const override { return real_->Lost(); }  // [devicelost] (the device's own, gfx.h)
   std::string LostReason() const override { return real_->LostReason(); }
   bool LoseForTest() override { return real_->LoseForTest(); }
@@ -207,6 +209,7 @@ class LoadingDevice final : public gfx::Device {
   void TakeTimes(std::vector<std::pair<const char*, double>>* out) override;
   uint64_t MemoryInUse() override { return real_->MemoryInUse(); }
   bool MemoryBudget(uint64_t* budget, uint64_t* used) override { return real_->MemoryBudget(budget, used); }
+  uint64_t CardMemory() override { return real_->CardMemory(); }  // [gtx1080]
   int BackgroundPipelinesWaiting() override { return real_->BackgroundPipelinesWaiting(); }
   // [mcrec] draws recorded on several threads: the device's own, once the world is drawn; none while it warms (its draws
   // then come here, where SetPipeline leaves out what is not made yet) or before (a world being opened draws nothing)

@@ -663,6 +663,12 @@
 //           checks of single shaders only: it does not finish the horizon's pixel shader, so a map in the modern look
 //           hangs with it. Without --fxc the viewer does not start when dxcompiler.dll is not beside it: it says which
 //           file is missing and where it must be (a dialog too, in a run a person watches) and ends with exit code 4.
+// --no-ray-tracing  [gtx1080] the device made as on a card without ray tracing (DeviceDesc::noRayTracing; a GTX 1080's,
+//           the first outside machine's): RayTracing false on both backends, every look that traces rays falls back as
+//           there, and the card's report says "switched off by --no-ray-tracing" (also for --picture)
+// --card-memory <MB>  [gtx1080] the card taken to have that much memory of its own (DeviceDesc::cardMemoryMB): its report
+//           says so, and the budget the renderer decides by (World's making ahead, a photo's plan) is scaled to it; what
+//           the run really uses is printed at its end ("card memory: the most ...") to hold against it (also for --picture)
 // --lose-device-at <frame>  [devicelost] the graphics device lost on purpose after that frame (gfx.h, Device::LoseForTest:
 //           Direct3D 12 by ID3D12Device5::RemoveDevice, for real; with --vulkan made up, the next submit's result taken
 //           for a loss), to try what notices it and what is done then; no driver is reset and no other program touched.
@@ -1048,6 +1054,8 @@ struct Options {
   bool bloom = true;                    // --no-bloom
   bool vulkan = false;                  // --vulkan
   bool fxc = false;                     // --fxc
+  bool noRayTracing = false;            // [gtx1080] --no-ray-tracing
+  int cardMemoryMB = 0;                 // [gtx1080] --card-memory
   bool shaderCache = true;              // --no-shader-cache
   std::string shaderCacheDir;           // --shader-cache
   bool vulkanClear = false;             // --vulkan-clear
@@ -1496,6 +1504,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--recover-test") o->recoverTest = true;  // [devicelost]
     else if (a == "--lose-in-recovery") o->loseInRecovery = true;  // [notice]
     else if (a == "--fxc") o->fxc = true;
+    else if (a == "--no-ray-tracing") o->noRayTracing = true;  // [gtx1080]
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
@@ -1714,6 +1723,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--size") {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
     } else if (a == "--frames") o->frames = atoi(v);
+    else if (a == "--card-memory") o->cardMemoryMB = std::max(0, atoi(v));  // [gtx1080]
     else if (a == "--low-latency-switch") o->lowLatencySwitch = atoi(v);
     else if (a == "--vsync-switch") o->vsyncSwitch = atoi(v);
     else if (a == "--sync-interval") o->syncInterval = atoi(v);
@@ -2403,6 +2413,8 @@ int main(int argc, char** argv) {
   dd.debug = opt.debug;
   dd.backend = opt.vulkan ? gfx::DeviceDesc::Backend::Vulkan : gfx::DeviceDesc::Backend::Direct3D12;
   dd.oldShaderCompiler = opt.fxc;
+  dd.noRayTracing = opt.noRayTracing;  // [gtx1080]
+  dd.cardMemoryMB = opt.cardMemoryMB;
   if (!opt.shaderCache) dd.shaderCache = "-";
   else if (!opt.shaderCacheDir.empty()) dd.shaderCache = opt.shaderCacheDir;
   auto device = gfx::Device::Create(dd, &error);
@@ -2425,6 +2437,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   printf("render: %s on %s, %dx%d\n", device->BackendName(), device->AdapterName().c_str(), device->Width(), device->Height());
+  gfx::PrintReport(*device);  // [cardlog] (the card, its memory, driver, ray tracing, shaders and output: "render: card: ...")
   // (the checks with --low-latency: their frames through the latency limiter, which then waits in BeginFrame)
   if (opt.lowLatency && (opt.gfxCheck || opt.fsr3Check || opt.framegenCheck)) device->SetLatencyLimiter(true);
   if (opt.gfxCheck) return GfxCheck(device.get(), [&] { window->Pump(nullptr); }) ? 0 : 1;
@@ -2579,6 +2592,7 @@ int main(int argc, char** argv) {
     live.SetShellStart(opt.shellStart);  // [shellstart]
     if (opt.farStep >= 0) live.SetFarStep(opt.farStep);  // (far step)
     picture.SetVulkan(opt.vulkan);
+    picture.SetCardImitation(opt.noRayTracing, opt.cardMemoryMB);  // [gtx1080] (--no-ray-tracing, --card-memory)
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
     picture.SetUpscale(opt.upscale);        // (--fsr)
@@ -2629,6 +2643,11 @@ int main(int argc, char** argv) {
       }
       if (World* pw = picture.world()) pw->effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast] (the picture's own world)
       printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");
+      {  // [gtx1080] (what the interface would suggest for this card)
+        const WorldPicture::PresetSuggestion s = picture.SuggestedPreset();
+        printf("render: --picture: suggested for this card: preset %d, texture detail %d, shadow fidelity %d: %s\n", s.preset, s.textureLevel,
+               s.shadowQuality, s.reason.c_str());
+      }
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
       live.onBeat = [&](const moho::Sim& sim) {
         std::lock_guard<std::mutex> lock(pictureBeats);  // [restart]
@@ -2753,6 +2772,7 @@ int main(int argc, char** argv) {
   if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
   if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
   world.water.ocean.tilt = opt.oceanTilt;
+  world.water.surf.waitField = automatic;  // [surfwait] (a counted run: the surf's field there from its first frame, surf.h)
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
   if (opt.surfBreak > 0) world.water.surf.breakDepth = opt.surfBreak;
@@ -3973,6 +3993,8 @@ int main(int argc, char** argv) {
     }
   } timing;
   FrameStats frameStats;  // [rbench] --timings frame by frame
+  uint64_t mostCardBytes = 0;  // [gtx1080] the most of the card's memory the run held (MemoryInUse, every 15th frame and the last)
+  int mostCardFrame = 0;
   auto statsLast = std::chrono::steady_clock::now();  // [rbench] (the last frame's end)
 
   for (;;) {
@@ -5402,6 +5424,10 @@ int main(int argc, char** argv) {
     }
     render::HangDumpBeat();  // [hangdump]
     MOHO_FRAME_MARK;  // [tracy] (the viewer's displayed frame)
+    if (frameCount % 15 == 0 || lastFrame) {  // [gtx1080] (the most the card held: the run's last line says it)
+      const uint64_t held = device->MemoryInUse();
+      if (held > mostCardBytes) mostCardBytes = held, mostCardFrame = frameCount;
+    }
     if (opt.timings) {  // (every frame, the first ones too: the slowest, part by part)
       const double whole = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
       if (whole > timing.slowest) {
@@ -5538,6 +5564,13 @@ int main(int argc, char** argv) {
         printf("; second tables (what stands): %d lights now, at most %d in a frame, %d made in all", lights.hullTables, lights.hullTablesMost, lights.hullMadeAll);
       if (world.hotMetal) printf("; hot metal: %d glowing, %d lit, %d smoking", world.heat.glowing, world.heat.lit, world.heat.smoking);
       printf("; textures %.0f MB", static_cast<double>(world.textures.bytes) / (1 << 20));
+      {  // [gtx1080] the card's memory the run held (as the system counts it: Direct3D 12; Vulkan: its blocks of the card's own)
+        uint64_t budget = 0, used = 0;
+        const bool budgeted = device->MemoryBudget(&budget, &used);
+        printf("; card memory: the most %.0f MB (frame %d), at the end %.0f MB", static_cast<double>(mostCardBytes) / (1 << 20), mostCardFrame,
+               static_cast<double>(device->MemoryInUse()) / (1 << 20));
+        if (budgeted) printf(" of a budget of %.0f MB", static_cast<double>(budget) / (1 << 20));
+      }
       if (world.textures.madeAhead || world.models.madeAhead || world.models.madeAlike)  // [spikes]
         printf(" (made ahead: %d textures, %.0f MB of them; %d models, %d asked for and not made; %d models of the simulation's looks the same as their files')",
                world.textures.madeAhead, static_cast<double>(world.textures.madeAheadBytes) / (1 << 20), world.models.madeAhead,
@@ -5613,6 +5646,7 @@ int main(int argc, char** argv) {
         printf("; rock hits: %d hits told, %d rocks touched, %zu scarred; %d chips thrown, %d flying, %d lying", world.rocks.hits, world.rocks.touched,
                world.rocks.HeldList().size(), world.debris.chipped, world.debris.ChipsFlying(), world.debris.ChipsLying());
       printf("\n");
+      printf("render: card: %s (at the run's end)\n", gfx::ShaderWorkLine().c_str());  // [cardlog]
       if (opt.wildlifeVerbose) tellFlocks("at the end");
       if (opt.timings && timing.frames > 0) {
         printf("render: --timings: %d frames at %dx%d on %s%s, average ms a frame:\n", timing.frames, device->Width(), device->Height(),
