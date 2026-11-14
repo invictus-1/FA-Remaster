@@ -34,6 +34,44 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 79. To the INTERFACE track (and the engine, whose core/log it may be): the renderer's lines into the game's log file (2026-11-14; Chris's first build; BLOCKING for a useful log from an outside machine)
+
+**Who:** renderer. **Why:** Chris, 2026-11-14, on the first build other people play: "any logs produced are extremely
+detailed so we don't have to keep coming back and forth". The renderer now says at every start what the machine is and
+what it could not draw ([cardlog], below), but it says it with printf on stdout, and its errors (a shader that does not
+compile, "FSR 3 cannot be used", a lost device) go to stderr as they always did. **The game's log file holds none of
+that**: a game.log of 2026-11-14 (4,856 lines) has no line of the renderer's, not even the card's name. A game started
+from a shortcut has no console, so on an outside machine every word of the renderer is lost.
+
+**What (1, the blocking part):** the program's stdout and stderr taken into the log file the game writes (--log and
+the always-on log alike), from before the world picture is opened, so that every "render: ..." line lands there in
+order with the interface's own. How is yours: the file handles redirected when the log opens, or the lines read and
+logged. What the renderer needs is only that nothing printed is lost, and that a line is in the file by the time a
+crash or a hang ends the program (no long buffering).
+
+**What arrives then, with no call of yours:** for each device made (the menu's, a recovered one's) about 13 lines
+"render: card: ..." (backend and level, the card and its ids, its memory and the budget now, the driver's version, ray
+tracing yes or NO and why, the shader compiler and its version, the shader cache, the output and screen, the system);
+at a map's first frame and whenever it changes "render: looks: ..." (each look that depends on the card, asked for and
+not drawn, why, and what is drawn in its place), the shaders compiled so far and the memory then.
+
+**What (2, not blocking):** your long-frame lines ("moho64ui: long frame N ...") are written only with
+MOHO64UI_LONG_FRAMES set, so an outside machine logs none. Proposed: on by default from about 100 ms a frame, with a
+limit of lines a minute, and the card's time beside the processor's (WorldPicture::LastStats has gpuMs and gpuStages).
+If you want the card's memory in that line too, say so and I add a call that returns used and budget.
+
+**What (3, for Chris's "a preset chosen by itself"; your call and his):** `WorldPicture::SuggestedPreset()` (after
+Open of any picture, the menu's too) returns the remastered preset, the texture detail and the shadow fidelity
+suggested for this card with the reason in words: by its ray tracing and its memory alone, from measures of a late
+game (an 8 GB card without ray tracing: High with Medium textures). How fast a card draws is NOT in the rule: nothing
+of that kind was here to measure. Meant for a first start without saved options, said in the log with its reason, and
+never over a choice the player has made. Not used by anything yet.
+
+**For your tests:** `WorldPicture::SetCardImitation(bool noRayTracing, int cardMemoryMB)` before Open makes the device
+as on a card without ray tracing and with that much memory (the viewer's --no-ray-tracing --card-memory 8192).
+
+**Answer:** (none yet)
+
 ## 78. To the INTERFACE track: the head lamps' colour as an option (2026-11-14; Chris's test of 13 November; not blocking)
 
 **Who asks:** the renderer, for Chris: on the redone units' head lamps he said "the new units lights are regular

@@ -264,6 +264,10 @@ class WorldPicture {
   // DeviceDesc::shaderCache: "" the user's own folder, as at first; "-" none kept), for a test that must not write into
   // the folder the player's game uses (the viewer's --recover-test with --shader-cache).
   void SetShaderCache(const std::string& folder);
+  // [gtx1080] (checks) Before Open: a smaller card imitated on this one (gfx.h, DeviceDesc::noRayTracing, cardMemoryMB): no ray
+  // tracing (RayTracingSupported false, as on a GTX 1080), and that much card memory (0: the card's own). The device's report
+  // in the log says so.
+  void SetCardImitation(bool noRayTracing, int cardMemoryMB);
   // The host's interface, laid over the world by the next DrawToWindow: `width` x `height` pixels
   // (the window's size), each 0xAARRGGBB with the colour already multiplied by its alpha (alpha 0:
   // the world shows through), `pitch` pixels from one row to the next. (x, y, w, h) is the part that
@@ -449,6 +453,19 @@ class WorldPicture {
   // After Open (of any picture, the menu's too): whether this device has ray tracing (Direct3D 12 with DXR 1.1,
   // Vulkan with ray queries; never on the Mac), for greying SetRayTracing out where it would do nothing.
   bool RayTracingSupported() const;
+  // [gtx1080] After Open (of any picture, the menu's too): the settings this card is suggested for a first start, by what its
+  // report reads (ray tracing, the card's own memory) and the window's size: `preset` the interface's remastered looks' level
+  // (remaster_preset: 0 Off, 1 Low, 2 Medium, 3 High, 4 Ultra), `textureLevel` the game's Texture Detail (texture_level: 0
+  // High, 1 Medium, 2 Low; SetTextureDetail), `shadowQuality` the game's Shadow Fidelity (shadow_quality: 3 a sun's shadow
+  // map of 4096, 2 of 2048, 1 of 1024), and the reason in words, for the log and a tooltip. The rule and the measures it
+  // rests on: world_picture.cpp, SuggestedPreset. preset -1: no device yet (nothing suggested). BY MEMORY AND RAY TRACING
+  // ALONE: how fast a card draws is not part of the rule (no card of a GTX 1080's kind was here to measure; the first
+  // outside machine's log will say), so a host should let the player's own choice stand over it.
+  struct PresetSuggestion {
+    int preset = -1, textureLevel = 0, shadowQuality = 3;
+    std::string reason;
+  };
+  PresetSuggestion SuggestedPreset() const;
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).

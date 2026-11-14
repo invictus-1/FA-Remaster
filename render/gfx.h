@@ -249,6 +249,16 @@ struct DeviceDesc {
   // DXC is not made at all (ShaderCompilerReady below says why). For checks of single shaders: the old compiler does
   // not finish the horizon's pixel shader (the interface's request 51), so a map in the modern look hangs with it.
   bool oldShaderCompiler = false;
+  // [gtx1080] (checks: the viewer's --no-ray-tracing and --card-memory; the first outside machine, Chris 2026-11-14, has a
+  // GTX 1080 of 8 GB without ray tracing) A smaller card imitated on this one. `noRayTracing`: the device made as on a card
+  // without ray tracing (RayTracing false, nothing of it asked of the driver: Direct3D 12 asks no ID3D12Device5, Vulkan
+  // enables no ray tracing extension), and its report says it was switched off so. `cardMemoryMB` (0: the card's own): the
+  // card taken to have that much memory of its own: the report says so, and MemoryBudget's budget is the system's, scaled
+  // from the card's real size to this one, without taking off what other programs hold of the real card (they are this
+  // machine's, not the imitated one's); what the renderer decides by memory follows (World's making ahead, a photo's plan).
+  // What is really used (MemoryInUse) is not changed: it is what an 8 GB card would have to hold.
+  bool noRayTracing = false;
+  int cardMemoryMB = 0;
 };
 
 // [nodxc] (Chris, 2026-11-09, the review's A4; the interface's request 51) Whether the shader compiler every device needs
@@ -260,6 +270,21 @@ struct DeviceDesc {
 // frozen window at the first map frame, and no word why. A host asks it itself before it makes its window, to say so
 // in a dialog of its own (WorldPicture::ShaderCompilerReady for the interface's program).
 bool ShaderCompilerReady(std::string* message);
+
+class Device;
+// [cardlog] The device's report (Device::Report) printed, each line after "render: card: ", on stdout. A host with a log
+// file of its own gets them there only if it takes the program's stdout and stderr into that file: the interface's program
+// did not on 2026-11-14 (its game.log held none of the renderer's lines; render/REQUESTS.md 79 asks for it).
+void PrintReport(Device& device);
+// [cardlog] The shader compiler's work in this program so far, in one line: shaders compiled by DXC (and how many failed), and
+// shaders read back from the shader cache instead.
+std::string ShaderWorkLine();
+// [cardlog] (the backends' reports) The shader compiler's line (DXC: where it is taken from, and whether it is loaded) and the
+// shader cache's (its folder, how many shaders of each backend it holds and their size, what this start compiled so far).
+std::vector<std::string> ShaderReport(const std::string& cacheDir);
+// [cardlog] (the backends' reports) The system's line: its version, the processor's threads, the computer's memory and how
+// much of it is free now.
+std::string SystemLine();
 
 // [mcrec] Draws recorded on another thread (Device::BeginParallel): a recorder takes the draw calls alone, with the same
 // meanings as the device's own below. Everything else (passes, dispatches, marks, buffers' and textures' updates, what
@@ -368,6 +393,16 @@ class Device {
 
   // Ray tracing (above). False: the card or its driver cannot; the calls below then do nothing.
   virtual bool RayTracing() const { return false; }
+  // [cardlog] (Chris, 2026-11-14: "any logs produced are extremely detailed so we don't have to keep coming back and forth")
+  // Why RayTracing is false, in words a log can be read by (which tier, extension or feature the card lacks, or that it was
+  // switched off: DeviceDesc::noRayTracing); empty where it is true.
+  virtual std::string RayTracingWhyNot() const { return RayTracing() ? std::string() : std::string("this backend has no ray tracing"); }
+  // [cardlog] The device's report, a fact a line, for the log of a machine nobody here can look at: the backend and its
+  // level, the card (name, vendor and device ids), its memory (its own, the computer's it may use, the budget and the use
+  // now), the driver's version, ray tracing (yes, or no and why), the shader compiler (where from), the shader cache (its
+  // folder, what it holds, what this start compiled), the window's output (size, format, vsync, tearing) and the system.
+  // A fact that cannot be read says so; nothing is guessed. Hosts print each line after "render: card: " (PrintReport).
+  virtual std::vector<std::string> Report() { return {std::string(BackendName()) + " on " + AdapterName() + " (no report of its own)"}; }
   // [devicelost] (Chris, 2026-11-09, the review's A4: a driver reset - one happened here on 2026-11-06, a bake beside the
   // game - left a frozen window and an error line a frame) The card's device is gone: the driver was reset or updated, the
   // card hung or was taken out (Direct3D 12: Present, a failed call or a frame's end found the device removed,
@@ -584,6 +619,10 @@ class Device {
     (void)used;
     return false;
   }
+  // [gtx1080] The card's own memory, bytes (Direct3D 12: the adapter's dedicated video memory; Vulkan: its largest heap of its
+  // own; DeviceDesc::cardMemoryMB's where given); 0 when not known. For a choice of settings by the card (WorldPicture's
+  // SuggestedPreset).
+  virtual uint64_t CardMemory() { return 0; }
   // [mcrec] A pass's draws recorded on several threads at once (Recorder above). Within a pass (after BeginFrame or
   // BeginPass, before the next pass, Resolve or Dispatch), BeginParallel(n) hands out n recorders (n from 1 to
   // ParallelRecorders()), each set up as the device is set now (its drawing pipeline, constants, textures, shader buffers,

@@ -1660,7 +1660,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (fsr3State_ == 0) {
       std::string error;
       fsr3State_ = fsr3.Init(&error) ? 1 : -1;
-      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str());
+      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str()), fsr3Why_ = error;  // ([cardlog])
     }
     temporalNow_ = fsr3State_ > 0;
   }
@@ -1676,13 +1676,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     if (wanted && framegenState_ == 0) {
       std::string error;
       framegenState_ = framegen.Init(&error) ? 1 : -1;
-      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str());
+      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str()), framegenWhy_ = error;  // ([cardlog])
     }
     const bool ask = wanted && framegenState_ > 0;
     if (ask != framegenAsked_) {
       if (ask && !device_->SetFrameGeneration([this] { return MakeBetween(); })) {
         fprintf(stderr, "render: this device cannot show frames made between; frame generation is off\n");
         framegenState_ = -1;
+        framegenWhy_ = "this device cannot show frames made between";  // [cardlog]
       }
       if (!ask) device_->SetFrameGeneration({});
       framegenAsked_ = ask && framegenState_ > 0;
@@ -1775,7 +1776,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       bounceTried_ = true;
       std::string why;
       bounceMade_ = bounce.Init(&why);
-      if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str());
+      if (!bounceMade_) fprintf(stderr, "render: bounce light cannot be used (%s)\n", why.c_str()), bounceWhy_ = why;  // ([cardlog])
     }
     if (bounceMade_) {
       // (cinecam: a cinematic camera's probes round a place forty units ahead of its eye, at the finest spacing, where
@@ -1785,6 +1786,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       bounceNow_ = true;
     }
   }
+  if (haveMap_ && !sidePicture && !extraView && !photo) TellLooks();  // [cardlog] (the looks the card decides, once they are chosen)
   if (temporalNow_)  // (the temporal upscaler: textures read for the screen's size and finer)
     c.temporal[0] = std::log2(static_cast<float>(sceneWidth) / static_cast<float>(width)) + temporalMipBias;
   else if (upscaleMipBias && sceneWidth < width)  // [upmip] (FSR 1: the textures read for the window's size too)
@@ -4394,11 +4396,11 @@ void World::PrepareAhead() {
     std::string error;
     if (temporalUpscale && fsr3State_ == 0) {
       fsr3State_ = fsr3.Init(&error) ? 1 : -1;
-      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str());
+      if (fsr3State_ < 0) fprintf(stderr, "render: FSR 3 cannot be used (%s); FSR 1 stays\n", error.c_str()), fsr3Why_ = error;  // ([cardlog])
     }
     if (frameGeneration && framegenState_ == 0) {
       framegenState_ = framegen.Init(&error) ? 1 : -1;
-      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str());
+      if (framegenState_ < 0) fprintf(stderr, "render: FSR 3 frame generation cannot be used (%s)\n", error.c_str()), framegenWhy_ = error;  // ([cardlog])
     }
     device_->EndBackgroundPipelines();
   }
@@ -5620,13 +5622,103 @@ bool World::RaysReady() {
   if (!raysTried_) {  // (its shaders, the first time: where the device has no ray tracing, never again)
     raysTried_ = true;
     std::string why;
-    if (!rays.Init(&why)) fprintf(stderr, "render: ray tracing cannot be used (%s)\n", why.c_str());
+    if (!rays.Init(&why)) fprintf(stderr, "render: ray tracing cannot be used (%s)\n", why.c_str()), raysWhy_ = why;  // ([cardlog] TellLooks)
   }
   if (rays.Available() && !raysGround_ && haveMap_) {
     rays.SetGround(map);
     raysGround_ = true;
   }
   return rays.Available();
+}
+
+// [cardlog] (world.h) Each look that depends on what the card can: asked for or not, and when asked and not drawn, why (a number
+// for the key, the words only when said). What falls back to what is decided elsewhere, as before; this only says it.
+void World::TellLooks() {
+  enum Why : int { kDrawn, kClassic, kNoRays, kRayScene, kNoRayShaders, kBounceFailed, kSamples, kMotionView, kFsr3Failed, kFramegenFailed, kNoIndirect };
+  struct Said {
+    const char* name;
+    bool asked;
+    int why;
+    const char* instead;
+  };
+  const bool modern = look == Look::Modern;
+  const bool cardRays = device_->RayTracing();
+  // (the ray tracing looks: in the order their own conditions are tried, Begin's above)
+  const auto rayWhy = [&](bool drawn, bool needsShaders) {
+    return drawn ? kDrawn : !modern ? kClassic : !cardRays ? kNoRays : needsShaders && !RayShadersOn() ? kNoRayShaders
+           : raysTried_ && !rays.Available() ? kRayScene : kDrawn;
+  };
+  const Said said[] = {
+      {"ray reflections", rayReflections, rayWhy(reflectNow_, true),
+       "the water mirrors the sky and what the picture itself shows (the march over the screen: nothing that is off the screen, the "
+       "far islands not at all), and smooth metal and wet ground mirror the sky alone"},
+      {"the small lights' shadows by rays", rayLightShadows, rayWhy(lightRaysNow_, true),
+       lampShadows ? "the flashes, shots and fires light what they reach without shadows; the nearest lamps keep their shadow maps (lamp shadows)"
+                   : "the flashes, shots, fires and lamps light what they reach without shadows (lamp shadows are off too)"},
+      {"bounce light", bounceLight,
+       bounceNow_ ? kDrawn : rayWhy(false, false) != kDrawn ? rayWhy(false, false) : bounceTried_ && !bounceMade_ ? kBounceFailed : kDrawn,
+       "the sky's fitted light round about: no light thrown back by the ground, the hills and what stands on them"},
+      {"the ray tracing check view", rayView, rayView && rays.Available() ? kDrawn : !cardRays ? kNoRays : raysTried_ ? kRayScene : kDrawn,
+       "the ordinary picture"},
+      {"FSR 3 (the temporal upscaler)", temporalUpscale,
+       temporalNow_ ? kDrawn : gSceneSamples > 1 ? kSamples : motionView > 0 ? kMotionView : fsr3State_ < 0 ? kFsr3Failed : kDrawn,
+       upscale < 0.999f ? "FSR 1 brings the smaller scene up to the window (sharpened, without the frames before)"
+                        : "the scene drawn at the window's size, without an upscaler"},
+      {"frame generation", frameGeneration, framegenState_ < 0 ? kFramegenFailed : gSceneSamples > 1 ? kSamples : motionView > 0 ? kMotionView : kDrawn,
+       "each frame shown once, as made (half the pictures a second of frame generation)"},
+      {"the still scenery picked on the card", cardScenery > 0, cardScenery > 0 && !device_->IndirectDraws() ? kNoIndirect : kDrawn,
+       "the processor picks the scenery (the same picture)"},
+      {"the sun's shadow worked out once a pixel", shadowMask, shadowMask && !device_->IndirectDraws() ? kNoIndirect : kDrawn,
+       "each surface works out the sun's shadow itself (the same picture)"},
+  };
+  uint64_t key = modern ? 1 : 2;
+  for (const Said& s : said) key = key * 16 + (s.asked ? static_cast<uint64_t>(s.why) + 1 : 0);
+  if (key == looksKey_) return;
+  const bool first = looksKey_ == ~uint64_t{0};
+  looksKey_ = key;
+  const auto reason = [&](int why) -> std::string {
+    switch (why) {
+      case kClassic: return "the classic look is on (this is a look of the modern look)";
+      case kNoRays: return "this card has no ray tracing: " + device_->RayTracingWhyNot();
+      case kRayScene: return "the ray tracing scene could not be made (" + raysWhy_ + ")";
+      case kNoRayShaders: return "the surfaces' shaders were built without rays when the map opened (it was switched on after: from the next map opened)";
+      case kBounceFailed: return "its probes could not be made (" + bounceWhy_ + ")";
+      case kSamples: return "the scene has several samples a pixel (MSAA), which it does not take";
+      case kMotionView: return "a check view of the motion is on";
+      case kFsr3Failed: return "its passes could not be made (" + fsr3Why_ + ")";
+      case kFramegenFailed: return "it could not be made or shown (" + framegenWhy_ + ")";
+      case kNoIndirect: return "this device has no indirect draws";
+      default: return "drawn";
+    }
+  };
+  printf("render: looks: %s (the looks that depend on the card, %s; the device: %s on %s, ray tracing %s)\n", first ? "as the map's first frame is drawn" : "changed",
+         modern ? "the modern look" : "the classic look", device_->BackendName(), device_->AdapterName().c_str(), cardRays ? "yes" : "no");
+  std::string drawn, notAsked;
+  int fallbacks = 0;
+  for (const Said& s : said) {
+    if (!s.asked) {
+      notAsked += (notAsked.empty() ? "" : ", ") + std::string(s.name);
+    } else if (s.why == kDrawn) {
+      drawn += (drawn.empty() ? "" : ", ") + std::string(s.name);
+    } else {
+      ++fallbacks;
+      printf("render: looks: %s asked for, NOT drawn: %s; in its place: %s\n", s.name, reason(s.why).c_str(), s.instead);
+    }
+  }
+  printf("render: looks: drawn as asked: %s\n", drawn.empty() ? "none of them" : drawn.c_str());
+  printf("render: looks: not asked for: %s\n", notAsked.empty() ? "none of them" : notAsked.c_str());
+  printf("render: looks: %d asked for and drawn otherwise\n", fallbacks);
+  if (first) {  // (and once, the card's shaders and memory as the map's first frame is drawn)
+    printf("render: card: %s\n", gfx::ShaderWorkLine().c_str());
+    uint64_t budget = 0, used = 0;
+    if (device_->MemoryBudget(&budget, &used))
+      printf("render: card: memory at the map's first frame: this program uses %.0f MB of the card's own; the budget it may use %.0f MB (the system's for "
+             "this program, less what other programs hold now; with --card-memory scaled to it instead)\n", static_cast<double>(used) / (1 << 20),
+             static_cast<double>(budget) / (1 << 20));
+    else
+      printf("render: card: memory at the map's first frame: this program uses %.0f MB (the budget is not known)\n",
+             static_cast<double>(device_->MemoryInUse()) / (1 << 20));
+  }
 }
 
 bool World::Project(Vec3 p, float* x, float* y) const {

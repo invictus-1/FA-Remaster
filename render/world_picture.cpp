@@ -92,6 +92,8 @@ struct WorldPicture::Impl {
   float upscale = 1;                   // SetUpscale
   bool temporalUpscale = false;        // SetTemporalUpscale
   bool rayReflections = false;         // SetRayReflections (and SetRayTracing)
+  bool noRayTracing = false;           // [gtx1080] SetCardImitation
+  int cardMemoryMB = 0;
   // the lighting options' bundles (SetAtmosphere, SetSoftShadows, SetRayTracing, SetWeatherEffects): -1 not set
   // (the world's own switches left as they are), else off or on
   int atmosphere = -1, softShadows = -1, rayTracing = -1, weatherEffects = -1, groundDetail = -1, frameGeneration = -1;
@@ -442,6 +444,10 @@ WorldPicture::WorldPicture() : impl_(std::make_unique<Impl>()) {}
 void WorldPicture::SetVulkan(bool on) { impl_->vulkan = on; }
 void WorldPicture::SetDebug(bool on) { impl_->debug = on; }
 void WorldPicture::SetShaderCache(const std::string& folder) { impl_->shaderCache = folder; }
+void WorldPicture::SetCardImitation(bool noRayTracing, int cardMemoryMB) {  // [gtx1080]
+  impl_->noRayTracing = noRayTracing;
+  impl_->cardMemoryMB = std::max(cardMemoryMB, 0);
+}
 WorldPicture::~WorldPicture() = default;
 
 // The picture's device on its window (the host's, or an invisible one of its own), with what the picture itself draws
@@ -455,6 +461,8 @@ bool WorldPicture::Impl::MakeDevice(std::string* error) {
   dd.vsync = false;
   dd.debug = m.debug;
   dd.shaderCache = m.shaderCache;
+  dd.noRayTracing = m.noRayTracing;  // [gtx1080] (SetCardImitation)
+  dd.cardMemoryMB = m.cardMemoryMB;
   if (m.HostShows()) {  // (the host's window: the picture is shown there, at its size)
     dd.window = m.hostWindow;
     dd.display = m.hostDisplay;
@@ -486,6 +494,11 @@ bool WorldPicture::Impl::MakeDevice(std::string* error) {
   }
   m.device = gfx::Device::Create(dd, error);
   if (!m.device) return false;
+  // [cardlog] the device's report, once for each device made (a recovered one's again): "render: card: ..." on stdout (in the
+  // host's log file once the host takes the program's stdout into it: gfx.h, PrintReport)
+  printf("render: the picture's device: %s on %s, %dx%d\n", m.device->BackendName(), m.device->AdapterName().c_str(), m.device->Width(),
+         m.device->Height());
+  gfx::PrintReport(*m.device);
   if (m.HostShows() && m.lowLatency) m.device->SetLatencyLimiter(true);  // (Low Latency, as set before Open)
   if (m.HostShows() && m.head2.wanted && !m.MakeHead2())  // [head2] (asked before Open)
     fprintf(stderr, "render: the second window: %s\n", m.head2.error.c_str());
@@ -2013,6 +2026,70 @@ void WorldPicture::SetHiddenOutlines(bool on) {
 }
 
 bool WorldPicture::RayTracingSupported() const { return impl_->device && impl_->device->RayTracing(); }
+
+// [gtx1080] (world_picture.h) The rule, from what the card held in the measures of 2026-11-14 (SETONS_R, eight M28 armies, the
+// game's full set of looks, --card-memory 8192, the most of the card's memory a run held, MemoryInUse, MB):
+//                              beat 3000 near   beat 9000 near   beat 9000, the whole map
+//   1440p, full textures            6412             7744              7771
+//   the same, shadow map 2048       6215             7548              7599
+//   the same, shadow map 1024       6188             7506              7552
+//   Medium textures                 3238             5235              5260
+//   Low textures                    2280             3313              3340
+//   1080p, full textures            6234 (about 120 MB less a megapixel less)
+// (about 3 GB of the full textures are those World makes ahead while the game starts: what a game will draw later.) Ray
+// tracing added some 150 MB at beat 3000 (kRaysMore: a margin over that). A gigabyte of the card is left to the system and
+// other programs (kSpare). The shadow map's size saves too little to be worth a step of its own.
+//  - ray tracing, and memory for full textures and the rays: Ultra (4), full textures;
+//  - memory for full textures: High (3), full textures;
+//  - memory for Medium textures (an 8 GB card: a GTX 1080's at 1080p and 1440p): High, Medium textures;
+//  - memory for Low textures: Medium (2), Low textures;
+//  - under that: Low (1), Low textures, the shadow map at 1024.
+// At sizes other than 1440p the pictures of the scene are taken to grow with the pixels (kPerMegapixel).
+WorldPicture::PresetSuggestion WorldPicture::SuggestedPreset() const {
+  PresetSuggestion s;
+  gfx::Device* device = impl_->device.get();
+  if (!device) return s;
+  const double card = static_cast<double>(device->CardMemory()) / (1 << 20);  // MB
+  const bool rays = device->RayTracing();
+  const double megapixels = static_cast<double>(device->Width()) * static_cast<double>(device->Height()) / 1e6;
+  constexpr double kFull = 7800, kMedium = 5300, kLow = 3350;  // (the late game's most at 1440p, 3.69 megapixels, by texture detail)
+  constexpr double kRaysMore = 400, kPerMegapixel = 130, kSpare = 1024;
+  const double more = (megapixels - 3.69) * kPerMegapixel;
+  char why[400];
+  if (card <= 0) {
+    s.preset = 3;
+    s.reason = "the card's memory is not known: High with full textures, the game's own start";
+    return s;
+  }
+  if (rays && card >= kFull + more + kRaysMore + kSpare) {
+    s.preset = 4;
+    snprintf(why, sizeof why, "ray tracing, and %.0f MB of the card's own: Ultra with full textures (a late game holds about %.0f MB at %.1f megapixels; a "
+             "gigabyte to spare)", card, kFull + more + kRaysMore, megapixels);
+  } else if (card >= kFull + more + kSpare) {
+    s.preset = 3;
+    snprintf(why, sizeof why, "%s; %.0f MB of the card's own: High with full textures (a late game holds about %.0f MB at %.1f megapixels; a gigabyte to spare)",
+             rays ? "ray tracing, but not the memory for it beside full textures" : "no ray tracing (Ultra's one look more)", card, kFull + more, megapixels);
+  } else if (card >= kMedium + more + kSpare) {
+    s.preset = 3;
+    s.textureLevel = 1;
+    snprintf(why, sizeof why, "%s; %.0f MB of the card's own: High with Medium textures (full ones: a late game holds about %.0f MB at %.1f megapixels, too "
+             "near the card's size; Medium about %.0f MB)", rays ? "ray tracing, but not the memory for it" : "no ray tracing", card, kFull + more, megapixels,
+             kMedium + more);
+  } else if (card >= kLow + more + kSpare) {
+    s.preset = 2;
+    s.textureLevel = 2;
+    snprintf(why, sizeof why, "%.0f MB of the card's own: Medium with Low textures (a late game holds about %.0f MB with them at %.1f megapixels)", card,
+             kLow + more, megapixels);
+  } else {
+    s.preset = 1;
+    s.textureLevel = 2;
+    s.shadowQuality = 1;
+    snprintf(why, sizeof why, "%.0f MB of the card's own: Low with Low textures and the smallest shadow map (even they hold about %.0f MB at %.1f megapixels)",
+             card, kLow + more, megapixels);
+  }
+  s.reason = why;
+  return s;
+}
 
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 
