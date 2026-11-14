@@ -73,7 +73,8 @@ cbuffer Ocean : register(b2) {
   float4 oceanHulls[72];   // [hulls] what floats in the sea (Ocean::AddHull), three rows each: x, z its middle, its way (x, z); its waterline's
                            // half length and half beam, its speed, -; its waterline's height there, the slopes it rides (dh/dx, dh/dz), -
   float4 oceanPatchTurn[2];  // [foampatch] each foam patch's main way in its picture (radians; patches 0-3, 4-7)
-  float4 oceanLook5;         // [relief] x how much the waves' faces lit by the sun show in the water's own colour (Ocean::relief)
+  float4 oceanLook5;         // [relief] x how much the waves' faces lit by the sun show in the water's own colour (Ocean::relief);
+                             // y [foamgrid] how much the crests are read from the squares shifted by region (0 at the place itself)
 };
 Texture2D oceanSlope[3] : register(t10);  // the slopes along x and z, and their squares (mip levels: their means)
 Texture2D oceanDisp[3] : register(t13);   // the sideways shift along x, the height, the shift along z; w the slopes' product
@@ -83,6 +84,37 @@ Texture2DArray<float2> oceanPatches : register(t41);  // [foampatch] the visuals
 Texture2D<float2> oceanWake : register(t42);  // [foamwake] the visuals track's wake sheet (r how much, g how thick)
 Texture2D<float2> oceanCrest : register(t43);  // [foamloop] the visuals track's crest loop (8 x 8 frames: a crest breaking)
 static const float kOceanSamples = 256;  // [watersq] each square's samples a side (Ocean::kN)
+#if FOAM_GRID
+// [foamgrid] Where the foam reads the squares from, for a far view: the sea in regions of about three quarters of a square's
+// length (137 world units for the largest: no share of any square's length), each reading its square shifted by a
+// length of its own (0 .. the square's length in x and in z, a hash of the region), so that the foam no longer repeats
+// with the square. The regions are a jittered point's nearest (a cellular pattern: no rows of them), their borders
+// wandering (the place moved by smooth noise about a region across before it is cut into regions: up to a quarter of a
+// region either way), so that no seam lines up with another across the sea. (A grid of squares with wandering edges,
+// tried first, still lay in rows of 137.) (The same in kOceanShaderBlock and kFoam: keep the two alike.)
+float2 FoamGridHash(float2 p) { return frac(sin(float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)))) * 43758.5453); }
+float FoamGridNoise(float2 p) {
+  float2 i = floor(p), f = frac(p);
+  f = f * f * (3 - 2 * f);
+  return lerp(lerp(FoamGridHash(i).x, FoamGridHash(i + float2(1, 0)).x, f.x), lerp(FoamGridHash(i + float2(0, 1)).x, FoamGridHash(i + float2(1, 1)).x, f.x), f.y);
+}
+float2 FoamShift(float2 world, float squareLength) {
+  float2 q = world / (0.76 * squareLength);
+  q += (float2(FoamGridNoise(q * 0.9), FoamGridNoise(q * 0.9 + 41.3)) - 0.5) * 0.5;
+  float2 base = floor(q), region = base;
+  float nearest = 9;
+  [unroll] for (int k = 0; k < 9; ++k) {
+    float2 c = base + float2(k % 3 - 1, k / 3 - 1);
+    float2 d = c + 0.15 + 0.7 * FoamGridHash(c - squareLength) - q;
+    float dd = dot(d, d);
+    if (dd < nearest) {
+      nearest = dd;
+      region = c;
+    }
+  }
+  return FoamGridHash(region + squareLength) * squareLength;
+}
+#endif
 // [watersq] A square's picture read between its samples by a cubic B-spline in place of a straight line (its slopes then
 // turn smoothly from sample to sample: no edge at a sample), as four bilinear readings at shifted places, each standing
 // for two by two of the sixteen samples the spline weighs (the third-order filtering of Sigg and Hadwiger, GPU Gems 2,
@@ -141,6 +173,9 @@ struct OceanHere {
   float height;     // the surface's height over the water's level
   float2 shift;     // the surface's sideways shift
   float3 fold;      // the shift's derivatives (xx, zz, xz)
+#if FOAM_GRID
+  float3 foldFar;   // [foamgrid] the same, each square read where its region reads it (FoamShift; only with oceanLook5.y)
+#endif
   float foam;       // the foam's field here (0 none .. 1 and more)
   float fresh;      // [whitecaps] how fresh that foam is (0 old .. 1 its crest breaking now)
 };
@@ -181,6 +216,9 @@ OceanHere OceanAt(float2 xz, float2 dxdx, float2 dxdy, float calm, float tilt) {
     o.shift += d.xz * shown;
     // ([whitecaps] the shift's derivatives: the crests breaking now, where the surface folds at this pixel)
     o.fold += oceanFold[c].SampleGrad(samplerAniso, uv, gx, gy).xyz * shown;
+#if FOAM_GRID
+    [branch] if (oceanLook5.y > 0) o.foldFar += oceanFold[c].SampleGrad(samplerAniso, uv + FoamShift(xz, oceanCascade[c].y) * oceanCascade[c].x, gx, gy).xyz * shown;
+#endif
   }
   // the foam: the field's where it lies (fading out toward its edges), beyond it the sea's mean share of white
   float2 at = (xz - oceanFoamArea.xy) * oceanFoamArea.z;
@@ -414,6 +452,15 @@ OceanCaps OceanWhitecapsParts(OceanHere o, float2 xz, float2 dxdx, float2 dxdy, 
   // (a hard edge: no grey half-white where the fold is shallow)
   float J = (1 + o.fold.x) * (1 + o.fold.y) - o.fold.z * o.fold.z + (pattern - 0.5) * 0.2;
   caps.crest = saturate((oceanLook3.x + 0.03 - J) / max(fwidth(J), 0.004) + 0.5) * smoothstep(0.1, 0.35, fresh);
+  // ([foamgrid] in a far view the crests where the field breaks them, each square read where its region reads it: the
+  // two crests, not the places, faded over as the field goes over, so that none slides)
+#if FOAM_GRID
+  [branch] if (oceanLook5.y > 0) {
+    float Jfar = (1 + o.foldFar.x) * (1 + o.foldFar.y) - o.foldFar.z * o.foldFar.z + (pattern - 0.5) * 0.2;
+    float crestFar = saturate((oceanLook3.x + 0.03 - Jfar) / max(fwidth(Jfar), 0.004) + 0.5) * smoothstep(0.1, 0.35, fresh);
+    caps.crest = lerp(caps.crest, crestFar, oceanLook5.y);
+  }
+#endif
   caps.young = max(caps.crest, fresh);
   return caps;
 }
@@ -581,7 +628,8 @@ class Ocean {
   gfx::Texture crest, churn;  // [foamloop] the crest loop (the patches' freshest band) and the wake's churn loop (Wakes::churn)
   float patchTurn[8] = {};
   // A view for checking (viewer --ocean-view n): the water shows 1 the slopes (red x, green z), 2 the foam field, 3 the
-  // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts; 0 off.
+  // slopes' spread, 4 the height (red up, blue down), 5 the Jacobian, 6 [whitecaps] the whitecaps' parts, 7 [foamgrid] the
+  // regions of FoamShift; 0 off.
   int view = 0;
   // [stormfoam] (Chris's second test, 2026-11-04: "storm foam looks normal but it is a bit too tame"; his picture's sea
   // about 0.05% white, a real storm's some 5-10%) How much more a storm's sea foams: by how rough it is (none up to 0.6, a
@@ -591,6 +639,24 @@ class Ocean {
   // streaks (StormStreak), the far sea's mean share of white two and a half times, and in the water's shader the foam
   // thicker (its strength 1.6 times), its streaks 2.5 times as long along the wind and dimmed less far off. 0: as
   // before (viewer --storm-foam 0); more than 1 more of all of it (up to 3).
+  // [rainfoam] (Chris's test of 2026-11-13: "the foam from the rain is a bit much tone it down by like 20%" and "the foam
+  // during rain starts up all uniform like a grid") `rainFoam`: what a sea that is no storm keeps of its whitecaps (a
+  // rain's, showers', snow's: roughness up to 0.6; a storm's own stay as they are; 1: all, as before; viewer --rain-foam):
+  // measured 19-20 % less white near and far.
+  // `foamGusts`: the wind in gusts, a soft pattern of patches going with it in which the crests break a little sooner,
+  // later between them, by this many of the fold's deviations from the calmest to the strongest (viewer --foam-gusts).
+  // Off (0): they did not mend the grid seen from the farthest zoom (kFoam's note), and at their patches' real size one
+  // place showed 42 % less white where the sea's mean was 20 % less - calm and rough patches, not the fifth less Chris
+  // asked for. 0.6 was the strength tried (kGustsMore is tuned for it).
+  float rainFoam = 0.8f;
+  float foamGusts = 0;
+  // [foamgrid] (Chris's test of 2026-11-13: "the foam during rain starts up all uniform like a grid": seen from far off the
+  // crests of one square broke at the same place in every repeat of it, 180 units and 41) `foamGrid`: in a far view (the
+  // foam's field's cells half a world unit and more) the foam reads the squares shifted by region (FoamShift), the waves
+  // themselves as they are; close in the foam lies on its own waves as before. false: as before (viewer --foam-grid-old).
+  // Its shader code is built in only while it is on (FOAM_GRID: the field's shader and the water's ocean variants, made
+  // again when it is switched), so that off they are the very shaders they were (as [mirrorfine]'s and [edgesea]'s).
+  bool foamGrid = true;
   float stormFoam = 0.15f;  // (2026-11-04: 0.25, about 6 % white and 30 % lace; Chris's third test, 2026-11-05: "the white a bit much: tone down by about 20-30%" -> 0.15, about 24 % lace)
   // [livewash] (Chris's second test, 2026-11-04: the white round a ship "needs to be a lot more I guess realistic right now
   // its like a barrier around the ship vs water") The hulls' wash (water.cpp, LiveWash) measured from the hull as the eye
@@ -648,6 +714,7 @@ class Ocean {
   float level_ = 0;
   bool tried_ = false, made_ = false;
   bool pipesTried_ = false;  // [whitecaps] (PreparePipelines)
+  bool foamGridBuilt_ = false;  // [foamgrid] (the foam's field's shader made with FOAM_GRID)
   std::string pipesError_;
   gfx::Pipeline rows_, columns_, mipsNear_, mipsFar_, foam_;
   gfx::Texture rowOut_[kCascades][2];   // the row pass's four complex sums (two a texel), RGBA32F
@@ -663,6 +730,8 @@ class Ocean {
   float foamCell_ = 0;
   int foamX_ = 0, foamZ_ = 0;
   double driftX_ = 0, driftZ_ = 0;  // [whitecaps] how far the foam has drifted since the field began (world units)
+  double gustX_ = 0, gustZ_ = 0;    // [rainfoam] how far the gusts' pattern has gone with the wind
+  float gridCrest_ = 0;             // [foamgrid] how far the water's crests have gone over to the shifted squares
   float foamArea_[4] = {0, 0, 0, 0};
   float sim_[16] = {};  // (the compute passes' spectrum numbers: Spectrum)
   double seaAlpha_ = 0, swellAlpha_ = 0, wp_ = 1;

@@ -198,6 +198,9 @@
 //           sets from the game): their life bars and pause marks show as the focus army's own
 // --shell-start-old  [shellstart] a new shell drawn from its first place on, one step out of its muzzle, as before (not
 //           from where it was made: SimFrames::shellStart)
+// --mirror-grain <bits>  [mirrorgrain] the mirror's grain trials named by their bits (Water::mirrorGrain: 1 the rain's fade,
+//           2 the Fresnel by a calmer surface, 4 by the waves' true slopes, 8 by the pixel's footprint; the default is 9;
+//           0: as before 2026-11-14); the four switches named above add theirs to none
 // --fog-frame-old  [fogframe] the fog of war's dimming outside the map let go from the edge on, as before (not held as far
 //           out as the farthest zoom shows)
 // --cloud-zoom  (cloudzoom) zooming out through the clouds (cloud_zoom.h, World::cloudZoom; with --clouds-3d): the game's
@@ -221,7 +224,15 @@
 // --ray-reflections  reflections by ray tracing (World::rayReflections; the shaders built for it, gRayShaders; where the
 //           device has ray tracing): smooth surfaces mirror what their rays meet; [mirrorfine] on the water the mirror image
 //           of what stands far off with soft edges (Water::mirrorFine; --no-mirror-fine: two rays a pixel, all or
-//           nothing, as before: flat bars at a low angle)
+//           nothing, as before: flat bars at a low angle); [mirrorgrain] trials against the grain of the mirror image seen
+//           low in the rain, none on by default (Water::mirrorGrain): --rain-tilt-fade the rain's rings and roughening of the
+//           water left out where they are finer than about two pixels (as the fine ripples are); --mirror-fresnel-calm how
+//           much the water mirrors (the Fresnel term) by a calmer surface, without them and the fine ripples;
+//           --mirror-true-slopes that, and the ocean's waves in it by their true slopes, not the steeper ones drawn;
+//           --mirror-fresnel-footprint [a,b,length[,view]] the Fresnel term by the drawn surface where a pixel is small
+//           against the waves, by that calm one where it takes in a wave's face or more: blended by the water a pixel covers
+//           along the line of sight over `length` world units, from a to b of it (0.0125,0.05,2); view 1: the share in red;
+//           low,lower: only for a line of sight low over the water, let go from that sine of its angle to the next (0.15,0.3)
 // --ray-light-shadows [rays|all]  the small lights' shadows by rays (World::rayLightShadows; the shaders built for it, as
 //           --ray-reflections; where the device has ray tracing): flashes, shots and lamps shadowed by what stands between;
 //           `rays` the most a place casts (1..4; 4 unless given), `all`: one for every light (exact, to compare with)
@@ -536,6 +547,11 @@
 //           seen, a thin line at rest, wider at the bow under way, torn by noise streaming aft, swelling as waves run up it
 // --storm-foam n  [stormfoam] how much more a storm's sea foams (Ocean::stormFoam, 1; 0: as before; up to 3): more crests,
 //           wider and longer-lived patches, longer streaks downwind; none on a sea calmer than 0.6 (rain's and calmer)
+// --rain-foam n  [rainfoam] what a sea that is no storm keeps of its whitecaps (Ocean::rainFoam, 0.8; 1: all, as before)
+// --foam-gusts n  [rainfoam] the wind in gusts: the crests break sooner in patches going with the wind, later between
+//           them, by n of the fold's deviations (Ocean::foamGusts; 0, off, by default; 0.6 the strength tried)
+// --foam-grid-old  [foamgrid] the sea's foam in a far view read from the squares as they repeat, as before (Ocean::foamGrid
+//           off; by default, seen from far off, each region of the sea reads them shifted, so that no lattice shows)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
@@ -558,7 +574,8 @@
 //           the steep wave faces looked down on catching the sky; 0, off, by default: Chris 2026-11-06; 0.3 the option's
 //           on); --ocean-view n: in place of the
 //           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
-//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue);
+//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue), 7
+//           [foamgrid] the regions a far view's foam reads the largest square shifted by (each its own colour);
 //           --ocean-glitter 0: [bigtest] the sun's glitter as before (Ocean::glitter; 1, the default: from the waves' true
 //           slopes, softened by what a pixel takes in: a soft path of light round the sun's mirror image, not a field of
 //           single bright pixels); --ocean-relief n: [relief] how much the waves' faces toward the sun (by night the moon)
@@ -1078,6 +1095,8 @@ struct Options {
   std::string unitLog;                  // --unit-log (far step)
   bool hullWashOld = false;             // [livewash] --hull-wash old
   float stormFoam = 1;                  // [stormfoam] --storm-foam
+  float rainFoam = -1, foamGusts = -1;  // [rainfoam] --rain-foam, --foam-gusts
+  bool foamGridOld = false;             // [foamgrid] --foam-grid-old
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
@@ -1097,6 +1116,8 @@ struct Options {
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
   bool soakOld = false;                                        // [soakfix] --soak-old
   bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
+  int mirrorGrain = -1;                                        // [mirrorgrain] --mirror-grain <bits> (-1: the water's own, 9); --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4, --mirror-fresnel-footprint 8 add to none
+  float mirrorFoot[6] = {-1, 0, 0, 0, 0, 0};                   // [mirrorgrain] --mirror-fresnel-footprint a,b,length,view,low,lower (-1: the water's own)
   std::string surfTest;                 // --surf-test
   float surfTestRadius = 60;            // --surf-test-radius
   int surfView = 0;                     // --surf-view
@@ -1449,6 +1470,17 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--no-mirror-fine") o->mirrorFine = false;  // [mirrorfine]
+    else if (a == "--rain-tilt-fade") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 1;  // [mirrorgrain]
+    else if (a == "--mirror-fresnel-calm") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 2;
+    else if (a == "--mirror-true-slopes") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 4;
+    else if (a == "--mirror-fresnel-footprint") {  // [mirrorgrain] (its numbers are optional)
+      o->mirrorGrain = std::max(o->mirrorGrain, 0) | 8;
+      if (i + 1 < argc && argv[i + 1][0] != '-') {
+        float f[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};
+        if (sscanf(argv[++i], "%f,%f,%f,%f,%f,%f", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5]) < 3) return false;
+        std::copy(f, f + 6, o->mirrorFoot);
+      }
+    }
     else if (a == "--soak-old") o->soakOld = true;  // [soakfix]
     else if (a == "--plain-ground") o->richGround = false;
     else if (a == "--map-ends") o->worldBeyond = false;
@@ -1506,6 +1538,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-mirror-view") o->fxMirrorView = true;
     else if (a == "--fx-mirror-blink") o->fxMirrorBlink = true;
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
+    else if (a == "--foam-grid-old") o->foamGridOld = true;  // [foamgrid]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--shells-as-before") o->shellBlend = false;  // (shell curve)
     else if (a == "--shell-start-old") o->shellStart = false;  // [shellstart]
@@ -1799,6 +1832,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surf-view") o->surfView = atoi(v);
     else if (a == "--hull-wash") o->hullWashOld = std::string(v) == "old";  // [livewash]
     else if (a == "--storm-foam") o->stormFoam = std::clamp(static_cast<float>(atof(v)), 0.0f, 3.0f);  // [stormfoam]
+    else if (a == "--rain-foam") o->rainFoam = static_cast<float>(atof(v));  // [rainfoam]
+    else if (a == "--foam-gusts") o->foamGusts = static_cast<float>(atof(v));  // [rainfoam]
     else if (a == "--energy-shield-health") o->energyShieldHealth = std::clamp(static_cast<float>(atof(v)), 0.0f, 1.0f);
     else if (a == "--energy-test") o->energyTest = std::max(0, atoi(v));
     else if (a == "--energy-shell") o->energyShell = std::string(v) == "plain" ? 0 : 1;
@@ -2051,6 +2086,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--inspect") o->inspect = v;
     else if (a == "--mist") o->mist = static_cast<float>(atof(v));
     else if (a == "--focus") o->focus = atoi(v);
+    else if (a == "--mirror-grain") o->mirrorGrain = atoi(v);  // [mirrorgrain]
     else if (a == "--allies") {  // [pausemark2] (checks)
       for (const char* s = v; *s;) {
         const int army = atoi(s);
@@ -2640,6 +2676,8 @@ int main(int argc, char** argv) {
     world.surroundAhead = opt.surroundAhead;
     // [mirrorfine] [edgesea] (built into the water's pipelines, made as the map opens: Water::KeepVariants)
     world.water.mirrorFine = opt.mirrorFine;
+    if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;  // [mirrorgrain]
+    if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
     if (opt.surroundEdgeBandWater >= 0) world.water.ownEdgeBand = opt.surroundEdgeBandWater > 0;
     if (!world.Open(opt.map, wo, &error)) {
       fprintf(stderr, "render: %s (is --fa or --data given?)\n", error.c_str());
@@ -2712,6 +2750,8 @@ int main(int argc, char** argv) {
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.mirrorFine = opt.mirrorFine;        // [mirrorfine]
+  if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
+  if (opt.mirrorFoot[0] >= 0) std::copy(opt.mirrorFoot, opt.mirrorFoot + 6, world.water.mirrorFoot);
   world.water.ocean.tilt = opt.oceanTilt;
   if (opt.surfStrength >= 0) world.water.surf.strength = opt.surfStrength;
   if (opt.surfSpray >= 0) world.water.surf.sprayStrength = opt.surfSpray;
@@ -2719,6 +2759,9 @@ int main(int argc, char** argv) {
   world.water.surf.view = opt.surfView;
   world.water.ocean.liveWash = !opt.hullWashOld;  // [livewash]
   world.water.ocean.stormFoam = opt.stormFoam;    // [stormfoam]
+  if (opt.rainFoam >= 0) world.water.ocean.rainFoam = opt.rainFoam;  // [rainfoam]
+  if (opt.foamGusts >= 0) world.water.ocean.foamGusts = opt.foamGusts;
+  world.water.ocean.foamGrid = !opt.foamGridOld;  // [foamgrid]
   world.groundCover = opt.groundCover;
   world.plantsFar = opt.plantsFar;  // [plantlod]
   world.plantsRound = opt.plantsRound;
