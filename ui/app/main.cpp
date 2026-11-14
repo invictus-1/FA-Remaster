@@ -52,6 +52,7 @@
 #include "sim/sim.h"
 #include "sound/sound_system.h"
 #include "user/bindings.h"
+#include "user/events.h"
 #include "user/keymap.h"
 #include "user/notices.h"
 #include "user/retest.h"
@@ -1625,6 +1626,8 @@ int main(int argc, char** argv) {
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
   }
+  // (the report bundle's first part: what the player did last, in the log of every run that ends in order; ours)
+  ui::LogLastEvents("the program ends", 200);
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
   return ok ? 0 : 1;

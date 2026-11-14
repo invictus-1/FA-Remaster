@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "user/keymap.h"
+#include "user/events.h"
 #include "user/notices.h"
 #include "user/retest.h"
 
@@ -186,6 +187,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterUserClasses(L);
   RegisterPrefsBindings(L);
   RegisterNoticeBindings(L);
+  RegisterEventBindings(L);
   RegisterRetestBindings(L);
   RegisterBasicBindings(L);
   RegisterControlBindings(L);

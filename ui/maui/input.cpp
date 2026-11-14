@@ -1,11 +1,13 @@
 #include "maui/input.h"
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
 #include "core/log.h"
 #include "maui/control.h"
 #include "script/script_state.h"
+#include "user/events.h"
 #include "user/keymap.h"
 #include "user/user_state.h"
 
@@ -329,6 +331,20 @@ void MouseMove(lua_State* L, UiManager& ui, UiEvent e) {
   PostEvent(L, target, e);
 }
 
+// The control a press landed on, for the interface's last events (user/events.h): its class and name, and those of up
+// to three ancestors that have a name (FAF names many groups: "Main Menu ScreenGroup", "border", ...).
+static std::string PressedOn(Control* c) {
+  if (!c) return "nothing";
+  std::string text = std::string(c->ClassName()) + (c->name.empty() ? std::string() : " \"" + c->name + "\"");
+  int named = 0;
+  for (Control* p = c->parent(); p && named < 3; p = p->parent()) {
+    if (p->name.empty()) continue;
+    text += " < " + std::string(p->ClassName()) + " \"" + p->name + "\"";
+    ++named;
+  }
+  return text;
+}
+
 void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doubleClick) {
   e.keyCode = ButtonKeyCode(e);
   ui.mouseX = e.x, ui.mouseY = e.y, ui.mouseHead = e.head;
@@ -348,6 +364,12 @@ void MouseButton(lua_State* L, UiManager& ui, UiEvent e, bool pressed, bool doub
   UpdateHover(L, ui, target, e);
   e.type = !pressed ? EventType::ButtonRelease : doubleClick ? EventType::ButtonDClick : EventType::ButtonPress;
   if (pressed) {
+    {
+      char where[96];
+      std::snprintf(where, sizeof where, "%s %s at %.0f,%.0f (head %d) on ", e.left ? "left" : e.middle ? "middle" : e.right ? "right" : "other",
+                    doubleClick ? "double click" : "press", e.x, e.y, e.head);
+      NoteEvent("click", where + PressedOn(target));
+    }
     // A click away from the control with the keyboard focus tells it so (0x7a4d09).
     if (ui.focus && ui.focus != target && !ui.focus->dead()) ui.focus->LosingKeyboardFocus(L);
     CallOnMouseButtonPress(L, e);

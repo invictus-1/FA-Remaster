@@ -12,6 +12,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -33,6 +34,7 @@
 #include "sim/sim.h"
 #include "sim/sim_view.h"
 #include "user/bindings.h"
+#include "user/events.h"
 #include "user/keymap.h"
 #include "user/user_state.h"
 
@@ -1379,7 +1381,15 @@ namespace {
 // earlier changes dropped) and the order, unless the copy holds more than 500 orders and `clear` is not given. The
 // order as the copy shows it: its id, type, blueprint and count, and its target's place (a place; a unit: where the
 // unit stands now, INFERRED as the simulation's view gives an order on a unit its place).
+const char* CommandName(int type);  // (below)
+
 void NoteIssued(lua_State* L, const std::vector<uint32_t>& ids, const StreamIssueData& d, uint32_t id, bool clear, bool factory) {
+  {  // (the interface's last events: user/events.h)
+    char text[160];
+    std::snprintf(text, sizeof text, "%s%s to %zu unit(s)%s%s%s", CommandName(d.type), factory ? " (rally)" : "", ids.size(),
+                  clear ? ", queue cleared" : "", d.blueprint.empty() ? "" : ", ", d.blueprint.c_str());
+    NoteEvent("order", text);
+  }
   UserState* user = UserState::From(L);
   UnitStore& store = Store(L);
   CommandView order;
