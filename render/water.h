@@ -140,6 +140,7 @@ class Water {
   bool ownEdgeBandBuilt_ = true;  // [edgesea] (and the edge's band)
   int mirrorGrainBuilt_ = 0;      // [mirrorgrain] (and the mirror's trials)
   float mirrorFootBuilt_[6] = {0.0125f, 0.05f, 2.0f, 0.0f, 0.15f, 0.3f};
+  bool foamGridBuilt_ = true;     // [foamgrid] (the ocean's variants made with the foam grid's code: Ocean::foamGrid)
   void KeepVariants();
   gfx::Pipeline PlainPipeline(std::string* error);  // [edgesea] (the classic look's water)
   gfx::Pipeline modernWinter_[2];  // (winter water: without and with the ripples' field; made the first time wanted)

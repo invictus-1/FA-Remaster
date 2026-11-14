@@ -590,6 +590,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     if (oceanLook.w < 1.5) return float4(saturate(ocean.slope * 4 + 0.5), 0, 1);
     if (oceanLook.w < 2.5) return float4(saturate(ocean.foam), saturate(ocean.foam), saturate(ocean.foam) * 0.5 + 0.2, 1);
     if (oceanLook.w < 3.5) return float4(saturate(sqrt(ocean.spread.xy) * 5), 0, 1);
+#if FOAM_GRID
+    // ([foamgrid] 7: the regions the foam reads the largest square shifted by in a far view, each its own colour: FoamShift)
+    if (oceanLook.w > 6.5) return float4(FoamShift(xz, oceanCascade[0].y) / oceanCascade[0].y, 0.3, 1);
+#endif
     if (oceanLook.w > 5.5) {  // ([whitecaps] 6: the whitecaps' parts, red the crest, green the fresh foam, blue the residue)
       OceanCaps c = OceanWhitecapsParts(ocean, xz, ddx(xz), ddy(xz), Lace(xz, grain));
       return float4(c.crest, c.laid, c.residue, 1);
@@ -1416,6 +1420,7 @@ gfx::Pipeline Water::ModernPipeline(bool ripples, std::string* error, bool winte
                        (surf && wet ? "#define SURF_WET 1\n" : "") +  // [shore]
                        (ocean ? "#define OCEAN 1\n" : "") +           // [ocean]
                        (ocean && lift ? "#define LIFT 1\n" : "") +    // [lift]
+                       (ocean && foamGridBuilt_ ? "#define FOAM_GRID 1\n" : "") +  // [foamgrid] (PrepareOcean)
                        "#define AIR_SMOOTH 1\n" +  // [weather] (view.h, AirAt)
                        (mirrorFineBuilt_ ? "#define MIRROR_FINE 1\n" : "") +  // [mirrorfine] (KeepVariants)
                        ((mirrorGrainBuilt_ & 1) ? "#define RAIN_FADE 1\n" : "") +       // [mirrorgrain] (trials, KeepVariants)
@@ -1541,6 +1546,16 @@ gfx::Pipeline Water::OceanPipeline(int key) {
 void Water::PrepareOcean(bool ripples, bool winter, bool surf, bool wet, bool lift) {
   if (!map_ || !map_->water.present || !modern_) return;
   KeepVariants();
+  // ([foamgrid] the ocean's variants made with the foam grid's code while Ocean::foamGrid is on, and made again when it
+  // is switched: off, the very shaders they were)
+  if (ocean.foamGrid != foamGridBuilt_) {
+    foamGridBuilt_ = ocean.foamGrid;
+    for (int k = 0; k < 32; ++k) {
+      if (oceanPipes_[k]) device_->Destroy(oceanPipes_[k]);
+      oceanPipes_[k] = {};
+      oceanTried_[k] = false;
+    }
+  }
   // (the variants the options on now may want: with the ripples' field or without it, in winter or not, with the surf;
   // [lift] lifted, or flat while the lift is off; [prebuild] with the lift on, the flat ones too: Draw takes them the frames
   // the lifted grid has no patch (Ocean::Lifted false: none of its patches placed), and Chris's second test froze 3.1 s an hour in, the

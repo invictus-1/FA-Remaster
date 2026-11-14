@@ -550,6 +550,8 @@
 // --rain-foam n  [rainfoam] what a sea that is no storm keeps of its whitecaps (Ocean::rainFoam, 0.8; 1: all, as before)
 // --foam-gusts n  [rainfoam] the wind in gusts: the crests break sooner in patches going with the wind, later between
 //           them, by n of the fold's deviations (Ocean::foamGusts; 0, off, by default; 0.6 the strength tried)
+// --foam-grid-old  [foamgrid] the sea's foam in a far view read from the squares as they repeat, as before (Ocean::foamGrid
+//           off; by default, seen from far off, each region of the sea reads them shifted, so that no lattice shows)
 // --surf  surf and sea spray (surf.h, World::surf; modern look): waves run in to the map's shores, break into white water
 //           that runs up the beaches and drains back, burst on the rocks and throw spray up them; ships at speed throw
 //           spray off their bows; by the weather's wind (calm on a still day, most in a storm: --weather storm).
@@ -572,7 +574,8 @@
 //           the steep wave faces looked down on catching the sky; 0, off, by default: Chris 2026-11-06; 0.3 the option's
 //           on); --ocean-view n: in place of the
 //           water 1 the slopes, 2 the foam's field, 3 the slopes' spread, 4 the height, 5 the Jacobian (red: it foams),
-//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue);
+//           6 [whitecaps] the whitecaps' parts (red the crest breaking now, green the fresh foam, blue the residue), 7
+//           [foamgrid] the regions a far view's foam reads the largest square shifted by (each its own colour);
 //           --ocean-glitter 0: [bigtest] the sun's glitter as before (Ocean::glitter; 1, the default: from the waves' true
 //           slopes, softened by what a pixel takes in: a soft path of light round the sun's mirror image, not a field of
 //           single bright pixels); --ocean-relief n: [relief] how much the waves' faces toward the sun (by night the moon)
@@ -1093,6 +1096,7 @@ struct Options {
   bool hullWashOld = false;             // [livewash] --hull-wash old
   float stormFoam = 1;                  // [stormfoam] --storm-foam
   float rainFoam = -1, foamGusts = -1;  // [rainfoam] --rain-foam, --foam-gusts
+  bool foamGridOld = false;             // [foamgrid] --foam-grid-old
   float rippleTest = 0, rippleTestRadius = 0.5f, rippleTestStrength = 1;  // --ripple-test
   float rippleSpeed = -1, rippleHalfLife = -1, rippleView = 0;  // --ripple-speed, --ripple-half-life, --ripple-view
   bool surf = false;                    // --surf
@@ -1534,6 +1538,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--fx-mirror-view") o->fxMirrorView = true;
     else if (a == "--fx-mirror-blink") o->fxMirrorBlink = true;
     else if (a == "--wakes-remade") o->wakesRemade = true;  // [wakes]
+    else if (a == "--foam-grid-old") o->foamGridOld = true;  // [foamgrid]
     else if (a == "--fixed-step") o->fixedStep = true;  // [wakes]
     else if (a == "--shells-as-before") o->shellBlend = false;  // (shell curve)
     else if (a == "--shell-start-old") o->shellStart = false;  // [shellstart]
@@ -2756,6 +2761,7 @@ int main(int argc, char** argv) {
   world.water.ocean.stormFoam = opt.stormFoam;    // [stormfoam]
   if (opt.rainFoam >= 0) world.water.ocean.rainFoam = opt.rainFoam;  // [rainfoam]
   if (opt.foamGusts >= 0) world.water.ocean.foamGusts = opt.foamGusts;
+  world.water.ocean.foamGrid = !opt.foamGridOld;  // [foamgrid]
   world.groundCover = opt.groundCover;
   world.plantsFar = opt.plantsFar;  // [plantlod]
   world.plantsRound = opt.plantsRound;

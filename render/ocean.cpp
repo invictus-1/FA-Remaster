@@ -57,6 +57,9 @@ constexpr double kGustSpeed = 2.0;
 constexpr double kGustsMore = 0.018;
 // [stormfoam] How fast a storm's foam is drawn out downwind into streaks (world units a second, at its full share: the
 // residue's patches lengthen by this as they drift, as a storm's wind rows do).
+// [foamgrid] Over how long the water's crests go over to the squares read shifted by region, or back, when the foam's
+// field does (seconds: about a fresh foam's life, kFreshLife, so that the crests fade with the foam they lie on).
+constexpr float kGridFade = 0.5f;
 constexpr float kStormStreak = 0.15f;  // ([stormfoam2] 0.4 -> 0.15: Chris, 2026-11-08, all of it streaming one way)
 // [whitecaps] How long foam stays fresh after its crest has broken (seconds to fall to 1/e): bright and solid while the crest
 // breaks and just after, then the residue, greyer and broken.
@@ -146,6 +149,7 @@ cbuffer OceanSim : register(b1) {
   float4 foamMore; // [whitecaps] xy the field's shift since the last frame in whole cells (foamOld.w 0); z the share of the fresh foam kept this frame;
                    // w [foamseed] the foam laid in cells the old field does not cover (the sea's mean share, as beyond the field)
   float4 gust;     // [rainfoam] the gusts' pattern: xy how far it has gone with the wind; z how much it moves the Jacobian it foams below (0: none); w 1 / its patches' size
+  float4 foamGrid; // [foamgrid] x 1 = the squares read shifted by region (FoamShift: a far view's field), 0 at the place itself; yzw the squares' lengths
 };
 static const float kPi = 3.14159265;
 SamplerState samplerLinearClamp : register(s1);  // (the fixed samplers, gfx.h)
@@ -410,6 +414,37 @@ float Gusts(float2 world) {
   float2 g = (world - gust.xy) * gust.w;
   return GustNoise(g) * 0.65 + GustNoise(g * 2.7 + 17.3) * 0.35 - 0.5;
 }
+#if FOAM_GRID
+// [foamgrid] Where the foam reads the squares from, for a far view: the sea in regions of about three quarters of a square's
+// length (137 world units for the largest: no share of any square's length), each reading its square shifted by a
+// length of its own (0 .. the square's length in x and in z, a hash of the region), so that the foam no longer repeats
+// with the square. The regions are a jittered point's nearest (a cellular pattern: no rows of them), their borders
+// wandering (the place moved by smooth noise about a region across before it is cut into regions: up to a quarter of a
+// region either way), so that no seam lines up with another across the sea. (A grid of squares with wandering edges,
+// tried first, still lay in rows of 137.) (The same in kOceanShaderBlock and kFoam: keep the two alike.)
+float2 FoamGridHash(float2 p) { return frac(sin(float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)))) * 43758.5453); }
+float FoamGridNoise(float2 p) {
+  float2 i = floor(p), f = frac(p);
+  f = f * f * (3 - 2 * f);
+  return lerp(lerp(FoamGridHash(i).x, FoamGridHash(i + float2(1, 0)).x, f.x), lerp(FoamGridHash(i + float2(0, 1)).x, FoamGridHash(i + float2(1, 1)).x, f.x), f.y);
+}
+float2 FoamShift(float2 world, float squareLength) {
+  float2 q = world / (0.76 * squareLength);
+  q += (float2(FoamGridNoise(q * 0.9), FoamGridNoise(q * 0.9 + 41.3)) - 0.5) * 0.5;
+  float2 base = floor(q), region = base;
+  float nearest = 9;
+  [unroll] for (int k = 0; k < 9; ++k) {
+    float2 c = base + float2(k % 3 - 1, k / 3 - 1);
+    float2 d = c + 0.15 + 0.7 * FoamGridHash(c - squareLength) - q;
+    float dd = dot(d, d);
+    if (dd < nearest) {
+      nearest = dd;
+      region = c;
+    }
+  }
+  return FoamGridHash(region + squareLength) * squareLength;
+}
+#endif
 [numthreads(8, 8, 1)] void Foam(uint3 id : SV_DispatchThreadID) {
   if (any(id.xy >= uint(foamNew.w))) return;
   float2 world = foamNew.xy + (float2(id.xy) + 0.5) * foamNew.z;
@@ -440,9 +475,24 @@ float Gusts(float2 world) {
   // (each square read at the level its texels are about a cell: finer folds than a cell are averaged in)
   float3 f = 0;
   float l0 = log2(max(foamNew.z * lengths.x * 256, 1)), l1 = log2(max(foamNew.z * lengths.y * 256, 1)), l2 = log2(max(foamNew.z * lengths.z * 256, 1));
+#if FOAM_GRID
+  // ([foamgrid] in a far view's field each square read where its region reads it, FoamShift: seen from far off the crests of
+  // the one square lay their foam in a lattice of its length, 180 units and 41, as a rain began most of all. Chris's test of
+  // 2026-11-13: "the foam during rain starts up all uniform like a grid". Close in the foam lies on its own waves)
+  float2 at0 = world, at1 = world, at2 = world;
+  [branch] if (foamGrid.x > 0.5) {
+    at0 += FoamShift(world, foamGrid.y);
+    at1 += FoamShift(world, foamGrid.z);
+    at2 += FoamShift(world, foamGrid.w);
+  }
+  f += fold0.SampleLevel(samplerLinear, at0 * lengths.x + 0.5 / 256, l0).xyz;
+  f += fold1.SampleLevel(samplerLinear, at1 * lengths.y + 0.5 / 256, l1).xyz;
+  f += fold2.SampleLevel(samplerLinear, at2 * lengths.z + 0.5 / 256, l2).xyz;
+#else
   f += fold0.SampleLevel(samplerLinear, world * lengths.x + 0.5 / 256, l0).xyz;
   f += fold1.SampleLevel(samplerLinear, world * lengths.y + 0.5 / 256, l1).xyz;
   f += fold2.SampleLevel(samplerLinear, world * lengths.z + 0.5 / 256, l2).xyz;
+#endif
   float J = (1 + f.x) * (1 + f.y) - f.z * f.z;
   // ([rainfoam] the gusts: the crests break unevenly over the sea, not as much in every one of the squares' repeats.
   // Chris's test of 2026-11-13, "the foam during rain starts up all uniform like a grid": measured at the farthest zoom
@@ -462,6 +512,7 @@ struct SimConstants {
   float lengths[4], mapInfo[4];
   float foamMore[4];  // [whitecaps]
   float gust[4];      // [rainfoam]
+  float foamGrid[4];  // [foamgrid]
 };
 
 float BandFrom(int c) { return c == 0 ? 1e-6f : 2 * kPi * kBandHarmonic / kCascadeLength[c]; }
@@ -491,7 +542,8 @@ bool Ocean::PreparePipelines() {
   pipesTried_ = true;
   auto make = [&](const char* name, const char* entry, const char* body) {
     gfx::ComputeDesc cd;
-    const std::string source = std::string(kSimCommon) + body;
+    // ([foamgrid] the foam's field built with FOAM_GRID while Ocean::foamGrid is on: off, the shader as it was)
+    const std::string source = std::string(body == kFoam && foamGrid ? "#define FOAM_GRID 1\n" : "") + kSimCommon + body;
     cd.source = source;
     cd.name = name;
     cd.entry = entry;
@@ -502,6 +554,7 @@ bool Ocean::PreparePipelines() {
   if (columns_) mipsNear_ = make("ocean: levels near", "MipsNear", kMips);
   if (mipsNear_) mipsFar_ = make("ocean: levels far", "MipsFar", kMips);
   if (mipsFar_) foam_ = make("ocean: foam", "Foam", kFoam);
+  foamGridBuilt_ = foamGrid;  // [foamgrid]
   return foam_.id != 0;
 }
 
@@ -730,7 +783,31 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   std::memcpy(k.foamMake, foamMake, sizeof foamMake);
   std::memcpy(k.foamMore, foamMore, sizeof foamMore);
   std::memcpy(k.gust, gust, sizeof gust);  // [rainfoam]
+  // [foamgrid] a far view's field (its cells half a world unit and more) reads the squares shifted by region; the water's
+  // crests follow it, over kGridFade seconds (look5[1]), so that as the field changes over its specks fade, none jumps
+  const bool gridField = foamGrid && cell >= 0.5f;
+  if (!foamGrid) gridCrest_ = 0;
+  else if (foamFresh_) gridCrest_ = gridField ? 1.0f : 0.0f;
+  else gridCrest_ = std::clamp(gridCrest_ + (gridField ? 1.0f : -1.0f) * static_cast<float>(dt) / kGridFade, 0.0f, 1.0f);
+  const float grid[4] = {gridField ? 1.0f : 0.0f, kCascadeLength[0], kCascadeLength[1], kCascadeLength[2]};
+  std::memcpy(k.foamGrid, grid, sizeof grid);
   device_->Mark("ocean: foam");
+  if (foamGrid != foamGridBuilt_) {  // [foamgrid] (switched since the field's shader was made: made again)
+    gfx::ComputeDesc cd;
+    const std::string source = std::string(foamGrid ? "#define FOAM_GRID 1\n" : "") + kSimCommon + kFoam;
+    cd.source = source;
+    cd.name = "ocean: foam";
+    cd.entry = "Foam";
+    std::string why;
+    if (gfx::Pipeline again = device_->CreateCompute(cd, &why)) {
+      device_->Destroy(foam_);
+      foam_ = again;
+      foamGridBuilt_ = foamGrid;
+    } else {
+      fprintf(stderr, "render: the sea's foam grid cannot be switched (%s)\n", why.c_str());
+      foamGrid = foamGridBuilt_;
+    }
+  }
   device_->SetPipeline(foam_);
   device_->SetConstants(1, &k, sizeof k);
   device_->SetTexture(0, foamMap_[foamCur_]);
@@ -788,7 +865,8 @@ void Ocean::Update(const Camera& camera, const View& view, gfx::Texture heights,
   constants_.look4[3] = patches ? foamPatches : 0.0f;  // [foampatch]
   for (int k = 0; k < 8; ++k) constants_.patchTurn[k / 4][k % 4] = patchTurn[k];
   constants_.look5[0] = std::clamp(relief, 0.0f, 1.0f);  // [relief]
-  constants_.look5[1] = constants_.look5[2] = constants_.look5[3] = 0;
+  constants_.look5[1] = gridCrest_;  // [foamgrid]
+  constants_.look5[2] = constants_.look5[3] = 0;
   // [hulls] the hulls nearest the eye (AddHull), for where the waves meet them
   hullCount_ = 0;
   if (lift && !hulls_.empty()) {
