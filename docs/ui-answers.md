@@ -3,6 +3,43 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## Chris's test of 2026-11-13 (the engine's split, `_scratch\engine\TEST_RESULTS_2026-11-13.md`): the interface's part (2026-11-14)
+
+His build was cb9caa01; his words are in the verdicts file, the causes below were read from his logs
+(`_scratch\bigtest\game_prev.log`, `game.log`) and from the code.
+
+| His finding | Cause | What was done |
+|---|---|---|
+| FAIL "The menu has a background at once": "its frozen ... only runs our new make briefly before switching to old background" | The switch: the flight's cost check (`FlightCost`) had a limit of 12 ms of the card a frame, a guess; his card takes 17.6 ms at 4K (16.2 in a window), and since the fix of 2026-11-11 the check always comes. The "frozen": the kept picture shown until the flight is live (33.7 s at the first start after a new build, 6.6 s at the second) | The limit is 33.3 ms (under 30 frames a second): `ui/app/flight_cost.h`, `docs/ui-menuflight.md` section 12. The first start's wait and a 4.3 s frame as the flight comes in: reported to the renderer with the numbers (ui/REQUESTS.md 55) |
+| FAIL the photo key: "Game freezes for a second" | The renderer shows the world as it was while a photo is made; `remaster_photo` asked for twice the view's size and left the supersampling to the renderer: ten frames of 75 to 146 ms, 0.93 s (his log, frames 546548-546557). The change of 2026-11-13 had only moved the second from one frame to ten | The key's photo is the view's own size, drawn once: 9 frames in 0.15 to 0.28 s at 4K against 0.42 to 0.91 s (measured, docs/ui-benchmarks.md "The photo key"). Asking only for no supersampling changed nothing (at 7680x4320 the renderer draws once anyway): found by the measure. `remaster_photo fine` gives the photo of twice the size as before; each photo's cost is in the log |
+| "it says cancelled brush stroke" (a camera drag with a second button) | FAF's own text: its map painting (`lua/ui/game/painting/PaintingBrush.lua` OnCancel, called when a dragger is cancelled); his right-button drag was a brush stroke | nothing |
+| "now there is a perma attack marker" (after the rally point row) | His log: a right press with Shift and Alt on a selected factory (`RULEUCC_Move +Shift +Alt`): an attack-move point in the factory's rally route, which stays as rally points do. The order's feedback mark went (the log shows it) | nothing |
+| "yellow icon that shows where the units are docking doesn't appear" (air staging) | Ours, probed 2026-11-14: the Dock order (the order panel's button, `IssueDockCommand`) draws FAF's yellow line (ddffff00) and `repair_btn_up` mark to the platform while Shift is held; a right click on the platform is `TransportLoadUnits` (the original's 0x820e01): line dd654bc2, mark `load_btn_up`. His click was a right click, on an ally's platform | asked him which mark he means (a question, through the engine's list) |
+| picture "I don't think I should be able to see what allies pause" | The original's: its icon pass marks a paused unit when the focus army IsAlly of the unit's army (0x85bd99, re-read). It draws the mark centred on the unit's icon place (RenderUnitIcon 0x85d9a0: one centre for the icon's quad and the pause picture's); ours floated above the unit | Chris: "make it an option and have it stick closer to the unit": ui/REQUESTS.md 54 to the renderer (the place; a switch for allies' units); the option's row is the interface's |
+| his notes were cut at about 200 characters | the note line's limit (`retest.lua`) | 2000; `ui/tests/retest.lua` types a note of 599 characters |
+| spawned units of his defeated army took no orders ("that should be allowed") | the original's simulation refuses every order for an army out of the game (Sim::OkayToMessWith 0x747320) | the next entry |
+
+Also found in his logs: the re-test list's Where cells put some three hundred warning lines at the head of every log
+(each word that is no screen's name); now one line (`ui/user/retest.cpp`).
+
+## engine, by message 2026-11-13 20:3x and 2026-11-14 05:48: the game option RemasterOrdersAfterDefeat (his batch 164) (2026-11-14)
+
+The engine: `Options.RemasterOrdersAfterDefeat = "on"` in the launch's scenario info (as RemasterSimOrder travels)
+lets the simulation take orders for the units of an army that is out of the game, while cheats are on; anything else,
+or missing, is the original's refusal. `MOHO64_ORDERS_AFTER_DEFEAT=1` forces it for a test (0 forces it off).
+
+The interface's half: `StampOrdersAfterDefeat` (`ui/app/game_session.cpp`) writes the option into the options of
+every launch (the lobby's, and a single player's launch info) that says `CheatsEnabled = "true"` and has not set it
+already. No row in the lobby: cheats on is the player's choice of a sandbox. The option is in the record, so a replay
+plays as the game went. No notice "this army is defeated" was added: without cheats a player cannot take a defeated
+army again, with cheats its units obey (agreed with the engine).
+
+Test: `ui/tests/orders_defeated.lua` (the suite's job `orders_defeated`): the skirmish lobby with cheats on and two
+AIs, each for itself; in the game the option is in the scenario's options; the player's commander is destroyed, the
+army is out of the game; three tanks made for it by the cheat callback; the army taken again by the console's
+SetFocusArmy; a right click sends the tanks off and they go. `ui/tests/simorder.lua`'s lobby game checks that the
+option is there exactly where cheats are on.
+
 ## engine, by message 2026-11-11 17:1x: the suite with MOHO64_FREE_DEAD=3 and MOHO64_DEAD_TRAP=1 (batch 149's levels 2 and 3): NO FAULT
 
 The whole suite on main 219749db (the engine's 82ca72c5 and the renderer's a059f6de in it), run 18:40 to 19:56 on

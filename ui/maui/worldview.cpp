@@ -3491,16 +3491,22 @@ void CineCameraCommand(lua_State* L, const std::string& value) {
   user->cineCamera = v->cameraName;
 }
 
-// The photo (user_state.h): the world at twice the main view's size (the renderer's StartPhoto, as the photo mode's:
-// made over the next frames while the window goes on being drawn, where TakePhoto held one frame for 0.7 to 1 s; drawn
-// larger again and made smaller for smooth edges, nothing of the interface), from the cinematic camera while it is on,
+// The photo (user_state.h): the world at the main view's own size, or with the word "fine" at twice that (the
+// renderer's StartPhoto, as the photo mode's: made over the next frames while the window goes on being drawn, where
+// TakePhoto held one frame for 0.7 to 1 s; nothing of the interface), from the cinematic camera while it is on,
 // else from the
 // game's camera; saved as <the preferences' folder>/screenshots/photo_<date>_<time>.png by the PC clock (a second
 // one in the same second gets _2, _3, ...); the console says where, once the file is written: on a thread of its own
 // (PhotoModeFrame takes the finished picture and gives it to SavePhotoOnThread). In any game: a photo changes nothing
 // in it.
-void CinePhotoCommand(lua_State* L) {
+void CinePhotoCommand(lua_State* L, const std::string& rest) {
   UserState* user = UserState::From(L);
+  // (remaster_photo fine: twice the view's size with the renderer's own supersampling, as every photo of this command
+  // was until 2026-11-13; the world's picture stands still about a second for it at 4K. The key's photo is the plain one.)
+  std::string word;
+  for (char c : rest)
+    if (c != ' ' && c != '	') word.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  const bool fine = word == "fine";
   if (!user->gameInterface) return ConsoleNoSession(L);
   WorldSource* source = user->config().world;
   WorldView* v = MainView(user->ui().GetFrame(0));
@@ -3510,7 +3516,13 @@ void CinePhotoCommand(lua_State* L) {
   if (!source || w <= 0 || h <= 0) return ConsolePrint(L, "remaster_photo: there is no picture of the world");
   if (user->photoMode.taking) return ConsolePrint(L, "remaster_photo: a photo is being made");
   if (Saver().busy) return ConsolePrint(L, "remaster_photo: the last photo is still being saved");
-  if (!source->StartPhotoFrom(v->PictureCameraFor(L), 2 * w, 2 * h)) return ConsolePrint(L, "remaster_photo: the photo could not be made");
+  // (the view's own size, drawn once: the world's picture stands still while a photo's frames are drawn (the renderer
+  // shows the world as it was), and at twice the view's size they took 75 to 146 ms each at 4K, nine or ten of them:
+  // Chris's test of 2026-11-13, "Game freezes for a second". Asking only for no supersampling changed nothing: at
+  // 7680x4320 the renderer draws once anyway (measured 2026-11-14; the numbers of both ways: docs/ui-benchmarks.md).
+  // The photo mode's own photos are 1 to 4 times the view: the game is paused there.)
+  const int k = fine ? 2 : 1;
+  if (!source->StartPhotoFrom(v->PictureCameraFor(L), k * w, k * h, fine ? 0 : 1)) return ConsolePrint(L, "remaster_photo: the photo could not be made");
   user->photoMode.taking = true;  // (PhotoModeFrame: its frames, then the file and the console's line)
   user->photoMode.takingFor = "remaster_photo";
   PhotoSettings().progress = 0;
@@ -3686,6 +3698,12 @@ void PhotoModeFrame(lua_State* L, float seconds) {
       double sum[3] = {0, 0, 0};
       for (uint32_t c : pixels) sum[0] += (c >> 16) & 0xff, sum[1] += (c >> 8) & 0xff, sum[2] += c & 0xff;  // (ARGB)
       for (int i = 0; i < 3; ++i) settings.mean[i] = static_cast<float>(sum[i] / static_cast<double>(pixels.size()));
+      // (what it cost: the world's picture stood still for its frames. Chris's test of 2026-11-13: "freezes for a second")
+      const WorldSource::PhotoCost cost = source->LastPhotoCost();
+      Logf(LogLevel::Info,
+           "moho64ui: the photo's frames: %d in %.2f s (%.0f ms a frame; %dx%d drawn %d time(s) as large, %d x %d tile(s)), put together in %.2f s",
+           cost.frames, cost.drawSeconds, cost.frames > 0 ? cost.drawSeconds * 1000.0 / cost.frames : 0.0, w, h, cost.by, cost.columns, cost.rows,
+           cost.assembleSeconds);
       SavePhotoOnThread(L, std::move(pixels), w, h, p.takingFor);
     } else if (progress >= 1) {  // (done, and nothing handed over: the card had no room for it)
       p.taking = false;

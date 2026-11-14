@@ -473,3 +473,27 @@ every frame the same as a full redraw, pixel for pixel.
 
 Early game for comparison (2026-10-15, before the change, the rebuilt Seton's at start): 1600x900 4.3 ms a frame
 (the interface's drawing 2.1 ms), 3840x2160 9.0 ms (3.7 ms).
+
+## The photo key (Ctrl-Alt-F12, `remaster_photo`): how long the world's picture stands still (2026-11-14)
+
+Why: Chris's test of 2026-11-13, "Game freezes for a second". The renderer shows the world as it was while a photo's
+frames are drawn (`WorldPicture::StartPhoto`: its settling frames, then the photo's), so the photo's draw time is the
+time the game's picture stands still. In his game (4K full screen, upscale 0.59, a late game) the photo of twice the
+view's size took ten frames of 75 to 146 ms, 0.93 s (`_scratch\bigtest\game_prev.log`, frames 546548-546557).
+
+Measured here: a game from `session_ai.lua` at twelve seconds, headless at 3840x2160 with the world drawn, the test
+template's preferences (every look on), the side build of 2026-11-14 06:10, pinned to CPUs 16-31; three photos each
+way, 8 to 10 s apart; the numbers are the renderer's own (`LastPhotoNumbers`, now in the log's line "the photo's
+frames: ..."). The engine's gate 164 ran until about 06:12, so the CPU was shared for the first runs.
+
+| The photo | Size | Frames | The picture stands still | Put together (on a thread) |
+|---|---|---|---|---|
+| twice the view, the renderer's supersampling (as until 2026-11-13; now `remaster_photo fine`) | 7680x4320, drawn once | 9 | 0.42, 0.49, 0.91 s (06:10); 0.74, 0.82, 1.10 s (06:06) | 0.14 to 0.17 s |
+| twice the view, supersample 1 (the first fix tried) | 7680x4320, drawn once | 9 | 0.92, 1.29, 1.42 s (06:06) | 0.14 to 0.15 s |
+| the view's own size, drawn once (the key since 2026-11-14) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10) | 0.04 s |
+
+What they say: asking for no supersampling changes nothing, because at 7680x4320 the renderer's own choice is
+already to draw once (`by` 1): the cost is the size. A photo of the view's own size stands still for a sixth to a
+third of a second. What is left is the renderer's nine frames (eight settle the clouds and the light in the air at
+the photo's size): fewer of them for a photo of the view's own size would bring it under a tenth of a second
+(ui/REQUESTS.md 56).

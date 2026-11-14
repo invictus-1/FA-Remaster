@@ -50,6 +50,10 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
             failed = fromLobby.failed or 0
             check("the lobby's game: our own order", options.RemasterSimOrder, "parallel")
             check("with its version, added at the launch", options.RemasterSimOrderVersion, moho64ui_SimOrderVersion())
+            -- (the lobby's cheats are the profile's last choice: the option goes with them, orders_defeated.lua)
+            check("a defeated army's units take orders only where the game has cheats on",
+                (options.RemasterOrdersAfterDefeat == "on") == (options.CheatsEnabled == "true") and
+                (options.RemasterOrdersAfterDefeat == "on" or options.RemasterOrdersAfterDefeat == nil), true)
             name = PARALLEL
         else
             -- 2.: a session table without the option: the original's order, no version

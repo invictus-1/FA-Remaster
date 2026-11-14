@@ -373,8 +373,9 @@ that.
 - **Automatic fallback.** The saved option is never overwritten; the program falls back for this run only:
   - SETONS_R is missing or fails to open (`MapFailed`, `failedMenuMap_`): Dusk.
   - The menu Sim fails to start: Dusk.
-  - The Flight's frames cost more than **12 ms of GPU** (**GUESS** at the threshold) on average over 5 s after the
-    warm-up (`WorldPicture::LastStats`): Dusk. The same rule from Dusk leads to Still.
+  - The Flight's frames cost more than **33.3 ms of GPU** (under 30 frames a second; it was 12 ms, a guess, until
+    2026-11-13: see section 12's Fallback) on average over 5 s after the warm-up (`WorldPicture::LastStats`): Dusk.
+    The same rule from Dusk leads to Still.
   - Each fallback writes one log line: `moho64ui: the menu's background: <mode> -> <mode> (<why>)`.
 - Headless runs, `--no-backdrop` and `--no-world` keep today's rules (no backdrop).
 
@@ -420,7 +421,7 @@ that.
 - **GPU (renderer's estimate 6-9 ms at 4K):**
   - Menu look (R2): ray-traced bounce light and many-light shadows off, upscale FSR1 Quality (1/1.5) at 4K.
   - Keep the Atmosphere and clouds; they make the shot.
-  - Target ≤ 8 ms GPU at 4K. The fallback threshold is 12 ms (§5).
+  - Target ≤ 8 ms GPU at 4K. The fallback threshold was 12 ms (§5) until 2026-11-13, now 33.3 ms.
   - Effects quality 1 (the nuke is the showpiece).
 - **Unit budget:** the storyboard keeps at most about 150 units alive (**GUESS**) and has no endless waves. Wrecks
   and craters are cleared each loop by the restart.
@@ -557,9 +558,15 @@ a loop of 4 minutes with the nuke near its end, the two options on the Interface
   the simulation freed, the world's sounds stopped). The game's map is opened anew (R3's safe way); back at the menu
   the flight begins again from its first beat once the game's session is gone.
 - **Fallback** (this run only, the option kept, one log line `the menu's background: flight -> dusk (<why>)`): no
-  SETONS_R, its session or simulation fails, its map fails to open, or its frames cost the card over 12 ms on average
+  SETONS_R, its session or simulation fails, its map fails to open, or its frames cost the card over 33.3 ms on average
+  (`FlightCost::kLimitMs`: under 30 frames a second, where the menu's own buttons lag)
   over the 10th to the 15th second in which the flight was DRAWN (`MOHO64UI_MENUFLIGHT_GPU_MS`; `FlightCost` in
-  `ui/app/menu_flight.h`). Seconds drawn, not seconds by the clock: until 2026-11-11 a screen over the menu or a
+  `ui/app/flight_cost.h`). The limit was 12 ms, a guess from the renderer's measure of 2026-11-09 (8 ms at 4K), until
+  Chris's test of 2026-11-13: his card took 17.6 ms a frame (4K, upscale 0.59, every look on; 16.2 ms in a window of
+  3658x2054) and the flight left for Dusk after fifteen seconds, "only runs our new make briefly before switching to
+  old background". The picture had gained looks since the first measure, and since 2026-11-11 the check always comes
+  (before, mostly never: the next sentence), so the guess bit for the first time. 57 frames a second is no fault in a
+  menu; the fallback is for a card on which the flight would make the menu itself slow. Seconds drawn, not seconds by the clock: until 2026-11-11 a screen over the menu or a
   covered window in the clock's seconds 10 to 15 left no frame to count and the check never came (the review's row
   D). A frame counts a quarter second at most, so a hitch is no time shown. `moho64ui_MenuFlight().costOf(frames)`
   plays the same rule over a list of frames for `ui/tests/menu_flight.lua`.

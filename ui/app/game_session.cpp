@@ -400,12 +400,12 @@ struct GameSession::Picture : WorldSource {
     photoAsked = true, photoDropped = false;
     return true;
   }
-  bool StartPhotoFrom(const WorldCamera& game, int width, int height) override {
+  bool StartPhotoFrom(const WorldCamera& game, int width, int height, int supersample) override {
     if (width <= 0 || height <= 0) return false;
     if (!cineGround) cineGround = picture.CineGround();
     render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
     camera.lodScale = game.lodScale;  // (the cinematic camera's views start at 1)
-    if (!picture.StartPhoto(camera, width, height, FrameMoment(), 0)) return false;  // (0: the renderer's supersampling)
+    if (!picture.StartPhoto(camera, width, height, FrameMoment(), supersample)) return false;
     photoAsked = true, photoDropped = false;
     return true;
   }
@@ -417,6 +417,13 @@ struct GameSession::Picture : WorldSource {
     }
     if (picture.PhotoProgress() >= 1) photoAsked = false;  // (done either way: handed over now, or it could not be made)
     return picture.TakeDonePhoto(pixels, width, height);
+  }
+  PhotoCost LastPhotoCost() const override {
+    const render::WorldPicture::PhotoNumbers n = picture.LastPhotoNumbers();
+    PhotoCost c;
+    c.frames = n.frames, c.by = n.by, c.columns = n.columns, c.rows = n.rows;
+    c.drawSeconds = n.drawSeconds, c.assembleSeconds = n.assembleSeconds;
+    return c;
   }
   CineState Cine() const override {
     CineState s;
@@ -850,6 +857,27 @@ void FlightFrameLooks(render::WorldPicture& p) {
   p.SetAtmosphere(looks.atmosphere);
   p.SetSoftShadows(looks.softShadows);
   p.SetGroundDetail(looks.groundDetail);
+}
+// A launch's options (the table on the stack's top): a game with cheats on takes orders for a defeated army's units
+// (ours, Chris 2026-11-13: in his test his commander died while he looked through another army, the 26 units he then
+// spawned for his own took no order: "that should be allowed"). The original's simulation refuses every order for an
+// army that is out of the game (Sim::OkayToMessWith 0x747320), cheats or not; the engine's game option
+// RemasterOrdersAfterDefeat = "on" (docs/engine-answers.md, batch 164) lifts that while cheats are on, and being in the
+// launch's options it is in the record, so a replay plays as the game went. Stamped only where the options say
+// CheatsEnabled "true" and nothing set it already: cheats on is the player's choice of a sandbox, so it has no row of
+// its own in the lobby; a game without cheats is the original's in this.
+void StampOrdersAfterDefeat(lua_State* L) {
+  if (!lua_istable(L, -1)) return;
+  lua_getfield(L, -1, "CheatsEnabled");
+  const bool cheats = lua_isstring(L, -1) && std::string(lua_tostring(L, -1)) == "true";
+  lua_pop(L, 1);
+  lua_getfield(L, -1, "RemasterOrdersAfterDefeat");
+  const bool given = !lua_isnil(L, -1);
+  lua_pop(L, 1);
+  if (!cheats || given) return;
+  lua_pushstring(L, "RemasterOrdersAfterDefeat");
+  lua_pushstring(L, "on");
+  lua_rawset(L, -3);
 }
 // A game's map opening behind let go of (dropped, failed, not ready): the looks held for it give way to the ones a
 // picture starts with, laid on the world shown (the menus', which has them; or a game's being left).
@@ -1844,6 +1872,7 @@ bool GameSession::LaunchWith(lua_State* L, int config, net::LobbyCore* lobby, st
       lua_pushnumber(L, moho::Sim::kSimOrderVersion);  // (this engine's parallel order version)
       lua_rawset(L, -3);
     }
+    StampOrdersAfterDefeat(L);
   }
   lua_pop(L, 1);
   if (!SessionFromGameConfig(L, config, params, &session, why)) return false;
@@ -1998,6 +2027,7 @@ bool GameSession::LaunchSinglePlayer(lua_State* L, int info, std::string* why) {
         lua_rawset(L, -3);
       }
     }
+    StampOrdersAfterDefeat(L);
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
@@ -3762,7 +3792,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
       if (world && flightShows_ && !flightCost_.decided && flightShownAt_ != std::chrono::steady_clock::time_point{}) {
         double ms = 0;
         if (flightCost_.Frame(dt, wp.picture.LastStats().gpuMs, &ms)) {
-          static const double limit = std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS") ? std::atof(std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS")) : 12.0;
+          static const double limit = std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS") ? std::atof(std::getenv("MOHO64UI_MENUFLIGHT_GPU_MS")) : FlightCost::kLimitMs;
           Logf(LogLevel::Info, "moho64ui: the menu's flight: the card's time %.2f ms a frame over %d frames (its 10th to 15th second drawn; the limit %.1f)",
                ms, flightCost_.frames, limit);
           if (ms > limit) {

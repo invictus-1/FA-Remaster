@@ -971,7 +971,7 @@ void WorldCameraShowBox(lua_State* L, const float lo[3], const float hi[3], floa
 // or a script's move of that camera hands it back. remaster_photo: the world at twice the view's size, as a PNG in
 // <the preferences' folder>/screenshots, named by the PC clock's date and time (in any game).
 void CineCameraCommand(lua_State* L, const std::string& value);
-void CinePhotoCommand(lua_State* L);
+void CinePhotoCommand(lua_State* L, const std::string& rest = std::string());
 // cam_SetLOD <camera> <scale> (worldview.cpp): the LOD scale of a camera, as the original's console command sets it.
 void CameraLodCommand(lua_State* L, const std::string& rest);
 // UI_TrackUnit <camera> ... (worldview.cpp): each named camera follows the selection, or lets go (the original's).

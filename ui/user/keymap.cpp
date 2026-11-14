@@ -1352,7 +1352,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   }
   // The cinematic camera for replays, the photo and the photo mode (ours: worldview.cpp)
   if (Upper(name) == "REMASTER_CINECAM") return CineCameraCommand(L, rest);
-  if (Upper(name) == "REMASTER_PHOTO") return CinePhotoCommand(L);
+  if (Upper(name) == "REMASTER_PHOTO") return CinePhotoCommand(L, rest);
   if (Upper(name) == "REMASTER_PHOTO_MODE") return PhotoModeCommand(L, rest);
   // The command palette (ours: ui/data/lua/palette.lua): remaster_palette [on|off] (no word: it turns over), in the
   // front end and in a game. Its key action "Command palette" (Ctrl-Shift-P at first) runs it.

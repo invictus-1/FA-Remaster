@@ -41,7 +41,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `MENUFLIGHT_FAST` | test | `1`: the menu flight's battle runs as fast as it goes | suite (the flight jobs) |
 | `MENUFLIGHT_FAST_TO` | test | fast only up to that tick | - |
 | `MENUFLIGHT_FP` | test | a file (per loop) for the flight's fingerprints | suite (the flight jobs) |
-| `MENUFLIGHT_GPU_MS` | test | the card's time a frame (12 ms unless given) over which the flight goes to Dusk | - |
+| `MENUFLIGHT_GPU_MS` | test | the card's time a frame (33.3 ms unless given: 30 frames a second) over which the flight goes to Dusk | - |
 | `MENUFLIGHT_PATH` | test | another camera path for the flight, without a rebuild | - |
 | `MENUFLIGHT_SEED` | test | another seed for the flight's battle (1108 unless given) | - |
 | `MENUFLIGHT_THREADS` | test | the threads of the flight's simulation | suite (the flight jobs) |
