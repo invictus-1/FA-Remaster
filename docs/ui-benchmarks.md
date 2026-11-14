@@ -492,7 +492,8 @@ each series the two sizes are a factor of about three apart.
 |---|---|---|---|---|
 | twice the view, the renderer's supersampling (as until 2026-11-13; now `remaster_photo fine`) | 7680x4320, drawn once | 9 | 0.74, 0.82, 1.10 s (06:06); 0.42, 0.49, 0.91 s (06:10); 0.87, 1.00, 1.33 s (06:22) | 0.14 to 0.17 s |
 | twice the view, supersample 1 (the first fix tried) | 7680x4320, drawn once | 9 | 0.92, 1.29, 1.42 s (06:06) | 0.14 to 0.15 s |
-| the view's own size, drawn once (the key since 2026-11-14) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10); 0.32, 0.38, 0.45 s (06:22) | 0.04 to 0.05 s |
+| the view's own size, drawn once, 8 settling frames (the key from 06:56 to the next build) | 3840x2160 | 9 | 0.15, 0.15, 0.28 s (06:10); 0.32, 0.38, 0.45 s (06:22) | 0.04 to 0.05 s |
+| the view's own size, drawn once, 2 settling frames (the key since the build after 08:00) | 3840x2160 | 3 | 0.17, 0.12, 0.12 s (08:00; the fine photo in that series: 1.08, 0.72, 0.75 s) | 0.04 s |
 
 What they say: asking for no supersampling changes nothing, because at 7680x4320 the renderer's own choice is
 already to draw once (`by` 1): the cost is the size. A photo of the view's own size stands still for 0.15 to 0.45 s
@@ -500,3 +501,12 @@ here, about a third of the larger one's time in the same series. Not measured: h
 screen (the log's new line will say it the next time he presses the key). What is left is the renderer's nine frames (eight settle the clouds and the light in the air at
 the photo's size): fewer of them for a photo of the view's own size would bring it under a tenth of a second
 (ui/REQUESTS.md 56).
+
+**Two settling frames (the renderer's answer to 56, render 3e7618fa, `StartPhoto`'s `settleFrames`).** At the
+window's own size and camera the settled pictures are carried over, so the key's photo asks for 2: three frames in
+0.12 to 0.17 s, a sixth of the fine photo's time in the same series. That the photo is as settled as with eight:
+the three photos of the 08:00 series (2 frames) and the three of the 06:10 and 06:22 series (8 frames), each made
+small to 480x270, have the same mean colours to a tenth of 255 (77.9 / 73.8 / 44.6, 78.1 / 74.2 / 45.2, 77.7 / 73.9
+/ 44.6: the same game, seed and moments); the renderer's own compare of one run is in docs/render-answers.md (a mean
+difference of 0.02 to 0.05 of 255, no pixel off by more than 2). Not measured: falling rain or snow, a night with
+many lamps (his note: 3 or 4 frames if noise shows there).

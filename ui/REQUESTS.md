@@ -2803,7 +2803,7 @@ call's name and I wire it the day it is in main.
 
 ### 55. The menu's flight: the first start after a new build, and one frame of 4.3 s as it comes in (2026-11-14, numbers from Chris's test of 11-13; a report, not blocking)
 
-**OPEN (reported 2026-11-14 05:53).**
+**ANSWERED (renderer, 2026-11-14, `docs/render-answers.md` "To the ui, request 55"): read and kept for the optimising phase.** The 4.3 s frame is the models' pipeline compiled inside the frame, once a build on a machine; the 17.6 ms are the land outside the map, the relief by material, the far mountains' form and the finer sea mirror, added since 9 November.
 
 Who: ui. Why: Chris failed the row "The menu has a background at once": "starts up like the background but its
 frozen ... only runs our new make briefly before switching to old background". The switching was mine (my cost limit
@@ -2828,7 +2828,7 @@ Asked: nothing urgent. If the models' pipeline can be made before the swap when 
 
 ### 56. A photo of the view's own size: fewer settling frames (2026-11-14, from Chris's test of 11-13; not blocking)
 
-**OPEN (asked 2026-11-14 06:15).**
+**DONE (renderer, 2026-11-14: render 3e7618fa, in main ef79fd9c: `StartPhoto`'s sixth argument `settleFrames`; the top entries of `docs/render-answers.md`).** Wired: the key's photo asks for 2 (three frames in 0.12 to 0.17 s at 4K; docs/ui-benchmarks.md).
 
 Who: ui. Why: Chris failed the photo key again, "Game freezes for a second": while a photo's frames are drawn the
 world's picture stands still (your StartPhoto shows the world as it was), and the key asked for twice the view's size:

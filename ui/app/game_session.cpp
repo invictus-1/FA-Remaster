@@ -402,12 +402,12 @@ struct GameSession::Picture : WorldSource {
     photoAsked = true, photoDropped = false;
     return true;
   }
-  bool StartPhotoFrom(const WorldCamera& game, int width, int height, int supersample) override {
+  bool StartPhotoFrom(const WorldCamera& game, int width, int height, int supersample, int settleFrames) override {
     if (width <= 0 || height <= 0) return false;
     if (!cineGround) cineGround = picture.CineGround();
     render::Camera camera = cine.On() ? cine.View(cineGround) : ToRender(game);
     camera.lodScale = game.lodScale;  // (the cinematic camera's views start at 1)
-    if (!picture.StartPhoto(camera, width, height, FrameMoment(), supersample)) return false;
+    if (!picture.StartPhoto(camera, width, height, FrameMoment(), supersample, settleFrames)) return false;
     photoAsked = true, photoDropped = false;
     return true;
   }

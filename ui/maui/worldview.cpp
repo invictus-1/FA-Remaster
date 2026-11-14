@@ -3521,8 +3521,13 @@ void CinePhotoCommand(lua_State* L, const std::string& rest) {
   // Chris's test of 2026-11-13, "Game freezes for a second". Asking only for no supersampling changed nothing: at
   // 7680x4320 the renderer draws once anyway (measured 2026-11-14; the numbers of both ways: docs/ui-benchmarks.md).
   // The photo mode's own photos are 1 to 4 times the view: the game is paused there.)
+  // (two settling frames in place of the renderer's eight: at the window's own size and camera the clouds and the
+  // light in the air are settled already and carried over; his answer to ui request 56, render 3e7618fa: against 24
+  // frames a mean difference of 0.02 to 0.05 of 255, no pixel off by more than 2. The photo's camera is the one the
+  // window shows, the cinematic camera's while that is on. The fine photo, of another size, keeps the eight.)
   const int k = fine ? 2 : 1;
-  if (!source->StartPhotoFrom(v->PictureCameraFor(L), k * w, k * h, fine ? 0 : 1)) return ConsolePrint(L, "remaster_photo: the photo could not be made");
+  const int settle = fine ? 8 : 2;
+  if (!source->StartPhotoFrom(v->PictureCameraFor(L), k * w, k * h, fine ? 0 : 1, settle)) return ConsolePrint(L, "remaster_photo: the photo could not be made");
   user->photoMode.taking = true;  // (PhotoModeFrame: its frames, then the file and the console's line)
   user->photoMode.takingFor = "remaster_photo";
   PhotoSettings().progress = 0;
