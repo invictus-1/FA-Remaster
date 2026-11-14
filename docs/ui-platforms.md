@@ -67,10 +67,36 @@ nothing was installed there.
   `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/.../run_test.sh keys 600` (without the variable Git Bash
   rewrites the path).
 
+## The suite's plain jobs in WSL2 (2026-11-14, 10:11 to 10:37)
+
+Chris, 2026-11-14: Linux is on the back burner, but "if any chat wants to test Linux stuff before then they can".
+`_scratch/ui/suite/wsl/suite_wsl.sh` runs the suite's jobs that are one plain front-end or game run (64 of the
+suite's 137 jobs), three at a time, with the headless Linux build and prints each job's count beside the Windows
+suite's for the same run. 17 jobs are left out: their tests read the world's picture (`world_jobs.txt`), which that
+build does not have.
+
+**47 jobs ran: 40 gave the same counts as on Windows, with no failed check.** Among them a small lobby, the options' tabs and preview, the key maps of ours and an imported one, the command
+palette, the mods manager, the loading screen, both M28 mods, our AI's game, transports, the Dock order, attack
+moves, guard orders, the order lines and their scale, the waypoints (drag, delete, clicks), hot build, the
+enhancement queue, the three order-work tests, the score tabs, victory, defeat and watching on, the end-game
+menu, the radial ping, and the 5,000-tank scale test.
+
+The 7 that differ, each for a reason of this build or of the slow files, none found to be a fault of Linux itself:
+
+| Job | Linux | Windows | Why |
+|---|---|---|---|
+| `sound_device`, `sound_banks`, `sound_loops`, and one check each of `game_fog_noworld` and `game_nofog_noworld` ("its steps are heard") | fewer ok lines, 0 to 5 failed | all ok | the headless build has no sound device (`--headless`: no SDL), and off Windows the wave banks are read whole, not mapped (`ui/sound/mapped_file.cpp`): the sound tests need the SDL build |
+| `templates` | 33 ok, 3 failed | 36 ok | its three camera-shake checks: the shakes are gathered in the world picture's part of `game_session.cpp` (`sim->collectShakes`), left out of a build without the picture |
+| `postgame` | 67 ok, 8 failed | 91 ok | the moments' scan plays the game again on a thread and mounts the game's files anew: through `/mnt/c` that took longer than the test's wait of 180 game seconds (the log shows it still mounting when the wait ran out). Read as slow files; not run again from a faster place |
+
+So what a headless Linux run can show, it shows right; the sound, the window, the text's drawing and the picture
+wait for the SDL build (a download: Chris's word), and letter case for a copy of the files on ext4 (space in the
+WSL disk: Chris's word).
+
 ## What is left
 
-0. Linux, next: the suite's front-end and no-world game jobs as a whole in WSL2 with the headless build (a runner
-   beside the suite's); then the same from a copy of the files on ext4 (letter case).
+0. Linux, next (each needs Chris's word): the same run from a copy of the files on ext4 (letter case; and the
+   postgame scan without the slow files); the SDL build for the window, the sound and the text.
 1. The first run on a Linux machine and on a Mac: the window and its keys, the sound, the text, and
    the world's picture (the renderer's Vulkan on the SDL window's surface: `SDL_WINDOW_VULKAN`,
    `SDL_Vulkan_GetInstanceExtensions` / `SDL_Vulkan_CreateSurface` handed to
