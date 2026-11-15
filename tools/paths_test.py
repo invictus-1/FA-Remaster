@@ -69,13 +69,21 @@ def main():
     rc, fp, out = run("nolog", base + mods + ["--sim", src, "--log", os.path.join(work, "none", "x.log")], work, log=False)
     check("a --log folder that is not there is said, the game plays", rc == 0 and fp == fp0 and "cannot write the log file" in out, "exit %s" % rc)
     d = os.path.join(work, "Игрок")
+    # (a value planted in the environment must not reach the dump: --crash-test holds the environment block on its
+    # stack at the fault, and the dump takes no memory the stacks point at; 2026-11-15)
+    secret = "zqxPlantedSecret42vw"
+    os.environ["MOHO64_PATHS_TEST_SECRET"] = secret
     rc, _, out = run("crash", ["--crash-test"], d)
+    del os.environ["MOHO64_PATHS_TEST_SECRET"]
     dmp = os.path.join(d, "crash.log.dmp")
     check("--crash-test: the log names the fault and the build", rc != 0 and "crash: EXCEPTION_ACCESS_VIOLATION" in out and "crash: build " in out, "exit %s" % rc)
     check("  the host's call before the report ran after the crash's lines",
           "crash: build " in out and "the host's call before the report ran" in out
           and out.index("crash: build ") < out.index("the host's call before the report ran"))
     check("  the memory dump is beside the log", "crash: dump written to" in out and os.path.exists(dmp) and open(dmp, "rb").read(4) == b"MDMP")
+    dump = open(dmp, "rb").read() if os.path.exists(dmp) else b""
+    check("  the dump holds no environment value",
+          bool(dump) and secret.encode() not in dump and secret.encode("utf-16-le") not in dump)
     shutil.rmtree(work, ignore_errors=True)  # (this test's own temporary folder)
     print("paths_test: " + ("all passed" if not failed else "%d FAILED" % len(failed)))
     return 1 if failed else 0

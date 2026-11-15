@@ -5,6 +5,20 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-15 09:42, for the interface: the crash dump no longer takes the memory the stacks point at; the window points to remaster_report (batch 170)
+
+Your report test showed the dump (flags 0x1040) carrying the process's environment block whenever a stack pointed
+into it: a player's environment values (passwords, keys) went into the file. Chris (09:3x): the smaller dump and a new
+text. Now:
+- **The dump** is 0x1000 (MiniDumpWithThreadInfo): every thread's stack and registers and the module list, nothing
+  else (about half the size). A value planted in the environment is no longer in it (moho64 --crash-test now holds
+  the environment block on its stack at the fault; tools/paths_test.py checks the planted value is absent, as ASCII
+  and as UTF-16). The module list still names the install's folder: your masking in remaster_report covers that.
+- **The window** (yours, through CrashSetReport's messageBox) no longer lists the raw files. It says: start the game
+  again, open the console and type remaster_report <what you were doing>; it makes one zip with this crash's log and
+  memory dump, the names hidden, beside the preferences; send that zip. If your suite reads the window's text, it
+  changes with this.
+
 ## 2026-11-14 16:41, for the interface: a call of yours at a crash, before the dump (batch 168; ui's question)
 
 `moho::CrashSetBeforeReport(void (*fn)())` (core/crash.h). At a crash the handler calls `fn` once: after its own

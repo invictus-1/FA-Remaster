@@ -129,9 +129,12 @@ void Report(EXCEPTION_POINTERS* ep) {
     HANDLE f = CreateFileW(g_dumpFileW, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE) {
       DumpExceptionInfo info{GetCurrentThreadId(), ep, FALSE};
-      // 0x1000 MiniDumpWithThreadInfo | 0x40 MiniDumpWithIndirectlyReferencedMemory: the stacks, the registers and
-      // the memory the stacks point at; a few MB
-      dumped = g_writeDump(GetCurrentProcess(), GetCurrentProcessId(), f, 0x1040, ep ? &info : nullptr, nullptr, nullptr) != 0;
+      // 0x1000 MiniDumpWithThreadInfo: every thread's stack and registers, the modules, nothing else. Not 0x40
+      // MiniDumpWithIndirectlyReferencedMemory (until 2026-11-15): the memory the stacks point at held the process's
+      // environment block whenever a stack pointed into it, so the player's environment values (passwords, keys) went
+      // into the file (found by the ui's report test; Chris: the smaller dump). The module list still names the
+      // install's folder: remaster_report (ui/user/report.cpp) masks the user's name before it zips a dump.
+      dumped = g_writeDump(GetCurrentProcess(), GetCurrentProcessId(), f, 0x1000, ep ? &info : nullptr, nullptr, nullptr) != 0;
       CloseHandle(f);
     }
     if (dumped) Line("crash: dump written to %s", g_dumpFile);
@@ -140,8 +143,13 @@ void Report(EXCEPTION_POINTERS* ep) {
   }
   if (g_messageBox && g_box) {
     wchar_t text[2600];
-    _snwprintf(text, 2600, L"The game has stopped because of a fault in the program.\n\nTo report it, please send:\n\n%ls%ls%ls",
-               g_logFileW[0] ? g_logFileW : L"(no log file was open)", dumped ? L"\n" : L"", dumped ? g_dumpFileW : L"");
+    // (2026-11-15, Chris: the window points to remaster_report, whose zip holds this log and this dump with the
+    // player's names and environment masked, not to the raw files)
+    _snwprintf(text, 2600,
+               L"The game has stopped because of a fault in the program.\n\nTo report it: start the game again, open the "
+               L"console and type\n\n    remaster_report <what you were doing>\n\nIt makes one zip with this crash's log%ls, your "
+               L"names hidden, beside your preferences. Send that zip.",
+               dumped ? L" and memory dump" : L"");
     text[2599] = 0;
     g_box(nullptr, text, L"FA Remastered", 0x10 | 0x10000 | 0x40000);  // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
   }
@@ -308,6 +316,14 @@ void CrashSetReport(const char* logFile, const char* dumpFile, bool messageBox) 
 void CrashSetLuaReader(CrashLuaReader reader) { g_luaReader = reader; }
 
 void CrashSetBeforeReport(void (*fn)()) { g_beforeReport = fn; }
+
+const void* CrashTestEnvironmentBlock() {
+#if defined(_WIN32)
+  return GetEnvironmentStringsW();
+#else
+  return nullptr;
+#endif
+}
 
 bool CrashReadable(const void* p, size_t n) {
   if (!p) return false;
