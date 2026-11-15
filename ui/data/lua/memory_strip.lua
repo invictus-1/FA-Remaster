@@ -140,8 +140,10 @@ function Attach(dialog, tabNow, setNow)
     panel:SetSolidColor('E0101418')
     panel.Depth:Set(function() return dialog.Depth() + 50 end)
     LayoutHelpers.SetWidth(panel, kWidth)
+    -- centred under the dialog (Chris, 2026-11-14: "center it with the menu so it flows with it"). Only the top is
+    -- set from the dialog's bottom: the layout helpers' Below also pins the left edge, which undid the centring.
+    panel.Top:Set(function() return dialog.Bottom() + LayoutHelpers.ScaleNumber(4) end)
     LayoutHelpers.AtHorizontalCenterIn(panel, dialog)
-    LayoutHelpers.Below(panel, dialog, 4)
     panel:DisableHitTest()
     local texts = {}
     for i = 1, kRows do

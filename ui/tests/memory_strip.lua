@@ -55,6 +55,8 @@ ForkThread(function()
     check("its first line: the estimate", string.find(first, "Graphics memory, estimated for a large late game: about ", 1, true) == 1, true)
     check("and the card's memory", string.find(first, " of ", 1, true) ~= nil, true)
     check("the strip lies under the dialog", S.panel.Top() >= dialog.Bottom(), true)
+    -- centred with the dialog (Chris, 2026-11-14): the two centres within a pixel
+    check("and centred with it", math.abs((S.panel.Left() + S.panel.Right()) - (dialog.Left() + dialog.Right())) <= 2, true)
     -- a part not counted yet is never shown as free: every part with 0 and measured false is named as not counted
     local unmeasured = 0
     for _, p in S.estimate.parts do
