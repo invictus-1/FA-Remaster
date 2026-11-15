@@ -531,8 +531,11 @@ int main(int argc, char** argv) {
   // /lua/version.lua names, or the original's alone) and every mod found under /mods (its folder's name, the
   // mod_info.lua's name and version where it gives them). No paths.
   {
+    // (its own test, the same as fafData's above: that one exists only in the build with the world's picture, and the
+    // headless build did not compile without it, 2026-11-15)
+    const bool fafFiles = vfs.Exists("/lua/version.lua");
     std::string version = "unknown";
-    if (fafData) {
+    if (fafFiles) {
       if (const auto text = vfs.ReadFile("/lua/version.lua")) {
         // (FAF's file: "local Version = '3839'" or "local Version = 3839")
         const size_t at = text->find("Version");
@@ -548,7 +551,7 @@ int main(int argc, char** argv) {
         }
       }
     }
-    Logf(LogLevel::Info, "moho64ui: the game: %s", fafData ? ("FAF's game files, version " + version).c_str() : "the original game's files (no FAF version file)");
+    Logf(LogLevel::Info, "moho64ui: the game: %s", fafFiles ? ("FAF's game files, version " + version).c_str() : "the original game's files (no FAF version file)");
     std::string mods;
     int count = 0;
     for (const std::string& info : vfs.FindFiles("/mods", "mod_info.lua")) {
