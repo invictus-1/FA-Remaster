@@ -4544,7 +4544,7 @@ std::vector<std::string> D3D12Device::Report() {
   if (described) {
     const char* maker = d.VendorId == 0x10de ? "NVIDIA" : d.VendorId == 0x1002 || d.VendorId == 0x1022 ? "AMD" : d.VendorId == 0x8086 ? "Intel"
                         : d.VendorId == 0x5143 ? "Qualcomm" : d.VendorId == 0x1414 ? "Microsoft" : "another maker";
-    snprintf(buf, sizeof buf, "card: %s, vendor 0x%04x (%s), device 0x%04x, subsystem 0x%08x, revision 0x%02x, adapter LUID %08lx:%08lx", adapterName_.c_str(),
+    snprintf(buf, sizeof buf, "adapter: %s, vendor 0x%04x (%s), device 0x%04x, subsystem 0x%08x, revision 0x%02x, adapter LUID %08lx:%08lx", adapterName_.c_str(),
              d.VendorId, maker, d.DeviceId, d.SubSysId, d.Revision, static_cast<long>(d.AdapterLuid.HighPart), d.AdapterLuid.LowPart);
     out.push_back(buf);
     if (cardMemory_ > 0)
@@ -4555,7 +4555,7 @@ std::vector<std::string> D3D12Device::Report() {
                mb(d.SharedSystemMemory), mb(d.DedicatedSystemMemory));
     out.push_back(buf);
   } else {
-    out.push_back("card: " + adapterName_ + " (the adapter's description could not be read: no vendor, device or memory sizes)");
+    out.push_back("adapter: " + adapterName_ + " (the adapter's description could not be read: no vendor, device or memory sizes)");
   }
   // its memory now: the system's budget for this program and its use, of the card's own memory and of the computer's
   DXGI_QUERY_VIDEO_MEMORY_INFO local = {}, shared = {};
