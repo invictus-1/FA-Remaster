@@ -501,9 +501,11 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     *The anti-ship aircraft strike as one wing* (they gather at the start and go once they weigh 0.6 of the ships'
     mass, at least 4): score -0.2 (p 0.86), 8 better and 8 worse; the trade better (5.65 mass lost per mass killed
     against 7.11, 30 bombers lost a game against 34), the outcome not. *The ships fight only as a gathered fleet* (a
-    fight starts when 70% of our ship mass is at the home water): +3.2 (p 0.85), 5 better and 11 worse, and the FIRST
-    WIN against M28 of any of our builds (one seed of 16). *A defence that loses the trade rests 3 minutes and the
+    fight starts when 70% of our ship mass is at the home water): +3.2 (p 0.85), 5 better and 11 worse; the +3.2 is
+    almost all one game, the first win against M28 of any of our builds (seed 15015, minute 13.8), and that win was
+    not the fleet's: M28's commander walked 298 from its start and our T1 artillery killed it. *A defence that loses the trade rests 3 minutes and the
     army regroups* (600 mass lost for at least twice its kills in 60 s): -0.4 (p 0.50), 4 better, 4 the same, 8 worse,
     and more extractor mass lost by minute 20 (-504, p 0.029). None taken (the kept rule). What it says: one change at
-    a time does not move M28's games; the wing's better trade and the fleet's one win point to the two together, with
-    more ships (43: M28 has two to four times our navy by minute 20), as the next candidate.
+    a time does not move M28's games; the wing's better trade (and the fleet's ships, +555 mass at minute 20 in 11
+    of 14 seeds) point to the two together, with more ships (43: M28 has two to four times our navy by minute 20),
+    as the next candidate.
