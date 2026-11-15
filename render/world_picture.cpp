@@ -2093,6 +2093,120 @@ WorldPicture::PresetSuggestion WorldPicture::SuggestedPreset() const {
   return s;
 }
 
+// [vram] (world_picture.h, EstimateCardMemory; the interface's request 57) The card's memory a set of settings takes, by part.
+// The measures, 2026-11-14 (_scratch/render/t1114/card/runs.txt, the morning's; t1114/vram/runs/, vruns.sh, the afternoon's):
+// SETONS_R, the M28 session of eight armies (config_fog.lua, seed 3977804112, --fixed-step), Chris's full looks
+// (helpers/snowhitch/looks.sh), 2560x1440 (3.6864 megapixels), MSAA 4 (the game's default), noon, clear, rays off unless said,
+// --card-memory 8192 (a card of 8 GB imitated: a budget of 7931 MB); a run's figure is "the most" its card memory held over 90
+// frames (Device::MemoryInUse). The late game: beat 9000, near the first land factory (680,341,70,50,20) or over the whole map
+// (512,512,700,65,0). What World makes ahead (readAhead) takes the card's room while there is room (World::PrepareAhead: used
+// + 1 GB under 85 % of the budget), so a part switched off is filled again by it: the afternoon's runs are each one change
+// against a base WITHOUT read-ahead (v_base 6509 MB; again at the end, v_base2, 6510; the morning's same run 6511).
+//  - textures and world (the rest: the map, the units' models, the effects, the fixed buffers): what a late game needs without
+//    read-ahead, by texture detail: High 6427 (near 6509 / 6510 / 6511, far 6344: the cameras' mean), Medium 2949 (far; the
+//    near camera not run), Low 2111 (v_td2, near); less the parts below (at that detail): the textures what is left after the
+//    world, the world 410 (High: 6427 less the textures the log counts, 5028 the cameras' mean, back with the ground's and the
+//    weather's own 604, less the parts below, 1593).
+//  - made ahead, on top, at the 8 GB budget: High 1330 (near 7744 - 6511 = 1233, far 7771 - 6344 = 1427: the mean), Medium
+//    2311 (far 5260 - 2949), Low 1202 (near 3313 - 2111). It is a cache: it only fills room the budget leaves, so with High
+//    textures it stops at the room (2120 of the some 3900 textures made; Medium and Low make all of them), it is less on a
+//    smaller card and more on a larger one (the card's own 24 GB, no imitation: far, 12481 MB held, 8189 MB of textures made
+//    ahead, against 7771 and 3249 at 8 GB). It never pushes the card over its budget: a host may leave it out of a warning.
+//  - window, anti_aliasing (all that grows with the pixels): 125 MB a megapixel at MSAA 4 without upscaling (1920x1080 against
+//    2560x1440, beat 3000, rays off: g_ 6234 -> 6435, 6234 -> 6437, 6234 -> 6437, 6236 -> 6437: +202 MB for 1.6128 megapixels;
+//    the same made ahead in both, 2710 MB; the smaller scene s_ 2869 -> 3068: 124), split by two runs: MSAA 1 (v_msaa1 6353,
+//    -156: 14.1 MB a megapixel a sample more than one) and FSR 1 at 0.59 (v_fsr1 6313, -196 for the 2.4032 megapixels not drawn:
+//    the scene's 81.6 a drawn megapixel at 4 samples, 39.2 of it at one); the window's own size the rest, 43.4.
+//    (MSAA 2 and 8 and other shares of FSR are by this rule, not run.)
+//  - fsr3: FSR 3's own at the window's size: v_fsr3 (0.59, one sample) 6501 against v_msaa1 6353: +148, with the scene's 94.3
+//    not drawn: 242.3, 65.7 a megapixel.
+//  - frame_generation: v_fg (one sample) 6676 against v_msaa1 6353: +323, 87.6 a megapixel.
+//  - shadows: the sun's shadow map, 256 MB at 4096, a quarter of it at each halving (16 bytes a texel: 256, 64, 16). Measured
+//    4096 -> 2048: -196, -172 (High, near and far), -193, -214 (Medium): 194 against 192; 4096 -> 1024: -238, -219: 229
+//    against 240.
+//  - ray_tracing: 200 (beat 9000, rays on against off, read-ahead on: near 7881 - 7744 = 137, far 7917 - 7771 = 146, each with
+//    56 MB of textures fewer made ahead for want of room: 193, 202; beat 3000 at 1080p +154 to +170, the smaller scene +155 to
+//    +182; the same at 1080p and 1440p, so not by the window's size).
+//  - soft_shadows: 0 (v_nosoft 6509, the base's own: a constant of the sun's shader; the contact shadows ride the occlusion
+//    pass, which is there without them). (The game's bundle also switches the shadow mask and the half-size occlusion, which
+//    the viewer's --soft-shadows does not: those were not measured.)
+//  - atmosphere: 68 (v_noatmos 6441); ground_detail: 450 (v_noground 6059; 279 of it textures, the log's count, which follow the
+//    texture detail); weather_effects: 325 (v_noweather 6184; all of it textures: the log counts 458 fewer); surround: 33
+//    (v_nosurround 6476, SETONS_R's sculpted land; a map without one has nothing there).
+//  - the looks' textures by the texture detail: as the base's (the log's count): Medium 1393 / 4932 = 0.282 (far), Low 545 /
+//    5124 = 0.106 (near).
+// Every m_9000 run of the morning and every run of the afternoon comes within 10 % (most within 2 %), but for the 24 GB one
+// (above). The game's size: only Large is measured; Small and Medium give the parts that grow with the game (textures, made
+// ahead, the world) 0 and measured false. The margin: 10 % of the sum, and for each part not measured the most it may be
+// (Small, Medium: the large game's figure for it at these settings; the shadow map with Shadow Fidelity Off: 16 MB, a 1024 one).
+WorldPicture::CardMemoryEstimate WorldPicture::EstimateCardMemory(const CardMemoryChoice& c) {
+  // (the numbers, MB, and MB a megapixel; how each was found: above)
+  static constexpr double kTextures[3] = {4424, 1380, 648}, kMadeAhead[3] = {1330, 2311, 1202}, kTextureShare[3] = {1, 0.282, 0.106};
+  constexpr double kWorld = 410, kWindowOut = 43.4, kScene = 39.2, kSample = 14.1, kFsr3 = 65.7, kFrameGen = 87.6;
+  constexpr double kShadow4096 = 256, kRays = 200, kSoftShadows = 0, kAtmosphere = 68, kSurround = 33;
+  constexpr double kGroundOther = 171, kGroundTextures = 279, kWeatherTextures = 325;
+  CardMemoryEstimate e;
+  e.parts.reserve(14);
+  double notCounted = 0;  // (the most the parts not measured may be)
+  auto part = [&](const char* id, const char* name, double mb, bool measured, double most) {
+    CardMemoryPart p;
+    p.id = id;
+    p.name = name;
+    p.megabytes = measured ? std::max(mb, 0.0) : 0.0;
+    p.measured = measured;
+    if (!measured) notCounted += std::max(most, 0.0);
+    e.totalMB += p.megabytes;
+    e.parts.push_back(p);
+  };
+  const bool large = c.gameSize == CardMemoryChoice::GameSize::Large;
+  const int detail = std::clamp(c.textureDetail, 0, 2);
+  const double megapixels = static_cast<double>(std::max(c.width, 1)) * static_cast<double>(std::max(c.height, 1)) / 1e6;
+  const int samples = c.samples >= 8 ? 8 : c.samples >= 4 ? 4 : c.samples >= 2 ? 2 : 1;
+  const bool fsr3 = c.temporalUpscale && samples == 1;             // (SetTemporalUpscale: with MSAA on, FSR 1 stays)
+  const bool frameGeneration = c.frameGeneration && samples == 1;  // (SetFrameGeneration: with MSAA on, nothing)
+  const double share = std::clamp(static_cast<double>(c.upscale), 0.25, 1.0);
+  const double sceneMegapixels = megapixels * share * share;
+  const double made = c.readAhead ? kMadeAhead[detail] : 0;
+  part("textures", "Textures", kTextures[detail], large, kTextures[detail]);
+  part("made_ahead", "Made ahead (what the armies may build)", made, large, made);
+  part("world", "Map, units and effects", kWorld, large, kWorld);
+  part("window", "Screen size", megapixels * kWindowOut + sceneMegapixels * kScene, true, 0);
+  part("anti_aliasing", "Anti-aliasing (MSAA)", sceneMegapixels * (samples - 1) * kSample, true, 0);
+  part("fsr3", "FSR 3 upscaling", fsr3 ? megapixels * kFsr3 : 0, true, 0);
+  part("frame_generation", "Frame generation", frameGeneration ? megapixels * kFrameGen : 0, true, 0);
+  if (c.shadowSize > 0) {
+    const double side = std::clamp(c.shadowSize, 512, 8192) / 4096.0;
+    part("shadows", "Shadows", kShadow4096 * side * side, true, 0);
+  } else {
+    part("shadows", "Shadows", 0, false, kShadow4096 / 16);
+  }
+  part("soft_shadows", "Soft shadows", c.softShadows ? kSoftShadows : 0, true, 0);
+  part("ray_tracing", "Ray tracing", c.rayTracing ? kRays : 0, true, 0);
+  part("atmosphere", "Atmosphere and clouds", c.atmosphere ? kAtmosphere : 0, true, 0);
+  part("ground_detail", "Ground detail", c.groundDetail ? kGroundOther + kGroundTextures * kTextureShare[detail] : 0, true, 0);
+  part("weather_effects", "Weather effects", c.weatherEffects ? kWeatherTextures * kTextureShare[detail] : 0, true, 0);
+  part("surround", "Land outside the map", c.surround ? kSurround : 0, true, 0);
+  e.marginMB = 0.10 * e.totalMB + notCounted;
+  return e;
+}
+
+// [vram] (world_picture.h)
+WorldPicture::CardMemoryNow WorldPicture::CardMemory() const {
+  CardMemoryNow n;
+  gfx::Device* device = impl_->device.get();
+  if (!device) return n;
+  constexpr double kMB = 1024.0 * 1024.0;
+  n.totalMB = static_cast<double>(device->CardMemory()) / kMB;
+  uint64_t budget = 0, used = 0;
+  if (device->MemoryBudget(&budget, &used)) {
+    n.budgetMB = static_cast<double>(budget) / kMB;
+    n.usedMB = static_cast<double>(used) / kMB;
+  } else {
+    n.usedMB = static_cast<double>(device->MemoryInUse()) / kMB;
+  }
+  return n;
+}
+
 void WorldPicture::SetTextureDetail(int drop) { impl_->textureDetail = std::clamp(drop, 0, 2); }
 
 // [seasons] (kept for the next Open; the open map keeps the season it took)
