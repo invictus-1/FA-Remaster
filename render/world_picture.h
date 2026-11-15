@@ -478,6 +478,63 @@ class WorldPicture {
     std::string reason;
   };
   PresetSuggestion SuggestedPreset() const;
+  // [vram] (the interface's request 57: the Options' "graphics memory" strip; Chris, 2026-11-14) An estimate of the card's
+  // memory a set of settings takes, by part, without a picture or a map, and the card's own figures now.
+  // CardMemoryChoice: plain values a caller fills (the defaults: the case measured, Chris's full looks at 2560x1440 without
+  // ray tracing). The renderer's own rules hold as they do in a game: with more than one sample (MSAA) FSR 3 is not drawn (FSR 1
+  // at the share in its place) and there is no frame generation (SetTemporalUpscale, SetFrameGeneration); the interface's
+  // LookSettings::SceneSamples already gives 1 under either.
+  struct CardMemoryChoice {
+    int width = 2560, height = 1440;  // the picture's (the window's) pixels
+    float upscale = 1.0f;             // SetUpscale's share (1: none; FSR 1, or FSR 3's with temporalUpscale)
+    bool temporalUpscale = false;     // FSR 3 (SetTemporalUpscale)
+    bool frameGeneration = false;     // SetFrameGeneration
+    int samples = 4;                  // the scene's samples a pixel (anti-aliasing: 1, 2, 4; 8 the viewer's too)
+    int textureDetail = 0;            // the game's Texture Detail: 0 High, 1 Medium, 2 Low (SetTextureDetail)
+    bool rayTracing = false;          // SetRayTracing (where RayTracingSupported)
+    int shadowSize = 4096;            // the game's Shadow Fidelity: the sun's shadow map 4096 High, 2048 Medium, 1024 Low; 0 Off
+    bool softShadows = true;          // SetSoftShadows
+    bool atmosphere = true;           // SetAtmosphere (light in the air, the volumetric clouds, the sky from tables, ...)
+    bool groundDetail = true;         // SetGroundDetail
+    bool weatherEffects = true;       // SetWeatherEffects (the real ocean and the surf with them)
+    bool surround = true;             // the land outside the map (the map's edge "beyond", World::mapSurround; a map with one)
+    // What a game will want later made ahead (World::readAhead). NOT a player's choice: always on in a game (the viewer's
+    // --no-read-ahead alone switches it off); here so that the estimate can be held against such runs.
+    bool readAhead = true;
+    // The game's size, one named choice. Only Large is measured: eight armies on a 1024 map (20 km, SETONS_R) late in the
+    // game (beat 9000, 15 minutes). Small and Medium give the parts that grow with the game measured = false.
+    enum class GameSize { Small, Medium, Large };
+    GameSize gameSize = GameSize::Large;
+  };
+  // One part of the estimate. `id`: stable (parts are added, an id is never renamed; a host shows an id it does not know by
+  // its `name`); `name`: plain words for the player; both live as long as the program. `megabytes` 0 with measured true: the
+  // part is off (nothing); 0 with measured false: NOT COUNTED YET (never "free").
+  struct CardMemoryPart {
+    const char* id = "";
+    const char* name = "";
+    double megabytes = 0;
+    bool measured = false;
+  };
+  // `totalMB` the parts' sum; `marginMB` how far the card's real figure may lie from it either way: 10 % of the sum where
+  // every part is measured, more where one is not (world_picture.cpp, EstimateCardMemory: how much and why).
+  struct CardMemoryEstimate {
+    std::vector<CardMemoryPart> parts;
+    double totalMB = 0, marginMB = 0;
+  };
+  // Pure arithmetic from the measures of 2026-11-14 (world_picture.cpp says which run each number rests on): no device, no
+  // file, any thread, any time (before Open too); about a microsecond. The parts in a fixed order (not by size).
+  // "made_ahead" is what a game makes ahead of its use (the kinds the armies may build) as long as the card has room: it is
+  // given as it came on a card of 8 GB; it is less on a smaller card and more on a larger one by itself, and never takes the
+  // card over its budget, so a warning that the card is too small may leave it out.
+  static CardMemoryEstimate EstimateCardMemory(const CardMemoryChoice& choice);
+  // After Open (of any picture, the menu's too): the card's memory now, megabytes. `totalMB` the card's own (Device::
+  // CardMemory; SetCardImitation's where set); `budgetMB` what the system lets this program use now before it moves some of
+  // it out to the computer's memory; `usedMB` what this program uses now (Device::MemoryBudget; where the card does not say
+  // the budget, budgetMB 0 and usedMB Device::MemoryInUse). All 0 without a device. On the picture's own thread.
+  struct CardMemoryNow {
+    double totalMB = 0, budgetMB = 0, usedMB = 0;
+  };
+  CardMemoryNow CardMemory() const;
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).
