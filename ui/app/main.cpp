@@ -386,8 +386,10 @@ int main(int argc, char** argv) {
     Logf(LogLevel::Info, "moho64ui: MOHO64UI_CRASH_TEST: half a line of the renderer's, then a fault on purpose");
     render::LogPrintf("render: the crash test's half line");
 #ifdef _WIN32
-    // (the environment block held from the stack at the fault: the dump then always catches a piece of it, the worst
-    // case for the report's masking of a crashed run's dump, user/report.cpp; the lab's suite/report.sh checks it)
+    // (the environment block held from the stack at the fault, the worst case for what a dump catches: the engine's
+    // dumps until its gate 170 (0x1040) then held a piece of it; its smaller dump since (0x1000) holds none, and this
+    // shows it at once if a later kind caught it again. The report masks it either way, user/report.cpp; the lab's
+    // suite/report.sh plants a piece in the dump to prove that.)
     wchar_t* volatile environment = GetEnvironmentStringsW();
     (void)environment;
 #endif
@@ -524,6 +526,62 @@ int main(int argc, char** argv) {
   }
 #endif
   Logf(LogLevel::Info, "moho64ui: %zu search paths, %zu files", vfs.MountCount(), vfs.FileCount());
+  // The game's and the mods' part of the report bundle's block (part (b), 2026-11-15: the machine's lines are at the
+  // log's head, these come once the files are mounted): whose game files (FAF's, with the version its
+  // /lua/version.lua names, or the original's alone) and every mod found under /mods (its folder's name, the
+  // mod_info.lua's name and version where it gives them). No paths.
+  {
+    std::string version = "unknown";
+    if (fafData) {
+      if (const auto text = vfs.ReadFile("/lua/version.lua")) {
+        // (FAF's file: "local Version = '3839'" or "local Version = 3839")
+        const size_t at = text->find("Version");
+        if (at != std::string::npos) {
+          size_t i = text->find('=', at);
+          if (i != std::string::npos) {
+            ++i;
+            while (i < text->size() && (std::isspace(static_cast<unsigned char>((*text)[i])) || (*text)[i] == '\'' || (*text)[i] == '"')) ++i;
+            size_t j = i;
+            while (j < text->size() && std::isalnum(static_cast<unsigned char>((*text)[j]))) ++j;
+            if (j > i) version = text->substr(i, j - i);
+          }
+        }
+      }
+    }
+    Logf(LogLevel::Info, "moho64ui: the game: %s", fafData ? ("FAF's game files, version " + version).c_str() : "the original game's files (no FAF version file)");
+    std::string mods;
+    int count = 0;
+    for (const std::string& info : vfs.FindFiles("/mods", "mod_info.lua")) {
+      // (only a mod's own mod_info.lua: /mods/<folder>/mod_info.lua)
+      const size_t slash = info.find('/', 6);
+      if (info.rfind("/mods/", 0) != 0 || slash == std::string::npos || info.find('/', slash + 1) != std::string::npos) continue;
+      std::string entry = info.substr(6, slash - 6);
+      if (const auto text = vfs.ReadFile(info)) {
+        auto field = [&](const char* key) -> std::string {
+          const size_t k = text->find(std::string("\n") + key);
+          if (k == std::string::npos) return "";
+          size_t q = text->find_first_of("'\"", k);
+          const size_t eol = text->find('\n', k + 1);
+          if (q == std::string::npos || (eol != std::string::npos && q > eol)) {
+            size_t i = text->find('=', k);  // (a number: version = 3)
+            if (i == std::string::npos || (eol != std::string::npos && i > eol)) return "";
+            ++i;
+            while (i < text->size() && std::isspace(static_cast<unsigned char>((*text)[i]))) ++i;
+            size_t j = i;
+            while (j < text->size() && (std::isalnum(static_cast<unsigned char>((*text)[j])) || (*text)[j] == '.')) ++j;
+            return text->substr(i, j - i);
+          }
+          const size_t end = text->find((*text)[q], q + 1);
+          return end == std::string::npos ? std::string() : text->substr(q + 1, end - q - 1);
+        };
+        const std::string name = field("name"), ver = field("version");
+        if (!name.empty() && name != entry) entry += " (" + name + (ver.empty() ? "" : " v" + ver) + ")";
+        else if (!ver.empty()) entry += " v" + ver;
+      }
+      mods += (count++ ? "; " : "") + entry;
+    }
+    Logf(LogLevel::Info, "moho64ui: the game: mods found: %d%s%s", count, count ? ": " : "", mods.c_str());
+  }
   Logf(LogLevel::Info, "moho64ui: built from commit %s", ui::kBuildCommit);
   // The test and trial switches set in this run's environment (MOHO64UI_*, the engine's and the renderer's MOHO64_*),
   // one line (the review of 2026-11-09, gates: a switch left on in a launcher changed a game without a word; the

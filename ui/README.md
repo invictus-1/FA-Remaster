@@ -99,7 +99,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The machine's block at the log's head (ours; the report bundle's second part, 2026-11-15): right after the log
   opens, lines "moho64ui: the machine: ..." name our build's commit, the system and its build number, the
   processor (cores, threads), the memory, every graphics adapter with its memory and driver version (NVIDIA's own
-  number beside it), and every screen with its true size, refresh and scale. No user or computer name, no path
+  number beside it), and every screen with its true size, refresh and scale; once the files are mounted, two lines
+  "moho64ui: the game: ..." name whose game files (FAF's with its version, or the original's) and every mod found
+  under /mods with its name and version. No user or computer name, no path
   (`app/machine_info.cpp`; on Linux the system, processor and memory, the card in the renderer's lines; the lab's
   suite/machine_block.sh checks it, the names' absence included).
 - The report (ours; the report bundle's third part, 2026-11-15): the console's `remaster_report [a note]` writes one
