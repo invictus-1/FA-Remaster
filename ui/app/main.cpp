@@ -372,6 +372,19 @@ int main(int argc, char** argv) {
   // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
   // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
   if (!logName.empty()) CrashSetReport(logName.c_str(), dumpName.c_str(), windowed);
+#ifdef MOHO64UI_WORLD_PICTURE
+  // (at a crash, after the crash's own lines and before the dump: a line the renderer was half-way through printing
+  // on the crashing thread goes into the log too; the engine's batch 168 for the renderer's request 79)
+  CrashSetBeforeReport(render::LogFlush);
+  // MOHO64UI_CRASH_TEST=1 (a check, as the engine's --crash-test): half a line printed the renderer's way, then a fault
+  // on purpose: the log must hold the crash's lines and, after them, that half line (the lab's suite/crash_test.sh).
+  if (std::getenv("MOHO64UI_CRASH_TEST")) {
+    Logf(LogLevel::Info, "moho64ui: MOHO64UI_CRASH_TEST: half a line of the renderer's, then a fault on purpose");
+    render::LogPrintf("render: the crash test's half line");
+    volatile int* nowhere = nullptr;
+    *nowhere = 1;
+  }
+#endif
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
