@@ -45,6 +45,10 @@
 #include "render/remasters.h"
 #include "render/view.h"
 #include "render/world_picture.h"
+// (the renderer's log header, only for LogFlush: without its printf / fprintf macros, which would send this file's own
+// prints into the renderer's sink)
+#define RENDER_LOG_PRINT_NO_MACROS
+#include "render/log_print.h"
 #endif
 #include "script/mount.h"
 #include "script/script_state.h"
@@ -52,6 +56,7 @@
 #include "sim/sim.h"
 #include "sound/sound_system.h"
 #include "user/bindings.h"
+#include "user/events.h"
 #include "user/keymap.h"
 #include "user/notices.h"
 #include "user/retest.h"
@@ -344,6 +349,17 @@ int main(int argc, char** argv) {
     if (logName.size() > 4) dumpName = logName.substr(0, logName.size() - 4) + ".dmp";
   }
   ui::SetMenuNoticeLog(logName);
+#ifdef MOHO64UI_WORLD_PICTURE
+  // The renderer's lines into this log (its request 79, 2026-11-14: "the card's report" and the rest it prints went
+  // to stdout / stderr, which a game started from a shortcut has not: on another machine all of it was lost). Set
+  // before any picture is made, so the card's start-up report is caught. Each call is one whole line without its
+  // newline and without the lead "render: "; the level is the engine's log's (1 info: was stdout, 2 warning: was
+  // stderr). It is called on the thread that printed, from several threads at once: Logf takes the log's lock.
+  render::WorldPicture::SetLogSink([](int level, const char* line) {
+    const LogLevel l = level <= 0 ? LogLevel::Debug : level == 1 ? LogLevel::Info : level == 2 ? LogLevel::Warning : LogLevel::Error;
+    Logf(l, "render: %s", line ? line : "");
+  });
+#endif
   if (!optionError.empty()) {  // (to the console as an unknown option is, and to the log when one is named)
     std::fprintf(stderr, "moho64ui: %s: not started\n", optionError.c_str());
     LogSetEcho(false);
@@ -356,6 +372,19 @@ int main(int argc, char** argv) {
   // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
   // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
   if (!logName.empty()) CrashSetReport(logName.c_str(), dumpName.c_str(), windowed);
+#ifdef MOHO64UI_WORLD_PICTURE
+  // (at a crash, after the crash's own lines and before the dump: a line the renderer was half-way through printing
+  // on the crashing thread goes into the log too; the engine's batch 168 for the renderer's request 79)
+  CrashSetBeforeReport(render::LogFlush);
+  // MOHO64UI_CRASH_TEST=1 (a check, as the engine's --crash-test): half a line printed the renderer's way, then a fault
+  // on purpose: the log must hold the crash's lines and, after them, that half line (the lab's suite/crash_test.sh).
+  if (std::getenv("MOHO64UI_CRASH_TEST")) {
+    Logf(LogLevel::Info, "moho64ui: MOHO64UI_CRASH_TEST: half a line of the renderer's, then a fault on purpose");
+    render::LogPrintf("render: the crash test's half line");
+    volatile int* nowhere = nullptr;
+    *nowhere = 1;
+  }
+#endif
   if (o.quiet) LogSetEcho(false);
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
@@ -1625,6 +1654,11 @@ int main(int argc, char** argv) {
     if (target.SavePng(screenshot)) Logf(LogLevel::Info, "moho64ui: screenshot %s", screenshot.c_str());
     else Logf(LogLevel::Error, "moho64ui: cannot write %s", screenshot.c_str());
   }
+  // (the report bundle's first part: what the player did last, in the log of every run that ends in order; ours)
+  ui::LogLastEvents("the program ends", 200);
+#ifdef MOHO64UI_WORLD_PICTURE
+  render::LogFlush();  // (a line the renderer was half-way through printing on this thread: into the log now)
+#endif
   ui::ReportStubCalls();
   if (o.listBindings) ui::ListBindings();
   return ok ? 0 : 1;

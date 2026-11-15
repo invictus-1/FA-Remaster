@@ -59,6 +59,7 @@
 #include "user/bindings.h"
 #include "user/keymap.h"
 #include "user/replay_timeline.h"
+#include "user/events.h"
 #include "user/notices.h"
 #include "user/user_state.h"
 #include "sound/sound_system.h"
@@ -2796,6 +2797,7 @@ bool GameSession::FinishLoad(std::string* why) {
   const SessionDescription& session = *described;
   const ReplayHeader& h = session.header;
   Logf(LogLevel::Info, "moho64ui: session started: rules %.2f s, simulation start-up %.2f s", loadRulesSeconds_, loadStartSeconds_);
+  NoteEvent("screen", play_ ? "a replay begun" : "a game begun");  // (the interface's last events: user/events.h)
   {
     // (where the load's time went, seconds from its start: what the loading thread did, and what came after it)
     const double end = std::chrono::duration<double>(std::chrono::steady_clock::now() - loadBegan_).count();

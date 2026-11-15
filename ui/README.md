@@ -89,6 +89,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   its top left corner with the log's name, until it is clicked or the menu is left (`user/notices.h`,
   `data/hook/lua/ui/menus/main.lua`; `moho64ui_Notices()`, `moho64ui_NoticesSeen()`; `tests/notices.lua`). The
   build's commit is the engine's build stamp too (`build_ui.py`: `-DMOHO64_BUILD_STAMP`).
+  Since 2026-11-14 the log also holds the renderer's lines, the card's start-up report among them ("render: card:
+  ..."; its request 79: `WorldPicture::SetLogSink`, set in `main.cpp` before any picture is made; nothing of the
+  renderer goes to stdout or stderr any more; `render::LogFlush` at the program's end), and the interface's last
+  events: a ring of the last 400 mouse presses (with the control pressed), key-map actions run by a key, console
+  commands, orders handed to the simulation and games begun, written into the log by the console command
+  `remaster_events [n]` and once at the program's orderly end (the last 200; `user/events.h`, `moho64ui_Events()`,
+  `tests/events.lua`; the report bundle's first part, Chris's "logs extremely detailed" of 2026-11-14).
 - The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
   Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
   `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog

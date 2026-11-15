@@ -24,6 +24,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `BEAT_LOG` | look | each beat's times, our maxSP, and each wait of the interface on a running beat with the function that waited | measuring scripts |
 | `BINDING_PROFILE` | look | every engine function the scripts call is timed (calls and time) | - |
 | `CAPTURE_FRAME` | test | the frame (300 unless given) at which `--window-capture`'s and the second window's pictures are taken | tests/dualhead.lua's runs |
+| `CRASH_TEST` | test | a fault on purpose right after the start's crash set-up, half a line printed the renderer's way before it: the log must hold the crash's lines and that half line after them (`CrashSetBeforeReport(render::LogFlush)`) | crash_test.sh (suite job crash_test) |
 | `DEFAULT_LOG` | test | a run without a window writes the default log file, as a window does | suite (the log job) |
 | `DIRTY_CHECK` | test | every frame's repaint of the changed parts is compared with a full redraw | window_checks.sh, wc_game_ab.sh |
 | `DRAW_PROFILE` | look | where drawing the interface's picture goes, by kind of control | - |

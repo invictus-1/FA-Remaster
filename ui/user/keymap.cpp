@@ -20,6 +20,7 @@
 #include "maui/control.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
+#include "user/events.h"
 #include "user/replay_timeline.h"
 #include "user/retest.h"
 #include "user/user_state.h"
@@ -625,6 +626,16 @@ static bool PaletteOpen(lua_State* L) {
   return open;
 }
 
+// A key-map action run by a key, noted as one event of the interface's last events (user/events.h): the key with its
+// modifiers and the action; the console command it runs is not noted again as "console".
+static void RunKeyAction(lua_State* L, KeyMap& map, int vk, bool shift, bool ctrl, bool alt, const std::string& action) {
+  std::string key = std::string(ctrl ? "Ctrl-" : "") + (shift ? "Shift-" : "") + (alt ? "Alt-" : "") + map.names[vk & 0xff];
+  NoteEvent("key", key + " -> " + action);
+  EventsFromKey() = true;
+  ExecuteConsoleCommand(L, action);
+  EventsFromKey() = false;
+}
+
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat) {
   KeyMap& map = Map(L);
   const bool wasDown = map.down.count(vk) != 0;
@@ -639,7 +650,7 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
     // again (Ctrl-Shift-P at first), as the photo mode's own key closes the photo mode.
     if (it != map.actions.end() && !repeat && IsActionOf(it->second, "REMASTER_PALETTE") && PaletteOpen(L)) {
       std::string action = it->second;
-      ExecuteConsoleCommand(L, action);
+      RunKeyAction(L, map, vk, shift, ctrl, alt, action);
     }
     return;
   }
@@ -650,7 +661,7 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   if (PhotoModeOpen(L)) {
     if (it != map.actions.end() && !repeat && IsPhotoModeAction(it->second)) {
       std::string action = it->second;
-      ExecuteConsoleCommand(L, action);
+      RunKeyAction(L, map, vk, shift, ctrl, alt, action);
       return;
     }
     PhotoModeKey(L, vk, repeat);
@@ -659,7 +670,7 @@ void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool r
   if (repeat && !map.repeats.count(code)) return;
   if (it == map.actions.end()) return;
   std::string action = it->second;  // the action may change the key map
-  ExecuteConsoleCommand(L, action);
+  RunKeyAction(L, map, vk, shift, ctrl, alt, action);
 }
 
 void KeyMapKeyUp(lua_State* L, int vk) {
@@ -1368,6 +1379,13 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   // over), in the front end and in a game; its key action "Re-test list" (Ctrl-Shift-R at first) runs it. Only in a
   // program started with --retest: without it there is no such command (it falls through to the unknown ones).
   if (Upper(name) == "REMASTER_RETEST" && RetestCommand(L, rest)) return;
+  // The interface's last events into the log (ours: user/events.h, the report bundle's first part): remaster_events
+  // [n] writes the newest n (all 400 kept without a number).
+  if (Upper(name) == "REMASTER_EVENTS") {
+    const int n = std::atoi(rest.c_str());
+    LogLastEvents("asked by remaster_events", n > 0 ? static_cast<size_t>(n) : 400);
+    return;
+  }
   // The follow camera (ours: ui/data/lua/followcam.lua, its camera maui/worldview.cpp): remaster_follow_cam [on|off]
   // (no word: it turns over), in a game or a replay. Its key action "Follow camera" (Ctrl-Alt-V at first) runs it.
   if (Upper(name) == "REMASTER_FOLLOW_CAM") {
@@ -1893,6 +1911,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
 void ExecuteConsoleCommand(lua_State* L, const std::string& text) {
   const size_t a = text.find_first_not_of(" \t");
   if (a == std::string::npos) return;
+  if (!EventsFromKey()) NoteEvent("console", text.substr(a));  // (the interface's last events: user/events.h)
   const size_t b = text.find_first_of(" \t", a);
   const std::string name = text.substr(a, b == std::string::npos ? std::string::npos : b - a);
   const ConVarNow var = ConVarOf(L, Upper(name));
