@@ -393,6 +393,10 @@ class UserState {
 void RegisterPrefsBindings(lua_State* L);
 // moho64ui_CardMemoryEstimate / moho64ui_CardMemoryNow (card_memory.cpp: the Options' graphics-memory strip).
 void RegisterCardMemoryBindings(lua_State* L);
+// The report (report.cpp, the report bundle's part (c)): the zip written into "reports" beside the preferences; its
+// file, or "" with `why`. The console's remaster_report [note] and moho64ui_Report([note]).
+std::string WriteReport(lua_State* L, const std::string& note, std::string* why);
+void RegisterReportBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Take over the original game's profiles once, when our preferences file does not exist yet
 // (Chris's decision, 2026-10-12: take over the player's existing profile once, on first start; read

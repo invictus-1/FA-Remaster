@@ -13,6 +13,8 @@ namespace moho::ui {
 void AddMenuNotice(const std::string& text);
 // The run's log file, named under the menu's line ("" when the run writes none).
 void SetMenuNoticeLog(const std::string& file);
+// That file, as given ("" when the run writes none): the report's (report.cpp) log of this run.
+std::string RunLogFile();
 // moho64ui_Notices() -> { text, ..., log = file } | nil; moho64ui_NoticesSeen(): the menu showed them, they go;
 // moho64ui_AddNoticeForTests(text) (a run with a test script only).
 void RegisterNoticeBindings(lua_State* L);

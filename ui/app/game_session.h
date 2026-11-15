@@ -235,6 +235,10 @@ class GameSession {
   // running or last played, "" for none.
   std::string userDir;
   std::string currentReplay;
+  // The replay being written put out to its disk now (the report copies the file as it is: report.cpp).
+  void FlushReplay() {
+    if (replay_) std::fflush(replay_);
+  }
   // Start a session from a replay file (a host path): its header makes the session, a replay
   // that the player watches (SessionIsReplay; the focus army none), and its command stream gives
   // the orders, beat by beat. False with the reason when it cannot start.

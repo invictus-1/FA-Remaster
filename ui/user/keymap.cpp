@@ -1381,6 +1381,15 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
   if (Upper(name) == "REMASTER_RETEST" && RetestCommand(L, rest)) return;
   // The interface's last events into the log (ours: user/events.h, the report bundle's first part): remaster_events
   // [n] writes the newest n (all 400 kept without a number).
+  // The report (ours: user/report.cpp, the report bundle's third part): remaster_report [a note] writes one zip with this
+  // run's log, the one before, the game's replay so far and the preferences into "reports" beside the preferences, and
+  // says where. The note goes into the zip's README.
+  if (Upper(name) == "REMASTER_REPORT") {
+    std::string why;
+    const std::string file = WriteReport(L, rest, &why);
+    if (file.empty()) return ConsolePrint(L, "remaster_report: no report: " + why);
+    return ConsolePrint(L, "remaster_report: written: " + file);
+  }
   if (Upper(name) == "REMASTER_EVENTS") {
     const int n = std::atoi(rest.c_str());
     LogLastEvents("asked by remaster_events", n > 0 ? static_cast<size_t>(n) : 400);

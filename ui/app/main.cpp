@@ -666,7 +666,9 @@ int main(int argc, char** argv) {
   }
   session.userDir = cfg.userDir;
   cfg.launchReplay = [&session](lua_State* L, const std::string& file, std::string* why) { return session.LaunchReplay(L, file, why); };
-  cfg.currentReplay = [&session]() { return session.currentReplay; };
+  // (the replay put out to its disk first: the report copies the file as it is, report.cpp; the Replay dialog's copy
+  // gains by it too)
+  cfg.currentReplay = [&session]() { session.FlushReplay(); return session.currentReplay; };
   cfg.worldLoading = [&session]() { return session.Loading(); };
   cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
   cfg.cardBackdrop = session.cardBackdrop();  // (the loading screen's film and the "IN TRANSIT" cover, where the window's picture shows)

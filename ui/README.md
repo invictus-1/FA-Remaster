@@ -102,6 +102,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   number beside it), and every screen with its true size, refresh and scale. No user or computer name, no path
   (`app/machine_info.cpp`; on Linux the system, processor and memory, the card in the renderer's lines; the lab's
   suite/machine_block.sh checks it, the names' absence included).
+- The report (ours; the report bundle's third part, 2026-11-15): the console's `remaster_report [a note]` writes one
+  zip into the folder "reports" beside the preferences and says where: README.txt (what is inside, when, our build,
+  the note), this run's log so far (the last 400 interface events written into it first), the log of the run before,
+  the game's replay as far as it is written, and the preferences. In the text files the user's own folder is written
+  `<user folder>`. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
+  `moho64ui_Report([note])`; `tests/report.lua`, the lab's suite/report.sh reads the zips).
 - The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57):
   a small panel under the Options dialog on its Video and Remastered tabs. It shows the renderer's estimate of the
   card's memory for the settings as chosen in the dialog, before Apply (`WorldPicture::EstimateCardMemory`, measured

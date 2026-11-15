@@ -66,6 +66,11 @@ void SetMenuNoticeLog(const std::string& file) {
   g_log = file;
 }
 
+std::string RunLogFile() {
+  std::lock_guard<std::mutex> hold(g_lock);
+  return g_log;
+}
+
 void RegisterNoticeBindings(lua_State* L) {
   SetGlobal(L, "moho64ui_Notices", l_Notices);
   SetGlobal(L, "moho64ui_NoticesSeen", l_NoticesSeen);
