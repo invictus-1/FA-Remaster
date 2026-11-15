@@ -172,7 +172,8 @@ void IndexBeat(Sim& sim);
 // makes and prints them in any session.
 void IndexAfterSessionStart(Sim& sim);
 // Remastered.AIUnitRating, AIZoneForces, AIZoneThreat, AIIndexInfo, AISquareLaw, AIBattleEstimate, and phase 3's
-// AIRandom, AISetRatingFix, AISetBeats, AISetVision (into the Remastered table, with the map calls).
+// AIRandom, AISetRatingFix, AISetBeats, AISetVision, and AISeenDead (2026-11-14) (into the Remastered table, with the
+// map calls).
 void RegisterIndexBindings(lua_State* L);
 bool WriteRatings(Sim& sim, const std::string& path);
 

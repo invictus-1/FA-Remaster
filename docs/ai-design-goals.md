@@ -459,3 +459,35 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     aircraft strike as one wing; a defence that loses the real trade rests and the army regroups; the commander's
     refuge is the inland base zone our mobile anti-air covers most; the ships fight only as a gathered fleet.
     Nothing new was proposed for cause (2): 36, 41 and 42 already tried near it.
+
+44. **The lag after a kill, and the navy's cost to the commander (helper aicore9, 2026-11-14; read by the engine
+    lead).** Chris's test of 13 November: "when a greater threat is killed there is a minor lag before it attacks".
+    The measure (aicore9's lag1.py): a fight in which at least 1,000 mass of enemy mobile units died while no
+    operation of ours ran, and the seconds until our next operation. Against FAF's veteran AI the base build
+    (43's) waited a median 68 s (32 such fights over 16 games), against FAF's rush AI 96 s; the ratio was 2-6
+    there, above every attack threshold: what held the army was the strength it still *remembered* of units it
+    had seen die (they faded over 60 s as if they had only walked out of sight) and the scouts' waits.
+    *Forget what was seen to die* (pk1w, landed as batch 169): a mobile enemy unit that dies in the army's sight
+    leaves its memory at once, and the strength remembered drops by that unit's rating (the native
+    `Remastered.AISeenDead`, read only). Full games, 16 seeds a set, paired by seed against 43's build: against
+    FAF's veteran AI 15 of 16 won and none lost (the base 12 and 4), score +10.4 (p 0.027), 13 seeds better and 3
+    worse; against FAF's rush AI +4.9 (p 0.231), 9 and 7; against M28 +0.1 (p 0.949), 9 and 7, no win either way.
+    The lag: 41 s against 68 s (veteran, p 0.078 over the pooled fights) and 74.5 s against 96 s (rush, p 0.469).
+    Better beyond the noise against one AI and not worse against the others: the kept rule. (The lead of 14
+    November had asked for the lag itself shorter at p < 0.05 as well; it is shorter in both sets, but not by
+    that much: noted for the check.)
+    *No scouts' look at a target the army sees now* (pk2w): the lag shorter (49 s against 68 s, p 0.235; 76 s
+    against 96 s, p 0.469), the games not better (veteran +2.6, p 0.83; rush -2.3, p 0.15; M28 identical in all
+    16). Not taken.
+    *The navy's cost:* a probe of 43's navy candidate (the navy grows with the navy it sees, nvy2w: -1.6 against
+    M28, p 0.12, 4 better and 12 worse) found its losses in the commander, not at sea: in every first fall-back one
+    tactical missile of a Seraphim T2 launcher, unseen from 196-255 away, took half the commander's health while 5-9
+    of our engineers stood within 20 and none repaired it (the repair rule took only idle engineers); its refuge
+    (726, 190) had no anti-air and no point defence at all; and the naval factories were ordered 12-26 times a game
+    for 4-5 that stood. Three answers, each alone against 43's build on M28: an order cap per site (nvy3w, with
+    nvy2w) -1.0 (p 0.30), 7 better and 9 worse; the refuge where our anti-air is (cmr2w) -0.4 (p 1.0), 14 of 16
+    games identical; the engineers beside a hurt commander repair it (acr1w) +0.2 (p 0.62), 4 and 3. All three
+    together (nvc1w) -1.5 (p 0.10), 7 and 9. None taken. One anti-missile defence by the commander's work area once a
+    missile has hit it (tmd1w: one, not a ring) works as meant (seed 16016: hit at tick 10370, ordered 10 s later),
+    but on 43's build a missile reaches the commander in only 2 of 16 games, so a set cannot judge it: kept for a
+    navy candidate that makes missiles the commander's danger again.

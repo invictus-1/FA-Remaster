@@ -1130,6 +1130,7 @@ native core for numbers and spends its own time only on decisions.
   | `AIRandom(army [, n])` | the army's own random stream: a float in [0, 1), or an integer 1..n (phase 3) |
   | `AISetRatingFix(blueprintId, multiplier)`, `AISetBeats(idA, idB, factor)` | Chris's corrections (3.3) |
   | `AISetVision(army, on)` | the "AI vision" cheat option for that army (3.2) |
+  | `AISeenDead(army [, forget])` | `{ground, mass, count, ghostGround, ghostLandMass}`: what the army saw die (mobile enemy units in its sight at one index build, dead at the next) since the start - their rating against ground, mass, units - and what its memory still counts of them; with `forget` true such a unit leaves the memory at once instead of fading for 60 s (2026-11-14) |
 - **Randomness:** the AI never calls the sim's `Random` for its own choices (that stream is shared with the game and
   the original's replays compare its draws). It gets its own MT19937 per brain, seeded from the session seed and the
   army index (`Remastered.AIRandom(army [, n])`, built in phase 3): same draws on every machine, and the game's stream

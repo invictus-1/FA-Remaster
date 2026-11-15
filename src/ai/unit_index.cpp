@@ -485,6 +485,22 @@ struct Memo {
   uint32_t tick = 0;
   bool structure = false;
   float hf = 1;
+  bool seen = false;      // (2026-11-14) in the army's sight (vision or omni) when last refreshed
+  bool diedSeen = false;  // (2026-11-14) the unit died while the army saw it (SeenDead below)
+};
+
+// (2026-11-14, Chris's test of 13 November: "when a greater threat is killed there is a minor lag before it attacks")
+// What an army saw die: a mobile enemy unit in its sight (vision or omni) at one index build and dead or gone at the
+// next. The memory above kept such a unit for kMemoryMobile beats, fading, as if it had only walked out of sight. The
+// counts below sum, from the session's start, what was so seen to die (its rating against ground as the index counted
+// it - the same terms as AIZoneSummary's ground columns - its mass and the units); `forget` (set by Lua,
+// Remastered.AISeenDead's second argument) takes such a unit out of the memory at once. Structures are left as they
+// were (remembered until their place is seen again, which a death in sight already does). Read only, and the memory
+// unchanged, unless an army's own script asks to forget; nothing in a session without our AI.
+struct SeenDead {
+  float ground = 0, mass = 0, count = 0;
+  float ghostGround = 0, ghostLandMass = 0;  // of the units seen to die, what the memory still counts now (weighted)
+  bool forget = false;
 };
 
 struct ArmyIndex {
@@ -494,6 +510,8 @@ struct ArmyIndex {
   bool rngSeeded = false;
   std::map<uint32_t, Memo> memory;  // by entity id (walked in id order)
   uint32_t builtTick = 0xffffffffu;
+  uint32_t lastBuild = 0xffffffffu, prevBuild = 0xffffffffu;  // (2026-11-14) the last two distinct build ticks
+  SeenDead seenDead;
   int units[kSides] = {}, unknown = 0, outside = 0;
   std::vector<Cell> cells;          // [zone][side][class]
   // The units themselves (phase 4), for the battle estimate of a zone (AIZoneEstimate): per zone and side, blueprint
@@ -592,6 +610,10 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
     if (r->kinds & kKindEconomy) e.economyMass += r->mass * weight;
   };
   const uint32_t now = sim.tick();
+  if (ix.lastBuild != now) {  // (2026-11-14, SeenDead: the build before this one; a forced rebuild keeps it)
+    ix.prevBuild = ix.lastBuild;
+    ix.lastBuild = now;
+  }
   auto addUnknown = [&](int side, const Vec3& p, int cls) {
     const int z = m.ZoneAt(p.x, p.z, -1);
     if (!z) {
@@ -641,6 +663,7 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
       mo.tick = now;
       mo.structure = r->move == kMoveStatic;
       mo.hf = hf;
+      mo.seen = (flags & (0x08 | 0x04)) != 0;  // (2026-11-14, SeenDead: seen now or on omni)
       continue;
     }
     if (u->fractionComplete < 1) continue;
@@ -648,11 +671,28 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
   }
   // Remembered enemies the army does not hold now: structures until the army sees their place again (vision there),
   // mobile units fading out over kMemoryMobile beats. In id order; entries refreshed this build are counted above.
+  ix.seenDead.ghostGround = ix.seenDead.ghostLandMass = 0;
   if (!ix.vision)
     for (auto it = ix.memory.begin(); it != ix.memory.end();) {
       Memo& mo = it->second;
       if (mo.tick == now) {
         ++it;
+        continue;
+      }
+      // (2026-11-14, SeenDead) a mobile unit in sight at the build before this one that is dead or gone now
+      if (!mo.structure && !mo.diedSeen && mo.seen && mo.tick == ix.prevBuild && mo.entity >= 0 &&
+          mo.entity < static_cast<int>(rs.byEntity.size()) && rs.byEntity[mo.entity].valid) {
+        const Entity* e = sim.FindEntityById(it->first);
+        if (!e || e->dead) {
+          const UnitRating& r = rs.byEntity[mo.entity];
+          mo.diedSeen = true;
+          ix.seenDead.ground += r.value[kVsGround] * mo.hf * r.fix;
+          ix.seenDead.mass += r.mass;
+          ix.seenDead.count += 1;
+        }
+      }
+      if (mo.diedSeen && ix.seenDead.forget) {
+        it = ix.memory.erase(it);
         continue;
       }
       const uint32_t age = now - mo.tick;
@@ -663,6 +703,12 @@ void BuildIndex(Sim& sim, ArmyIndex& ix) {
         continue;
       }
       const float weight = mo.structure ? 1.0f : 1.0f - static_cast<float>(age) / kMemoryMobile;
+      if (mo.diedSeen && m.ZoneAt(mo.pos.x, mo.pos.z, -1)) {  // (SeenDead: what the memory still counts of them)
+        const UnitRating& r = rs.byEntity[mo.entity];
+        ix.seenDead.ghostGround += r.value[kVsGround] * mo.hf * r.fix * weight;
+        if (r.move == kMoveLand || r.move == kMoveHover || r.move == kMoveAmphibious)
+          ix.seenDead.ghostLandMass += r.mass * weight;
+      }
       addKnown(kEnemy, mo.pos, &rs.byEntity[mo.entity], mo.hf, weight, true, mo.owner);
       ++it;
     }
@@ -1661,6 +1707,26 @@ int l_AISetBeats(lua_State* L) {
   return 0;
 }
 
+// Remastered.AISeenDead(army [, forget]) -> {ground, mass, count, ghostGround, ghostLandMass} (2026-11-14): what the
+// army saw die since the session's start (SeenDead above: mobile enemy units in its sight at one index build and dead
+// at the next; their rating against ground as the index counted it, mass, units), and what its memory still counts of
+// them now (weighted; 0 once they are forgotten). With `forget` given, from the next build on such a unit leaves the
+// army's memory at once (true) or fades as before (false).
+int l_AISeenDead(lua_State* L) {
+  ArmyIndex& ix = CheckArmyIndex(L, 1);
+  if (!lua_isnoneornil(L, 2)) ix.seenDead.forget = lua_toboolean(L, 2) != 0;
+  const SeenDead& s = ix.seenDead;
+  lua_newtable(L);
+  const std::pair<const char*, float> fields[] = {{"ground", s.ground}, {"mass", s.mass}, {"count", s.count},
+                                                  {"ghostGround", s.ghostGround}, {"ghostLandMass", s.ghostLandMass}};
+  for (const auto& [name, v] : fields) {
+    lua_pushstring(L, name);
+    lua_pushnumber(L, v);
+    lua_rawset(L, -3);
+  }
+  return 1;
+}
+
 // Remastered.AISetVision(army, on): the "AI vision" cheat option for an army that plays our AI (its index then knows
 // every enemy unit where it is). Its brain sets it from the lobby option, the same on every machine.
 int l_AISetVision(lua_State* L) {
@@ -1712,7 +1778,8 @@ void RegisterIndexBindings(lua_State* L) {
               {"AIEnemyMix", l_AIEnemyMix},
               {"AISetRatingFix", l_AISetRatingFix},
               {"AISetBeats", l_AISetBeats},
-              {"AISetVision", l_AISetVision}};
+              {"AISetVision", l_AISetVision},
+              {"AISeenDead", l_AISeenDead}};
   for (const auto& fn : kFns) {
     lua_pushstring(L, fn.name);
     lua_pushcfunction(L, fn.f);
