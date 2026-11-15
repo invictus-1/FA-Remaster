@@ -2310,7 +2310,7 @@ std::vector<std::string> VulkanDevice::Report() {
   const uint32_t vendor = props_.vendorID;
   const char* maker = vendor == 0x10de ? "NVIDIA" : vendor == 0x1002 ? "AMD" : vendor == 0x8086 ? "Intel" : vendor == 0x106b ? "Apple" : vendor == 0x13b5 ? "ARM"
                       : vendor == 0x5143 ? "Qualcomm" : "another maker";
-  snprintf(buf, sizeof buf, "card: %s, vendor 0x%04x (%s), device 0x%04x, %s", props_.deviceName, vendor, maker, props_.deviceID, kind);
+  snprintf(buf, sizeof buf, "adapter: %s, vendor 0x%04x (%s), device 0x%04x, %s", props_.deviceName, vendor, maker, props_.deviceID, kind);
   out.push_back(buf);
   // its memory: the heaps, its own (device-local) and the computer's; the budget and the use of each where the driver says
   VkPhysicalDeviceMemoryBudgetPropertiesEXT b{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
