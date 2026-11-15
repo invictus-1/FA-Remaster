@@ -72,6 +72,9 @@ def main():
     rc, _, out = run("crash", ["--crash-test"], d)
     dmp = os.path.join(d, "crash.log.dmp")
     check("--crash-test: the log names the fault and the build", rc != 0 and "crash: EXCEPTION_ACCESS_VIOLATION" in out and "crash: build " in out, "exit %s" % rc)
+    check("  the host's call before the report ran after the crash's lines",
+          "crash: build " in out and "the host's call before the report ran" in out
+          and out.index("crash: build ") < out.index("the host's call before the report ran"))
     check("  the memory dump is beside the log", "crash: dump written to" in out and os.path.exists(dmp) and open(dmp, "rb").read(4) == b"MDMP")
     shutil.rmtree(work, ignore_errors=True)  # (this test's own temporary folder)
     print("paths_test: " + ("all passed" if not failed else "%d FAILED" % len(failed)))

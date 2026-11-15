@@ -32,6 +32,7 @@ thread_local CrashPlace g_crashPlace;
 namespace {
 
 CrashLuaReader g_luaReader = nullptr;
+void (*g_beforeReport)() = nullptr;
 
 volatile long g_inCrash = 0;  // a fault inside the handler: the process just ends
 
@@ -91,6 +92,13 @@ void PlaceLines() {
     }
     LogFlush();
   }
+}
+
+// The host's call (CrashSetBeforeReport), after every line above is flushed.
+void BeforeReport() {
+  if (!g_beforeReport) return;
+  g_beforeReport();
+  LogFlush();
 }
 
 #if defined(_WIN32)
@@ -222,6 +230,7 @@ LONG WINAPI OnException(EXCEPTION_POINTERS* ep) {
   Line("crash: build %s", BuildStamp());
   LogFlush();
   PlaceLines();
+  BeforeReport();
   Report(ep);
   InterlockedExchange(&g_inCrash, 0);
   return g_previous ? g_previous(ep) : EXCEPTION_CONTINUE_SEARCH;
@@ -238,6 +247,7 @@ void OnAbort(int) {
   Line("crash: build %s", BuildStamp());
   LogFlush();
   PlaceLines();
+  BeforeReport();
   Report(nullptr);
 }
 
@@ -264,6 +274,7 @@ void OnSignal(int sig, siginfo_t* si, void* uc) {
   Line("crash: build %s", BuildStamp());
   LogFlush();
   PlaceLines();
+  BeforeReport();
   // SA_RESETHAND: returning re-runs the fault (or abort re-raises) with the default action
 }
 
@@ -295,6 +306,8 @@ void CrashSetReport(const char* logFile, const char* dumpFile, bool messageBox) 
 }
 
 void CrashSetLuaReader(CrashLuaReader reader) { g_luaReader = reader; }
+
+void CrashSetBeforeReport(void (*fn)()) { g_beforeReport = fn; }
 
 bool CrashReadable(const void* p, size_t n) {
   if (!p) return false;

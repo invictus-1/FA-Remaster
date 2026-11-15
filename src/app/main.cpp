@@ -2121,6 +2121,8 @@ int main(int argc, char** argv) {
   if (!o.logFile.empty()) CrashSetReport(o.logFile.c_str(), (o.logFile + ".dmp").c_str(), false);
   if (o.crashTest) {  // the crash report's own test: a write to an address that is no memory
     Logf(LogLevel::Info, "moho64: --crash-test: faulting on purpose");
+    // (and the host's call before the report, core/crash.h CrashSetBeforeReport: its line must follow the crash's)
+    CrashSetBeforeReport([] { Logf(LogLevel::Info, "moho64: --crash-test: the host's call before the report ran"); });
     volatile uintptr_t nowhere = 16;
     *reinterpret_cast<volatile int*>(nowhere) = 1;
   }
