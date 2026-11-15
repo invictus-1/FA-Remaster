@@ -491,3 +491,21 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     missile has hit it (tmd1w: one, not a ring) works as meant (seed 16016: hit at tick 10370, ordered 10 s later),
     but on 43's build a missile reaches the commander in only 2 of 16 games, so a set cannot judge it: kept for a
     navy candidate that makes missiles the commander's danger again.
+
+45. **Three answers from 43's ledger, in full games on today's AI (helper aicore10, 2026-11-15; read by the engine
+    lead).** 43's ledger names the ships shelling our base, and our anti-ship aircraft and ships thrown in one by one,
+    as the largest causes of the games lost to M28. Three answers built on 13 November were only screened (21-minute
+    games end before that damage) and are now ported, each alone, onto main's AI (44's build) and played in full
+    against M28, 16 seeds, paired against a fresh set of main's own (the engine's fixes since 11 November play some
+    seeds differently from the older sets, so those cannot pair): main itself 0 of 16 won, 29.5 minutes a game.
+    *The anti-ship aircraft strike as one wing* (they gather at the start and go once they weigh 0.6 of the ships'
+    mass, at least 4): score -0.2 (p 0.86), 8 better and 8 worse; the trade better (5.65 mass lost per mass killed
+    against 7.11, 30 bombers lost a game against 34), the outcome not. *The ships fight only as a gathered fleet* (a
+    fight starts when 70% of our ship mass is at the home water): +3.2 (p 0.85), 5 better and 11 worse; the +3.2 is
+    almost all one game, the first win against M28 of any of our builds (seed 15015, minute 13.8), and that win was
+    not the fleet's: M28's commander walked 298 from its start and our T1 artillery killed it. *A defence that loses the trade rests 3 minutes and the
+    army regroups* (600 mass lost for at least twice its kills in 60 s): -0.4 (p 0.50), 4 better, 4 the same, 8 worse,
+    and more extractor mass lost by minute 20 (-504, p 0.029). None taken (the kept rule). What it says: one change at
+    a time does not move M28's games; the wing's better trade (and the fleet's ships, +555 mass at minute 20 in 11
+    of 14 seeds) point to the two together, with more ships (43: M28 has two to four times our navy by minute 20),
+    as the next candidate.
