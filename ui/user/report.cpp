@@ -398,19 +398,6 @@ std::filesystem::path LastCrashedBefore(const std::filesystem::path& now) {
   return best;
 }
 
-// Whether a minidump holds the memory its stacks point at (a MemoryList stream: the engine's dumps until its gate
-// 170, 0x1040; after it 0x1000, the stacks, registers and modules only)
-bool DumpHasStackMemory(const std::string& d) {
-  if (d.size() < 16 || d.compare(0, 4, "MDMP") != 0) return false;
-  auto u32 = [&](size_t at) -> uint32_t {
-    if (at + 4 > d.size()) return 0;
-    return uint32_t(uint8_t(d[at])) | uint32_t(uint8_t(d[at + 1])) << 8 | uint32_t(uint8_t(d[at + 2])) << 16 | uint32_t(uint8_t(d[at + 3])) << 24;
-  };
-  for (uint32_t i = 0, n = u32(8), dir = u32(12); i < n && i < 256; ++i)
-    if (u32(dir + 12 * i) == 5) return true;
-  return false;
-}
-
 // A crashed run's log and its dump into the zip as <part>.txt and <part>.dmp, the dump masked; the README's lines
 void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::filesystem::path& dumpFile,
                    const std::string& logPart, const std::string& dumpPart, const std::string& which, std::string* inside,
@@ -423,12 +410,12 @@ void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::
   std::string dump;
   if (!ReadWhole(dumpFile, &dump)) return;
   // (the environment's values first: a value holding the user's folder must still match whole)
-  const bool memory = DumpHasStackMemory(dump);
   const size_t environment = MaskEnvironment(dump);
   const size_t masked = MaskUserNameInPaths(dump);
   zip.Add(dumpPart, dump);
   *inside += "- " + dumpPart + ": the crash dump of " + which + " (the threads' stacks" +
-             std::string(memory ? " and the memory near them" : "") + ", the modules, the fault and its registers).\n"
+             ", the little memory its registers point at, the modules, the fault). Masked all the same\n"
+             "  (the engine's dumps before its gate 170 held more: the memory the stacks point at).\n"
              "  Masked with '_', every string keeping its length so the dump stays readable: the values of the\n"
              "  program's environment variables wherever a piece of that block was caught, the user's and the PC's\n"
              "  names (" + std::to_string(environment) + " place(s)), the user's name in paths (" + std::to_string(masked) +
