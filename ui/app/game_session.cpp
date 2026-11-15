@@ -3174,6 +3174,7 @@ bool GameSession::EnsureWindowPicture(bool remake) {
   made->vulkan = vulkan, made->samples = samples;
   made->picture.SetVulkan(vulkan);                                  // (the player's Graphics API)
   if (!shaderCache.empty()) made->picture.SetShaderCache(shaderCache);  // (checks: --shader-cache)
+  if (cardImitationMB > 0) made->picture.SetCardImitation(true, cardImitationMB);  // (checks: MOHO64UI_CARD_IMITATION)
   made->picture.SetLowLatency(made->lowLatency = Pacing().lowLatency);  // (the Remastered tab's Low Latency, before Open)
   UseGameWindow(made->picture, window);
   if (window2_) UseSecondOn(made->picture, window2_, window2W_, window2H_);  // ([head2] made with the device)
@@ -4195,6 +4196,19 @@ bool GameSession::AskDeviceRecovery(const std::string& mode, std::string* why) {
 #endif
 }
 
+bool GameSession::CardMemoryNow(double* totalMB, double* budgetMB, double* usedMB) const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  const render::WorldPicture* picture = windowPicture_ ? &windowPicture_->picture : picture_ ? &picture_->picture : nullptr;
+  if (!picture) return false;
+  const render::WorldPicture::CardMemoryNow now = picture->CardMemory();
+  *totalMB = now.totalMB, *budgetMB = now.budgetMB, *usedMB = now.usedMB;
+  return now.totalMB > 0;
+#else
+  (void)totalMB, (void)budgetMB, (void)usedMB;
+  return false;
+#endif
+}
+
 void GameSession::PushDeviceState(lua_State* L) {
   auto num = [L](const char* k, double v) {
     lua_pushstring(L, k);
@@ -4467,6 +4481,7 @@ void GameSession::OpenPicture() {
   }
   pic->picture.SetVulkan(Looks().vulkan);  // (the player's Graphics API)
   if (!shaderCache.empty()) pic->picture.SetShaderCache(shaderCache);  // (checks: --shader-cache)
+  if (cardImitationMB > 0) pic->picture.SetCardImitation(true, cardImitationMB);  // (checks: MOHO64UI_CARD_IMITATION)
   pic->picture.SetTextureDetail(Looks().textureDetail);  // (the game's Texture Detail)
   pic->picture.SetLowLatency(Pacing().lowLatency);  // (the Remastered tab's Low Latency)
   pic->picture.SetSeason(Looks().season == 1 ? render::Season::Autumn : render::Season::Summer);  // (the Remastered tab's Season)

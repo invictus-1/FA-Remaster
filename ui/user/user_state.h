@@ -127,6 +127,9 @@ class UserState {
     // PushDeviceState behind moho64ui_RecoverDevice and moho64ui_DeviceState); unset: both return nil.
     std::function<bool(const std::string& mode, std::string* why)> recoverDevice;
     std::function<void(lua_State* L)> deviceState;
+    // The card's memory as the picture shown sees it (GameSession::CardMemoryNow; moho64ui_CardMemoryNow, the Options'
+    // graphics-memory strip). Unset, or false from it: none known.
+    std::function<bool(double* totalMB, double* budgetMB, double* usedMB)> cardMemoryNow;
     // The scripts' clock (CurrentTime, GetSystemTimeSeconds) runs on while a frame's scripts run, as the
     // original's GetSystemTimer does (FA exe 0x955730, which both read): on in a live window; off in a test
     // run, whose clock goes in fixed frame steps.
@@ -388,6 +391,8 @@ class UserState {
 
 // Preferences: GetPreference / SetPreference / SavePreferences (prefs.cpp).
 void RegisterPrefsBindings(lua_State* L);
+// moho64ui_CardMemoryEstimate / moho64ui_CardMemoryNow (card_memory.cpp: the Options' graphics-memory strip).
+void RegisterCardMemoryBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Take over the original game's profiles once, when our preferences file does not exist yet
 // (Chris's decision, 2026-10-12: take over the player's existing profile once, on first start; read
