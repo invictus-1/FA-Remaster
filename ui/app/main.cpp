@@ -66,6 +66,7 @@ using namespace moho;
 
 namespace moho::ui {
 extern const char kBuildCommit[];  // (build_ui.py: the commit the program was built from)
+void LogMachineBlock();  // (machine_info.cpp: the machine's block at the log's head, the report bundle's part (b))
 }
 
 namespace {
@@ -349,6 +350,9 @@ int main(int argc, char** argv) {
     if (logName.size() > 4) dumpName = logName.substr(0, logName.size() - 4) + ".dmp";
   }
   ui::SetMenuNoticeLog(logName);
+  // The machine's block (the report bundle's part (b), 2026-11-15): what this run ran on, before anything else is
+  // written, so that a log sent from another PC answers "what machine" by itself. Only where a log is written.
+  if (!logName.empty()) ui::LogMachineBlock();
 #ifdef MOHO64UI_WORLD_PICTURE
   // The renderer's lines into this log (its request 79, 2026-11-14: "the card's report" and the rest it prints went
   // to stdout / stderr, which a game started from a shortcut has not: on another machine all of it was lost). Set

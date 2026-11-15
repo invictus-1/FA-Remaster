@@ -96,6 +96,12 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   commands, orders handed to the simulation and games begun, written into the log by the console command
   `remaster_events [n]` and once at the program's orderly end (the last 200; `user/events.h`, `moho64ui_Events()`,
   `tests/events.lua`; the report bundle's first part, Chris's "logs extremely detailed" of 2026-11-14).
+- The machine's block at the log's head (ours; the report bundle's second part, 2026-11-15): right after the log
+  opens, lines "moho64ui: the machine: ..." name our build's commit, the system and its build number, the
+  processor (cores, threads), the memory, every graphics adapter with its memory and driver version (NVIDIA's own
+  number beside it), and every screen with its true size, refresh and scale. No user or computer name, no path
+  (`app/machine_info.cpp`; on Linux the system, processor and memory, the card in the renderer's lines; the lab's
+  suite/machine_block.sh checks it, the names' absence included).
 - The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57):
   a small panel under the Options dialog on its Video and Remastered tabs. It shows the renderer's estimate of the
   card's memory for the settings as chosen in the dialog, before Apply (`WorldPicture::EstimateCardMemory`, measured
