@@ -669,6 +669,9 @@ int main(int argc, char** argv) {
   // (tests: moho64ui_RecoverDevice, moho64ui_DeviceState; the graphics device's recovery, GameSession::ServeDevice)
   cfg.recoverDevice = [&session](const std::string& mode, std::string* why) { return session.AskDeviceRecovery(mode, why); };
   cfg.deviceState = [&session](lua_State* L) { session.PushDeviceState(L); };
+  cfg.cardMemoryNow = [&session](double* total, double* budget, double* used) { return session.CardMemoryNow(total, budget, used); };
+  // (checks: MOHO64UI_CARD_IMITATION=<MB>: a smaller card imitated by the session's pictures, GameSession::cardImitationMB)
+  if (const char* mb = std::getenv("MOHO64UI_CARD_IMITATION")) session.cardImitationMB = std::atoi(mb);
 
   // The front end's background: the world's picture of a map behind the main menu, on a thread
   // of its own. In a live window unless told otherwise; not when a game starts at once.

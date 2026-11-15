@@ -188,6 +188,7 @@ UserState::UserState(Vfs* vfs, Config config) : config_(std::move(config)) {
   RegisterPrefsBindings(L);
   RegisterNoticeBindings(L);
   RegisterEventBindings(L);
+  RegisterCardMemoryBindings(L);
   RegisterRetestBindings(L);
   RegisterBasicBindings(L);
   RegisterControlBindings(L);

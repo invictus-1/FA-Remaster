@@ -386,6 +386,9 @@ class GameSession {
   // loses the device on purpose must name a folder of its own: the renderer's first such test wrote a short
   // pipelines file over the player's (HANDOFF-render, 2026-11-10).
   std::string shaderCache;
+  // (checks: MOHO64UI_CARD_IMITATION=<MB>) A smaller card imitated on this one by every picture this session makes
+  // (the renderer's SetCardImitation(noRayTracing true, that many MB), before Open: a GTX 1080's kind at 8192); 0: none.
+  int cardImitationMB = 0;
   // moho64ui_RecoverDevice([mode]) (the host's own function for tests): asks for exactly ServeDevice's recovery at
   // the next frame boundary. `mode` "check" (or none): though the device is not lost (the renderer makes it anew all
   // the same); "lose": the device REALLY lost first, this program's own only and nothing of the system's
@@ -403,6 +406,10 @@ class GameSession {
   // mapSeconds, deviceTries, props, effects, looks, world, loadBegunAgain}}), world = the switches this program sets on
   // the game's world as that world has them now, stats = the last frame's numbers, backdrop = the menu background's.
   void PushDeviceState(lua_State* L);
+  // The card's memory as the picture shown sees it (the renderer's WorldPicture::CardMemory: its own, or the imitated
+  // card's; the system's budget for the program; its use), for the Options' graphics-memory strip (ours, Chris's wish
+  // of 2026-11-14, ui/REQUESTS 57). False without a picture of the world drawn on this thread.
+  bool CardMemoryNow(double* totalMB, double* budgetMB, double* usedMB) const;
 
   bool running() const { return sim_ != nullptr; }
   // A launch is loaded the original's way (its session states, WLD_Frame 0x88cae0): the launch call

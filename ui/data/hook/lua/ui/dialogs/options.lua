@@ -196,5 +196,14 @@ do
             gameSetNewPage(tabControl)
             FitLit()
         end
+        -- The graphics-memory strip under the dialog, on its Video and Remastered tabs (ours; Chris's wish of 2026-11-14,
+        -- /moho64ui/lua/memory_strip.lua): it reads the tab shown and the dialog's working set, both locals of the
+        -- game's module, through the functions that use them.
+        local attached, why = pcall(function()
+            return import('/moho64ui/lua/memory_strip.lua').Attach(dialog,
+                function() return Upvalue(gameSetNewPage, 'currentTabButton') end,
+                function() return Upvalue(RemasterGameCreateDialog, 'currentOptionsSet') end)
+        end)
+        if not attached then WARN("FA Remastered: the Options' graphics-memory strip: " .. tostring(why)) end
     end
 end

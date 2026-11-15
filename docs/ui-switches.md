@@ -23,6 +23,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `BEATS_HERE` | old way | a window's game runs its beats on the window's thread, not on a thread of their own | - (the measurements of October) |
 | `BEAT_LOG` | look | each beat's times, our maxSP, and each wait of the interface on a running beat with the function that waited | measuring scripts |
 | `BINDING_PROFILE` | look | every engine function the scripts call is timed (calls and time) | - |
+| `CARD_IMITATION` | test | `<MB>`: every picture of the session imitates a smaller card (the renderer's `SetCardImitation(true, MB)`: no ray tracing, that much card memory; 8192 a GTX 1080's kind) | memory_strip.sh (suite job memory_strip) |
 | `CAPTURE_FRAME` | test | the frame (300 unless given) at which `--window-capture`'s and the second window's pictures are taken | tests/dualhead.lua's runs |
 | `CRASH_TEST` | test | a fault on purpose right after the start's crash set-up, half a line printed the renderer's way before it: the log must hold the crash's lines and that half line after them (`CrashSetBeforeReport(render::LogFlush)`) | crash_test.sh (suite job crash_test) |
 | `DEFAULT_LOG` | test | a run without a window writes the default log file, as a window does | suite (the log job) |
