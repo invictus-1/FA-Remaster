@@ -108,6 +108,21 @@ Windows. `run_ext4.sh` runs `suite_wsl.sh` on it with `init_ext4.lua`.
 - **Speed:** the 47 jobs took 1 minute 50 seconds in all, three at a time (26 minutes through `/mnt/c`); the small
   lobby 12 s against 79 s. A Linux player's files are on such a file system; `/mnt/c` is no measure of anything.
 
+## After a landing: the headless build from ext4 again (2026-11-15, 11:25)
+
+The check the Fable lead asked for after each landing ("to see that nothing rotted"): the headless Linux build of
+the landed commit (7eea2ea9), the repository's parts of the copy in the Ubuntu brought up to date
+(`_scratch/ui/suite/wsl/refresh_ext4.sh`: data, mods, ui/data, ui/tests, the sessions, the program; the game's own
+files are left as they are), then `run_ext4.sh`.
+
+- **It found a fault, at once:** the headless build did not compile. The game's lines added to the log that day
+  (`app/main.cpp`) used a value that only the build with the world's picture has. The Windows build and the full
+  Linux build have it, so neither showed it. Fixed the same hour (7eea2ea9: the block makes its own test).
+- **Then, of the 47 plain jobs, 42 give the Windows counts** (17 more need the world's picture and are left out).
+  The 5 others are the known kinds: the camera shake of `templates` (part of the world picture) and four sound
+  checks the headless build cannot have (`sound_device`, `sound_loops`, the commander's steps in the two no-world
+  games). One fewer than on 2026-11-14.
+
 ## The full build on Linux: SDL window, sound, text and the Vulkan picture (2026-11-14, 14:15 to 14:35)
 
 Chris, 2026-11-14: "Yeah you can do that and sdl3", and for the shader compiler "Yes you can download". He installed

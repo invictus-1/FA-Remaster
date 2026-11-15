@@ -5,7 +5,7 @@
 -- a header, Video's "Show" button choosing the Remastered tab, a hover on one of our titles showing its tip; OK saving
 -- what the preset set. In the front end:
 --   moho64ui --init <init.lua> --prefs <a copy> --stage setup --size 1920x1080 --lua ui/tests/options_tabs.lua
---            --frames 300 --log out.log [--screenshot x.png -- /optcase top|water|video]
+--            --frames 300 --log out.log [--screenshot x.png -- /optcase top|water|video|gameplay|ui|sound]
 -- With /optcase the dialog is left open for the picture: the Remastered tab's top (top), scrolled to Water (water),
 -- or Video's end with the Show button (video).
 -- Every check logs "TEST ok ..." or "TEST FAIL ..."; the last line is "TEST done: <n> failed".
@@ -259,6 +259,11 @@ ForkThread(function()
             Button(buttons, 'video'):OnClick()
             local _, g = Row('remaster_show_tab')
             g:ScrollSetTop('Vert', 99)
+        elseif case == 'gameplay' or case == 'ui' or case == 'sound' then
+            -- (the game's own tabs, for the layout check: section 6, item 4, of the ui handoff, 2026-11-15)
+            local b = Button(buttons, case)
+            check("the " .. case .. " tab is there for the picture", b ~= nil, true)
+            if b then b:OnClick() end
         else
             Button(buttons, 'remaster'):OnClick()
             if case == 'water' then Choose('remaster_goto_section', 5) end
