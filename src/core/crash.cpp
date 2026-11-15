@@ -144,11 +144,12 @@ void Report(EXCEPTION_POINTERS* ep) {
   if (g_messageBox && g_box) {
     wchar_t text[2600];
     // (2026-11-15, Chris: the window points to remaster_report, whose zip holds this log and this dump with the
-    // player's names and environment masked, not to the raw files)
+    // player's names and environment masked, not to the raw files. It takes the newest crash among the kept logs, so
+    // the next start is the sure moment: the ui's note)
     _snwprintf(text, 2600,
-               L"The game has stopped because of a fault in the program.\n\nTo report it: start the game again, open the "
-               L"console and type\n\n    remaster_report <what you were doing>\n\nIt makes one zip with this crash's log%ls, your "
-               L"names hidden, beside your preferences. Send that zip.",
+               L"The game has stopped because of a fault in the program.\n\nTo report it: the next time you start the game, "
+               L"open the console and type\n\n    remaster_report <what you were doing>\n\nIt makes one zip with this crash's "
+               L"log%ls, your names hidden, beside your preferences. Send that zip.",
                dumped ? L" and memory dump" : L"");
     text[2599] = 0;
     g_box(nullptr, text, L"FA Remastered", 0x10 | 0x10000 | 0x40000);  // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
