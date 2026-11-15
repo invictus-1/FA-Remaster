@@ -676,6 +676,11 @@
 // --card-memory <MB>  [gtx1080] the card taken to have that much memory of its own (DeviceDesc::cardMemoryMB): its report
 //           says so, and the budget the renderer decides by (World's making ahead, a photo's plan) is scaled to it; what
 //           the run really uses is printed at its end ("card memory: the most ...") to hold against it (also for --picture)
+// --card-estimate [small|medium|large]  [vram] WorldPicture::EstimateCardMemory for this run's own settings (its size, --fsr,
+//           --fsr3, --frame-generation, --msaa, --texture-detail, --shadow-size or --noshadows, rays unless --no-ray-tracing
+//           where a look traces them, the looks of the atmosphere, soft shadows, ground detail and weather effects, the
+//           surround, --no-read-ahead; the game's size, large unless given): each part on a line of its own and the sum,
+//           then the viewer ends (no window, no device, no map)
 // --lose-device-at <frame>  [devicelost] the graphics device lost on purpose after that frame (gfx.h, Device::LoseForTest:
 //           Direct3D 12 by ID3D12Device5::RemoveDevice, for real; with --vulkan made up, the next submit's result taken
 //           for a loss), to try what notices it and what is done then; no driver is reset and no other program touched.
@@ -1065,6 +1070,8 @@ struct Options {
   bool fxc = false;                     // --fxc
   bool noRayTracing = false;            // [gtx1080] --no-ray-tracing
   int cardMemoryMB = 0;                 // [gtx1080] --card-memory
+  bool cardEstimate = false;            // [vram] --card-estimate
+  std::string cardEstimateSize;         // [vram] (its game size: small, medium, large; empty: large)
   bool shaderCache = true;              // --no-shader-cache
   std::string shaderCacheDir;           // --shader-cache
   bool vulkanClear = false;             // --vulkan-clear
@@ -1514,6 +1521,10 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--lose-in-recovery") o->loseInRecovery = true;  // [notice]
     else if (a == "--fxc") o->fxc = true;
     else if (a == "--no-ray-tracing") o->noRayTracing = true;  // [gtx1080]
+    else if (a == "--card-estimate") {  // [vram]
+      o->cardEstimate = true;
+      if (i + 1 < argc && argv[i + 1][0] != '-') o->cardEstimateSize = argv[++i];
+    }
     else if (a == "--no-shader-cache") o->shaderCache = false;
     else if (a == "--vulkan-clear") o->vulkan = o->vulkanClear = true;
     else if (a == "--gfx-check") o->gfxCheck = true;
@@ -2400,6 +2411,39 @@ int main(int argc, char** argv) {
     return 2;
   }
   if (!opt.logSinkTest.empty() && !InstallLogSinkTest(opt.logSinkTest)) return 2;  // [logsink]
+  if (opt.cardEstimate) {  // [vram] --card-estimate: WorldPicture::EstimateCardMemory for this run's own settings, printed; no window
+    WorldPicture::CardMemoryChoice c;
+    c.width = opt.width;
+    c.height = opt.height;
+    c.upscale = opt.upscale;
+    c.temporalUpscale = opt.fsr3;
+    c.frameGeneration = opt.frameGeneration;
+    c.samples = opt.fsr3 ? 1 : opt.msaa == 2 || opt.msaa == 4 || opt.msaa == 8 ? opt.msaa : 1;  // (as gSceneSamples below)
+    c.textureDetail = opt.textureDetail;
+    c.rayTracing = !opt.noRayTracing && (opt.bounce || opt.rayReflections || opt.rayLightShadows > 0);  // (taken as a card with rays)
+    c.shadowSize = opt.shadows ? opt.shadowSize : 0;
+    c.softShadows = opt.softShadows || opt.contactShadows;
+    c.atmosphere = opt.air || opt.clouds3d || opt.skyTables || opt.cloudZoom || opt.beyondLand;
+    c.groundDetail = opt.groundCover || opt.battleScars || opt.leafLight || opt.deepTracks || opt.wildlife || opt.plantsReact ||
+                     opt.remasteredTarmacs || opt.plantsFar;
+    c.weatherEffects = opt.litRain || opt.rainSplashes || opt.waterDetail || opt.surf || opt.oceanWaves || opt.streamWater || opt.horizon;
+    c.surround = opt.surround && opt.worldBeyond;
+    c.readAhead = opt.readAhead;
+    c.gameSize = opt.cardEstimateSize == "small"    ? WorldPicture::CardMemoryChoice::GameSize::Small
+                 : opt.cardEstimateSize == "medium" ? WorldPicture::CardMemoryChoice::GameSize::Medium
+                                                    : WorldPicture::CardMemoryChoice::GameSize::Large;
+    const WorldPicture::CardMemoryEstimate e = WorldPicture::EstimateCardMemory(c);
+    printf("render: card estimate: %dx%d, share %.2f%s%s, %d samples, texture detail %d, shadow map %d, rays %s, soft shadows %s, atmosphere %s, "
+           "ground detail %s, weather effects %s, surround %s, read ahead %s, game %s\n",
+           c.width, c.height, c.upscale, c.temporalUpscale ? " FSR 3" : "", c.frameGeneration ? ", frame generation" : "", c.samples, c.textureDetail,
+           c.shadowSize, c.rayTracing ? "on" : "off", c.softShadows ? "on" : "off", c.atmosphere ? "on" : "off", c.groundDetail ? "on" : "off",
+           c.weatherEffects ? "on" : "off", c.surround ? "on" : "off", c.readAhead ? "on" : "off",
+           opt.cardEstimateSize.empty() ? "large" : opt.cardEstimateSize.c_str());
+    for (const WorldPicture::CardMemoryPart& p : e.parts)
+      printf("render: card estimate: %-17s %6.0f MB  %s%s\n", p.id, p.megabytes, p.name, p.measured ? "" : " (not counted yet)");
+    printf("render: card estimate: the sum %.0f MB, +- %.0f MB\n", e.totalMB, e.marginMB);
+    return 0;
+  }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash
   // (crash report) A fault writes its place, the build and the frames to stderr and to the log (core/crash.h). A run
   // a person watches (no --frames) also keeps a dated log of its own beside the shader cache when --simlog names none
@@ -2695,6 +2739,10 @@ int main(int argc, char** argv) {
         const WorldPicture::PresetSuggestion s = picture.SuggestedPreset();
         printf("render: --picture: suggested for this card: preset %d, texture detail %d, shadow fidelity %d: %s\n", s.preset, s.textureLevel,
                s.shadowQuality, s.reason.c_str());
+      }
+      {  // [vram] the card's memory now (WorldPicture::CardMemory: its own, the budget the system gives this program, the use)
+        const WorldPicture::CardMemoryNow n = picture.CardMemory();
+        printf("render: --picture: the card's memory: %.0f MB of its own, a budget of %.0f MB, %.0f MB used now\n", n.totalMB, n.budgetMB, n.usedMB);
       }
       live.onStarted = [&](const moho::Sim& sim) { picture.GameStarted(sim); };
       live.onBeat = [&](const moho::Sim& sim) {
