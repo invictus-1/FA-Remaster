@@ -624,9 +624,23 @@ function Think(brain)
     -- (phase 6, fog of war: what the army saw of the enemy's strength fades slowly, kPeakFade a think, so a few
     -- minutes without sight of its army are not "far ahead"; the duels with fog launched decisive pushes at a ratio
     -- of 20-50 into armies they had not seen for a while)
-    R.theirsPeak = math.max(theirs, (R.theirsPeak or 0) * kPeakFade)
+    -- (2026-11-14, Chris's test of 13 November: "when a greater threat is killed there is a minor lag before it
+    -- attacks") What the army SAW DIE is forgotten at once: the index drops a mobile enemy unit that died in our sight
+    -- from its memory (before, it faded over 60 s there as if it had only walked out of sight), and the strength
+    -- remembered here drops by that unit's rating against ground (Remastered.AISeenDead: the same terms as the front's
+    -- sums). What was only lost from sight still fades by kPeakFade, as phase 6 set.
+    local seenDead = Remastered.AISeenDead(R.army, true)
+    local gone = math.max(0, seenDead.ground - (R.seenDeadGround or 0))
+    local goneUnits, goneMass = seenDead.count - (R.seenDeadCount or 0), seenDead.mass - (R.seenDeadMass or 0)
+    R.seenDeadGround, R.seenDeadCount, R.seenDeadMass = seenDead.ground, seenDead.count, seenDead.mass
+    local remembered = (R.theirsPeak or 0) * kPeakFade
+    R.theirsPeak = math.max(theirs, remembered - gone)
     theirs = R.theirsPeak
     local ratio = ours / math.max(theirs, 1)
+    if gone > 0 and gone >= 0.1 * remembered then
+        Log(R, 'forget', 0, 0, ratio, string.format('saw %d enemy units die (%.0f mass, %.1f of strength): the strength remembered %.1f -> %.1f',
+            goneUnits, goneMass, gone, remembered, theirs))
+    end
     local K = Knobs(brain)
     if math.mod(R.tick, 600) < 50 then  -- (a status line a minute: tests score "pushes when ahead" from these; the
         -- operations think on ticks 10-19 of each 50 since 2026-11-03, still once in the minute's first 50)
