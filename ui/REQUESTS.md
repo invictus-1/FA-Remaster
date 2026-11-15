@@ -2844,7 +2844,7 @@ a quarter of a second is a blink.
 
 ### 57. An estimate of the card's memory for a set of settings, by part (the options' "graphics memory" strip) (2026-11-14, Chris's wish; not blocking)
 
-**WAITING: agreed, not built (the renderer, 2026-11-14 ~14:50, by message; proposed 14:49).** The shape below stands, with his
+**ANSWERED (the renderer's half, 2026-11-14: render 106f227f + d7ad440d, main c4800952; docs/render-answers.md, "To the ui, request 57"). The interface's strip: BUILT 2026-11-14 by the Opus lead (ui/data/lua/memory_strip.lua, ui/user/card_memory.cpp), its place and look waiting for Chris's eye.** Agreed with the renderer 2026-11-14 ~14:50, by message; proposed 14:49. The shape below stands, with his
 three changes: (1) each part carries `measured` (bool): he stands behind what he measured on 2026-11-14 (SETONS_R,
 eight M28 armies, full looks, 1440p: the base by texture detail 7,800 / 5,300 / 3,350 MB, about 130 MB a megapixel of
 window size, the sun's shadow map, ray tracing, what is made ahead); the parts not measured yet (clouds, ground

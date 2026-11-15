@@ -96,6 +96,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   commands, orders handed to the simulation and games begun, written into the log by the console command
   `remaster_events [n]` and once at the program's orderly end (the last 200; `user/events.h`, `moho64ui_Events()`,
   `tests/events.lua`; the report bundle's first part, Chris's "logs extremely detailed" of 2026-11-14).
+- The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57):
+  a small panel under the Options dialog on its Video and Remastered tabs. It shows the renderer's estimate of the
+  card's memory for the settings as chosen in the dialog, before Apply (`WorldPicture::EstimateCardMemory`, measured
+  for a large late game), the card's memory and the system's budget for the game (`CardMemory`), a bar, the largest
+  parts, the parts not counted yet (never shown as free), and over the budget the settings that give the most back,
+  each one step lower. It changes no setting (`data/lua/memory_strip.lua`, `user/card_memory.cpp`:
+  `moho64ui_CardMemoryEstimate`, `moho64ui_CardMemoryNow`; `MOHO64UI_CARD_IMITATION=<MB>` imitates a smaller card for
+  tests; `tests/memory_strip.lua`). Its place and look wait for Chris's word.
 - The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
   Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
   `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog
