@@ -2123,6 +2123,12 @@ int main(int argc, char** argv) {
     Logf(LogLevel::Info, "moho64: --crash-test: faulting on purpose");
     // (and the host's call before the report, core/crash.h CrashSetBeforeReport: its line must follow the crash's)
     CrashSetBeforeReport([] { Logf(LogLevel::Info, "moho64: --crash-test: the host's call before the report ran"); });
+#if defined(_WIN32)
+    // (a pointer to the process's environment block held on the stack at the fault, as any program may hold one: the
+    // dump must not carry the block it points to; tools/paths_test.py looks for a planted value in the dump)
+    volatile const void* environmentHeld = CrashTestEnvironmentBlock();
+    (void)environmentHeld;
+#endif
     volatile uintptr_t nowhere = 16;
     *reinterpret_cast<volatile int*>(nowhere) = 1;
   }

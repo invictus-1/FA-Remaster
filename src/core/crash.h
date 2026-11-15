@@ -86,4 +86,8 @@ bool CrashReadable(const void* p, size_t n);
 // its own lines are flushed after it.
 void CrashSetBeforeReport(void (*fn)());
 
+// For the crash tests only (moho64 --crash-test): the process's environment block (Windows' GetEnvironmentStringsW),
+// to be held on the stack at the fault: the dump must not carry what it points to. nullptr elsewhere.
+const void* CrashTestEnvironmentBlock();
+
 }  // namespace moho
