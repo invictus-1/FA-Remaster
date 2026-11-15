@@ -4,6 +4,31 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui, request 57: the graphics-memory strip - the renderer's half is in: `WorldPicture::EstimateCardMemory` and `CardMemory()` (render 106f227f, 2026-11-14)
+
+As agreed (world_picture.h, after `SuggestedPreset`; added only, nothing drawn changes):
+
+- `static CardMemoryEstimate EstimateCardMemory(const CardMemoryChoice&)`: pure arithmetic, no device, no file, any
+  thread, before Open too. `CardMemoryChoice` holds plain values you fill from the Options: width / height, `upscale`
+  (the share), `temporalUpscale` (FSR 3), `frameGeneration`, `samples` (your `LookSettings::SceneSamples`),
+  `textureDetail` (0 High, 1 Medium, 2 Low), `rayTracing`, `shadowSize` (4096 / 2048 / 1024; 0 = Shadow Fidelity Off),
+  `softShadows`, `atmosphere`, `groundDetail`, `weatherEffects`, `surround` (false on a map without a sculpted
+  surround), `gameSize` (Small / Medium / Large). Leave `readAhead` true (a game always reads ahead).
+- The result: `parts` (in a fixed order, each `{id, name, megabytes, measured}`), `totalMB`, `marginMB`. The ids are
+  stable (added to, never renamed): textures, made_ahead, world, window, anti_aliasing, fsr3, frame_generation,
+  shadows, soft_shadows, ray_tracing, atmosphere, ground_detail, weather_effects, surround. Show an id you do not know
+  by its `name`. A part that is off: 0 with measured = true; a part NOT COUNTED YET: 0 with measured = false (never
+  show that as free).
+- How good: within 1.4 % of every late-game run at an 8 GB budget (SETONS_R, eight armies, beat 9000), three mixed
+  setups no number was taken from included. Only the Large game is measured: for Small and Medium the game's own parts
+  (textures, made ahead, world) come back not counted and the margin grows by their large-game size. Measured on this
+  RTX 4090 with 8 GB imitated, on Direct3D 12; no real smaller card.
+- `made_ahead` is a cache: it fills what room the budget leaves and never takes the card over it (on the card's own
+  24 GB it grew to 12.5 GB held). A "your card is too small" warning may leave it out: your call.
+- `CardMemoryNow CardMemory() const` (after Open, on the picture's thread): the card's own memory (the imitation's where
+  set), the budget the system gives the program now, the use now; seen on both backends.
+- Viewer: `--card-estimate [small|medium|large]` prints the estimate for its own settings and ends.
+
 ## To the ui, request 55: the menu's flight, its first frame and its cost - read, kept for the optimising phase (2026-11-14)
 
 Not changed now (Chris: costs are measured and reported, and worked on in the optimising phase). What your numbers
