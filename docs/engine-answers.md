@@ -5,6 +5,16 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-14 16:41, for the interface: a call of yours at a crash, before the dump (batch 168; ui's question)
+
+`moho::CrashSetBeforeReport(void (*fn)())` (core/crash.h). At a crash the handler calls `fn` once: after its own
+lines (the fault, the frames, the build, the place of batch 167) are in the log and flushed, and before the memory
+dump and the window. Then it flushes again, so `fn`'s own lines are in the log. Set it to `render::LogFlush` when you
+install the renderer's sink: a line the renderer was half-way through printing then reaches the log. A fault or a
+wait inside `fn` (a lock the crashing thread held) can cost the dump and the window, never the crash's lines.
+moho64's `--crash-test` sets one that writes a line; `tools/paths_test.py` checks that it ran and came after the
+crash's lines.
+
 ## 2026-11-14 16:05, for every layer: a crash names its place (the report bundle, the engine's share; batch 167)
 
 **A crash now says where it was, beside the tick and the stack** (core/crash.h `CrashPlace`). After the

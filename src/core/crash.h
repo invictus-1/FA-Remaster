@@ -80,4 +80,10 @@ void CrashSetLuaReader(CrashLuaReader reader);
 // True when [p, p + n) can be read now (for the crash's readers: a crash may come from a broken object).
 bool CrashReadable(const void* p, size_t n);
 
+// A host's call at a crash (nullptr = none): once, after the crash's own lines are in the log and flushed, before
+// the memory dump and the window. For what the host still holds and the log should have (moho64ui: the renderer's
+// half-printed line, render::LogFlush). A fault or a wait inside it can cost the dump, never the crash's lines;
+// its own lines are flushed after it.
+void CrashSetBeforeReport(void (*fn)());
+
 }  // namespace moho
