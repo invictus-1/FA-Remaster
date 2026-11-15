@@ -4,6 +4,29 @@ Everything for the game's interface lives in this folder: the front end (main me
 options, replays) and the in-game interface (economy bar, construction, orders, minimap, score).
 It is built on its own and does not change the simulation.
 
+## A map of this folder (2026-11-15)
+
+The sections below "Build and run" grew as a diary, a line per piece as it landed. This map is the short way in:
+where each part lives and where its long description is. (Added by the Opus lead on account B; the diary itself is
+left as it is: rewriting it is a choice for the Fable lead.)
+
+| Part | Where | What it is | More |
+|---|---|---|---|
+| The program | `app/main.cpp` | options, the log (with the machine's block, `app/machine_info.cpp`), the files mounted, the front end, the loop | "Build and run"; `docs/ui-switches.md` (every `MOHO64UI_*` switch) |
+| A game | `app/game_session.*` | starting a skirmish or a replay; the simulation beside the interface; the replay file written as it runs | "Build and run" (sessions, replays) |
+| The window and the picture | `app/window*.cpp`, `app/run_window.cpp`, `app/backdrop.*`, `app/menu_flight.*` | Windows' window or SDL3's; the world's picture from `render/`; the menu's live flight | `docs/ui-window.md`, `docs/ui-menuflight.md`, `docs/ui-dualscreen.md` |
+| The control toolkit | `maui/` | the engine side the game's scripts call: controls, LazyVar layout, text, input, focus, the world view, the map preview | "What the interface is"; "Status" |
+| Drawing | `draw/` | the software path, textures, movies (pl_mpeg), the recorder | "Status" (Movies) |
+| The scripts' functions | `user/` | the user state's bindings: key maps and console commands (`keymap.cpp`), units and orders (`user_units.cpp`), preferences, the lobby, range rings, the replay timeline, the re-test panel, the menu's notices | "Build and run" |
+| The report bundle | `user/events.*`, `app/machine_info.cpp`, `user/report.cpp` | the last 400 interface events; the machine's block at each log's head; `remaster_report [note]`, one zip with the logs, the masked crash dump, the replay, the preferences | "Build and run" (the three entries of 2026-11-14 / 15) |
+| Sound | `sound/` | XACT banks, the mixer, Windows' and SDL3's output | "Build and run" (sound) |
+| Our scripts | `data/lua/`, `data/hook/` | our own Lua (photo mode, follow camera, palette, timeline, re-test panel, the Options' memory strip) and our hooks into the game's scripts | `docs/ui-options-layout.md` (the Options) |
+| Multiplayer | `net/` | LAN lobby and lockstep: FROZEN (Chris, 2026-11-09: no multiplayer goal) | `docs/ui-net-game.md`, `docs/ui-net-udp.md` |
+| Tests | `tests/` | one Lua script per feature, run by the lab's suite (`_scratch/ui/suite`, not in the repository) | `docs/ui-retest-list.md`; the lab's `suite.sh` |
+| Other systems | — | Linux (headless and SDL3 + Vulkan, run in WSL2) | `docs/ui-platforms.md` |
+| Measures | — | frame times, the photo key, the menu's flight, card memory | `docs/ui-benchmarks.md` |
+| Questions to and from other layers | — | the renderer's and the engine's answers, ours | `docs/ui-answers.md`, `ui/REQUESTS.md` |
+
 ## What "the interface" is in this game
 
 The original's interface is written in Lua (`/lua/ui`, `/lua/lazyvar.lua`, `/lua/maui/*`). Those
