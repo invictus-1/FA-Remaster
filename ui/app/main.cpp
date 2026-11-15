@@ -385,6 +385,12 @@ int main(int argc, char** argv) {
   if (std::getenv("MOHO64UI_CRASH_TEST")) {
     Logf(LogLevel::Info, "moho64ui: MOHO64UI_CRASH_TEST: half a line of the renderer's, then a fault on purpose");
     render::LogPrintf("render: the crash test's half line");
+#ifdef _WIN32
+    // (the environment block held from the stack at the fault: the dump then always catches a piece of it, the worst
+    // case for the report's masking of a crashed run's dump, user/report.cpp; the lab's suite/report.sh checks it)
+    wchar_t* volatile environment = GetEnvironmentStringsW();
+    (void)environment;
+#endif
     volatile int* nowhere = nullptr;
     *nowhere = 1;
   }
