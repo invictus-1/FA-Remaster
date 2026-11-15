@@ -118,6 +118,43 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## The multicore round as a whole: main 6e8d7177 against dfd0c579 (2026-11-14, account B)
+
+The round's items 1-5 (batches 162-166: the unit economy's sums, the combat prefill, the snapshot pool, the
+navigators' and steering's snapshots on the pool, phase D on the pool) were timed one by one on 11-13
+(mcwrap's `runs/t_c2345_table.txt`, below); this is all of them together, plus batches 167-169 (the crash place, the
+crash hook, an AI change; none of them in these sessions, which have no AI of ours).
+
+**Exes.** Before: mcwrap's clean worktree build of dfd0c579 (`wt/build-zig`). After: main 6e8d7177 (`build-zig`),
+copied with `data/fixes` and `data/ai` beside it. **Machine and method** as on 11-13: Ryzen 9 9950X3D, pinned to
+logical CPUs 0-15, `MOHO64_PLACE=off`, `MOHO64_PROFILE=1`, `MOHO64_STATS=1`, `MOHO64_PROFILE_CLOCK=game`, one run at a
+time, before and after taken back to back in each pair (mcwrap's `timing3.sh`; the original-order runs by its copy
+`timing3o.sh` with `ORDER=original`). Every run checked quiet at its start and end, with a sampler on CPUs 16-31 every
+~6 s (no moho64ui, moho64view or ForgedAlliance; the other chats held from 20:50; AI games of the lead's queue ran
+on CPUs 16-31). 24 runs, 20:50-21:11 (PC clock), all exit 0, none disturbed (one first run of the after exe failed at
+start-up for a missing `data/fixes` beside the copy; set aside, not counted).
+
+| workload | config | before (dfd0c579), 3 pairs | after (main), 3 pairs | change | pairs faster |
+|---|---|---|---|---|---|
+| B3-16k, 2000 beats | P16 | 16.13 / 15.53 / 15.42 = 15.69 | 14.86 / 14.86 / 13.96 = 14.56 | **-7.2%** | 3 of 3 |
+| 50k, 600 beats | P16 | 50.42 / 49.62 / 45.50 = 48.52 | 44.79 / 45.63 / 41.87 = 44.09 | **-9.1%** | 3 of 3 |
+| B3-16k | O1 | 26.81 / 25.58 / 26.59 = 26.33 | 26.94 / 25.71 / 27.27 = 26.64 | +1.2% | 0 of 3 |
+| 50k | O1 | 73.86 / 72.51 / 83.00 = 76.46 | 77.16 / 74.16 / 88.25 = 79.86 | +4.4% | 0 of 3 |
+
+(ms a beat, means of the profile's tick times. The entity pass alone at P16: B3 4.48 -> 3.75 ms, -16.3%; 50k 17.83 ->
+14.44 ms, -19.0%, 3 of 3 each.)
+
+**The headline, parallel order at 16 threads against the original order at one, the same session:** B3-16k **1.83x**
+(26.64 / 14.56; dfd0c579 tonight 1.68x), 50k **1.81x** (79.86 / 44.09; dfd0c579 tonight 1.58x).
+
+**Against 11-13's numbers.** 11-13 gave dfd0c579 2.05x and 1.90x, with its O1 at 32.45 and 89.66 ms; tonight the same
+exe's O1 took 26.33 and 76.46 ms (P16 15.86 / 47.17 then, 15.69 / 48.52 now). So the one-thread runs are what moved
+(not explained: the machine's state, the AI games then on the other CCD, or the run order); tonight's headline is the
+honest one for main: about 1.8x. The round's own gain at 16 threads is 7-9% (the items one by one suggested 15-20%:
+they overlap). At one thread in the original order the round costs a little (+1.2%, +4.4%, all pairs slower):
+the pool's bookkeeping is paid without threads. Measured by the engine lead (Opus 5.5); tables:
+`SCR/agents/mcwrap/runs/t_main169`, `t_main169_o1` (`ptable.py`).
+
 ## Parallel order against the original order: B3-16k, 50,000 units, B1 (2026-11-13, main dfd0c579)
 
 parallel-mode.md section 8 item 6. Measured by the engine helper mcwrap, 2026-11-13 12:47-14:16 (PC clock).
