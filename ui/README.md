@@ -105,7 +105,8 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - The report (ours; the report bundle's third part, 2026-11-15): the console's `remaster_report [a note]` writes one
   zip into the folder "reports" beside the preferences and says where: README.txt (what is inside, when, our build,
   the note), this run's log so far (the last 400 interface events written into it first), the log of the run before
-  and, when that run crashed, its crash dump (the user's name in its paths masked with `_`, the same length, so the
+  and, of the newest crash among the kept logs (that run, or one a start or two further back: log_crash.txt), its
+  crash dump (the user's name in its paths masked with `_`, the same length, so the
   dump stays readable; Chris's "Yes, masked"), the game's replay as far as it is written, and the preferences. In the
   text files the user's own folder is written `<user folder>`. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
   `moho64ui_Report([note])`; `tests/report.lua`, the lab's suite/report.sh reads the zips).

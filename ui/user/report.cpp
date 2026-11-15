@@ -5,7 +5,8 @@
 //   log_now.txt        this run's log so far (its head names the machine; the last 400 interface events written into
 //                      it just before, at its end)
 //   log_before.txt     the log of the run before this one, when there is one in the same folder
-//   dump_before.dmp    that run's crash dump when it crashed: the environment's values, the user's and the PC's names,
+//   dump_before.dmp    that run's crash dump when it crashed (log_crash.txt + dump_crash.dmp: the newest older crash
+//                      among the kept logs when the run before did not crash): the environment's values, the user's and the PC's names,
 //                      the user's name in paths masked with '_' (same length:
 //                      the dump stays readable; Chris, 2026-11-15, on what a dump carries: "Yes, masked")
 //   LastGame.SCFAReplay  the game being played or last played, as far as it is written (its own format, untouched)
@@ -369,6 +370,72 @@ std::filesystem::path LogBefore(const std::filesystem::path& now) {
   return best;
 }
 
+// The crash dump beside a log, "" when that run did not crash (the engine's crash handler writes it beside the log:
+// "<log>.dmp" for a log named by --log, "<log without .log>.dmp" for the default log).
+std::filesystem::path DumpOf(const std::filesystem::path& log) {
+  std::error_code ec;
+  std::string stem = TextOf(log);
+  const std::string whole = stem + ".dmp";
+  if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".log") == 0) stem.resize(stem.size() - 4);
+  for (const std::string& candidate : {whole, stem + ".dmp"})
+    if (std::filesystem::is_regular_file(PathOf(candidate), ec)) return PathOf(candidate);
+  return {};
+}
+
+// The newest log older than `now` in the same folder whose run crashed (a dump beside it), "" when none: so that a
+// report made a start or two after the crash still has it (the logs folder keeps the newest ten).
+std::filesystem::path LastCrashedBefore(const std::filesystem::path& now) {
+  std::error_code ec;
+  std::filesystem::path best;
+  std::string bestName;
+  for (const auto& e : std::filesystem::directory_iterator(now.parent_path(), ec)) {
+    if (!e.is_regular_file(ec)) continue;
+    const std::string name = Name(e.path());
+    if (name.rfind("moho64ui_", 0) != 0 || e.path().extension() != ".log") continue;
+    if (std::filesystem::equivalent(e.path(), now, ec)) continue;
+    if (name < Name(now) && name > bestName && !DumpOf(e.path()).empty()) bestName = name, best = e.path();
+  }
+  return best;
+}
+
+// Whether a minidump holds the memory its stacks point at (a MemoryList stream: the engine's dumps until its gate
+// 170, 0x1040; after it 0x1000, the stacks, registers and modules only)
+bool DumpHasStackMemory(const std::string& d) {
+  if (d.size() < 16 || d.compare(0, 4, "MDMP") != 0) return false;
+  auto u32 = [&](size_t at) -> uint32_t {
+    if (at + 4 > d.size()) return 0;
+    return uint32_t(uint8_t(d[at])) | uint32_t(uint8_t(d[at + 1])) << 8 | uint32_t(uint8_t(d[at + 2])) << 16 | uint32_t(uint8_t(d[at + 3])) << 24;
+  };
+  for (uint32_t i = 0, n = u32(8), dir = u32(12); i < n && i < 256; ++i)
+    if (u32(dir + 12 * i) == 5) return true;
+  return false;
+}
+
+// A crashed run's log and its dump into the zip as <part>.txt and <part>.dmp, the dump masked; the README's lines
+void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::filesystem::path& dumpFile,
+                   const std::string& logPart, const std::string& dumpPart, const std::string& which, std::string* inside,
+                   bool withLog) {
+  std::string text;
+  if (withLog && ReadWhole(log, &text)) {
+    zip.Add(logPart, ShortenUserFolder(text));
+    *inside += "- " + logPart + ": the log of " + which + " (" + Name(log) + ")\n";
+  }
+  std::string dump;
+  if (!ReadWhole(dumpFile, &dump)) return;
+  // (the environment's values first: a value holding the user's folder must still match whole)
+  const bool memory = DumpHasStackMemory(dump);
+  const size_t environment = MaskEnvironment(dump);
+  const size_t masked = MaskUserNameInPaths(dump);
+  zip.Add(dumpPart, dump);
+  *inside += "- " + dumpPart + ": the crash dump of " + which + " (the threads' stacks" +
+             std::string(memory ? " and the memory near them" : "") + ", the modules, the fault and its registers).\n"
+             "  Masked with '_', every string keeping its length so the dump stays readable: the values of the\n"
+             "  program's environment variables wherever a piece of that block was caught, the user's and the PC's\n"
+             "  names (" + std::to_string(environment) + " place(s)), the user's name in paths (" + std::to_string(masked) +
+             " place(s)). Reading it needs\n  the moho64ui.pdb of the commit in that log's head.\n";
+  Logf(LogLevel::Info, "moho64ui: the report: %s crashed: its dump put in, masked in %zu + %zu place(s)", which.c_str(), environment, masked);
+}
+
 std::string Stamp(const char* form) {
   std::time_t now = std::time(nullptr);
   std::tm t = {};
@@ -418,28 +485,19 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
     if (!before.empty() && ReadWhole(before, &text)) {
       zip.Add("log_before.txt", ShortenUserFolder(text));
       inside += "- log_before.txt: the log of the run before this one (" + Name(before) + ")\n";
-      // That run's crash dump, when it crashed (the engine's crash handler writes it beside the log: "<log>.dmp" for
-      // a log named by --log, "<log without .log>.dmp" for the default log), the user's name masked in its paths.
-      std::string stem = TextOf(before);
-      if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".log") == 0) stem.resize(stem.size() - 4);
-      for (const std::string& candidate : {TextOf(before) + ".dmp", stem + ".dmp"}) {
-        std::string dump;
-        if (!ReadWhole(PathOf(candidate), &dump)) continue;
-        // (the environment's values first: a value holding the user's folder must still match whole)
-        const size_t environment = MaskEnvironment(dump);
-        const size_t masked = MaskUserNameInPaths(dump);
-        zip.Add("dump_before.dmp", dump);
-        inside += "- dump_before.dmp: that run CRASHED: its crash dump (the threads' stacks and the memory near them, the\n"
-                  "  modules, the fault and its registers). Masked with '_', every string keeping its length so the\n"
-                  "  dump stays readable: the values of the program's environment variables where a piece of that\n"
-                  "  block was caught, and the user's and the PC's names (" + std::to_string(environment) + " place(s)), the user's\n"
-                  "  name in paths (" + std::to_string(masked) + " place(s)). Reading it needs the moho64ui.pdb of the commit in\n"
-                  "  log_before's head.\n";
-        Logf(LogLevel::Info, "moho64ui: the report: the run before crashed: its dump put in, masked in %zu + %zu place(s)", environment, masked);
-        break;
-      }
     } else {
       inside += "- (no log of a run before this one in the same folder)\n";
+    }
+    // The newest crash among the kept logs (the run before, or an older one when the player started again in between;
+    // the engine's crash window asks for remaster_report at the next start): its dump, and its log when that is not
+    // the log before already in the zip.
+    const std::filesystem::path crashed = LastCrashedBefore(PathOf(log));
+    if (!crashed.empty()) {
+      const bool isBefore = !before.empty() && Name(crashed) == Name(before);
+      if (isBefore)
+        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_before.txt", "dump_before.dmp", "the run before this one, which CRASHED", &inside, false);
+      else
+        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_crash.txt", "dump_crash.dmp", "the last run that crashed", &inside, true);
     }
   }
   const std::string replay = cfg.currentReplay ? cfg.currentReplay() : std::string();
