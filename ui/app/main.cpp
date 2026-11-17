@@ -749,6 +749,9 @@ int main(int argc, char** argv) {
   cfg.recoverDevice = [&session](const std::string& mode, std::string* why) { return session.AskDeviceRecovery(mode, why); };
   cfg.deviceState = [&session](lua_State* L) { session.PushDeviceState(L); };
   cfg.cardMemoryNow = [&session](double* total, double* budget, double* used) { return session.CardMemoryNow(total, budget, used); };
+  cfg.suggestedPreset = [&session](int* preset, int* texture, int* shadow, std::string* reason) {
+    return session.SuggestedPreset(preset, texture, shadow, reason);
+  };
   // (checks: MOHO64UI_CARD_IMITATION=<MB>: a smaller card imitated by the session's pictures, GameSession::cardImitationMB)
   if (const char* mb = std::getenv("MOHO64UI_CARD_IMITATION")) session.cardImitationMB = std::atoi(mb);
 

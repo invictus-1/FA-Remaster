@@ -156,6 +156,7 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
   p.SetHiddenOutlines(looks.hiddenOutlines);
   p.SetWrecksOnceSeen(looks.wrecksOnceSeen);
   p.SetAlliesPauseMarks(looks.alliesPauseMarks);
+  p.SetWreckPoses(looks.wreckPoses);
   p.SetMinimapMeshes(looks.minimapLod != 0);
 }
 // A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
@@ -708,6 +709,7 @@ struct GameSession::Picture : WorldSource {
     if (!lookApplied || looks.wrecksOnceSeen != lookNow.wrecksOnceSeen) picture.SetWrecksOnceSeen(looks.wrecksOnceSeen);
     // (Allies' Pause Marks, ours: the renderer's answer to ui request 54)
     if (!lookApplied || looks.alliesPauseMarks != lookNow.alliesPauseMarks) picture.SetAlliesPauseMarks(looks.alliesPauseMarks);
+    if (!lookApplied || looks.wreckPoses != lookNow.wreckPoses) picture.SetWreckPoses(looks.wreckPoses);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
@@ -2543,6 +2545,9 @@ void GameSession::BeginLoad() {
     // always kept, so that the option "Wrecks appear only once seen" can be switched on in the middle of a game
     // (measured by the engine: 0.04 to 0.08 ms a beat in a 4v4, 0.7 ms with 5,000 wrecks nobody has seen).
     sim->collectPropsSeen = true;
+    // (wrecks keep the pose their unit died in, as in the original: the renderer's request of 2026-11-17, render
+    // 7b30aa05; the engine's batch 173 collects the poses when this is set before the first beat)
+    sim->collectCopiedPoses = wantPicture;
     sim->keepSnapshots = true;          // building sites and reclaimables copied at each sync point (UserState::BuildSite)
     // hits, impacts and health changes, for the looks that answer them (marks on units, water ripples, blast waves;
     // about 1% of a beat's time; the renderer's request of 2026-10-18: render/world_picture.h)
@@ -4207,6 +4212,20 @@ bool GameSession::CardMemoryNow(double* totalMB, double* budgetMB, double* usedM
   return now.totalMB > 0;
 #else
   (void)totalMB, (void)budgetMB, (void)usedMB;
+  return false;
+#endif
+}
+
+bool GameSession::SuggestedPreset(int* preset, int* textureLevel, int* shadowQuality, std::string* reason) const {
+#ifdef MOHO64UI_WORLD_PICTURE
+  const render::WorldPicture* picture = windowPicture_ ? &windowPicture_->picture : picture_ ? &picture_->picture : nullptr;
+  if (!picture) return false;
+  const render::WorldPicture::PresetSuggestion s = picture->SuggestedPreset();
+  if (s.preset < 0) return false;  // (no device yet)
+  *preset = s.preset, *textureLevel = s.textureLevel, *shadowQuality = s.shadowQuality, *reason = s.reason;
+  return true;
+#else
+  (void)preset, (void)textureLevel, (void)shadowQuality, (void)reason;
   return false;
 #endif
 }

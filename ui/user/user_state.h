@@ -130,6 +130,9 @@ class UserState {
     // The card's memory as the picture shown sees it (GameSession::CardMemoryNow; moho64ui_CardMemoryNow, the Options'
     // graphics-memory strip). Unset, or false from it: none known.
     std::function<bool(double* totalMB, double* budgetMB, double* usedMB)> cardMemoryNow;
+    // The renderer's suggestion for this card (GameSession::SuggestedPreset; moho64ui_SuggestedPreset, the Options'
+    // recommendation). Unset, or false from it: none known.
+    std::function<bool(int* preset, int* textureLevel, int* shadowQuality, std::string* reason)> suggestedPreset;
     // The scripts' clock (CurrentTime, GetSystemTimeSeconds) runs on while a frame's scripts run, as the
     // original's GetSystemTimer does (FA exe 0x955730, which both read): on in a live window; off in a test
     // run, whose clock goes in fixed frame steps.
@@ -670,6 +673,11 @@ struct LookSettings {
   // to ui request 54, render e4a967c1; the mark itself now sits on the unit's icon place as the original's). Console
   // remaster_allies_pause_marks 0|1.
   bool alliesPauseMarks = true;
+  // Wreck Poses (the renderer's request of 2026-11-17, render 7b30aa05, with the engine's batch 173; by Chris's rule
+  // that a look is a player's option): a unit's wreck keeps the pose its unit died in, as in the original (true, the
+  // default: a tank's turret stays turned, a walker lies as it fell), or every wreck in its resting pose (false, as
+  // the remaster drew them until then). The renderer's WorldPicture::SetWreckPoses. Console remaster_wreck_poses 0|1.
+  bool wreckPoses = true;
   // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
   // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
   // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's

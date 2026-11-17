@@ -99,10 +99,9 @@ int l_CardMemoryEstimate(lua_State* L) {
 #endif
 
 #ifdef _WIN32
-// The memory of the hardware adapter with the most of its own, in MB (0: none listed). For the strip where no picture
-// of the world is drawn (the menu with its background turned off): the card's size is still worth showing there.
-// INFERRED to be the card the renderer draws on (its own choice is in its "render: card:" lines; on a PC with one
-// card, or a laptop whose stronger card has more memory, it is the same).
+// The memory of the hardware adapter with the most of its own, in MB (0: none listed): the fallback where the
+// renderer's own WorldPicture::AdapterMemoryMB cannot tell (below). INFERRED to be the card the renderer draws on (on
+// a PC with one card, or a laptop whose stronger card has more memory, it is the same).
 double LargestAdapterMB() {
   IDXGIFactory1* factory = nullptr;
   if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory) return 0;
@@ -131,10 +130,20 @@ int l_CardMemoryNow(lua_State* L) {
   if (!ask || !ask(&total, &budget, &used) || total <= 0) {
     // (no picture of the world on this thread: the card's own size alone, from the system's list; budget and use 0)
     total = budget = used = 0;
-#ifdef _WIN32
-    static const double listed = LargestAdapterMB();
-    total = listed;
+    // (the renderer's own pick of the adapter, asked of DXGI without a device: WorldPicture::AdapterMemoryMB, render
+    // d64904d3, made for this on 2026-11-17; where it cannot tell (0: not Windows, or a build without the renderer)
+    // the largest hardware adapter of the system's list stands in, INFERRED the same card)
+    static const double listed = [] {
+      double mb = 0;
+#ifdef MOHO64UI_WORLD_PICTURE
+      mb = render::WorldPicture::AdapterMemoryMB();
 #endif
+#ifdef _WIN32
+      if (mb <= 0) mb = LargestAdapterMB();
+#endif
+      return mb;
+    }();
+    total = listed;
     if (total <= 0) return lua_pushnil(L), 1;
     adapter = true;
   }
@@ -156,6 +165,32 @@ int l_CardMemoryNow(lua_State* L) {
   return 1;
 }
 
+// moho64ui_SuggestedPreset() -> { preset = 0..4, texture_level = 0..2, shadow_quality = 1..3, reason = text } | nil: what
+// the renderer suggests for this card (the option keys' own values: remaster_preset, texture_level, shadow_quality),
+// by its memory and ray tracing alone. nil without a picture of the world on this thread. It changes nothing: the
+// Options' strip shows it and the player may take it (Chris, 2026-11-17: recommended, never set by itself; max stays
+// the default).
+int l_SuggestedPreset(lua_State* L) {
+  int preset = -1, texture = 0, shadow = 3;
+  std::string reason;
+  const auto& ask = UserState::From(L)->config().suggestedPreset;
+  if (!ask || !ask(&preset, &texture, &shadow, &reason) || preset < 0) return lua_pushnil(L), 1;
+  lua_newtable(L);
+  lua_pushstring(L, "preset");
+  lua_pushnumber(L, preset);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "texture_level");
+  lua_pushnumber(L, texture);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "shadow_quality");
+  lua_pushnumber(L, shadow);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "reason");
+  lua_pushstring(L, reason.c_str());
+  lua_rawset(L, -3);
+  return 1;
+}
+
 }  // namespace
 
 void RegisterCardMemoryBindings(lua_State* L) {
@@ -163,6 +198,7 @@ void RegisterCardMemoryBindings(lua_State* L) {
   SetGlobal(L, "moho64ui_CardMemoryEstimate", l_CardMemoryEstimate);
 #endif
   SetGlobal(L, "moho64ui_CardMemoryNow", l_CardMemoryNow);
+  SetGlobal(L, "moho64ui_SuggestedPreset", l_SuggestedPreset);
 }
 
 }  // namespace moho::ui

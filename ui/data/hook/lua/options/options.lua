@@ -646,6 +646,22 @@ local looks = {
         },
     },
     {
+        -- ours (2026-11-17; the renderer's WorldPicture::SetWreckPoses, render 7b30aa05, the engine's batch 173): on =
+        -- the original game's way; set by no preset level (it costs nothing and is the original's)
+        title = "Wreck Poses",
+        key = 'remaster_wreck_poses',
+        tip = "On (the original game's way): a unit's wreck keeps the pose the unit died in, a tank's turret turned where it pointed, a walker lying as it fell. Off: every wreck in its resting pose.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_wreck_poses"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's look 15, WorldPicture::SetHiddenOutlines: only what the player may see; none in the Original look
         title = "Hidden Unit Outlines",
         key = 'remaster_hidden_outlines',
@@ -995,7 +1011,8 @@ local remasterSections = {
                             'remaster_warpin_colours' } },
     { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour', 'remaster_head_lamp_colour',
                                'remaster_hidden_outlines', 'remaster_ghost_look', 'remaster_guide', 'remaster_cloak_look',
-                               'remaster_stealth_veil', 'remaster_wrecks_once_seen', 'remaster_allies_pause_marks' } },
+                               'remaster_stealth_veil', 'remaster_wrecks_once_seen', 'remaster_wreck_poses',
+                               'remaster_allies_pause_marks' } },
     { "Picture & Camera", { 'remaster_photo_look', 'remaster_sharpen', 'remaster_lens' } },
 }
 local function Header(title)  -- (the game's header row: its box unseen, only its title; "expected everywhere": FAF's)

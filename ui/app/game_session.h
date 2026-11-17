@@ -414,6 +414,10 @@ class GameSession {
   // card's; the system's budget for the program; its use), for the Options' graphics-memory strip (ours, Chris's wish
   // of 2026-11-14, ui/REQUESTS 57). False without a picture of the world drawn on this thread.
   bool CardMemoryNow(double* totalMB, double* budgetMB, double* usedMB) const;
+  // The settings the renderer suggests for this card (WorldPicture::SuggestedPreset: by its memory and ray tracing
+  // alone, with the reason in words), for the Options' recommendation (Chris, 2026-11-17: "it should recommend
+  // settings and if users want to use it but max is default"). False without a picture of the world on this thread.
+  bool SuggestedPreset(int* preset, int* textureLevel, int* shadowQuality, std::string* reason) const;
 
   bool running() const { return sim_ != nullptr; }
   // A launch is loaded the original's way (its session states, WLD_Frame 0x88cae0): the launch call
