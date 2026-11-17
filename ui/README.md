@@ -116,8 +116,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   ..."; its request 79: `WorldPicture::SetLogSink`, set in `main.cpp` before any picture is made; nothing of the
   renderer goes to stdout or stderr any more; `render::LogFlush` at the program's end), and the interface's last
   events: a ring of the last 400 mouse presses (with the control pressed), key-map actions run by a key, console
-  commands, orders handed to the simulation and games begun, written into the log by the console command
-  `remaster_events [n]` and once at the program's orderly end (the last 200; `user/events.h`, `moho64ui_Events()`,
+  commands, orders handed to the simulation and games begun, each written into the log as it happens (a repeat
+  again at 2, 4, 8 times: a crashed run's log holds what came before the fault; 2026-11-17), and as one block by the
+  console command `remaster_events [n]` and once at the program's orderly end (the last 200; `user/events.h`, `moho64ui_Events()`,
   `tests/events.lua`; the report bundle's first part, Chris's "logs extremely detailed" of 2026-11-14).
 - The machine's block at the log's head (ours; the report bundle's second part, 2026-11-15): right after the log
   opens, lines "moho64ui: the machine: ..." name our build's commit, the system and its build number, the
@@ -127,22 +128,30 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   under /mods with its name and version. No user or computer name, no path
   (`app/machine_info.cpp`; on Linux the system, processor and memory, the card in the renderer's lines; the lab's
   suite/machine_block.sh checks it, the names' absence included).
-- The report (ours; the report bundle's third part, 2026-11-15): the console's `remaster_report [a note]` writes one
-  zip into the folder "reports" beside the preferences and says where: README.txt (what is inside, when, our build,
-  the note), this run's log so far (the last 400 interface events written into it first), the log of the run before
-  and, of the newest crash among the kept logs (that run, or one a start or two further back: log_crash.txt), its
-  crash dump (the user's name in its paths masked with `_`, the same length, so the
-  dump stays readable; Chris's "Yes, masked"), the game's replay as far as it is written, and the preferences. In the
-  text files the user's own folder is written `<user folder>`. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
-  `moho64ui_Report([note])`; `tests/report.lua`, the lab's suite/report.sh reads the zips).
-- The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57):
-  a small panel under the Options dialog on its Video and Remastered tabs. It shows the renderer's estimate of the
-  card's memory for the settings as chosen in the dialog, before Apply (`WorldPicture::EstimateCardMemory`, measured
-  for a large late game), the card's memory and the system's budget for the game (`CardMemory`), a bar, the largest
-  parts, the parts not counted yet (never shown as free), and over the budget the settings that give the most back,
-  each one step lower. It changes no setting (`data/lua/memory_strip.lua`, `user/card_memory.cpp`:
-  `moho64ui_CardMemoryEstimate`, `moho64ui_CardMemoryNow`; `MOHO64UI_CARD_IMITATION=<MB>` imitates a smaller card for
-  tests; `tests/memory_strip.lua`). Centred under the dialog, as Chris asked on its picture (2026-11-14).
+- The report (ours; the report bundle's third part, 2026-11-15; corrected at the Fable lead's check, 2026-11-17): the
+  console's `remaster_report [a note]` writes one zip into the folder "reports" beside the preferences and says where:
+  README.txt (what is inside, when, our build, the note), this run's log so far, the log of the run before, the
+  newest crash's dump (and its log when that is not the run before), the game's replay as far as it is written, and the
+  preferences. The run before is found both ways a log is named: the default `moho64ui_<date>_<time>.log` (the earlier
+  logs beside it, a crash's dump beside its log), and a launcher's `--log game.log` (the launcher's `game_prev.log`,
+  the dump `game.log.dmp`; an older crash's dump comes dated, its log gone). In the text files the user's own folder
+  is written `<user folder>`; in a dump the user's name in paths, the values of environment variables and the user's
+  and PC's names are overwritten with `_`, every length kept (Chris's "Yes, masked"). The folder is matched in UTF-8,
+  in small letters, in the system code page's bytes and in UTF-16 at any byte, so a name with letters outside ASCII is
+  hidden too. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
+  `moho64ui_Report([note])`; `tests/report.lua`; the lab's suite/report.sh reads the zips, with a made-up user folder
+  and both ways of naming).
+- The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57;
+  its numbers' rule decided with the renderer at the Fable check, 2026-11-17): a small panel under the Options dialog
+  on its Video and Remastered tabs. Its first line: what a large late game needs with the settings as chosen in the
+  dialog, before Apply (`WorldPicture::EstimateCardMemory` without its part "made_ahead"), "of the card's X GB"
+  (`CardMemory`'s total; without a picture the system's list), with a bar; then the largest parts, what is made ahead
+  while there is room (it never takes a card over, so it is not in the sum), the parts not counted yet (never shown
+  as free), and over the card the settings that give the most back, each one step lower. Under the card but over what
+  the system gives the program right now, one line says other programs hold the rest. It changes no setting
+  (`data/lua/memory_strip.lua`, `user/card_memory.cpp`: `moho64ui_CardMemoryEstimate`, `moho64ui_CardMemoryNow`;
+  `MOHO64UI_CARD_IMITATION=<MB>` imitates a smaller card for tests; `tests/memory_strip.lua`). Centred under the
+  dialog, as Chris asked on its picture (2026-11-14).
 - The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
   Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
   `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog
