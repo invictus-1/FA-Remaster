@@ -930,7 +930,8 @@ FrameTimes& Times();
 // MOHO64UI_LONG_FRAMES=<ms> sets the threshold (16 when it is not a number), =0 or =off turns it off. Unset, a live
 // window logs the frames longer than kWindowDefaultMs (LongFramesInWindow, from its thread before its first frame; the
 // renderer's request 79, 2: an outside machine's log names its hitches too) and a run without a window none (its own
-// watchdog, main.cpp, is apart). At most LongFrameLimit::kLines lines a minute (LongFrameLimit).
+// watchdog, main.cpp, is apart). The window's default writes at most LongFrameLimit::kLines lines a minute
+// (LongFrameLimit); with the variable set every long frame has its line.
 // The limit of the long-frame lines (a bad stretch must not flood the log): a minute begins with a long frame (the
 // first after the last minute ended); of its long frames the first kLines are written, the others counted, and when
 // the minute ends (Tick, each frame; Flush, at the window's end) one line says how many were not written and the

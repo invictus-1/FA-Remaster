@@ -727,7 +727,9 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         const double atSeconds = std::chrono::duration<double>(shownAt - runStart).count();
         const std::string heldLine = longFrames.limit.Tick(atSeconds);
         if (!heldLine.empty()) Logf(LogLevel::Info, "%s", heldLine.c_str());
-        if (ms > longFrames.thresholdMs && longFrames.limit.Take(atSeconds, ms, frames)) {
+        // (the limit is the DEFAULT's alone: with the variable set, as Chris's launchers set it, every long frame has
+        // its line, for the lab's tools that read them all; the Fable lead, 2026-11-17)
+        if (ms > longFrames.thresholdMs && (LongFramesVariable() > 0 || longFrames.limit.Take(atSeconds, ms, frames))) {
           // The frame's parts; "before": from the last frame's showing to this one's start (the pace's wait). Other
           // chats' scripts read these lines: a new part goes at the end of the parts, the names and order stay.
           std::string line;
