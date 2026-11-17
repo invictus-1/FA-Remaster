@@ -6,7 +6,7 @@
 -- and the system's budget for the program through moho64ui_CardMemoryNow (nil where no picture of the world is drawn on
 -- the interface's thread). The original game has no such thing.
 -- A small panel under the Options dialog, on its Video and Remastered tabs: the estimate for the settings AS CHOSEN IN
--- THE DIALOG (its working set, before Apply), the card's memory, a bar, the largest parts, the parts the renderer has
+-- THE DIALOG (its working set, before Apply) against the card's own memory, a bar, the largest parts, the parts the renderer has
 -- not counted yet (never shown as free), and over the budget the settings that give the most back (each asked of the
 -- estimate one step lower, the others as chosen). It changes no setting. It follows the dialog every 15 frames.
 -- Its place and look are for Chris's eye (handoff: build it, show him a picture, not finished before his word).
@@ -15,11 +15,11 @@ local Bitmap = import('/lua/maui/bitmap.lua').Bitmap
 local UIUtil = import('/lua/ui/uiutil.lua')
 
 -- For the tests: the panel, the lines shown, the last estimate and the advice.
-State = { panel = false, lines = {}, estimate = false, now = false, advice = {}, hidden = true }
+State = { panel = false, lines = {}, estimate = false, now = false, advice = {}, hidden = true, needed = 0, card = false }
 
 local kWidth = 664    -- (the Options dialog's panel is 698 wide at scale 1: the strip a little narrower)
 local kGameSize = "large"  -- (only the Large game is measured: the strip says "a large late game")
-local kRows = 8       -- (the text's rows at most: the lines wrapped to the panel's width)
+local kRows = 10      -- (the text's rows at most: the lines wrapped to the panel's width)
 
 -- The working set's values (the dialog's currentOptionsSet: every option's value as chosen, before Apply) as the
 -- renderer's CardMemoryChoice. The window's size is the screen's now (a change of the display mode in the Video tab
@@ -71,6 +71,20 @@ local function ItemOf(key)
 end
 
 -- {key, title, valueText, savesMB} for each option that gives back over 50 MB, the most first
+-- What a game NEEDS of an estimate: its total without the part "made_ahead" (the renderer's rule, read by its Fable
+-- lead 2026-11-17, render world.cpp: what the armies may build is made ahead only while the memory in use plus 1 GB is
+-- under 85 % of the budget, so it fills free room and never takes a card over; counted in, a 4 GB card with Medium
+-- textures read 5.3 GB and warned, while the game needs 2.9 GB there and fits). The part's id is the renderer's, kept
+-- stable for this.
+function Needed(e)
+    local ahead = 0
+    for _, p in e.parts or {} do
+        if p.id == 'made_ahead' then ahead = ahead + p.mb end
+    end
+    return e.total - ahead, ahead
+end
+
+-- (`total`: what the settings as chosen need, Needed's)
 function Advice(set, total)
     local out = {}
     for _, key in kLowerable do
@@ -83,7 +97,7 @@ function Advice(set, total)
                     local trial = Copy(set)
                     trial[key] = s.key
                     local e = moho64ui_CardMemoryEstimate(Choice(trial))
-                    local saves = total - e.total
+                    local saves = total - Needed(e)
                     if saves > 50 and (not best or saves < best.saves) then  -- (the smallest step that gives back: "one step lower")
                         best = { key = key, title = LOC(item.title or key), value = LOC(s.text or tostring(s.key)), saves = saves }
                     end
@@ -98,37 +112,50 @@ end
 
 local function GB(mb) return string.format("%.1f GB", mb / 1024) end
 
--- The lines for an estimate and the card's memory now (`now` nil: no card known on this thread)
+-- The lines for an estimate and the card's memory now (`now` nil: no card known). The first line holds what the game
+-- needs against THE CARD'S OWN memory, a figure that stands still (the Fable lead's check, 2026-11-17, with the
+-- renderer: the first version showed the system's budget for the program, which falls and rises as other programs
+-- use the card: 3.9 GB alone, 1.8 GB beside a second game, on the same card). Over the card: the warning and the
+-- settings that give the most back. Under the card but over what the system gives the program right now: one line
+-- that says so (other programs hold the rest), no advice to lower a setting.
 function Lines(e, now, advice)
     local lines = {}
-    local budget = now and ((now.budget > 0 and now.budget < now.total) and now.budget or now.total) or nil
-    local head = "Graphics memory, estimated for a large late game: about " .. GB(e.total)
+    local needed, ahead = Needed(e)
+    local card = now and now.total or nil
+    local budget = now and now.budget and now.budget > 0 and now.budget < now.total and now.budget or card
+    local head = "Graphics memory, estimated for a large late game: about " .. GB(needed)
     if e.margin > 0 then head = head .. string.format(" (+/- %.1f)", e.margin / 1024) end
-    if budget then head = head .. " of " .. GB(budget) end
-    table.insert(lines, { text = head, over = budget ~= nil and e.total > budget })
+    if card then head = head .. " of the card's " .. GB(card) end
+    local over = card ~= nil and needed > card
+    table.insert(lines, { text = head, over = over })
     local parts, unmeasured = {}, {}
     for _, p in e.parts or {} do
-        if p.mb > 0 then table.insert(parts, p) end
+        if p.mb > 0 and p.id ~= 'made_ahead' then table.insert(parts, p) end
         if p.mb <= 0 and not p.measured then table.insert(unmeasured, p.name) end
     end
     table.sort(parts, function(a, b) return a.mb > b.mb end)
     local largest = {}
     for i = 1, math.min(4, table.getn(parts)) do table.insert(largest, parts[i].name .. " " .. GB(parts[i].mb)) end
     if table.getn(largest) > 0 then table.insert(lines, { text = "Largest: " .. table.concat(largest, ", ") }) end
+    if ahead > 0 then
+        table.insert(lines, { text = "Plus up to " .. GB(ahead) .. " made ahead while there is room (never over the card).", dim = true })
+    end
     if table.getn(unmeasured) > 0 then
         table.insert(lines, { text = "Not counted yet (not free): " .. table.concat(unmeasured, ", "), dim = true })
     end
-    if budget and e.total > budget then
+    if over then
         local tips = {}
         for i = 1, math.min(3, table.getn(advice or {})) do
             local a = advice[i]
             table.insert(tips, a.title .. " " .. a.value .. " (" .. GB(a.saves) .. ")")
         end
-        local over = "Over the card's memory by " .. GB(e.total - budget) .. "."
-        if table.getn(tips) > 0 then over = over .. " Gives the most back: " .. table.concat(tips, ", ") end
-        table.insert(lines, { text = over, over = true })
+        local text = "Over the card's memory by " .. GB(needed - card) .. "."
+        if table.getn(tips) > 0 then text = text .. " Gives the most back: " .. table.concat(tips, ", ") end
+        table.insert(lines, { text = text, over = true })
+    elseif budget and needed > budget then
+        table.insert(lines, { text = "It fits the card, but Windows gives the game only " .. GB(budget) .. " of it right now: other programs hold the rest. Close them before a large game.", over = true })
     end
-    return lines, budget
+    return lines, card, needed
 end
 
 -- The panel under `dialog`; `tabNow()` gives the tab button shown, `setNow()` the dialog's working set. Shown on the
@@ -162,7 +189,7 @@ function Attach(dialog, tabNow, setNow)
     local fill = Bitmap(trough)
     fill:DisableHitTest()
     LayoutHelpers.SetHeight(fill, 6)
-    State = { panel = panel, lines = {}, estimate = false, now = false, advice = {}, hidden = false }
+    State = { panel = panel, lines = {}, estimate = false, now = false, advice = {}, hidden = false, needed = 0, card = false }
     local mine = State
     local shown = ""
     local function Lay(lines, share, over)
@@ -207,16 +234,17 @@ function Attach(dialog, tabNow, setNow)
                 local set = (setNow and setNow()) or {}
                 local e = moho64ui_CardMemoryEstimate(Choice(set))
                 local now = moho64ui_CardMemoryNow()
-                local budget = now and ((now.budget > 0 and now.budget < now.total) and now.budget or now.total) or nil
-                local advice = (budget and e.total > budget) and Advice(set, e.total) or {}
+                local needed = Needed(e)
+                local card = now and now.total or nil
+                local advice = (card and needed > card) and Advice(set, needed) or {}
                 local lines = Lines(e, now, advice)
                 local key = ""
                 for _, l in lines do key = key .. l.text .. "|" end
                 if key ~= shown then
                     shown = key
-                    mine.estimate, mine.now, mine.advice, mine.lines = e, now, advice, {}
+                    mine.estimate, mine.now, mine.advice, mine.lines, mine.needed, mine.card = e, now, advice, {}, needed, card
                     for _, l in lines do table.insert(mine.lines, l.text) end
-                    Lay(lines, budget and e.total / budget or 0, budget ~= nil and e.total > budget)
+                    Lay(lines, card and needed / card or 0, card ~= nil and needed > card)
                 end
             end
             WaitFrames(15)  -- (frames, not seconds: in a game the interface's seconds are the game's, which stand while it is paused)

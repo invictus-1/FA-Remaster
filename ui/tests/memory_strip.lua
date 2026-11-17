@@ -53,7 +53,16 @@ ForkThread(function()
     local first = S.lines[1] or ""
     LOG("TEST note the strip: " .. table.concat(S.lines, " / "))
     check("its first line: the estimate", string.find(first, "Graphics memory, estimated for a large late game: about ", 1, true) == 1, true)
-    check("and the card's memory", string.find(first, " of ", 1, true) ~= nil, true)
+    check("and the card's own memory, a figure that stands still", string.find(first, string.format(" of the card's %.1f GB", card / 1024), 1, true) ~= nil, true)
+    -- what the armies may build is made ahead only while there is room: kept out of the sum, said on a line of its own
+    local needed, ahead = strip.Needed(S.estimate)
+    LOG(string.format("TEST note needed %.0f MB, made ahead %.0f MB, the estimate's total %.0f MB", needed, ahead, S.estimate.total))
+    check("the first line's number is what the game needs (the total without what is made ahead)", string.find(first, string.format("about %.1f GB", needed / 1024), 1, true) ~= nil and ahead > 0, true)
+    local said = false
+    for _, l in S.lines do
+        if string.find(l, "made ahead while there is room", 1, true) then said = true end
+    end
+    check("and what is made ahead has its own line", said, true)
     check("the strip lies under the dialog", S.panel.Top() >= dialog.Bottom(), true)
     -- centred with the dialog (Chris, 2026-11-14): the two centres within a pixel
     check("and centred with it", math.abs((S.panel.Left() + S.panel.Right()) - (dialog.Left() + dialog.Right())) <= 2, true)
@@ -88,8 +97,18 @@ ForkThread(function()
     check("the Remastered tab: the strip again", S.hidden, false)
 
     if card <= 4096 then
-        -- the settings high: over the card, and the advice
+        -- Medium textures on a 4 GB card: the game fits (the renderer's case of 2026-11-17: 2.9 GB needed, though the
+        -- total with what is made ahead is over 5): no warning
         Button(buttons, 'video'):OnClick()
+        Choose('texture_level', 1)
+        Wait(40)
+        local warned = false
+        for _, l in S.lines do
+            if string.find(l, "Over the card's memory by ", 1, true) == 1 then warned = true end
+        end
+        LOG(string.format("TEST note Medium textures at %d MB: needed %.0f MB, the total %.0f MB", card, S.needed, S.estimate.total))
+        check("Medium textures on this card: no warning though the total with what is made ahead is over the card", warned == false and S.needed < card and S.estimate.total > card, true)
+        -- the settings high: over the card, and the advice
         Choose('texture_level', 0)
         Wait(40)
         local over = false

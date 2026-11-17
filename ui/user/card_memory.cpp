@@ -4,12 +4,20 @@
 // dialog's hook (data/hook/lua/ui/dialogs/options.lua). The original game has no such thing.
 #include "user/user_state.h"
 
+#include <algorithm>
 #include <string>
 
 #include "script/script_state.h"
 #include "user/bindings.h"
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/world_picture.h"
+#endif
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <dxgi.h>
 #endif
 
 namespace moho::ui {
@@ -90,15 +98,52 @@ int l_CardMemoryEstimate(lua_State* L) {
 }
 #endif
 
-// moho64ui_CardMemoryNow() -> { total = MB, budget = MB, used = MB } | nil: the card's memory as the picture shown
+#ifdef _WIN32
+// The memory of the hardware adapter with the most of its own, in MB (0: none listed). For the strip where no picture
+// of the world is drawn (the menu with its background turned off): the card's size is still worth showing there.
+// INFERRED to be the card the renderer draws on (its own choice is in its "render: card:" lines; on a PC with one
+// card, or a laptop whose stronger card has more memory, it is the same).
+double LargestAdapterMB() {
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory) return 0;
+  double best = 0;
+  for (UINT i = 0;; ++i) {
+    IDXGIAdapter1* adapter = nullptr;
+    if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND || !adapter) break;
+    DXGI_ADAPTER_DESC1 d = {};
+    if (SUCCEEDED(adapter->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
+      best = (std::max)(best, d.DedicatedVideoMemory / 1048576.0);
+    adapter->Release();
+  }
+  factory->Release();
+  return best;
+}
+#endif
+
+// moho64ui_CardMemoryNow() -> { total = MB, budget = MB, used = MB [, adapter = true] } | nil: the card's memory as the picture shown
 // sees it now (the renderer's CardMemory: the card's own, or MOHO64UI_CARD_IMITATION's; the budget the system gives
 // the program; what it uses). nil without a picture of the world on this thread (a run without the renderer, the
 // front end of a run without a window, whose menu background draws on its own thread).
 int l_CardMemoryNow(lua_State* L) {
   double total = 0, budget = 0, used = 0;
   const auto& ask = UserState::From(L)->config().cardMemoryNow;
-  if (!ask || !ask(&total, &budget, &used) || total <= 0) return lua_pushnil(L), 1;
+  bool adapter = false;
+  if (!ask || !ask(&total, &budget, &used) || total <= 0) {
+    // (no picture of the world on this thread: the card's own size alone, from the system's list; budget and use 0)
+    total = budget = used = 0;
+#ifdef _WIN32
+    static const double listed = LargestAdapterMB();
+    total = listed;
+#endif
+    if (total <= 0) return lua_pushnil(L), 1;
+    adapter = true;
+  }
   lua_newtable(L);
+  if (adapter) {
+    lua_pushstring(L, "adapter");
+    lua_pushboolean(L, 1);
+    lua_rawset(L, -3);
+  }
   lua_pushstring(L, "total");
   lua_pushnumber(L, total);
   lua_rawset(L, -3);
