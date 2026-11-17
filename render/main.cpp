@@ -525,6 +525,8 @@
 // --water-detail  wet shorelines and stronger caustics (World::waterDetail; modern look); [shore] the sun's glint on the
 //           water softened by how much water a pixel covers (a calm sheen from far up), and with --surf the wet beach
 //           following the surf (wider and darker on exposed beaches, narrow in calm bays, a film after each wave);
+//           [seamirror] --sea-mirror-strong: without ray tracing the water's mirror of land and rocks made stronger
+//           (Water::strongMirror; off by default: a trial, see water.h);
 //           [bigtest] the bed under the shallows soaked as that wet beach (Water::shoreSoak; --no-shore-soak: as before);
 //           [soakfix] the band and the soak by the map's own heights, not by the ground as drawn at its level of detail
 //           (Water::soakFixed; --soak-old: by the drawn ground, as before)
@@ -1142,6 +1144,7 @@ struct Options {
   int snowShade = 1;                                           // [snowshade] --snow-shade
   float snowShadeTune[7] = {-1, -1, -1, -1, -1, -1, -1};       // [snowshade] --snow-shade-tune (below 0: World's own)
   bool shoreSoak = true;                                       // [bigtest] --no-shore-soak
+  bool seaMirrorStrong = false;                                // [seamirror] --sea-mirror-strong
   bool soakOld = false;                                        // [soakfix] --soak-old
   bool mirrorFine = true;                                      // [mirrorfine] --no-mirror-fine
   int mirrorGrain = -1;                                        // [mirrorgrain] --mirror-grain <bits> (-1: the water's own, 9); --rain-tilt-fade 1, --mirror-fresnel-calm 2, --mirror-true-slopes 4, --mirror-fresnel-footprint 8 add to none
@@ -1499,6 +1502,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
+    else if (a == "--sea-mirror-strong") o->seaMirrorStrong = true;  // [seamirror]
     else if (a == "--no-mirror-fine") o->mirrorFine = false;  // [mirrorfine]
     else if (a == "--rain-tilt-fade") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 1;  // [mirrorgrain]
     else if (a == "--mirror-fresnel-calm") o->mirrorGrain = std::max(o->mirrorGrain, 0) | 2;
@@ -2873,6 +2877,7 @@ int main(int argc, char** argv) {
   for (int k = 0; k < 7; ++k)
     if (opt.snowShadeTune[k] >= 0) world.snowShadeTune[k] = opt.snowShadeTune[k];
   world.water.shoreSoak = opt.shoreSoak;          // [bigtest]
+  world.water.strongMirror = opt.seaMirrorStrong;  // [seamirror]
   world.water.soakFixed = !opt.soakOld;           // [soakfix]
   world.water.mirrorFine = opt.mirrorFine;        // [mirrorfine]
   if (opt.mirrorGrain >= 0) world.water.mirrorGrain = opt.mirrorGrain;      // [mirrorgrain]
