@@ -168,7 +168,10 @@ struct Constants {
   float shadingChangeScale;
   float accumulationAddedPerFrame;
   float minDisocclusionAccumulation;
-  float pad[3];  // (to the cbuffer's whole rows)
+  // [fsrthin] (ours, where three numbers filled the buffer's last row up: cbFSR3Upscaler's fThinView, fThinGuard, fThinLock)
+  float thinView;
+  float thinGuard;
+  float thinLock;
 };
 static_assert(sizeof(Constants) == 160, "cbFSR3Upscaler's layout");
 static_assert(offsetof(Constants, deviceToViewDepth) == 48 && offsetof(Constants, tanHalfFOV) == 104 &&
@@ -267,6 +270,8 @@ struct Fsr3::Impl {
     constants.shadingChangeScale = 1.0f;
     constants.accumulationAddedPerFrame = 1.0f / 3.0f;
     constants.minDisocclusionAccumulation = -1.0f / 3.0f;
+    // [fsrthin] (a check view of the accumulate pass, for a developer: fsr3_source.cpp lists them at fThinView)
+    if (const char* view = getenv("MOHO64_FSR3_VIEW")) constants.thinView = static_cast<float>(atof(view));
     firstExecution = true;
     resourceFrameIndex = 0;
   }
@@ -495,6 +500,8 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
   c.renderSize[1] = in.renderHeight;
   c.maxRenderSize[0] = W;
   c.maxRenderSize[1] = H;
+  c.thinGuard = in.steady ? 3.0f : 0.0f;  // [fsrthin] (kept less and less out to twice the frame's own 3x3 range beyond it)
+  c.thinLock = in.steady ? 1.0f : 0.0f;
   const float aspect = static_cast<float>(in.renderWidth) / static_cast<float>(in.renderHeight);
   const float horizontal = std::atan(std::tan(in.fovY / 2) * aspect) * 2;
   c.tanHalfFOV = std::tan(horizontal * 0.5f);
@@ -557,6 +564,7 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
   const uint32_t shadingY = groups(static_cast<int>(static_cast<float>(in.renderHeight) * 0.5f), 8);
   const gfx::Texture reactive = in.reactive ? in.reactive : m->zeroMask;
   const gfx::Texture composition = in.composition ? in.composition : m->zeroMask;  // [falltrail]
+  const gfx::Texture animated = in.animated ? in.animated : m->zeroMask;           // [fsrthin]
   auto run = [&](gfx::Pipeline p, uint32_t x, uint32_t y, bool spdConstants = false) {
     d->SetPipeline(p);
     d->SetConstants(0, &c, sizeof c);
@@ -584,7 +592,9 @@ void Fsr3::Run(const Inputs& in, gfx::Texture output, int displayWidth, int disp
        {{lumaHistoryWrite, 0}, {m->intermediate, 0}});
   run(m->lumaInstability, srcX, srcY);
   const bool sharpen = in.sharpness >= 0;
-  bind({m->exposure, m->dilatedReactive, m->dilatedMotion, upscaledRead, gfx::Texture{}, m->farthestDepthMip1, currentLuma, m->intermediate,
+  // ([fsrthin] the fifth: AMD's Lanczos table's register, which this build never reads (its reprojection is Lanczos type
+  // 0, its upsampling type 2): ours for the animated mask, SampleAnimatedMask in fsr3_source.cpp)
+  bind({m->exposure, m->dilatedReactive, m->dilatedMotion, upscaledRead, animated, m->farthestDepthMip1, currentLuma, m->intermediate,
         in.color},
        {{upscaledWrite, 0}, {output, 0}, {m->newLocks, 0}});
   run(sharpen ? m->accumulateSharpen : m->accumulate, dstX, dstY);

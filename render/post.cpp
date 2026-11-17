@@ -202,6 +202,57 @@ float PS(float4 position : SV_Position) : SV_Target {
 }
 )hlsl";
 
+// [fsrthin] The temporal upscaler's mask of what is animated WITHOUT motion (Post::Animated): the water. The water writes
+// no depth, so a pixel it covers holds the bed's depth: where the scene's surface lies under the water's level (and a
+// reach above it, for the swell and the surf's run up the sand) the pixel is taken as water. A pixel with nothing behind
+// it (the far plane) is water where its line of sight goes down under the level. The jitter is left out (half a pixel).
+// And what came after the solid scene (dust, smoke, sparks, beams: Post::KeepOpaque's picture against the finished one,
+// as the reactive mask reads them) wherever it changed the picture by more than a little: the reactive mask begins at a
+// change of 0.2, and under it a drifting puff of dust is animated without motion all the same.
+const char kAnimatedShader[] = R"hlsl(
+Texture2D<float> sceneDepth : register(t0);
+Texture2D opaque : register(t1);
+Texture2D finished : register(t2);
+Texture2D<float> groundHeights : register(t3);  // (Terrain::HeightTexture, one a grid point)
+cbuffer Animated : register(b1) {
+  float4 cameraRight;  // w: tan(half the field of view)
+  float4 cameraUp;     // w: aspect
+  float4 cameraBack;   // w: near distance
+  float4 surface;      // x: the water's level and its reach, less the eye's height (very high: no water); y: the least change of what came after (0: not looked at)
+  float4 ground;       // x, y: the map's width and height; z: world units of the heights' largest value (0: no ground given); w: how far above it a thing stands up
+};
+float3 Squeezed(float3 c) { return c / (1 + max(max(c.r, c.g), c.b)); }
+float4 VS(uint id : SV_VertexID) : SV_Position {
+  float2 uv = float2((id << 1) & 2, id & 2);
+  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float PS(float4 position : SV_Position) : SV_Target {
+  if (surface.y > 0) {
+    float3 a = Squeezed(opaque.Load(int3(position.xy, 0)).rgb * modern.z), b = Squeezed(finished.Load(int3(position.xy, 0)).rgb * modern.z);
+    if (max(max(abs(a.r - b.r), abs(a.g - b.g)), abs(a.b - b.b)) > surface.y) return 1;
+  }
+  float depth = sceneDepth.Load(int3(position.xy, 0));
+  float2 ndc = float2(position.x * viewport.z * 2 - 1, 1 - position.y * viewport.w * 2);
+  float3 ray = cameraRight.xyz * (ndc.x * cameraRight.w * cameraUp.w) + cameraUp.xyz * (ndc.y * cameraRight.w) - cameraBack.xyz;
+  bool water = surface.x > -1e8;
+  if (depth <= 0) return water && ray.y < 0 && surface.x < 0 ? 1 : 0;
+  float away = cameraBack.w / depth;
+  if (water && ray.y * away < surface.x) return 1;
+  // the ground itself, and what lies low on it (grass, stones): not above the highest of the four grid points round the
+  // place by more than ground.w (as the energy shields' StandsUp)
+  if (ground.z > 0) {
+    float3 p = cameraPosition + ray * away;
+    if (all(p.xz >= 0) && all(p.xz <= ground.xy)) {
+      int2 c = int2(floor(p.xz)), most = int2(ground.xy);
+      float g = max(max(groundHeights.Load(int3(min(c, most), 0)), groundHeights.Load(int3(min(c + int2(1, 0), most), 0))),
+                    max(groundHeights.Load(int3(min(c + int2(0, 1), most), 0)), groundHeights.Load(int3(min(c + int2(1, 1), most), 0))));
+      if (p.y <= g * ground.z + ground.w) return 1;
+    }
+  }
+  return 0;
+}
+)hlsl";
+
 }  // namespace
 
 bool Post::Init(std::string* error) {
@@ -270,6 +321,11 @@ bool Post::Init(std::string* error) {
     pd.colorFormat = gfx::Format::R8;
     reactiveMask_ = device_->CreatePipeline(pd, error);
     if (!reactiveMask_) return false;
+    std::string animated = std::string(kViewShaderBlock) + kAnimatedShader;  // [fsrthin]
+    pd.vertexSource = pd.pixelSource = animated;
+    pd.name = "animated mask";
+    animatedMask_ = device_->CreatePipeline(pd, error);
+    if (!animatedMask_) return false;
   }
   // a black picture for when there is no glow
   const uint8_t black[4] = {0, 0, 0, 255};
@@ -284,7 +340,7 @@ bool Post::Init(std::string* error) {
 
 void Post::BeginScene(int width, int height, const float clearColor[4]) {
   if (width != width_ || height != height_ || !color_) {
-    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_, opaque_, reactive_, composition_})
+    for (gfx::Texture t : {color_, depth_, drawn_, behind_, ldr_, opaque_, reactive_, composition_, animated_})
       if (t) device_->Destroy(t);
     drawn_ = {};
     behind_ = {};
@@ -292,6 +348,7 @@ void Post::BeginScene(int width, int height, const float clearColor[4]) {
     opaque_ = {};
     reactive_ = {};
     composition_ = {};  // [falltrail]
+    animated_ = {};     // [fsrthin]
     gfx::TargetDesc td;
     td.width = width;
     td.height = height;
@@ -385,6 +442,41 @@ gfx::Texture Post::Reactive(const std::function<void()>& more) {
   if (more) more();
   keptOpaque_ = false;
   return reactive_;
+}
+
+gfx::Texture Post::Animated(const View& view, const float axes[12], float eyeHeight, float waterLevel, float leastChange, gfx::Texture groundHeights,
+                            float mapWidth, float mapHeight, float heightUnit, float standsUp) {  // [fsrthin]
+  if (!animatedMask_ || !depth_ || width_ <= 0 || height_ <= 0) return {};
+  if (!animated_) {
+    gfx::TargetDesc td;
+    td.width = width_;
+    td.height = height_;
+    td.format = gfx::Format::R8;
+    animated_ = device_->CreateTarget(td);
+    if (!animated_) return {};
+  }
+  float k[20];
+  std::memcpy(k, axes, 12 * sizeof(float));
+  const bool ground = groundHeights && heightUnit > 0;
+  k[16] = mapWidth, k[17] = mapHeight, k[18] = ground ? heightUnit : 0, k[19] = standsUp;
+  const bool after = keptOpaque_ && opaque_ && leastChange > 0;  // (KeepOpaque's picture of this frame; before Reactive, which ends it)
+  k[12] = waterLevel - eyeHeight;
+  k[13] = after ? leastChange : 0;
+  k[14] = k[15] = 0;
+  gfx::PassDesc pass;
+  pass.color = animated_;
+  pass.clearColor = false;  // (the mask is drawn over every pixel)
+  device_->BeginPass(pass);
+  device_->SetPipeline(animatedMask_);
+  device_->SetConstants(0, &view.constants, sizeof view.constants);
+  device_->SetConstants(1, k, sizeof k);
+  device_->SetTexture(0, depth_);
+  device_->SetTexture(1, after ? opaque_ : color_);
+  device_->SetTexture(2, color_);
+  device_->SetTexture(3, ground ? groundHeights : depth_);  // (not read without a ground)
+  device_->Draw(3);
+  for (int slot = 0; slot < 4; ++slot) device_->SetTexture(slot, {});
+  return animated_;
 }
 
 gfx::Texture Post::Composition(const std::function<void()>& draw) {  // [falltrail]

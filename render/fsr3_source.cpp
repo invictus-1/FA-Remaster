@@ -5669,6 +5669,11 @@ cbuffer cbFSR3Upscaler FFX_DECLARE_CB(FSR3UPSCALER_BIND_CB_FSR3UPSCALER)
     FfxFloat32    fShadingChangeScale;
     FfxFloat32    fAccumulationAddedPerFrame;
     FfxFloat32    fMinDisocclusionAccumulation;
+    // [fsrthin] BEGIN (ours, not AMD's; in the three numbers that filled the buffer's last row up: fsr3.cpp, Constants)
+    FfxFloat32    fThinView;   // a check view of the accumulate pass (MOHO64_FSR3_VIEW; 0: none)
+    FfxFloat32    fThinGuard;  // a still pixel's history kept while it lies in the frame's own 3x3 range widened by this (0: off)
+    FfxFloat32    fThinLock;   // over 0.5: a lock lives through the jitter's own shading change and reaches the 3x3 round it
+    // [fsrthin] END
 };
 
 #define FFX_FSR3UPSCALER_CONSTANT_BUFFER_1_SIZE (sizeof(cbFSR3Upscaler) / 4)  // Number of 32-bit values. This must be kept in sync with the cbFSR3Upscaler size.
@@ -6411,6 +6416,47 @@ FfxFloat32 SampleLanczos2Weight(FfxFloat32 x)
 #endif
 }
 // END: FSR3UPSCALER_BIND_SRV_LANCZOS_LUT
+
+// [fsrthin] BEGIN (ours, not AMD's): the mask of what is animated without motion (Fsr3::Inputs::animated, R8 at the size
+// drawn), bound in the Lanczos table's register above: nothing reads that table in this build (the reprojection is
+// Lanczos type 0, the upsampling type 2).
+FfxFloat32 SampleAnimatedMask(FfxFloat32x2 fUV)
+{
+#if defined(FSR3UPSCALER_BIND_SRV_LANCZOS_LUT)
+    return r_lanczos_lut.SampleLevel(s_LinearClamp, fUV, 0);
+#else
+    return 0.f;
+#endif
+}
+// [fsrthin] END
+
+// [fsrthin] BEGIN (ours) How far the scene's surface at a pixel is from flat, from the depth at half the size drawn (AMD's
+// farthest depth, in metres): the largest second difference across the pixel in four directions, against its depth. A flat
+// surface gives nought however steeply it is seen; an edge, a step, a sliver or a wall seen edge-on gives its jump.
+#if defined(FSR3UPSCALER_BIND_SRV_FARTHEST_DEPTH_MIP1)
+FfxFloat32 ThinGeometry(FfxFloat32x2 fLrUvJittered)
+{
+    const FfxInt32x2 iSize = FfxInt32x2(RenderSize() / 2);
+    const FfxInt32x2 iAt = clamp(FfxInt32x2(fLrUvJittered * FfxFloat32x2(iSize)), FfxInt32x2(0, 0), iSize - FfxInt32x2(1, 1));
+    const FfxFloat32 fHere = LoadFarthestDepthMip1(iAt);
+    FfxFloat32 fBend = 0.0f;
+    const FfxInt32x2 iWays[4] = {FfxInt32x2(1, 0), FfxInt32x2(0, 1), FfxInt32x2(1, 1), FfxInt32x2(1, -1)};
+    for (FfxInt32 w = 0; w < 4; w++) {
+        const FfxFloat32 fA = LoadFarthestDepthMip1(clamp(iAt + iWays[w], FfxInt32x2(0, 0), iSize - FfxInt32x2(1, 1)));
+        const FfxFloat32 fB = LoadFarthestDepthMip1(clamp(iAt - iWays[w], FfxInt32x2(0, 0), iSize - FfxInt32x2(1, 1)));
+        fBend = ffxMax(fBend, abs(fA + fB - 2.0f * fHere));
+        // (and two steps out, halved: a flat surface gives nought there too, and a step ONE pixel beside this one is found,
+        // so that the pixels on both sides of an edge count, whichever side the farthest depth of the pair fell to)
+        const FfxFloat32 fA2 = LoadFarthestDepthMip1(clamp(iAt + 2 * iWays[w], FfxInt32x2(0, 0), iSize - FfxInt32x2(1, 1)));
+        const FfxFloat32 fB2 = LoadFarthestDepthMip1(clamp(iAt - 2 * iWays[w], FfxInt32x2(0, 0), iSize - FfxInt32x2(1, 1)));
+        fBend = ffxMax(fBend, 0.5f * abs(fA2 + fB2 - 2.0f * fHere));
+    }
+    return fBend / ffxMax(fHere, 1e-3f);
+}
+#else
+FfxFloat32 ThinGeometry(FfxFloat32x2 fLrUvJittered) { return 0.0f; }
+#endif
+// [fsrthin] END
 
 #if defined(FSR3UPSCALER_BIND_SRV_DILATED_REACTIVE_MASKS)
 Texture2D<unorm FfxFloat32x4> r_dilated_reactive_masks FFX_DECLARE_SRV(FSR3UPSCALER_BIND_SRV_DILATED_REACTIVE_MASKS);
@@ -11151,7 +11197,29 @@ void RectifyHistory(
         const FfxFloat32x3 fFinalClampedHistoryColor = (fClampedHistoryColor * fScaledBoxVec) + data.clippingBox.boxCenter;
 
         // Scale history color using rectification info, also using accumulation mask to avoid potential invalid color protection
-        const FfxFloat32 fHistoryContribution = ffxMax(params.fLumaInstabilityFactor, data.fLockContributionThisFrame) * params.fAccumulation * (1 - params.fDisocclusion);
+        FfxFloat32 fHistoryContribution = ffxMax(params.fLumaInstabilityFactor, data.fLockContributionThisFrame) * params.fAccumulation * (1 - params.fDisocclusion);  // ([fsrthin] AMD's line, its const taken off)
+        // [fsrthin] BEGIN (ours) The range guard. AMD's pass pulls the history to this frame's colour box, weighted so
+        // that the nearest sample drawn rules, unless its luma-instability test or a lock says "keep"; on a still picture
+        // that test is a coin flip, so a pixel on a hard edge or a sliver jumps with the jitter (the flickering strip of
+        // the UEF land factory's bay, Chris's test of 2026-11-13). A history is KEPT while it lies inside the plain
+        // least..most of the frame's 3x3 samples, and less and less to nought as it leaves that range by (fThinGuard - 1)
+        // times its width (a soft edge: all or nothing made single pixels stand out), on a pixel
+        //  - that stands still: no motion, not reactive, not just uncovered;
+        //  - that is not animated without motion (SampleAnimatedMask: the water, whose waves move on pixels that stand
+        //    still, dust and smoke, and the ground itself, over which shadows move: kept there, the sea turned to
+        //    blotches, dust got a speckled edge and a driving unit's shadow lost its own);
+        //  - and whose surface is not flat (ThinGeometry: an edge, a step, a sliver: where the jitter's flicker comes
+        //    from; a flat face of a unit takes a shadow passing over it as it always did).
+        if (fThinGuard > 0.0f) {
+            const FfxFloat32x3 fReach = (data.clippingBox.aabbMax - data.clippingBox.aabbMin) * (fThinGuard - 1.0f);
+            const FfxFloat32x3 fOutside = ffxMax(ffxMax(data.clippingBox.aabbMin - data.fHistoryColor, data.fHistoryColor - data.clippingBox.aabbMax), FfxFloat32x3(0.0f, 0.0f, 0.0f)) / ffxMax(fReach, FfxFloat32x3(1e-6f, 1e-6f, 1e-6f));
+            const FfxFloat32 fInRange = 1.0f - ffxSaturate(ffxMax(fOutside.x, ffxMax(fOutside.y, fOutside.z)));
+            const FfxFloat32 fAnimated = ffxSaturate(SampleAnimatedMask(params.fHrUv) * 4.0f);
+            const FfxFloat32 fStill = (1.0f - ffxSaturate(params.f4KVelocity / 4.0f)) * (1.0f - fReactiveFactor) * params.fAccumulation * (1.0f - params.fDisocclusion) * (1.0f - fAnimated);
+            const FfxFloat32 fEdge = ffxSaturate((ThinGeometry(params.fLrUvJittered) - 0.006f) / 0.008f);
+            fHistoryContribution = ffxMax(fHistoryContribution, fInRange * fStill * fEdge);
+        }
+        // [fsrthin] END
         data.fHistoryColor = ffxLerp(fFinalClampedHistoryColor, data.fHistoryColor, ffxSaturate(fHistoryContribution));
     }
 }
@@ -11160,13 +11228,30 @@ void UpdateLockStatus(AccumulationPassCommonParams params, FFX_PARAMETER_INOUT A
 {
     data.fLock *= FfxFloat32(params.bIsNewSample == false);
 
-    const FfxFloat32 fLifetimeDecreaseFactor = ffxMax(ffxSaturate(params.fShadingChange), ffxMax(params.fReactiveMask, params.fDisocclusion));
+    // [fsrthin] BEGIN (ours) A lock's life was cut every frame by the shading-change mask, which the jitter's own flicker
+    // raises to 0.02 .. 0.4 on a still thin feature: the locks meant for such features never lived. With fThinLock, and not
+    // on the water, only a change over 0.3 cuts it. (AMD's line: fLifetimeDecreaseFactor from ffxSaturate(fShadingChange).)
+    const FfxBoolean bThinLock = fThinLock > 0.5f && SampleAnimatedMask(params.fHrUv) < 0.25f;
+    const FfxFloat32 fShadingChangeForLock = bThinLock ? ffxSaturate((params.fShadingChange - 0.3f) / 0.4f) : ffxSaturate(params.fShadingChange);
+    const FfxFloat32 fLifetimeDecreaseFactor = ffxMax(fShadingChangeForLock, ffxMax(params.fReactiveMask, params.fDisocclusion));
+    // [fsrthin] END
     data.fLock = ffxMax(0.0f, data.fLock - fLifetimeDecreaseFactor * fLockMax);
 
     // Compute this frame lock contribution
     data.fLockContributionThisFrame = ffxSaturate(ffxSaturate(data.fLock - fLockThreshold) * (fLockMax - fLockThreshold));
 
-    const FfxFloat32 fNewLockIntensity = LoadRwNewLocks(params.iPxHrPos) * (1.0f - ffxMax(params.fShadingChange * 0, params.fReactiveMask));
+    // [fsrthin] BEGIN (ours) A new lock reaches the 3x3 pixels round its own (a sliver's lock sat on one pixel of the
+    // screen's size and its neighbours on the same sliver jumped). (AMD's line read LoadRwNewLocks(params.iPxHrPos) alone.)
+    FfxFloat32 fNewLockThere = LoadRwNewLocks(params.iPxHrPos);
+    if (bThinLock) {
+        for (FfxInt32 ly = -1; ly <= 1; ly++) {
+            for (FfxInt32 lx = -1; lx <= 1; lx++) {
+                fNewLockThere = ffxMax(fNewLockThere, LoadRwNewLocks(clamp(params.iPxHrPos + FfxInt32x2(lx, ly), FfxInt32x2(0, 0), FfxInt32x2(UpscaleSize()) - FfxInt32x2(1, 1))));
+            }
+        }
+    }
+    // [fsrthin] END
+    const FfxFloat32 fNewLockIntensity = fNewLockThere * (1.0f - ffxMax(params.fShadingChange * 0, params.fReactiveMask));
     data.fLock = ffxMax(0.0f, ffxMin(data.fLock + fNewLockIntensity, fLockMax));
 
     // Preparing for next frame
@@ -11235,19 +11320,61 @@ void Accumulate(FfxInt32x2 iPxHrPos)
         ReprojectHistoryColor(params, data);
     }
     
+    const FfxFloat32 dbgHistory = data.fHistoryColor.x;  // [fsrthin] (ours: for the check view)
     UpdateLockStatus(params, data);
 
     ComputeBaseAccumulationWeight(params, data);
 
     ComputeUpsampledColorAndWeight(params, data);
+    // [fsrthin] BEGIN (ours: for the check view)
+    const FfxFloat32 dbgBox = data.clippingBox.boxCenter.x;
+    const FfxFloat32 dbgBoxVec = data.clippingBox.boxVec.x;
+    const FfxFloat32 dbgUp = data.fUpsampledColor.x;
+    const FfxFloat32 dbgUpWeight = data.fUpsampledWeight;
+    const FfxFloat32 dbgHistoryWeight = data.fHistoryWeight;
+    // [fsrthin] END
 
     RectifyHistory(params, data);
+    const FfxFloat32 dbgRectified = data.fHistoryColor.x;  // [fsrthin] (ours: for the check view)
 
     Accumulate(params, data);
 
     data.fHistoryColor /= Exposure();
 
     data.fHistoryColor = ffxMax(data.fHistoryColor, FfxFloat32x3(0.0f, 0.0f, 0.0f));
+
+    // [fsrthin] BEGIN (ours) The check views (MOHO64_FSR3_VIEW=n): 1 lock / its most, 2 the lock's share this frame, 3
+    // accumulation, 4 disocclusion, 5 shading change, 6 luma instability, 7 new lock, 8 reactive, 9 velocity, 10 / 11 / 12
+    // the levels 1 / 0.5 / 0.25, 13 the history before, 14 the frame's box centre, 15 this frame's colour, 16 the blend's
+    // weight, 17 the history after the pull, 18 the box's extent, 19 the upsample weight, 20 the animated mask, 21 how far from
+    // flat the surface is (ThinGeometry x 50), 22 its share in the range guard.
+    if (fThinView > 0.5f) {
+        FfxFloat32 v = 0.0f;
+        if (fThinView < 1.5f) v = data.fLock / fLockMax;
+        else if (fThinView < 2.5f) v = data.fLockContributionThisFrame;
+        else if (fThinView < 3.5f) v = params.fAccumulation;
+        else if (fThinView < 4.5f) v = params.fDisocclusion;
+        else if (fThinView < 5.5f) v = params.fShadingChange;
+        else if (fThinView < 6.5f) v = params.fLumaInstabilityFactor;
+        else if (fThinView < 7.5f) v = LoadRwNewLocks(params.iPxHrPos);
+        else if (fThinView < 8.5f) v = params.fReactiveMask;
+        else if (fThinView < 9.5f) v = ffxSaturate(params.f4KVelocity / 20.0f);
+        else if (fThinView < 10.5f) v = 1.0f;
+        else if (fThinView < 11.5f) v = 0.5f;
+        else if (fThinView < 12.5f) v = 0.25f;
+        else if (fThinView < 13.5f) v = dbgHistory;
+        else if (fThinView < 14.5f) v = dbgBox;
+        else if (fThinView < 15.5f) v = dbgUp;
+        else if (fThinView < 16.5f) v = ffxSaturate(dbgUpWeight / ffxMax(FSR3UPSCALER_EPSILON, dbgHistoryWeight + dbgUpWeight));
+        else if (fThinView < 17.5f) v = dbgRectified;
+        else if (fThinView < 18.5f) v = dbgBoxVec;
+        else if (fThinView > 21.5f) v = ffxSaturate((ThinGeometry(params.fLrUvJittered) - 0.006f) / 0.008f);
+        else if (fThinView > 20.5f) v = ffxSaturate(ThinGeometry(params.fLrUvJittered) * 50.0f);
+        else if (fThinView > 19.5f) v = SampleAnimatedMask(params.fHrUv);
+        else v = dbgUpWeight;
+        data.fHistoryColor = FfxFloat32x3(v, v, v) / Exposure();
+    }
+    // [fsrthin] END
 
     StoreInternalColorAndWeight(iPxHrPos, FfxFloat32x4(data.fHistoryColor, data.fLock));
 

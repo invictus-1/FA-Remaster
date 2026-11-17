@@ -35,6 +35,16 @@ class Fsr3 {
     // only, which shortens a lock's life but still makes new ones); for what is thin, bright and moves without motion
     // vectors (snow, rain: Precipitation::DrawComposition). None: 0, as before.
     gfx::Texture composition;
+    // [fsrthin] optional R8 at the size drawn: where the picture is animated WITHOUT motion vectors on a surface that
+    // stands still (open water: Post::Animated). There our keeping of a still pixel's history (thinFeatures below) is
+    // off and the pixel is AMD's own. None: 0 everywhere.
+    gfx::Texture animated;
+    // [fsrthin] Still thin features held steady (Chris's test of 2026-11-13: the flickering light strip in the UEF land
+    // factory's bay): two changes of ours inside AMD's accumulate pass (fsr3_source.cpp, between its [fsrthin] marks).
+    // On an edge or a sliver of what stands still, a pixel keeps its history while that lies inside this frame's own 3x3
+    // range (less and less beyond it), and a thin feature's lock lives through the jitter's own shading change and
+    // reaches the pixels round it. Not where `animated` is set. false: AMD's pass as it came (the viewer's --fsr3-plain).
+    bool steady = true;
     int renderWidth = 0, renderHeight = 0;  // the size drawn
     float jitterX = 0, jitterY = 0;  // this frame's jitter in pixels of the size drawn (Jitter below)
     float exposure = 1;              // what the colour is multiplied by before the tone curve
