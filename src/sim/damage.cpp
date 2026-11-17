@@ -455,6 +455,18 @@ namespace {
 
 // Entity:Kill(instigator, type, excessDamageRatio) 0x691d10
 int l_Kill(lua_State* L) {
+  // 0x691d45..0x691d63 (read): lua_gettop must be 1..4, else LuaState::Error 0x90c1d0 with "%s\n  expected between %d
+  // and %d args, but got %d" (0xe0a270) and the help text at 0xe28adc (lua_pushvfstring + lua_error: no "chunk(line):"
+  // in front, which luaL_error would add). Seen (oracle scene upg, FAF 3840): the scene's method wrapper calls U.Kill
+  // with five arguments (self and four, the last nils): the original raised this error inside the dying factory's
+  // KillUnitBeingBuilt, its OnKilled ended there ("Error running OnKilled script"), and the factory never had its
+  // death thread; ours killed the upgrade and the factory went on to its wreck.
+  const int nargs = lua_gettop(L);
+  if (nargs < 1 || nargs > 4) {
+    lua_pushfstring(L, "%s\n  expected between %d and %d args, but got %d",
+                    "Entity:Kill(instigator,type,excessDamageRatio)", 1, 4, nargs);
+    return lua_error(L);
+  }
   Entity* e = CheckObject<Entity>(L, 1);
   Sim& sim = *S(L);
   if (e->dead) return 0;

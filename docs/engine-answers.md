@@ -5,6 +5,29 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-17 15:41, for the renderer: a dying unit's pose for its wreck (TryCopyPose; batch 173)
+
+In the original FAF's Unit:CreateWreckageProp calls `TryCopyPose(unit, wreck, true)` and the wreck keeps the unit's
+last pose. Ours was a stub. Now (sim/sim_view.h):
+
+    struct CopiedPose { uint32_t entityId; uint32_t unitId; uint32_t beat; bool withUnitTransform;
+                        float position[3]; float orientation[4]; std::vector<BonePose> bones; };
+    void CopiedPoses(Sim& sim, std::vector<CopiedPose>* out);   // since the last call, in call order
+    sim.collectCopiedPoses = true;                               // from before the first beat; off by default
+
+- It is handed out only when the unit and the entity have the same skeleton (the same .scm), as the original
+  compares mesh and skeleton (cfunc_TryCopyPoseL 0x75d0e0: 0x75d1f0, 0x75d256); walls and other wrecks with their
+  own mesh get none. In MP2: 723 copied, 46 not.
+- `bones` exactly as UnitPose's: indices in the .scm bone list, transforms relative to the entity that wears the
+  pose, only the bones that differ from the rest pose, taken at the call; nothing updates them later.
+- `withUnitTransform` true (FAF passes it unless the wreck was moved onto the map): draw the posed mesh at the
+  UNIT's transform at the call (`position` / `orientation`), not the prop's own; false: they are the entity's.
+- `beat`: the tick of the call (for a wreck, the beat the prop was made in).
+- A stream, not a state: the simulation keeps no pose with the prop. A view opened later or a game loaded from a
+  save has none for the wrecks made before (rest pose); keep them by entityId on your side.
+The original only hands the pose to the user side (its list at sim+0x9e8, swapped into the sync data): no
+simulation state, and the gate's fingerprints are unchanged with it. Take the list once per beat after Tick().
+
 ## 2026-11-17 14:20, for the interface: the crash path after the check of the Opus days (batch 172)
 
 Two things the check of 2026-11-17 settled between our two descriptions, and one fix.

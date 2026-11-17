@@ -538,6 +538,30 @@ void UnitPoses(const Sim& sim, std::vector<UnitPose>* out) {
   }
 }
 
+void NoteCopiedPose(Sim& sim, const Unit* from, const Entity* to, bool withUnitTransform) {
+  if (!sim.collectCopiedPoses) return;
+  CopiedPose p;
+  p.entityId = to->id;
+  p.unitId = from->id;
+  p.beat = sim.tick();
+  p.withUnitTransform = withUnitTransform;
+  const Entity* w = withUnitTransform ? static_cast<const Entity*>(from) : to;
+  p.position[0] = w->position.x;
+  p.position[1] = w->position.y;
+  p.position[2] = w->position.z;
+  p.orientation[0] = w->orientation.x;
+  p.orientation[1] = w->orientation.y;
+  p.orientation[2] = w->orientation.z;
+  p.orientation[3] = w->orientation.w;
+  PosedBones(from, &p.bones);
+  sim.copiedPoses.push_back(std::move(p));
+}
+
+void CopiedPoses(Sim& sim, std::vector<CopiedPose>* out) {
+  out->clear();
+  out->swap(sim.copiedPoses);
+}
+
 void HiddenBones(const Sim& sim, std::vector<UnitHiddenBones>* out) {
   out->clear();
   for (const Unit* u : sim.units()) {

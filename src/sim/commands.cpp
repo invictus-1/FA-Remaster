@@ -1510,11 +1510,20 @@ void CommandStep(Sim& sim, Unit* u) {
         break;
       } else if (task->pdata && (task->type == CommandType::Patrol || task->type == CommandType::FormPatrol) &&
                  !u->commands.empty()) {
-        // a patrol point goes to the back of the queue (the loop); attack-moves are removed
+        // a patrol point goes to the back of the queue (the loop); attack-moves are removed. IAiCommandDispatchImpl::
+        // TaskTick 0x598e80 (read): with its result word at 2 the Patrol / FormPatrol goes to the back at once
+        // (0x598ebb -> 0x598ee0 MoveFirstCommandToBackOfQueue); otherwise (0x598f47 -> 0x598fed) only when the queue
+        // holds a second command (CUnitCommandQueue::GetNextCommand 0x6edc20 non-null -> 0x599001), and a patrol
+        // ALONE in the queue is removed (RemoveFirstCommandFromQueue 0x599013); the dispatcher answers 1 either way.
+        // Seen (oracle scene patrol_one, FAF 3840): IssuePatrol with one point, the unit's queue is empty on the beat
+        // its leg ends (tank 345: q 0) and it coasts to a stop 58.1 from its start; ours kept the order and drove
+        // on to the point (60.2) and kept re-patrolling.
         std::shared_ptr<UnitCommand> keep = u->commands.front();
         PopHead(u);
-        u->commands.push_back(keep);
-        keep->units.insert(u);
+        if (u->dispatchResult == 2 || !u->commands.empty()) {
+          u->commands.push_back(keep);
+          keep->units.insert(u);
+        }
         // IAiCommandDispatchImpl::TaskTick 0x598ebb: with its result word at 2 (the patrol's last child failed) the
         // point goes to the back (0x598ee0) and the next one is dispatched at once (0x598f6d); otherwise (0x598fed)
         // the next patrol leg starts a beat later (seen: one beat with neither "Patrolling" nor the drive-through
@@ -2943,6 +2952,16 @@ int l_GetCommandQueue(lua_State* L) {
   if (!u) {
     if (lua_istable(L, 1)) luaL_error(L, "UnitScript:GetCommandQueue Passed in an invalid unit");
     u = U(L);
+  }
+  // cfunc_UnitGetCommandQueueL 0x6ce280 (read): a unit whose command queue (unit+0x4b4) is null raises "UnitScript:
+  // GetCommandQueue invalid UnitCommandQueue" (0x6ce32d -> 0x6ce337, the text at 0xe2c814). Unit::KillCleanup 0x6a8790
+  // deletes the queue the beat after a kill, so a killed unit's script that asks in its death thread gets the error.
+  // Seen (oracle scene upg, FAF 3840): the scene's probe asks every killed upgrader each beat: the original's lines
+  // stop at the kill's beat and 9921 such errors follow (the beat after the kill on); ours answered an empty list.
+  // (LuaState::Error 0x90c1d0 at 0x6ce33d: lua_pushvfstring + lua_error, no "chunk(line):" in front.)
+  if (u->commandQueueGone) {
+    lua_pushstring(L, "UnitScript:GetCommandQueue invalid UnitCommandQueue");
+    return lua_error(L);
   }
   Sim* sim = S(L);
   lua_newtable(L);

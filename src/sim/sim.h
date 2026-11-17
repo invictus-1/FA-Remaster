@@ -365,6 +365,13 @@ class Sim {
   // (PropsSeen below: see collectPropsSeen)
   bool collectProps = false;
   std::vector<std::pair<uint32_t, int>> propsGone;
+  // CopiedPoses (sim/sim_view.h): while set, every pose TryCopyPose hands to an entity (the original's list at
+  // sim+0x9e8, swapped into the beat's sync data by Sim::Sync 0x747595) is kept until taken. View-side only: not
+  // read by the simulation, not in the state hash.
+  bool collectCopiedPoses = false;
+  std::vector<CopiedPose> copiedPoses;
+  // The skeleton of a mesh blueprint (its first LOD's MeshName; nullptr: none), as AttachSkeleton finds it.
+  const Skeleton* MeshBlueprintSkeleton(lua_State* L, const std::string& meshBlueprint);
   // Which armies have seen each wreck (sim/sim_view.h PropSeenBy, PropsSeen, ReclaimableAt's armyMask; the option
   // "wrecks appear only once seen"). Set collectPropsSeen before the first beat (before Start or between Start and
   // the first Tick); off, nothing below is touched. While set, the end of every Tick and PausedBeat (after the Sync,

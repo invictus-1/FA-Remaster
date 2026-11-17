@@ -9,6 +9,7 @@
 // (/lua/sim/unit.lua Unit, /lua/sim/prop.lua Prop, /lua/sim/projectile.lua Projectile).
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -720,6 +721,15 @@ int l_BeenDestroyed(lua_State* L) {
   return 1;
 }
 int l_Destroy(lua_State* L) {
+  // cfunc_EntityDestroyL 0x691a80 (read): lua_gettop must be 1 (0x691ab3), else LuaState::Error 0x90c1d0 "%s\n  expected
+  // %d args, but got %d" (0xe0a220) with the help text "Entity:Destroy()" (0xe28a7c): no position in front. Seen (oracle
+  // scene upg, FAF 3840): the scene's method wrapper calls U.Destroy with five arguments; the original raised this inside
+  // the factory's DestroyUnitBeingBuilt (cells destr: "Error running OnDestroy script") and its OnStopBuild (cells
+  // clear), so there the upgrade was destroyed by the engine, not by the script; ours destroyed it from the script.
+  if (const int n = lua_gettop(L); n != 1) {
+    lua_pushfstring(L, "%s\n  expected %d args, but got %d", "Entity:Destroy()", 1, n);
+    return lua_error(L);
+  }
   static const bool dbgDestroy = getenv("MOHO64_DEBUG_DESTROY") != nullptr;  // (read once)
   if (dbgDestroy) {
     Entity* de = ToObject<Entity>(L, 1);
@@ -811,6 +821,51 @@ int l_SetMesh(lua_State* L) {
   Entity* e = E(L);
   e->mesh = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
   return 0;
+}
+// TryCopyPose(unitFrom, entityTo, bCopyWorldTransform) cfunc_TryCopyPoseL 0x75d0e0 (read 2026-11-15):
+// - lua_gettop must be 3, else LuaState::Error 0x90c1d0 "%s\n  expected %d args, but got %d" (0xe0a220) with the help
+//   text 0xe3523c (no position in front); then SCR_FromLua_Unit 0x5936c0 (arg 1) and SCR_FromLua_Entity 0x5a8020
+//   (arg 2);
+// - the copy is made only when both have the same mesh resource (Entity::GetMesh 0x5bdb90: entity+0x78, compared at
+//   0x75d1f0) and the same skeleton (RScmResource::GetSkeleton 0x538db0 of each, 0x75d256). Ours: the skeleton of
+//   each one's mesh (Entity:SetMesh's mesh blueprint, else the blueprint's Display.MeshBlueprint), from the cache
+//   keyed by the .scm file, so one skeleton = one mesh file;
+// - then the unit's pose (its actor unit+0x540, CAniActor::GetPoseShared 0x5bdd50) and arg 3 (GetBoolean 0x415560:
+//   a boolean or nil, read only on this path). True: the unit's own pose object is handed out, with the unit's
+//   world transform; false: a new CAniPose copied from it (0x54b290) whose world transform is set to the entity's
+//   (CAniPose::SetWorldTransform 0x54b550 from entity+0x9c);
+// - {entity id (entity+0x68), pose} is appended to the sim's list sim+0x9e8 (0x75f050), which Sim::Sync
+//   (0x747595, 0x747aa8..0x747aec) swaps into the beat's sync data for the user side. Nothing else: the entity's own
+//   transform, collision, bones and the unit are left as they were; the simulation never reads the list;
+// - it returns one boolean: whether the copy was made (0x75d533 / 0x75d585).
+// FAF: Unit:CreateWreckageProp (sim/Unit.lua 1824) gives its wreck the unit's last pose, the third argument true
+// unless the wreck was moved onto the playable area. Ours keeps the copies only for a host (Sim::collectCopiedPoses,
+// CopiedPoses in sim/sim_view.h).
+int l_TryCopyPose(lua_State* L) {
+  const int n = lua_gettop(L);
+  if (n != 3) {
+    lua_pushfstring(L, "%s\n  expected %d args, but got %d", "TryCopyPose(unitFrom,entityTo,bCopyWorldTransform)", 3,
+                    n);
+    return lua_error(L);
+  }
+  Unit* u = CheckObject<Unit>(L, 1);
+  Entity* e = CheckObject<Entity>(L, 2);
+  Sim& sim = *S(L);
+  auto skeletonOf = [&](Entity* x) { return x->mesh.empty() ? x->skeleton : sim.MeshBlueprintSkeleton(L, x->mesh); };
+  const Skeleton* from = skeletonOf(u);
+  const bool same = from && from == skeletonOf(e);
+  if (same) {
+    const int t = lua_type(L, 3);
+    if (t != LUA_TBOOLEAN && t != LUA_TNIL) luaL_typerror(L, 3, "boolean");
+    NoteCopiedPose(sim, u, e, lua_toboolean(L, 3) != 0);
+  }
+  static const bool debug = std::getenv("MOHO64_DEBUG_COPYPOSE") != nullptr;
+  if (debug)
+    Logf(LogLevel::Info, "copypose %u unit 0x%x %s -> entity 0x%x %s: %s (arg3 %d)", sim.tick(), u->id,
+         u->blueprint ? u->blueprint->id.c_str() : "-", e->id, e->mesh.c_str(), same ? "copied" : "no",
+         lua_toboolean(L, 3));
+  lua_pushboolean(L, same);
+  return 1;
 }
 int l_SetDrawScale(lua_State* L) {
   Entity* e = E(L);
@@ -1374,6 +1429,7 @@ void RegisterEntityBindings(lua_State* L) {
   SetGlobal(L, "CreateInitialArmyUnit", l_CreateInitialArmyUnit);
   SetGlobal(L, "CreatePropHPR", l_CreatePropHPR);
   SetGlobal(L, "CreateProp", l_CreateProp);
+  SetGlobal(L, "TryCopyPose", l_TryCopyPose);
   SetGlobal(L, "GenerateRandomOrientation", l_GenerateRandomOrientation);
   SetGlobal(L, "SetArmyStart", l_SetArmyStart);
   SetGlobal(L, "GenerateArmyStart", l_GenerateArmyStart);
@@ -1508,6 +1564,26 @@ void Sim::AttachSkeleton(lua_State* L, Entity* e) {
     }
   }
   lua_settop(L, top);
+}
+
+const Skeleton* Sim::MeshBlueprintSkeleton(lua_State* L, const std::string& meshBlueprint) {
+  const BlueprintInfo* mesh = bps_.Find(meshBlueprint);
+  if (!mesh) return nullptr;
+  // (raw reads with lua_gpg_rawgetstr: no string made, no collector check, so the Lua state goes on as if the
+  // call had made none: the original's TryCopyPose reads its arguments and pushes one boolean, nothing else)
+  const int top = lua_gettop(L);
+  const Skeleton* sk = nullptr;
+  bps_.PushTable(L, *mesh);
+  lua_gpg_rawgetstr(L, -1, "LODs");
+  if (lua_istable(L, -1)) {
+    lua_rawgeti(L, -1, 1);
+    if (lua_istable(L, -1)) {
+      lua_gpg_rawgetstr(L, -1, "MeshName");
+      if (lua_type(L, -1) == LUA_TSTRING && lua_strlen(L, -1)) sk = skeletons_->Get(lua_tostring(L, -1));
+    }
+  }
+  lua_settop(L, top);
+  return sk;
 }
 
 // Unit::InitializeArmor: the unit's Defense.ArmorType names a row of /lua/armordefinition.lua

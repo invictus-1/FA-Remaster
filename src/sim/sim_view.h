@@ -233,6 +233,30 @@ struct UnitPose {
   uint32_t id = 0;  // the unit's entity id
   std::vector<BonePose> bones;
 };
+// A dying unit's pose handed to another entity of the same mesh (TryCopyPose(unitFrom, entityTo,
+// bCopyWorldTransform) 0x75d0e0: FAF's Unit:CreateWreckageProp gives the wreck its unit's last pose).
+// - bones: exactly as UnitPose's (BonePose above): indices in the mesh's bone list (.scm order), each transform
+//   relative to the unit (to the entity that now wears the pose), only the bones that differ from the rest pose,
+//   taken when the call was made. The entity keeps this pose for as long as it lives: nothing updates it later.
+// - withUnitTransform (the third argument true, which FAF passes unless the wreck was moved onto the map): the
+//   original hands the entity the unit's own pose object, whose world transform is the UNIT's at the call, so the
+//   posed mesh is drawn at position / orientation below, not at the prop's own (they differ when the wreck was made
+//   elsewhere, e.g. an air unit's wreck put on the ground under it). False: a copy whose world transform is set to
+//   the entity's own (CAniPose::SetWorldTransform 0x54b550 from entity+0x9c): position / orientation below are the
+//   entity's then.
+// - beat: the simulation's tick in which the call was made (the same beat the entity was made in, for a wreck).
+// - A stream, not a state: the simulation keeps no pose with the prop. A view opened later, and a game loaded from a
+//   save, has no CopiedPose for the wrecks made before: they show the rest pose. A viewer that re-lays wrecks keeps
+//   the poses itself by entityId.
+struct CopiedPose {
+  uint32_t entityId = 0;                // the entity given the pose (the wreck)
+  uint32_t unitId = 0;                  // the unit it came from
+  uint32_t beat = 0;                    // the tick of the call
+  bool withUnitTransform = false;
+  float position[3] = {0, 0, 0};        // the pose's world transform (see withUnitTransform)
+  float orientation[4] = {0, 0, 0, 1};  // x, y, z, w
+  std::vector<BonePose> bones;
+};
 
 // The bones of a unit's mesh that its script has hidden now (Unit:HideBone / ShowBone): a commander's upgrades
 // not bought yet, a factory's arm parts, a missile not in its silo. Bone indices as in UnitPose (the mesh's bone
@@ -554,6 +578,13 @@ void VisionCasters(const Sim& sim, std::vector<VisionCasterView>* out);
 // Sim::collectProps set from before the first beat. (It compares every prop with what was last told: measured
 // 0.066 ms a beat with 6,200 props in a small fight, 0.46 ms with 14,000 props and 200 changes a beat.)
 void PropEvents(Sim& sim, std::vector<PropEvent>* out);
+// The poses TryCopyPose handed out since the last call (see CopiedPose), in call order. Take it once per beat,
+// after Tick(), with Sim::collectCopiedPoses set from before the first beat (off: nothing is kept).
+void CopiedPoses(Sim& sim, std::vector<CopiedPose>* out);
+// (TryCopyPose's note of one copy, while collectCopiedPoses is set: the unit's bones now.)
+class Unit;
+class Entity;
+void NoteCopiedPose(Sim& sim, const Unit* from, const Entity* to, bool withUnitTransform);
 // Which armies have seen a wreck (the option "wrecks appear only once seen"): set Sim::collectPropsSeen before the
 // first beat. Bit army - 1 (army 1-based, 16 at most). A wreck is a prop made during the game (not by the map's
 // setup) whose blueprint some unit blueprint names as its Wreckage.Blueprint (every unit's wreck: FAF's

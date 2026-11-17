@@ -380,6 +380,7 @@ class Unit : public Entity {
   uint8_t recon[16] = {};          // per army index: Radar 1, Sonar 2, Omni 4, LOSNow 8, LOSEver 0x10
   bool killCleanup = false;        // killed: weapons and commands go at the next beat
   bool combatGone = false;         // ... and they went
+  bool commandQueueGone = false;   // ... and the command queue object went (Unit::KillCleanup 0x6a8790: unit+0x4b4)
   // destroyed without a kill: the weapons had their OnDestroy in the destroy queue's drain, but the attacker and its
   // weapons (their targets, their Lua objects) last until ~Unit deletes them, after the command queue (sim.cpp)
   bool weaponsHeld = false;
