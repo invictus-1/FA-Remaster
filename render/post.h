@@ -49,6 +49,19 @@ class Post {
   // [falltrail] The temporal upscaler's transparency and composition mask (Fsr3::Inputs::composition; R8, the scene's
   // size): cleared to nought, then what `draw` draws into its pass (Precipitation::DrawComposition). Before Reactive.
   gfx::Texture Composition(const std::function<void()>& draw);
+  // [fsrthin] The temporal upscaler's mask of what is animated without motion (Fsr3::Inputs::animated; R8, the scene's
+  // size, one sample a pixel): 1 on the water, found from the scene's depth (the water writes none): where the surface
+  // behind a pixel lies under `waterLevel` (give it with the reach of the swell and the surf above the level). `axes`:
+  // the camera's right, up and back, each with a fourth number: tan(half the field of view), the aspect, the near
+  // distance (as the water's own constants). And 1 where what was drawn after KeepOpaque (dust, smoke, sparks) changed
+  // the picture by more than `leastChange` (both brought into 0..1 as Reactive does; 0: not looked at): call it BEFORE
+  // Reactive, which ends what KeepOpaque kept. No water: a level far below the map. Ends the pass begun.
+  // And 1 on the ground itself and what lies low on it (not more than `standsUp` above the terrain's height there:
+  // `groundHeights` Terrain::HeightTexture with the map's size and Terrain::HeightUnit; none: not looked at): the thin
+  // edges the upscaler's keeping is for are on what stands up (units, structures, trees), and a shadow moving over the
+  // ground must not be kept.
+  gfx::Texture Animated(const View& view, const float axes[12], float eyeHeight, float waterLevel, float leastChange, gfx::Texture groundHeights,
+                        float mapWidth, float mapHeight, float heightUnit, float standsUp);
   // Begins a pass into what KeepOpaque kept, keeping what is there (false: nothing kept): for what darkens
   // the picture where it stands still (the fog of war), drawn there too, so that the reactive mask does not
   // take it for something that moves. ContinueScene afterwards.
@@ -105,6 +118,7 @@ class Post {
     std::swap(finishWidth_, o.finishWidth_), std::swap(finishHeight_, o.finishHeight_), std::swap(opaque_, o.opaque_);
     std::swap(reactive_, o.reactive_), std::swap(upscaled_, o.upscaled_), std::swap(upscaledWidth_, o.upscaledWidth_);
     std::swap(composition_, o.composition_);  // [falltrail]
+    std::swap(animated_, o.animated_);        // [fsrthin]
     std::swap(upscaledHeight_, o.upscaledHeight_), std::swap(upscaledNow_, o.upscaledNow_), std::swap(keptOpaque_, o.keptOpaque_);
     std::swap(photoFinish, o.photoFinish);
   }
@@ -112,7 +126,7 @@ class Post {
   // destructor of its own: the world's are let go of with the device).
   void ReleaseView() {
     for (gfx::Texture* t : {&finished_, &ldr_, &color_, &depth_, &drawn_, &behind_, &bloom_[0], &bloom_[1], &opaque_, &reactive_, &upscaled_,
-                            &composition_})
+                            &composition_, &animated_})
       if (*t) {
         device_->Destroy(*t);
         *t = {};
@@ -148,11 +162,13 @@ class Post {
   void SizeFinishing(int width, int height);
   gfx::Texture opaque_, reactive_;  // (KeepOpaque, Reactive)
   gfx::Texture composition_;        // [falltrail] (Composition)
+  gfx::Texture animated_;           // [fsrthin] (Animated)
   gfx::Texture upscaled_;  // (UpscaleTemporal: FSR 3's picture at the screen's size, until the next Present)
   int upscaledWidth_ = 0, upscaledHeight_ = 0;
   bool upscaledNow_ = false;
   bool keptOpaque_ = false;
   gfx::Pipeline reactiveMask_;
+  gfx::Pipeline animatedMask_;  // [fsrthin]
 };
 
 }  // namespace render

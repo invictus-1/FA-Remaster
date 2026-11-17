@@ -710,6 +710,11 @@ class World {
   // [falltrail] With FSR 3, what falls marked in its transparency and composition mask too (Fsr3::Inputs::composition): no
   // lock on a flake, so no trail of its light where it was. False: the reactive mask alone, as before.
   bool fallNoLocks = true;
+  // [fsrthin] With FSR 3: still thin features held steady (Fsr3::Inputs::steady; Chris's test of 2026-11-13, the
+  // flickering light strip in the UEF land factory's bay): edges and slivers of what stands up off the ground keep their
+  // gathered picture instead of jumping with the jitter. Never on the water, on dust and smoke, or on the ground itself
+  // (Post::Animated). Off: AMD's upscaler as it came (the viewer's --fsr3-plain).
+  bool fsr3Steady = true;
   // Rain's splashes (weather.h): where rain meets what faces up (the ground, a unit's top) and the picture shows it,
   // small crowns that rise and fade. Modern look; off by default.
   bool rainSplashes = false;

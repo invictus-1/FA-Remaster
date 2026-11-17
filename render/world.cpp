@@ -5538,6 +5538,21 @@ void World::Render() {
     in.motion = motion.Texture();
     if (fallNoLocks && falling.WantsComposition())  // [falltrail] (while it snows; before Reactive, which ends the fall's masks)
       in.composition = post.Composition([&] { falling.DrawComposition(view); });
+    {  // [fsrthin] (what is animated without motion: the water, and what came after the solid scene; before Reactive)
+      Vec3 right, up, back;
+      camera.Axes(&right, &up, &back);
+      const float axes[12] = {right.x, right.y, right.z, std::tan(camera.fovY * 0.5f),
+                              up.x, up.y, up.z, static_cast<float>(view.width) / static_cast<float>(std::max(view.height, 1)),
+                              back.x, back.y, back.z, camera.zNear};
+      // (the water's level with a unit of reach for the swell and the surf's run up the sand; what came after the solid
+      // scene from a change of 0.02, a tenth of where the reactive mask begins; the ground and what lies within half a
+      // unit of it: grass, stones)
+      if (fsr3Steady)
+        in.animated = post.Animated(view, axes, camera.Eye().y, haveMap_ && map.water.present ? map.water.elevation + 1.0f : -1e9f, 0.02f,
+                                    haveMap_ ? terrain.HeightTexture() : gfx::Texture{}, static_cast<float>(map.width),
+                                    static_cast<float>(map.height), terrain.HeightUnit(), 0.5f);
+      in.steady = fsr3Steady;
+    }
     in.reactive = post.Reactive([&] { falling.DrawReactive(view); });  // ([rainreactive])
     in.jitterX = motion.jitterX;
     in.jitterY = motion.jitterY;

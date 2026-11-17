@@ -756,6 +756,8 @@
 // --fall-pace world  [fallpace] rain and snow at one speed in the world at every zoom and the flakes' sway by the zoom,
 //           as before (World::fallSteadyPace off; by default as fast on the screen at every zoom, each box of the ladder
 //           at its own speed, the sway by the flake's own box)
+// --fsr3-plain  [fsrthin] FSR 3 as AMD's upscaler came (World::fsr3Steady off; by default still edges and slivers of
+//           units and structures keep their gathered picture: no flicker of a thin lit strip under the jitter)
 // --fall-trails  [falltrail] with FSR 3 what falls marked in the reactive mask alone, as before (World::fallNoLocks off; by
 //           default in the transparency and composition mask too: no lock on a flake, no trail of light behind it)
 // --effects-quality <share>  the share of their particles effects throw out (1: all; 0.5 for a slower card)
@@ -1339,6 +1341,7 @@ struct Options {
   bool fallSceneSize = false;           // --fall-size scene [fallsize]
   bool fallWorldPace = false;           // --fall-pace world [fallpace]
   bool fallTrails = false;              // --fall-trails [falltrail]
+  bool fsr3Plain = false;               // --fsr3-plain [fsrthin]
   int shadowSize = 2048;                // --shadow-size
   int textureDetail = 0;                // --texture-detail
   bool frame = true;                    // --no-frame
@@ -1553,6 +1556,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--lod-by-scene") o->lodByScene = true;  // [uplod]
     else if (a == "--fsr1-no-bias") o->fsr1NoBias = true;  // [upmip]
     else if (a == "--fall-trails") o->fallTrails = true;   // [falltrail]
+    else if (a == "--fsr3-plain") o->fsr3Plain = true;     // [fsrthin]
     else if (a == "--rain-splashes") o->rainSplashes = true;
     else if (a == "--lit-smoke") o->litSmoke = true;
     else if (a == "--smoke-shadows") o->smokeShadows = true;
@@ -3127,6 +3131,7 @@ int main(int argc, char** argv) {
   world.fallSteadyPace = !opt.fallWorldPace;   // [fallpace]
   world.fallFadeHigh = opt.fallFadeHigh;       // [fallhigh]
   world.fallNoLocks = !opt.fallTrails;         // [falltrail]
+  world.fsr3Steady = !opt.fsr3Plain;           // [fsrthin]
   world.shadowSize = opt.shadowSize;
   world.meshes.depthPrepass = opt.prepass;
   if (opt.shadowFitMargin >= 0) world.shadows.fitMargin = opt.shadowFitMargin;  // [shadowtri]
