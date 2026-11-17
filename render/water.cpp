@@ -130,7 +130,7 @@ cbuffer WaterConstants : register(b1) {
   float4 cameraRight;     // w: tan(half the field of view)
   float4 cameraUp;        // w: aspect
   float4 cameraBack;      // w: near distance
-  float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround); y [bigtest] 1 the bed soaked (Water::shoreSoak)
+  float4 groundInfo;      // [floatfoam] x the ground's height unit (0: the ground's heights not bound, Water::SetGround); y [bigtest] 1 the bed soaked (Water::shoreSoak); w [seamirror] 1 the stronger mirror without rays (Water::strongMirror)
   float4 fxMirror;        // [fxmirror] the effects' mirror image (fx_mirror.h): x 1 = its picture is bound; y how far off what it
                           // shows is taken to be (world units: the waves' tilt moves it by that); z its strength looked down on;
                           // w 1 = a view for checking: the picture itself in place of the water (Water::fxMirrorView)
@@ -1218,6 +1218,30 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #else
     float3 marchR = R;
 #endif
+    // [seamirror] (Water::strongMirror, groundInfo.w; OFF by default) Without rays this march is the whole mirror, and
+    // it is a weak one: a hit's weight falls with the step it was found at (a cliff 50 units off is met at step 8 or 9
+    // and mirrored at 40 %, the sky showing through), the march ends at the first thing the picture has in front of the
+    // ray even where the ray only passes behind it (the sky stays there, with a hard edge), and a ray that leaves the
+    // picture over its top is the sky. With the switch, and only where no rays make the mirror: a hit weighs by the
+    // ray's length (whole to 120 units, nought at 200); the march goes on where the ray passes behind something; the
+    // plain water's march goes off the calmer surface, as the ocean's; a ray over the picture's top mirrors the land
+    // standing at that edge; and what is met is read softly (nine taps, six pixels of a 1080-line picture apart): read
+    // at one place its fine detail jumped with the waves (a film's flicker 11 % of pixels against the rays' 2.6 %;
+    // softly 4.9 %). Seen low over the sea the mirror then has the rays' level (101.5 against 99.2; stock 116.9); from
+    // the game's height nothing changes. NOT the default: patches of sky with hard edges remain in it, and it
+    // flickers twice as much as the rays' mirror (_scratch/render/t1117/seamirror/NOTES.md, 2026-11-17).
+    bool marchAlone = groundInfo.w > 0.5;
+#if RAYS
+    marchAlone = marchAlone && rayEffects.x <= 0.5;
+#endif
+#if !OCEAN
+    if (marchAlone) {
+      marchR = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), 0.55)));
+      marchR.y = max(marchR.y, 0.02);
+      marchR = normalize(marchR);
+    }
+#endif
+    float2 atBefore = i.position.xy * viewport.zw;
     for (int k = first; k < 14; ++k) {
 #if OCEAN
       if (k == 0) stride = 1.2;
@@ -1228,7 +1252,15 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       float4 c = mul(viewProj, float4(p, 1));
       if (c.w <= 0) break;
       float2 at = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
-      if (any(at < 0) || any(at > 1)) break;
+      if (any(at < 0) || any(at > 1)) {
+        if (marchAlone && at.y < 0 && atBefore.y > 0) {  // (over the picture's top: where it crossed the edge)
+          float2 edgeAt = float2(lerp(atBefore.x, at.x, atBefore.y / (atBefore.y - at.y)), 0.5 * viewport.w);
+          if (edgeAt.x > 0 && edgeAt.x < 1 && SCENE_DEPTH(int2(edgeAt * viewport.xy), 0) > 0)
+            mirror = lerp(mirror, behind.SampleLevel(samplerLinearClamp, edgeAt, 0).rgb, saturate(min(edgeAt.x, 1 - edgeAt.x) * 10) * saturate((200 - length(p - i.world)) / 80));
+        }
+        break;
+      }
+      atBefore = at;
       float there = SCENE_DEPTH(int2(at * viewport.xy), 0);
       float here = c.z / c.w;
       if (there > here) {  // the picture has something nearer than this place on the way: it is what is mirrored
@@ -1257,10 +1289,20 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #endif
         if (gap < slack) {
           float2 edge = min(at, 1 - at);
-          float seen = saturate(min(edge.x, edge.y) * 10) * (1 - max(k, 0) / 14.0);  // ([reflblot] its short steps first)
-          mirror = lerp(mirror, behind.SampleLevel(samplerLinearClamp, at, 0).rgb, seen);
+          float seen = saturate(min(edge.x, edge.y) * 10) * (marchAlone ? saturate((200 - length(p - i.world)) / 80) : 1 - max(k, 0) / 14.0);  // ([reflblot] its short steps first)
+          float3 met = behind.SampleLevel(samplerLinearClamp, at, 0).rgb;
+          [branch] if (marchAlone) {  // [seamirror] (read softly: eight more taps round the place)
+            float2 r = (6.0 / 1080.0) * float2(viewport.y * viewport.z, 1);
+            met += behind.SampleLevel(samplerLinearClamp, at + r * float2(1, 0), 0).rgb + behind.SampleLevel(samplerLinearClamp, at + r * float2(-1, 0), 0).rgb +
+                   behind.SampleLevel(samplerLinearClamp, at + r * float2(0, 1), 0).rgb + behind.SampleLevel(samplerLinearClamp, at + r * float2(0, -1), 0).rgb +
+                   behind.SampleLevel(samplerLinearClamp, at + r * float2(0.7, 0.7), 0).rgb + behind.SampleLevel(samplerLinearClamp, at + r * float2(-0.7, 0.7), 0).rgb +
+                   behind.SampleLevel(samplerLinearClamp, at + r * float2(0.7, -0.7), 0).rgb + behind.SampleLevel(samplerLinearClamp, at + r * float2(-0.7, -0.7), 0).rgb;
+            met /= 9;
+          }
+          mirror = lerp(mirror, met, seen);
+          break;
         }
-        break;
+        if (!marchAlone) break;  // ([seamirror] with the switch: on, where the ray only passed behind it)
       }
     }
   }
@@ -1670,6 +1712,7 @@ void Water::DrawWith(const View& view, const Camera* camera, gfx::Texture behind
     std::memcpy(c.cameraRight, axes, sizeof axes);
     if (ground_) c.groundInfo[0] = groundUnit_;  // [floatfoam]
     c.groundInfo[1] = shoreSoak ? 1.0f : 0.0f;    // [bigtest]
+    c.groundInfo[3] = strongMirror ? 1.0f : 0.0f;  // [seamirror]
     if (fxMirror) {  // [fxmirror]
       c.fxMirror[0] = 1;
       c.fxMirror[1] = fxMirrorReach;

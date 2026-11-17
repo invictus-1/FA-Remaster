@@ -469,7 +469,7 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     had seen die (they faded over 60 s as if they had only walked out of sight) and the scouts' waits.
     *Forget what was seen to die* (pk1w, landed as batch 169): a mobile enemy unit that dies in the army's sight
     leaves its memory at once, and the strength remembered drops by that unit's rating (the native
-    `Remastered.AISeenDead`, read only). Full games, 16 seeds a set, paired by seed against 43's build: against
+    `Remastered.AISeenDead`: it only counts, until an army's own script asks it to forget, as ours does). Full games, 16 seeds a set, paired by seed against 43's build: against
     FAF's veteran AI 15 of 16 won and none lost (the base 12 and 4), score +10.4 (p 0.027), 13 seeds better and 3
     worse; against FAF's rush AI +4.9 (p 0.231), 9 and 7; against M28 +0.1 (p 0.949), 9 and 7, no win either way.
     The lag: 41 s against 68 s (veteran, p 0.078 over the pooled fights) and 74.5 s against 96 s (rush, p 0.469).
@@ -509,3 +509,20 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     a time does not move M28's games; the wing's better trade (and the fleet's ships, +555 mass at minute 20 in 11
     of 14 seeds) point to the two together, with more ships (43: M28 has two to four times our navy by minute 20),
     as the next candidate.
+
+46. **The forgetting of 44 checked again on today's engine, and kept (the check of the Opus days, 2026-11-17).** 44's
+    change (batch 169) had landed on the games' outcome alone: the wait after a won fight was shorter, but only at
+    p 0.078 where the condition set for it was p under 0.05, its sets had run on the engine of 11 November, and no
+    gate run plays our own AI. So it was played again, not argued: 112 full games on main's engine (after batches
+    145-171), main's AI against the same AI with operations.lua as before 44, paired by seed (tools/board.py's score;
+    the lags by `_scratch/engine/ai_20261114/lagperm.py`). Against FAF's veteran AI, 32 seeds (the 16 of 44 and 16
+    new ones): 27 won, 2 not ended, 3 lost with the forgetting, against 21 / 1 / 10 without; score +10.5 (p 0.018), 21
+    seeds better, 1 the same, 10 worse; income at minute 20 +38 (p 0.006). The old seeds alone +10.7 (p 0.024, 15
+    wins against 12), the new seeds alone +10.9 (12 wins against 9; 8 better and 7 worse, p 0.18 by themselves: the
+    same size, not significant alone). The wait after a won fight: a median 40.5 s against 82 s (p 0.008 over the
+    pooled fights; by seed p 0.020): the condition of 14 November is met on today's engine. Against FAF's rush AI
+    12 of 16 won either way, score +4.7 (p 0.25), the wait 47.5 s against 96 s (p 0.059); against M28 no win either
+    way, score 0.0 (p 0.98), 9 better and 7 worse. Better beyond the noise against one AI in outcome and in the
+    thing it was made for, not worse against the others: KEPT. What the check changes is the record, not the code:
+    a change to what a player's game does is judged on the engine it lands on, and a condition set for a landing is
+    met before it, or the change waits.
