@@ -920,14 +920,43 @@ struct FrameTimes {
   int beats = 0;
 };
 FrameTimes& Times();
-// MOHO64UI_LONG_FRAMES=<ms> (16 when it is not a number): each frame of a live window longer than that from the one
-// before is logged with the parts of the frame (run_window.cpp) and what ran long in it: an engine function the
-// scripts called (the binding profile is on with it), a part of the host's step (main.cpp), a Lua collection of the
-// interface's state or the simulation's (lua_gpg_prof_gc). A tool for finding the hitches; only the window's thread
-// notes (a collection on the beats' thread is counted apart: BeatThreadGcMs; what a game's state made on the loading
-// thread does there is left out).
+// The long-frame log: each frame of a live window longer than its threshold from the one before is logged with the
+// parts of the frame (run_window.cpp), the card's time (the newest frame the card finished, as the world's picture
+// last gave it: WorldPicture::LastStats().gpuMs; left out when no picture was drawn in the frame) and what ran long
+// in it: an engine function the scripts called (with the variable set: the binding profile is on with it), a part of
+// the host's step (main.cpp), a Lua collection of the interface's state or the simulation's (lua_gpg_prof_gc). A tool
+// for finding the hitches; only the window's thread notes (a collection on the beats' thread is counted apart:
+// BeatThreadGcMs; what a game's state made on the loading thread does there is left out).
+// MOHO64UI_LONG_FRAMES=<ms> sets the threshold (16 when it is not a number), =0 or =off turns it off. Unset, a live
+// window logs the frames longer than kWindowDefaultMs (LongFramesInWindow, from its thread before its first frame; the
+// renderer's request 79, 2: an outside machine's log names its hitches too) and a run without a window none (its own
+// watchdog, main.cpp, is apart). The window's default writes at most LongFrameLimit::kLines lines a minute
+// (LongFrameLimit); with the variable set every long frame has its line.
+// The limit of the long-frame lines (a bad stretch must not flood the log): a minute begins with a long frame (the
+// first after the last minute ended); of its long frames the first kLines are written, the others counted, and when
+// the minute ends (Tick, each frame; Flush, at the window's end) one line says how many were not written and the
+// longest of them. Plain numbers, no window: the test ui/tests/long_frames_limit.lua runs it through
+// moho64ui_LongFrameLimitForTests (keymap.cpp).
+struct LongFrameLimit {
+  static constexpr int kLines = 30;
+  static constexpr double kMinuteSeconds = 60.0;
+  double from = -1;  // the minute's start, s (the window's clock); below 0: none running
+  int written = 0, held = 0;
+  double heldLongestMs = 0;
+  int heldLongestFrame = 0;
+  // each frame, before Take: when the minute running has ended, the line about those not written in it ("" when
+  // none were, and while it runs)
+  std::string Tick(double seconds);
+  // a long frame: true when its line is to be written, false when it is only counted
+  bool Take(double seconds, double ms, int frame);
+  // the window's end: the line about those not written in the minute that has not ended ("" when none)
+  std::string Flush();
+};
 struct LongFrameLog {
+  static constexpr double kWindowDefaultMs = 100.0;
   double thresholdMs = 0;  // 0: off
+  float cardMs = -1;  // this frame's: the card's time the world's picture last gave (below 0: no picture drawn)
+  LongFrameLimit limit;  // (the window's lines)
   std::thread::id thread;  // the window's
   std::vector<std::pair<const char*, double>> notes;  // this frame's: what (a name that stays), ms
   void Note(const char* what, double ms) {
@@ -949,6 +978,11 @@ struct LongFrameLog {
   std::string AsideSummary() const;
 };
 LongFrameLog& LongFrames();
+// MOHO64UI_LONG_FRAMES as it is set: below 0 not set, 0 off ("0", "off", a number not above 0), else the threshold.
+double LongFramesVariable();
+// A live window's loop, on its thread before its first frame: with the variable not set, the log on at
+// kWindowDefaultMs on this thread (the Lua collections' hook with it); one line says which case it is.
+void LongFramesInWindow();
 // Whether this is the program's main thread (the one the first user state was made on: the front end's); a session's
 // state is made on the loading thread (main.cpp), and what its scripts do there that touches what the main thread
 // owns waits for it or is left out (the sound system's language, the profile's counts).

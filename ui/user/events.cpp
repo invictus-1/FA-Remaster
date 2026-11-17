@@ -52,13 +52,24 @@ void NoteEvent(const char* kind, const std::string& text) {
   e.text = text.size() > kTextLimit ? text.substr(0, kTextLimit) + "..." : text;
   for (char& c : e.text)
     if (c == '\n' || c == '\r') c = ' ';  // (one line each in the log)
-  std::lock_guard<std::mutex> hold(g_lock);
-  if (!g_ring.empty() && g_ring.back().kind == e.kind && g_ring.back().text == e.text) {
-    ++g_ring.back().times;
-    return;
+  // Each event also goes into the log as it happens (the Fable lead's check, 2026-11-17: the ring alone was written
+  // only on demand and at an orderly end, so the log of a run that CRASHED, the one a report is made for, held none
+  // of what the player did before the fault; a crash handler that walks the ring could fault a second time, a line
+  // already in the log cannot). A repeat is counted on its entry and written again only at 2, 4, 8, ... times, so a
+  // script that runs one command every frame costs a handful of lines. The line is written after the ring's lock is
+  // let go (the log has its own).
+  int times = 1;
+  {
+    std::lock_guard<std::mutex> hold(g_lock);
+    if (!g_ring.empty() && g_ring.back().kind == e.kind && g_ring.back().text == e.text) {
+      times = ++g_ring.back().times;
+    } else {
+      g_ring.push_back(e);
+      while (g_ring.size() > kRingSize) g_ring.pop_front();
+    }
   }
-  g_ring.push_back(std::move(e));
-  while (g_ring.size() > kRingSize) g_ring.pop_front();
+  if (times == 1) Logf(LogLevel::Info, "moho64ui: event %9.3f %-7s %s", e.seconds, e.kind.c_str(), e.text.c_str());
+  else if ((times & (times - 1)) == 0) Logf(LogLevel::Info, "moho64ui: event %9.3f %-7s %s (%d times so far)", e.seconds, e.kind.c_str(), e.text.c_str(), times);
 }
 
 std::vector<InterfaceEvent> LastEvents(size_t count) {

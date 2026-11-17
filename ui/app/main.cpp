@@ -360,6 +360,8 @@ int main(int argc, char** argv) {
   // newline and without the lead "render: "; the level is the engine's log's (1 info: was stdout, 2 warning: was
   // stderr). It is called on the thread that printed, from several threads at once: Logf takes the log's lock.
   render::WorldPicture::SetLogSink([](int level, const char* line) {
+    // (at a crash this is called from the crash's hook, perhaps with the log's lock held by the crashing thread:
+    // the engine's LogCrashing, its gate 172 of 2026-11-17, makes Logf try the lock there and write anyway)
     const LogLevel l = level <= 0 ? LogLevel::Debug : level == 1 ? LogLevel::Info : level == 2 ? LogLevel::Warning : LogLevel::Error;
     Logf(l, "render: %s", line ? line : "");
   });
@@ -382,7 +384,10 @@ int main(int argc, char** argv) {
   CrashSetBeforeReport(render::LogFlush);
   // MOHO64UI_CRASH_TEST=1 (a check, as the engine's --crash-test): half a line printed the renderer's way, then a fault
   // on purpose: the log must hold the crash's lines and, after them, that half line (the lab's suite/crash_test.sh).
-  if (std::getenv("MOHO64UI_CRASH_TEST")) {
+  // MOHO64UI_CRASH_TEST=log: the same fault taken WHILE THE LOG'S LOCK IS HELD (the engine's LogTestFaultUnderLock, its
+  // gate 172): the crash's hook hands the renderer's half line to Logf, which must not wait for that lock (before the
+  // engine's LogCrashing it waited for ever: crash lines in the log, no dump, no window).
+  if (const char* crashTest = std::getenv("MOHO64UI_CRASH_TEST")) {
     Logf(LogLevel::Info, "moho64ui: MOHO64UI_CRASH_TEST: half a line of the renderer's, then a fault on purpose");
     render::LogPrintf("render: the crash test's half line");
 #ifdef _WIN32
@@ -393,6 +398,7 @@ int main(int argc, char** argv) {
     wchar_t* volatile environment = GetEnvironmentStringsW();
     (void)environment;
 #endif
+    if (std::strcmp(crashTest, "log") == 0) LogTestFaultUnderLock();
     volatile int* nowhere = nullptr;
     *nowhere = 1;
   }

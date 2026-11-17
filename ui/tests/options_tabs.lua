@@ -99,8 +99,12 @@ ForkThread(function()
         buttons[5].Right() .. ", each " .. buttons[1].Width() .. ", Remastered's label " .. buttons[4].label.Width())
     check("all five as wide, each inside the panel", tostring(same) .. " " .. tostring(inside), "true true")
     check("each overlapping the next by 10, as the game lays them", overlap, true)
+    -- (the 6 is in the game's units: scaled as the interface is, by a button's width over its width at scale 1; at
+    -- 150 % each width is cut to a whole pixel, 217 for 217.5, so the five end 7 pixels short, 4.7 units. The check
+    -- compared pixels with the unscaled 6 and failed there, though the layout is right: found at the Fable check,
+    -- 2026-11-17, the numbers and the pictures by a helper, read by the lead)
     check("the last ends inside the panel, at most 6 short of its edge (the game's four: 6)",
-        dialog.Right() - buttons[5].Right() >= 0 and dialog.Right() - buttons[5].Right() <= 6, true)
+        dialog.Right() - buttons[5].Right() >= 0 and dialog.Right() - buttons[5].Right() <= 6 * buttons[5].Width() / w, true)
     check("each label fits its button (6 to spare each side)", table.concat(labels, ", "), "")
     check("the chosen tab's lit picture as wide as its button", dialog.remasterLitTab and dialog.remasterLitTab.Width(), buttons[1].Width())
 

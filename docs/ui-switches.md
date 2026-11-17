@@ -25,7 +25,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `BINDING_PROFILE` | look | every engine function the scripts call is timed (calls and time) | - |
 | `CARD_IMITATION` | test | `<MB>`: every picture of the session imitates a smaller card (the renderer's `SetCardImitation(true, MB)`: no ray tracing, that much card memory; 8192 a GTX 1080's kind) | memory_strip.sh (suite job memory_strip) |
 | `CAPTURE_FRAME` | test | the frame (300 unless given) at which `--window-capture`'s and the second window's pictures are taken | tests/dualhead.lua's runs |
-| `CRASH_TEST` | test | a fault on purpose right after the start's crash set-up, half a line printed the renderer's way before it: the log must hold the crash's lines and that half line after them (`CrashSetBeforeReport(render::LogFlush)`); on Windows the environment block is held from the stack at the fault (the worst case for what a dump catches: the engine's dump since its gate 170 holds none of it) | crash_test.sh (suite job crash_test) |
+| `CRASH_TEST` | test | (`=log`: the fault is taken while the log's lock is held, and the hook's line and the dump must still come) a fault on purpose right after the start's crash set-up, half a line printed the renderer's way before it: the log must hold the crash's lines and that half line after them (`CrashSetBeforeReport(render::LogFlush)`); on Windows the environment block is held from the stack at the fault (the worst case for what a dump catches: the engine's dump since its gate 170 holds none of it) | crash_test.sh (suite job crash_test) |
 | `DEFAULT_LOG` | test | a run without a window writes the default log file, as a window does | suite (the log job) |
 | `DIRTY_CHECK` | test | every frame's repaint of the changed parts is compared with a full redraw | window_checks.sh, wc_game_ab.sh |
 | `DRAW_PROFILE` | look | where drawing the interface's picture goes, by kind of control | - |
@@ -38,7 +38,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `HEADS` | test | `2`: a second head in a run without a window | suite (dualhead) |
 | `HELD_LOG` | look | a line for each held frame, with where the beats stood | - |
 | `LOCAL_MOD_FIXES` | place | one more folder in which our fixes of mods are looked for | - |
-| `LONG_FRAMES` | look | each long frame is logged with its parts and the functions that ran long | Chris's launchers (allowed: launch_switch_allow.txt) |
+| `LONG_FRAMES` | look | `<ms>`: each frame of a live window longer than that is logged with its parts, the card's time and the functions that ran long (16 when it is not a number); `0` or `off`: none. Unset: a live window logs those over 100 ms (without the functions' names), at most 30 lines a minute, the others counted in one line (with the variable set there is no such limit); a run without a window none | Chris's launchers (allowed: launch_switch_allow.txt) |
 | `MENUFLIGHT_CAPTURES` | test | battle ticks (`600,1500,...`) at which the menu flight's picture is saved | - |
 | `MENUFLIGHT_FAST` | test | `1`: the menu flight's battle runs as fast as it goes | suite (the flight jobs) |
 | `MENUFLIGHT_FAST_TO` | test | fast only up to that tick | - |

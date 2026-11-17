@@ -536,6 +536,7 @@ struct GameSession::Picture : WorldSource {
     FrameTimes& times = Times();
     times.worldDraw += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     ++times.worldDraws;
+    if (LongFrames().thresholdMs > 0) LongFrames().cardMs = picture.LastStats().gpuMs;  // (the long-frame line's)
     return pixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) ? pixels.data() : nullptr;
   }
   bool Project(const float world[3], float* x, float* y) override {
@@ -2503,7 +2504,7 @@ void GameSession::BeginLoad() {
   loadNextNote_ = 10;
   Logf(LogLevel::Info, "moho64ui: the load begun, %.2f s after the launch call", std::chrono::duration<double>(loadBegan_ - launchAt_).count());
   {
-    LongFrameLog& lf = LongFrames();  // (MOHO64UI_LONG_FRAMES: what the renderer makes off the frames' thread meanwhile)
+    LongFrameLog& lf = LongFrames();  // (the long-frame log, when on: what the renderer makes off the frames' thread meanwhile)
     lf.asides.clear(), lf.longestAsides.clear();
     lf.loading = lf.thresholdMs > 0;
   }
@@ -3847,6 +3848,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
     }
   }
   if (menuBackdrop) menuBackdrop->EndFrame();
+  if (drawn) LongFrames().cardMs = wp.picture.LastStats().gpuMs;  // (the long-frame line's card time: this frame drew)
   if (freezeAsked_ && drawn) TakeFrozen(captureRgba_, w, h);
   else if (freezeAsked_ && ++freezeWaits_ >= 3) TakeFrozen({}, w, h);  // (no frame of the world drawn: held black)
   if (!captureTo_.empty()) SaveWindowCapture(captureRgba_, w, h, captureTo_), captureTo_.clear();

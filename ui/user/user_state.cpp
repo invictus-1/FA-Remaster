@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
@@ -105,19 +106,81 @@ int DoscriptAhead(lua_State* L) {
 }
 }  // namespace
 
+double LongFramesVariable() {
+  static const double value = [] {
+    const char* v = std::getenv("MOHO64UI_LONG_FRAMES");
+    if (!v) return -1.0;
+    std::string s(v);
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (s == "off") return 0.0;
+    char* end = nullptr;
+    const double ms = std::strtod(v, &end);
+    if (end != v) return ms > 0 ? ms : 0.0;  // (a number: "0" is off, no longer 16)
+    return 16.0;                             // (a text that is not a number: as before)
+  }();
+  return value;
+}
+
+namespace {
+// The log on at `ms` on this thread (it notes, and the Lua collections are watched from now on).
+void LongFramesOn(LongFrameLog& l, double ms) {
+  l.thresholdMs = ms;
+  l.thread = g_windowThread = std::this_thread::get_id();
+  if (lua_gpg_prof_gc != LongFrameGcHook) g_gcHookBefore = lua_gpg_prof_gc, lua_gpg_prof_gc = LongFrameGcHook;
+}
+}  // namespace
+
 LongFrameLog& LongFrames() {
   static LongFrameLog log = [] {
     LongFrameLog l;
-    if (const char* v = std::getenv("MOHO64UI_LONG_FRAMES")) {
-      l.thresholdMs = std::atof(v) > 0 ? std::atof(v) : 16.0;
-      l.thread = g_windowThread = std::this_thread::get_id();
-      g_gcHookBefore = lua_gpg_prof_gc;
-      lua_gpg_prof_gc = LongFrameGcHook;
-      Logf(LogLevel::Info, "moho64ui: frames longer than %.1f ms are logged (MOHO64UI_LONG_FRAMES)", l.thresholdMs);
+    if (const double v = LongFramesVariable(); v > 0) {
+      LongFramesOn(l, v);
+      Logf(LogLevel::Info, "moho64ui: frames longer than %.1f ms are logged (MOHO64UI_LONG_FRAMES=%s)", l.thresholdMs,
+           std::getenv("MOHO64UI_LONG_FRAMES"));
     }
     return l;
   }();
   return log;
+}
+
+void LongFramesInWindow() {
+  LongFrameLog& l = LongFrames();
+  const double v = LongFramesVariable();
+  if (v < 0 && l.thresholdMs <= 0) {
+    LongFramesOn(l, LongFrameLog::kWindowDefaultMs);
+    Logf(LogLevel::Info,
+         "moho64ui: frames longer than %.1f ms are logged (a live window's default; MOHO64UI_LONG_FRAMES=<ms> sets another, =0 "
+         "or =off none), at most %d lines a minute",
+         l.thresholdMs, LongFrameLimit::kLines);
+  } else if (v == 0) {
+    Logf(LogLevel::Info, "moho64ui: long frames are not logged (MOHO64UI_LONG_FRAMES=%s)", std::getenv("MOHO64UI_LONG_FRAMES"));
+  }
+}
+
+std::string LongFrameLimit::Tick(double seconds) {
+  if (from < 0 || seconds < from + kMinuteSeconds) return "";
+  std::string line = Flush();
+  from = -1, written = 0;
+  return line;
+}
+
+bool LongFrameLimit::Take(double seconds, double ms, int frame) {
+  if (from < 0) from = seconds, written = 0, held = 0, heldLongestMs = 0, heldLongestFrame = 0;
+  if (written < kLines) return ++written, true;
+  ++held;
+  if (ms > heldLongestMs) heldLongestMs = ms, heldLongestFrame = frame;
+  return false;
+}
+
+std::string LongFrameLimit::Flush() {
+  if (held <= 0) return "";
+  char buf[200];
+  std::snprintf(buf, sizeof buf,
+                "moho64ui: long frames: %d more in the minute from %.1f s not written (at most %d lines a minute), the "
+                "longest %.1f ms (frame %d)",
+                held, from, kLines, heldLongestMs, heldLongestFrame);
+  held = 0, heldLongestMs = 0, heldLongestFrame = 0;
+  return buf;
 }
 
 void LongFrameLog::NoteAside(const std::string& what, double ms) {

@@ -4,7 +4,8 @@
 //   README.txt         what is inside, when, our build, the player's note
 //   log_now.txt        this run's log so far (its head names the machine; the last 400 interface events written into
 //                      it just before, at its end)
-//   log_before.txt     the log of the run before this one, when there is one in the same folder
+//   log_before.txt     the log of the run before this one: the newest older moho64ui_*.log in the same folder, or, for a
+//                      log a launcher named with --log (game.log), the <name>_prev<.ext> the launcher kept
 //   dump_before.dmp    that run's crash dump when it crashed (log_crash.txt + dump_crash.dmp: the newest older crash
 //                      among the kept logs when the run before did not crash): the environment's values, the user's and the PC's names,
 //                      the user's name in paths masked with '_' (same length:
@@ -16,11 +17,13 @@
 // passes it on. moho64ui_Report([note]) -> the zip's file | nil, why (the same, for a script; the test uses it).
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -77,77 +80,151 @@ bool ReadWhole(const std::filesystem::path& file, std::string* out) {
   return true;
 }
 
-// The user's own folder in a text, in any letter case and with either slash, made "<user folder>". The folder is the
-// system's (USERPROFILE on Windows, HOME elsewhere); too short a value (a root) is not used.
-std::string ShortenUserFolder(const std::string& text) {
+// The user's own folder in the forms it can stand in a file (the Fable lead's check of 2026-11-17: the first version
+// took the folder from getenv alone, the system's ANSI code page, so a folder with a letter outside ASCII, "Jürgen" or
+// any name not in Latin letters, was hidden nowhere: the logs are UTF-8 and a dump's paths UTF-16):
+//   wide    as the system has it (Windows: _wgetenv; a dump's module paths and the Windows environment block);
+//   narrow  UTF-8 as given, UTF-8 in small letters (the engine's display form of a path is in small letters), and the
+//           ANSI code page's bytes (what the C runtime's own copy of the environment holds), each once.
+// Without a trailing slash; a value shorter than 4 (a root) gives none.
+struct HomeForms {
+  std::wstring wide;
+  std::vector<std::string> narrow;
+};
+
+const HomeForms& Home() {
+  static const HomeForms forms = [] {
+    HomeForms f;
+    auto trim = [](auto& s) {
+      while (!s.empty() && (s.back() == '\\' || s.back() == '/')) s.pop_back();
+    };
+    auto add = [&](std::string s) {
+      trim(s);
+      if (s.size() < 4) return;
+      for (const std::string& have : f.narrow)
+        if (have == s) return;
+      f.narrow.push_back(std::move(s));
+    };
 #ifdef _WIN32
-  const char* home = std::getenv("USERPROFILE");
+    if (const wchar_t* w = _wgetenv(L"USERPROFILE")) f.wide = w;
+    trim(f.wide);
+    if (f.wide.size() < 4) f.wide.clear();
+    auto utf8 = [](const std::wstring& w) {
+      std::string s;
+      const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+      if (n > 0) s.resize(static_cast<size_t>(n)), WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
+      return s;
+    };
+    if (!f.wide.empty()) {
+      add(utf8(f.wide));
+      std::wstring lower = f.wide;
+      for (wchar_t& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+      add(utf8(lower));
+    }
+    if (const char* a = std::getenv("USERPROFILE")) add(a);
+    // (and the SYSTEM's ANSI code page's bytes, both ways Windows makes them: with its "best fit" letters ("Jürgen" as
+    // "Jurgen" on a Japanese system) and without (a '?' for each such letter). This program's own code page is
+    // UTF-8, so its getenv gives UTF-8 again (seen 2026-11-17); the system's page is what a file written by another
+    // program, read into this one's memory, holds. Asked for by its number: CP_ACP here means UTF-8.)
+    if (!f.wide.empty()) {
+      UINT page = 0;
+      if (GetLocaleInfoW(LOCALE_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER, reinterpret_cast<LPWSTR>(&page),
+                         sizeof(page) / sizeof(wchar_t)) > 0 && page != 0 && page != CP_UTF8) {
+        for (const DWORD flags : {DWORD(0), DWORD(WC_NO_BEST_FIT_CHARS)}) {
+          std::string s;
+          const int n = WideCharToMultiByte(page, flags, f.wide.c_str(), static_cast<int>(f.wide.size()), nullptr, 0, nullptr, nullptr);
+          if (n > 0) s.resize(static_cast<size_t>(n)), WideCharToMultiByte(page, flags, f.wide.c_str(), static_cast<int>(f.wide.size()), s.data(), n, nullptr, nullptr);
+          add(std::move(s));
+        }
+      }
+    }
 #else
-  const char* home = std::getenv("HOME");
+    if (const char* h = std::getenv("HOME")) add(h);
 #endif
-  std::string h = home ? home : "";
-  while (!h.empty() && (h.back() == '\\' || h.back() == '/')) h.pop_back();
-  if (h.size() < 4) return text;
-  auto same = [](char a, char b) {
-    if ((a == '\\' || a == '/') && (b == '\\' || b == '/')) return true;
-    return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-  };
-  std::string out;
-  out.reserve(text.size());
-  for (size_t i = 0; i < text.size();) {
-    bool match = i + h.size() <= text.size();
-    for (size_t k = 0; match && k < h.size(); ++k) match = same(text[i + k], h[k]);
-    // (only the whole folder: "C:\Users\chris" in "C:\Users\christine" is not it)
-    if (match && i + h.size() < text.size()) {
-      const char next = text[i + h.size()];
-      match = !(std::isalnum(static_cast<unsigned char>(next)) || next == '_' || next == '-' || next == '.');
+    return f;
+  }();
+  return forms;
+}
+
+bool SameSlash(unsigned a, unsigned b) { return (a == '\\' || a == '/') && (b == '\\' || b == '/'); }
+// (ASCII letters in either case; every other byte as it is)
+bool SameByte(unsigned char a, unsigned char b) {
+  if (SameSlash(a, b)) return true;
+  return a == b || (a < 0x80 && b < 0x80 && std::tolower(a) == std::tolower(b));
+}
+// Whether what follows a folder's name goes on with that name: a letter, digit, '_' or '-', or a '.' with a letter or
+// digit after it ("C:\Users\chris" in "C:\Users\christine" or "C:\Users\chris.old" is another folder; "...\chris."
+// at a sentence's end is this one).
+bool NameGoesOn(unsigned char next, unsigned char afterNext) {
+  if (std::isalnum(next) || next == '_' || next == '-') return true;
+  return next == '.' && std::isalnum(afterNext) != 0;
+}
+
+// The user's own folder in a text, in each of its narrow forms, ASCII letters in any case and with either slash, made
+// "<user folder>".
+std::string ShortenUserFolder(const std::string& text) {
+  std::string now = text;
+  for (const std::string& h : Home().narrow) {
+    std::string out;
+    out.reserve(now.size());
+    for (size_t i = 0; i < now.size();) {
+      bool match = i + h.size() <= now.size();
+      for (size_t k = 0; match && k < h.size(); ++k) match = SameByte(static_cast<unsigned char>(now[i + k]), static_cast<unsigned char>(h[k]));
+      if (match && i + h.size() < now.size()) {
+        const size_t n = i + h.size();
+        match = !NameGoesOn(static_cast<unsigned char>(now[n]), n + 1 < now.size() ? static_cast<unsigned char>(now[n + 1]) : 0);
+      }
+      if (match) {
+        out += "<user folder>";
+        i += h.size();
+      } else {
+        out.push_back(now[i++]);
+      }
     }
-    if (match) {
-      out += "<user folder>";
-      i += h.size();
-    } else {
-      out.push_back(text[i++]);
-    }
+    now.swap(out);
   }
-  return out;
+  return now;
 }
 
 // The user's name masked where the user's folder stands in a binary file (a crash dump; Chris, 2026-11-15: "Yes,
-// masked"): wherever the folder occurs, in ASCII or in UTF-16 (the dump's module paths are UTF-16, its stacks hold
-// both), in any letter case and with either slash, its last part (the name) is overwritten with '_' of the same
-// length. Every string keeps its length and place, so the dump stays readable by a debugger; "C:\Users\" stays.
-// Returns how many places were masked.
+// masked"): wherever the folder occurs, in one of its narrow forms or in UTF-16 at any byte (a string in a dump's
+// memory need not lie on an even byte of the file), letters in any case and with either slash, its last part (the
+// name) is overwritten with '_' of the same length. Every string keeps its length and place, so the dump stays
+// readable by a debugger; "C:\Users\" stays. Returns how many places were masked.
 size_t MaskUserNameInPaths(std::string& data) {
-#ifdef _WIN32
-  const char* home = std::getenv("USERPROFILE");
-#else
-  const char* home = std::getenv("HOME");
-#endif
-  std::string h = home ? home : "";
-  while (!h.empty() && (h.back() == '\\' || h.back() == '/')) h.pop_back();
-  const size_t slash = h.find_last_of("\\/");
-  if (h.size() < 4 || slash == std::string::npos || slash + 1 >= h.size()) return 0;
-  const size_t nameAt = slash + 1;
-  auto same = [](unsigned char a, char b) {
-    if ((a == '\\' || a == '/') && (b == '\\' || b == '/')) return true;
-    return std::tolower(a) == std::tolower(static_cast<unsigned char>(b));
-  };
-  auto boundary = [](unsigned char c) { return !(std::isalnum(c) || c == '_' || c == '-' || c == '.'); };
   size_t masked = 0;
-  for (int wide = 0; wide <= 1; ++wide) {
-    const size_t step = wide ? 2 : 1, span = h.size() * step;
+  for (const std::string& h : Home().narrow) {
+    const size_t slash = h.find_last_of("\\/");
+    if (slash == std::string::npos || slash + 1 >= h.size()) continue;
+    for (size_t i = 0; i + h.size() <= data.size(); ++i) {
+      bool match = true;
+      for (size_t k = 0; match && k < h.size(); ++k) match = SameByte(static_cast<unsigned char>(data[i + k]), static_cast<unsigned char>(h[k]));
+      if (!match) continue;
+      const size_t n = i + h.size();
+      if (n < data.size() && NameGoesOn(static_cast<unsigned char>(data[n]), n + 1 < data.size() ? static_cast<unsigned char>(data[n + 1]) : 0)) continue;
+      for (size_t k = slash + 1; k < h.size(); ++k) data[i + k] = '_';
+      ++masked;
+      i += h.size() - 1;
+    }
+  }
+  const std::wstring& w = Home().wide;
+  const size_t slash = w.find_last_of(L"\\/");
+  if (!w.empty() && slash != std::wstring::npos && slash + 1 < w.size()) {
+    auto unit = [&](size_t at) -> unsigned { return static_cast<unsigned char>(data[at]) | static_cast<unsigned>(static_cast<unsigned char>(data[at + 1])) << 8; };
+    const size_t span = w.size() * 2;
     for (size_t i = 0; i + span <= data.size(); ++i) {
       bool match = true;
-      for (size_t k = 0; match && k < h.size(); ++k) {
-        match = same(static_cast<unsigned char>(data[i + k * step]), h[k]);
-        if (match && wide) match = data[i + k * step + 1] == 0;
+      for (size_t k = 0; match && k < w.size(); ++k) {
+        const unsigned have = unit(i + 2 * k), want = static_cast<unsigned>(w[k]) & 0xffff;
+        match = have == want || SameSlash(have, want) || std::towlower(static_cast<wint_t>(have)) == std::towlower(static_cast<wint_t>(want));
       }
       if (!match) continue;
-      if (i + span + step <= data.size()) {  // (only the whole folder: "...\chris" in "...\christine" is not it)
-        const unsigned char next = static_cast<unsigned char>(data[i + span]);
-        if (!boundary(next) && (!wide || data[i + span + 1] == 0)) continue;
+      if (i + span + 2 <= data.size()) {
+        const unsigned next = unit(i + span), after = i + span + 4 <= data.size() ? unit(i + span + 2) : 0;
+        if (next < 0x80 && NameGoesOn(static_cast<unsigned char>(next), after < 0x80 ? static_cast<unsigned char>(after) : 0)) continue;
+        if (next >= 0x80 && std::iswalnum(static_cast<wint_t>(next))) continue;
       }
-      for (size_t k = nameAt; k < h.size(); ++k) data[i + k * step] = '_';
+      for (size_t k = slash + 1; k < w.size(); ++k) data[i + 2 * k] = '_', data[i + 2 * k + 1] = 0;
       ++masked;
       i += span - 1;
     }
@@ -155,24 +232,23 @@ size_t MaskUserNameInPaths(std::string& data) {
   return masked;
 }
 
-// Every place `needle` (bytes) stands in `data` overwritten from byte `keep` on with '_' (`wide`: the needle is UTF-16,
-// each character's two bytes become '_' and 0). `caseless`: ASCII letters match in either case. `whole`: only where
-// no letter or digit stands right before and after. Returns how many places.
-size_t MaskEvery(std::string& data, const std::string& needle, size_t keep, bool wide, bool caseless, bool whole) {
-  if (needle.size() <= keep) return 0;
-  auto low = [&](unsigned char c) { return caseless ? static_cast<unsigned char>(std::tolower(c)) : c; };
+// Every place `needle` (bytes) stands in `data` overwritten with '_' (`wide`: the needle is UTF-16, each character's
+// two bytes become '_' and 0; it is looked for at every byte). ASCII letters match in either case; only where no
+// letter or digit stands right before and after (a whole word). Returns how many places.
+size_t MaskWord(std::string& data, const std::string& needle, bool wide) {
+  if (needle.empty()) return 0;
   auto word = [](unsigned char c) { return std::isalnum(c) != 0; };
+  auto same = [](unsigned char a, unsigned char b) { return a == b || (a < 0x80 && b < 0x80 && std::tolower(a) == std::tolower(b)); };
   const size_t step = wide ? 2 : 1;
   size_t masked = 0;
   for (size_t i = 0; i + needle.size() <= data.size(); ++i) {
     size_t k = 0;
-    while (k < needle.size() && low(static_cast<unsigned char>(data[i + k])) == low(static_cast<unsigned char>(needle[k]))) ++k;
+    while (k < needle.size() && same(static_cast<unsigned char>(data[i + k]), static_cast<unsigned char>(needle[k]))) ++k;
     if (k < needle.size()) continue;
-    if (whole) {
-      if (i >= step && word(static_cast<unsigned char>(data[i - step]))) continue;
-      if (i + needle.size() < data.size() && word(static_cast<unsigned char>(data[i + needle.size()]))) continue;
-    }
-    for (size_t j = keep; j < needle.size(); j += step) {
+    if (i >= step && word(static_cast<unsigned char>(data[i - step])) && (!wide || data[i - 1] == 0)) continue;
+    const size_t n = i + needle.size();
+    if (n + step <= data.size() && word(static_cast<unsigned char>(data[n])) && (!wide || data[n + 1] == 0)) continue;
+    for (size_t j = 0; j < needle.size(); j += step) {
       data[i + j] = '_';
       if (wide) data[i + j + 1] = 0;
     }
@@ -205,32 +281,39 @@ std::vector<std::pair<size_t, size_t>> DumpRanges(const std::string& d) {
   return out;
 }
 
-// A crash dump's memory near the stacks can hold a piece of the program's environment block (seen 2026-11-15 in the
-// crash test's dump: PATH, SHELL, a trace id; often cut off where a captured range ends), and an environment may hold
-// anything: folders, the PC's name, a token. So wherever, inside the dump's memory, one of this program's environment
-// variables begins an entry ("NAME=", ASCII or UTF-16, the name in any case, no letter / digit / '_' before it), its
-// value is overwritten with '_' up to its NUL or the end of that range (never past it); the name is kept. Our own
-// MOHO64* switches stay (the log names them anyway). The crashed run's environment is not known here: this run's,
-// started the same way, stands in for its names (INFERRED: the same launcher gives the same names). Then the user's
-// and the computer's names wherever they stand alone (whole words of 3 letters or more). Returns how many places.
+// A crash dump's memory can hold a piece of the program's environment block (seen 2026-11-15 in a dump of the
+// engine's before its gate 170, which took the memory the stacks point at: PATH, SHELL, a password-like entry; often
+// cut off where a captured range ends), and an environment may hold anything: folders, the PC's name, a token. So
+// wherever, inside the dump's memory, one of this program's environment variables begins an entry ("NAME=", ASCII or
+// UTF-16 at any byte, the name in any case, no letter / digit / '_' before it), its value is overwritten with '_' up
+// to its NUL or the end of that range (never past it); the name is kept. Our own MOHO64* switches stay (the log names
+// them anyway). The crashed run's environment is not known here: this run's, started the same way, stands in for its
+// names (INFERRED: the same launcher gives the same names). Then the user's and the computer's names wherever they
+// stand alone as a whole word, anywhere in the file: in UTF-16 from 3 letters, in plain bytes from 4 ASCII letters (a
+// 3-letter word of plain bytes turns up by chance in a few hundred KB of stack about once in five dumps, and
+// overwriting that would change a value a reader of the dump needs; such a name is still masked in every path).
+// Returns how many places.
 size_t MaskEnvironment(std::string& data) {
   size_t masked = 0;
-  std::vector<std::string> names;
-  std::string user, host;
+  std::vector<std::string> names;  // (ASCII names only: Windows' own and every launcher's are)
+  std::wstring user, host;
 #ifdef _WIN32
   if (wchar_t* block = GetEnvironmentStringsW()) {
     for (const wchar_t* p = block; *p; p += wcslen(p) + 1) {
       const std::wstring w(p);
       const size_t eq = w.find(L'=', 1);  // (Windows keeps entries like "=C:=C:\..." whose name begins with '=')
       if (eq == std::wstring::npos) continue;
-      std::string name, value;
-      for (size_t i = 0; i < w.size(); ++i) (i < eq ? name : value).push_back(i == eq ? '\0' : static_cast<char>(w[i] & 0x7f));
-      if (!value.empty() && value[0] == '\0') value.erase(0, 1);
+      std::string name, upper;
+      bool ascii = true;
+      for (size_t i = 0; i < eq; ++i) {
+        if (w[i] >= 0x80) ascii = false;
+        name.push_back(static_cast<char>(w[i] & 0x7f));
+        upper.push_back(static_cast<char>(std::toupper(w[i] & 0x7f)));
+      }
+      if (!ascii || name.empty()) continue;
       names.push_back(name);
-      std::string upper = name;
-      for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-      if (upper == "USERNAME") user = value;
-      if (upper == "COMPUTERNAME") host = value;
+      if (upper == "USERNAME") user = w.substr(eq + 1);
+      if (upper == "COMPUTERNAME") host = w.substr(eq + 1);
     }
     FreeEnvironmentStringsW(block);
   }
@@ -240,8 +323,9 @@ size_t MaskEnvironment(std::string& data) {
     const size_t eq = entry.find('=', 1);
     if (eq == std::string::npos) continue;
     names.push_back(entry.substr(0, eq));
-    if (names.back() == "USER") user = entry.substr(eq + 1);
-    if (names.back() == "HOSTNAME") host = entry.substr(eq + 1);
+    const std::string value = entry.substr(eq + 1);
+    if (names.back() == "USER") user.assign(value.begin(), value.end());
+    if (names.back() == "HOSTNAME") host.assign(value.begin(), value.end());
   }
 #endif
   const auto ranges = DumpRanges(data);
@@ -250,13 +334,17 @@ size_t MaskEnvironment(std::string& data) {
     for (const std::string& name : names) {
       std::string upper = name;
       for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-      if (name.empty() || upper.rfind("MOHO64", 0) == 0) continue;
+      if (upper.rfind("MOHO64", 0) == 0) continue;
+      // (a name of one or two letters is not looked for: "_=" (the shell's own variable) stands by chance in a few
+      // hundred KB of stack two or three times, and each would overwrite what follows it up to a NUL; found by the
+      // report's test, 2026-11-17. Windows' own two-letter name is OS, whose value says nothing)
+      if (name.size() < 3) continue;
       for (int wide = 0; wide <= 1; ++wide) {
         const size_t step = wide ? 2 : 1, len = (name.size() + 1) * step;  // ("NAME=")
-        for (size_t i = start; i + len <= end; i += step) {
+        for (size_t i = start; i + len <= end; ++i) {
           // an entry's start: the range's start, or no letter, digit or '_' right before (a NUL in the block itself; the
           // heap's bytes before the C runtime's own copy of each entry; and "PATH=" inside "EXECPATH=" is not one)
-          if (i > start) {
+          if (i >= start + step) {
             const unsigned char before = static_cast<unsigned char>(data[i - step]);
             if ((std::isalnum(before) || before == '_') && (!wide || data[i - 1] == 0)) continue;
           }
@@ -281,12 +369,17 @@ size_t MaskEnvironment(std::string& data) {
       }
     }
   }
-  for (const std::string& n : {user, host}) {
+  for (const std::wstring& n : {user, host}) {
     if (n.size() < 3) continue;
-    std::string utf16;
-    for (char c : n) utf16.push_back(c), utf16.push_back(0);
-    masked += MaskEvery(data, n, 0, false, true, true);
-    masked += MaskEvery(data, utf16, 0, true, true, true);
+    std::string utf16, plain;
+    bool ascii = true;
+    for (wchar_t c : n) {
+      utf16.push_back(static_cast<char>(c & 0xff)), utf16.push_back(static_cast<char>((c >> 8) & 0xff));
+      if (c >= 0x80) ascii = false;
+      plain.push_back(static_cast<char>(c & 0x7f));
+    }
+    masked += MaskWord(data, utf16, true);
+    if (ascii && plain.size() >= 4) masked += MaskWord(data, plain, false);
   }
   return masked;
 }
@@ -355,6 +448,37 @@ class ZipWriter {
   uint16_t count_ = 0, time_ = 0, date_ = 0;
 };
 
+// The two ways a run's log is named, and where the runs before it are (the Fable lead's check, 2026-11-17: the first
+// version knew only the first way, so a report made from Chris's launchers held no log before and no crash dump):
+//   the default  moho64ui_<date>_<time>.log in the folder "logs" beside the preferences, the newest ten kept: the
+//                earlier runs' logs lie beside it, a crashed run's dump beside its log (LogBefore, LastCrashedBefore);
+//   a launcher's a name given with --log (Chris's Play-*.bat: game.log). The launcher copies the log to
+//                <name>_prev<.ext> before each start, so that is the run before; a crash's dump lies beside the log
+//                as <log>.dmp and stays there until the next crash writes over it, whichever run it was.
+bool DefaultLogName(const std::filesystem::path& log) {
+  return Name(log).rfind("moho64ui_", 0) == 0 && log.extension() == ".log";
+}
+
+// A file's time as "2026-11-17 14:05" (the local clock), "" when it cannot be read
+std::string FileTime(const std::filesystem::path& file) {
+  std::error_code ec;
+  const auto written = std::filesystem::last_write_time(file, ec);
+  if (ec) return "";
+  // (the file clock's time carried over to the system clock by the two clocks' "now": good to a moment, on every system)
+  const auto system = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+      written - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+  const std::time_t t = std::chrono::system_clock::to_time_t(system);
+  std::tm tm = {};
+#ifdef _WIN32
+  localtime_s(&tm, &t);
+#else
+  localtime_r(&t, &tm);
+#endif
+  char text[64];
+  std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &tm);
+  return text;
+}
+
 // The log in the same folder written just before this run's (the newest moho64ui_*.log other than `now`), "" if none
 std::filesystem::path LogBefore(const std::filesystem::path& now) {
   std::error_code ec;
@@ -414,13 +538,13 @@ void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::
   const size_t masked = MaskUserNameInPaths(dump);
   zip.Add(dumpPart, dump);
   *inside += "- " + dumpPart + ": the crash dump of " + which + " (the threads' stacks" +
-             ", the little memory its registers point at, the modules, the fault). Masked all the same\n"
-             "  (the engine's dumps before its gate 170 held more: the memory the stacks point at).\n"
+             " whole and their registers, a little code round each thread's place, the modules, the fault;\n"
+             "  no heap. The engine's dumps before its gate 170 held more: the memory the stacks point at).\n"
              "  Masked with '_', every string keeping its length so the dump stays readable: the values of the\n"
              "  program's environment variables wherever a piece of that block was caught, the user's and the PC's\n"
              "  names (" + std::to_string(environment) + " place(s)), the user's name in paths (" + std::to_string(masked) +
              " place(s)). Reading it needs\n  the moho64ui.pdb of the commit in that log's head.\n";
-  Logf(LogLevel::Info, "moho64ui: the report: %s crashed: its dump put in, masked in %zu + %zu place(s)", which.c_str(), environment, masked);
+  Logf(LogLevel::Info, "moho64ui: the report: a crash dump put in (%s), masked in %zu + %zu place(s)", which.c_str(), environment, masked);
 }
 
 std::string Stamp(const char* form) {
@@ -467,7 +591,7 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
   } else {
     inside += "- (no log of this run: it writes none)\n";
   }
-  if (!log.empty()) {
+  if (!log.empty() && DefaultLogName(PathOf(log))) {
     const std::filesystem::path before = LogBefore(PathOf(log));
     if (!before.empty() && ReadWhole(before, &text)) {
       zip.Add("log_before.txt", ShortenUserFolder(text));
@@ -485,6 +609,28 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
         AddCrashedRun(zip, crashed, DumpOf(crashed), "log_before.txt", "dump_before.dmp", "the run before this one, which CRASHED", &inside, false);
       else
         AddCrashedRun(zip, crashed, DumpOf(crashed), "log_crash.txt", "dump_crash.dmp", "the last run that crashed", &inside, true);
+    }
+  } else if (!log.empty()) {
+    // A log named by a launcher: the run before is <name>_prev<.ext>, a crash's dump <log>.dmp beside this log.
+    const std::filesystem::path now = PathOf(log);
+    const std::filesystem::path before = now.parent_path() / PathOf(Name(now.stem()) + "_prev" + Name(now.extension()));
+    bool beforeCrashed = false;
+    if (ReadWhole(before, &text)) {
+      beforeCrashed = text.find("error: crash: ") != std::string::npos;
+      zip.Add("log_before.txt", ShortenUserFolder(text));
+      inside += "- log_before.txt: the log of the run before this one (" + Name(before) + ", kept by the launcher)\n";
+    } else {
+      inside += "- (no log of a run before this one: the launcher kept none as " + Name(before) + ")\n";
+    }
+    const std::filesystem::path dump = DumpOf(now);
+    if (!dump.empty()) {
+      const std::string when = FileTime(dump);
+      if (beforeCrashed)
+        AddCrashedRun(zip, before, dump, "log_before.txt", "dump_before.dmp",
+                      "the run before this one, which CRASHED (the dump's file is of " + when + ")", &inside, false);
+      else
+        AddCrashedRun(zip, before, dump, "log_crash.txt", "dump_crash.dmp",
+                      "an earlier run that crashed (the dump's file is of " + when + "; that run's log is no longer kept)", &inside, false);
     }
   }
   const std::string replay = cfg.currentReplay ? cfg.currentReplay() : std::string();

@@ -424,7 +424,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     hostDrawn = IntRect{};
     painter.Invalidate();  // (the interface is painted whole again when the hold is over)
   };
-  // MOHO64UI_LONG_FRAMES (user_state.h): this frame's parts, for the log of a long one.
+  // The long-frame log (user_state.h, LongFrameLog): this frame's parts, for the log of a long one. On in a live
+  // window by default (from 100 ms; MOHO64UI_LONG_FRAMES=<ms> another threshold, =0 or =off none): set here, on this
+  // thread, before anything below asks whether it is on.
+  LongFramesInWindow();
   LongFrameLog& longFrames = LongFrames();
   longFrames.notes.clear();  // (what ran before the window: not a frame's)
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -720,15 +723,24 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
             if (!n.elsewhere && n.depth == 0) longFrames.Note(renderNames.insert("render: " + n.what).first->c_str(), n.ms);
         }
 #endif
-        if (ms > longFrames.thresholdMs) {
-          // The frame's parts; "before": from the last frame's showing to this one's start (the pace's wait).
+        // (at most LongFrameLimit::kLines lines a minute: the others counted, said in one line when the minute ends)
+        const double atSeconds = std::chrono::duration<double>(shownAt - runStart).count();
+        const std::string heldLine = longFrames.limit.Tick(atSeconds);
+        if (!heldLine.empty()) Logf(LogLevel::Info, "%s", heldLine.c_str());
+        // (the limit is the DEFAULT's alone: with the variable set, as Chris's launchers set it, every long frame has
+        // its line, for the lab's tools that read them all; the Fable lead, 2026-11-17)
+        if (ms > longFrames.thresholdMs && (LongFramesVariable() > 0 || longFrames.limit.Take(atSeconds, ms, frames))) {
+          // The frame's parts; "before": from the last frame's showing to this one's start (the pace's wait). Other
+          // chats' scripts read these lines: a new part goes at the end of the parts, the names and order stay.
           std::string line;
           char buf[240];
           std::snprintf(buf, sizeof buf, "moho64ui: long frame %d (%.1f s): %.1f ms: before %.1f, wait %.1f, input %.1f, scripts %.1f, drawing %.1f (recording %.1f), host %.1f, showing %.1f (the world's picture %.1f)",
-                        frames, std::chrono::duration<double>(shownAt - runStart).count(), ms,
+                        frames, atSeconds, ms,
                         std::chrono::duration<double, std::milli>(loopTop - lastShown).count(), parts.wait, parts.input, parts.scripts,
                         parts.drawing, parts.recording, parts.host, parts.showing, parts.world);
           line = buf;
+          // the card's time (the newest frame it finished: WorldPicture::LastStats().gpuMs; none when no picture was drawn)
+          if (longFrames.cardMs > 0) std::snprintf(buf, sizeof buf, ", the card %.1f", longFrames.cardMs), line += buf;
           if (beatGc > 0) std::snprintf(buf, sizeof buf, "; a Lua collection on the beats' thread %.1f ms", beatGc), line += buf;
           // what ran long in it, the longest first (an engine function includes what it called)
           std::stable_sort(longFrames.notes.begin(), longFrames.notes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
@@ -739,6 +751,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
           Logf(LogLevel::Info, "%s", line.c_str());
         }
         longFrames.notes.clear();
+        longFrames.cardMs = -1;
         parts = Parts{};
       }
       lastShown = shownAt;
@@ -752,6 +765,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
     if (hooks.framePeriod) period = std::max(period, hooks.framePeriod());
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
+  }
+  if (longFrames.thresholdMs > 0) {  // (the long frames of the minute that had not ended, not written)
+    const std::string heldLine = longFrames.limit.Flush();
+    if (!heldLine.empty()) Logf(LogLevel::Info, "%s", heldLine.c_str());
   }
   double total = std::chrono::duration<double>(Clock::now() - start).count();
   const int counted = frames - statsFrom;
