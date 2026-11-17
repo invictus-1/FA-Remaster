@@ -108,7 +108,16 @@ Buffer Device::FinishBuffer(std::unique_ptr<Prepared> prepared) {
 std::unique_ptr<Device> CreateVulkanDevice(const DeviceDesc& desc, std::string* error);  // gfx_vulkan.cpp
 #if defined(_WIN32)
 std::unique_ptr<Device> CreateD3D12Device(const DeviceDesc& desc, std::string* error);  // gfx_d3d12.cpp
+uint64_t D3D12AdapterMemory();  // gfx_d3d12.cpp ([vram])
 #endif
+
+uint64_t Device::AdapterMemory() {  // [vram] (gfx.h)
+#if defined(_WIN32)
+  return D3D12AdapterMemory();
+#else
+  return 0;
+#endif
+}
 
 // [nodxc] (gfx.h) One sentence a player can act on: what is missing, and the one place it must be.
 bool ShaderCompilerReady(std::string* message) {

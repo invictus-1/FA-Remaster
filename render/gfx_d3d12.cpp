@@ -4788,6 +4788,23 @@ void D3D12Device::ShowExtras(bool present) {
 
 }  // namespace
 
+// [vram] (gfx.h, Device::AdapterMemory) The adapter D3D12Device::Init would pick, by the same walk, and its dedicated
+// memory; no device is made (D3D12CreateDevice with no device asked for only says whether one could be).
+uint64_t D3D12AdapterMemory() {
+  Com<IDXGIFactory1> factory;
+  if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.Put())))) return 0;
+  Com<IDXGIFactory6> factory6;
+  if (FAILED(factory->QueryInterface(IID_PPV_ARGS(factory6.Put())))) return 0;
+  for (UINT i = 0;; ++i) {
+    Com<IDXGIAdapter1> a;
+    if (factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(a.Put())) == DXGI_ERROR_NOT_FOUND) break;
+    DXGI_ADAPTER_DESC1 d;
+    if (FAILED(a->GetDesc1(&d)) || (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) continue;
+    if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr))) return static_cast<uint64_t>(d.DedicatedVideoMemory);
+  }
+  return 0;
+}
+
 std::unique_ptr<Device> CreateD3D12Device(const DeviceDesc& desc, std::string* error) {
   auto d = std::make_unique<D3D12Device>();
   if (!d->Init(desc, error)) return nullptr;

@@ -24,10 +24,13 @@ What to know:
 
 - A stream, not a state (the engine's words): a wreck made before a save was loaded, or before a view was opened, has
   no pose and stands at rest.
-- A wreck drawn as its baked pile of debris (the debris look) has no pose either way; a remastered unit's own painted
-  wreck wears the pose only where it has the unit's bones (otherwise it stays at rest: checked bone by bone).
-- The map's own wreck fields are posed too where the game's set-up kills units with a death animation (Seton's middle:
-  14 walkers; the Loyalists lie fallen now).
+- A wreck drawn as its baked pile of debris (the debris look) has no pose either way. A remastered unit's OWN wreck
+  model never wears one: the visuals track makes it as the wreck, in one piece on the root bone, and it lies as its
+  artist left it (render 2026-11-17: a walker's fallen pose moved that one piece into the ground). So today the pose
+  shows on the wrecks of units that are not remastered, and on a remastered unit's wreck where it has no wreck model
+  of its own.
+- The map's own wreck fields are told poses too where the game's set-up kills units with a death animation (Seton's
+  middle: 14 walkers; all 14 are remastered units with wreck models of their own today, so they lie as made).
 - The viewer: `--wrecks-at-rest` is the old way; `MOHO64_DEBUG_WRECKS=1` prints each pose as it is told.
 
 ## To the ui, request 57: the graphics-memory strip - the renderer's half is in: `WorldPicture::EstimateCardMemory` and `CardMemory()` (render 106f227f, 2026-11-14)

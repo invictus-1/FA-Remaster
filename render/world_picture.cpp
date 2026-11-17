@@ -2197,6 +2197,9 @@ WorldPicture::CardMemoryEstimate WorldPicture::EstimateCardMemory(const CardMemo
 }
 
 // [vram] (world_picture.h)
+double WorldPicture::AdapterMemoryMB() { return static_cast<double>(gfx::Device::AdapterMemory()) / (1024.0 * 1024.0); }
+
+// [vram] (world_picture.h)
 WorldPicture::CardMemoryNow WorldPicture::CardMemory() const {
   CardMemoryNow n;
   gfx::Device* device = impl_->device.get();

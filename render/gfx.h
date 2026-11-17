@@ -623,6 +623,13 @@ class Device {
   // own; DeviceDesc::cardMemoryMB's where given); 0 when not known. For a choice of settings by the card (WorldPicture's
   // SuggestedPreset).
   virtual uint64_t CardMemory() { return 0; }
+  // [vram] The same WITHOUT a device, bytes: the dedicated memory of the adapter a Direct3D 12 device of this program
+  // would be made on (the first of the system's high-performance order that is hardware and can do Direct3D 12: what
+  // D3D12Device::Init picks), asked of DXGI alone. For a host that shows the card's size before any picture exists.
+  // 0 where it cannot be told this way (not Windows; no such adapter): then CardMemory() once a device is there. On a
+  // machine with one card Vulkan's device is on the same one; with two it picks by its own order (a card of its own
+  // before graphics in the processor), which agrees with the system's wherever that puts the faster card first.
+  static uint64_t AdapterMemory();
   // [mcrec] A pass's draws recorded on several threads at once (Recorder above). Within a pass (after BeginFrame or
   // BeginPass, before the next pass, Resolve or Dispatch), BeginParallel(n) hands out n recorders (n from 1 to
   // ParallelRecorders()), each set up as the device is set now (its drawing pipeline, constants, textures, shader buffers,

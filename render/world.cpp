@@ -3033,7 +3033,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     if (made != madeProps_.end() && made->second.model) {
       bool fits = true;
       for (const FrameBone& b : e.pose) fits = fits && b.bone < made->second.model->bones.size();
-      made->second.posed = fits && !e.pose.empty();
+      made->second.posed = fits && !e.pose.empty() && !made->second.ownWreck;
       if (made->second.cell >= 0) propCells_[static_cast<size_t>(made->second.cell)].changed = true;  // (out of its group)
     }
     return;
@@ -3165,8 +3165,10 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
       const std::string unit = slash != std::string::npos && end != std::string::npos && end > slash ? low.substr(slash + 1, end - slash - 1) : std::string();
       kept.pile = !unit.empty() && PileKind(unit);
       if (kept.pile) pileProps_[e.id] = unit;
+      kept.ownWreck = !unit.empty() && models.RemasteredWreck(unit) == kept.model;  // [wreckpose]
     }
     if (!kept.pile) pileProps_.erase(e.id);
+    if (kept.ownWreck) kept.posed = false;  // [wreckpose] (made as the wreck: as its artist left it)
     // [fogglow] (made now: whether its unit was ever seen; a change keeps what was decided)
     if (e.kind == FramePropEvent::Create && kept.unitWreck && kept.model && sight.On()) {
       Vec3 centre;

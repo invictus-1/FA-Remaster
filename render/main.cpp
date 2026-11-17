@@ -2450,6 +2450,8 @@ int main(int argc, char** argv) {
     for (const WorldPicture::CardMemoryPart& p : e.parts)
       printf("render: card estimate: %-17s %6.0f MB  %s%s\n", p.id, p.megabytes, p.name, p.measured ? "" : " (not counted yet)");
     printf("render: card estimate: the sum %.0f MB, +- %.0f MB\n", e.totalMB, e.marginMB);
+    // (WorldPicture::AdapterMemoryMB: the card's own memory with no device made; 0: cannot be told this way)
+    printf("render: card estimate: this machine's card, asked without a device: %.0f MB\n", WorldPicture::AdapterMemoryMB());
     return 0;
   }
   setvbuf(stdout, nullptr, _IONBF, 0);  // messages appear in order with stderr's, and survive a crash

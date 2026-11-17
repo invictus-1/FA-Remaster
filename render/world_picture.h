@@ -373,7 +373,8 @@ class WorldPicture {
   // (TryCopyPose: a wreck's turret stays turned where it pointed, a walker's legs where they stood). Off: every wreck
   // in its mesh's rest pose, as this renderer drew them before. Needs Sim::collectCopiedPoses set before the
   // simulation's first beat (without it no pose is told and every wreck is at rest); a wreck made before a save was
-  // loaded has none. May be set at any time. A player's option.
+  // loaded has none; a remastered unit's own wreck model, made as the wreck, never wears one. May be set at any time.
+  // A player's option.
   void SetWreckPoses(bool on);
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.
@@ -542,6 +543,12 @@ class WorldPicture {
     double totalMB = 0, budgetMB = 0, usedMB = 0;
   };
   CardMemoryNow CardMemory() const;
+  // [vram] The card's own memory, megabytes, WITHOUT a picture or a device (gfx::Device::AdapterMemory): the adapter this
+  // program's Direct3D 12 device would be made on, asked of the system alone; any thread, any time, a few milliseconds.
+  // For the Options' memory strip where no picture exists yet (the menu with its background off). 0 where it cannot
+  // be told this way (not Windows): use CardMemory().totalMB once a picture is open. No imitation (SetCardImitation)
+  // is counted in: this is the card itself.
+  static double AdapterMemoryMB();
   // The texture detail setting (TextureCache::detail): 0 all sizes (as at first), 1 the largest left out
   // (half width and height, a quarter of the memory), 2 the two largest. Before Open: it applies to what
   // the next Open loads. The sun's shadows' detail is the world's `shadowSize` (world()->shadowSize).
