@@ -21,7 +21,8 @@
 // The routing: this header defines printf( and fprintf( as macros that call the wrapper. Every render/*.cpp and
 // render/*.h that prints includes it as the LAST of its includes, so that the macros never rewrite a system or
 // third-party header's declarations (render/tools/check_log_print.py finds a file that forgot). Write printf and
-// fprintf unqualified: std::printf( would not be rewritten.
+// fprintf unqualified: std::printf( does not compile under the macros (it becomes std::::render::LogPrintf), and in a
+// file without this header it would print past the wrapper (the check finds both).
 #pragma once
 
 #include <cstdarg>
@@ -62,7 +63,9 @@ void LogLine(int level, const char* format, ...)
 #endif
     ;
 
-// Hands the calling thread's part of a line (stdout's and stderr's) to the sink now (nothing without a sink).
+// Hands the calling thread's part of a line (stdout's and stderr's) to the sink now (nothing without a sink). Safe in
+// a crash handler as far as the renderer goes: no lock, no memory taken; a thread with nothing unfinished calls nothing.
+// The sink it calls is the host's: one that takes a lock must not wait for it there (the crashing thread may hold it).
 void LogFlush();
 
 }  // namespace render
