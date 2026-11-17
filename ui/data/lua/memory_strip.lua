@@ -19,7 +19,7 @@ State = { panel = false, lines = {}, estimate = false, now = false, advice = {},
 
 local kWidth = 664    -- (the Options dialog's panel is 698 wide at scale 1: the strip a little narrower)
 local kGameSize = "large"  -- (only the Large game is measured: the strip says "a large late game")
-local kRows = 10      -- (the text's rows at most: the lines wrapped to the panel's width)
+local kRows = 11      -- (the text's rows at most: the lines wrapped to the panel's width)
 
 -- The working set's values (the dialog's currentOptionsSet: every option's value as chosen, before Apply) as the
 -- renderer's CardMemoryChoice. The window's size is the screen's now (a change of the display mode in the Video tab
@@ -110,6 +110,53 @@ function Advice(set, total)
     return out
 end
 
+-- THE RECOMMENDATION (Chris, 2026-11-17: "it should recommend settings and if users want to use it but max is
+-- default"): what the renderer suggests for this card (moho64ui_SuggestedPreset: the Remastered Preset, Texture Detail
+-- and Shadow Fidelity, by the card's memory and ray tracing alone), set against what the dialog has chosen. Nothing
+-- is set by itself, at a first start or ever: where the choice differs the strip says what is recommended and a
+-- button puts those three into the dialog, as picking them there would; the player still presses Apply or OK.
+local kRecommended = { 'remaster_preset', 'texture_level', 'shadow_quality' }
+
+-- nil without a suggestion; else { want = {key = value}, differs, text = "Remastered Preset High, ...", reason }
+function Recommendation(set)
+    if not rawget(_G, 'moho64ui_SuggestedPreset') then return nil end
+    local s = moho64ui_SuggestedPreset()
+    if not s then return nil end
+    local want = { remaster_preset = s.preset, texture_level = s.texture_level, shadow_quality = s.shadow_quality }
+    local names, differs = {}, false
+    for _, key in kRecommended do
+        local item = ItemOf(key)
+        local value = tostring(want[key])
+        for _, st in (item and item.custom and item.custom.states) or {} do
+            if st.key == want[key] then value = LOC(st.text or value) end
+        end
+        table.insert(names, LOC((item and item.title) or key) .. " " .. value)
+        if (set or {})[key] ~= want[key] then differs = true end
+    end
+    return { want = want, differs = differs, text = table.concat(names, ", "), reason = s.reason }
+end
+
+-- The three put into the dialog's working set `set`. A setting whose control is on the tab shown goes the dialog's own
+-- way (optionslogic.SetValue: the control shows it, and the preset's control sets its looks); one on another tab has
+-- no control now (the dialog makes a tab's controls when it is shown), so its value is written into the working set,
+-- the preset's with the looks its level sets, as its control would.
+function UseRecommended(set, want)
+    if not set or not want then return end
+    local logic = import('/lua/options/optionslogic.lua')
+    local preset = ItemOf('remaster_preset')
+    if preset and preset.control and not IsDestroyed(preset.control) then
+        logic.SetValue('remaster_preset', want.remaster_preset)
+    else
+        local values = import('/lua/options/options.lua').RemasterPresetValues(want.remaster_preset)
+        for key, value in values or {} do set[key] = value end
+    end
+    set.remaster_preset = want.remaster_preset
+    for _, key in { 'texture_level', 'shadow_quality' } do
+        set[key] = want[key]
+        logic.SetValue(key, want[key], true)
+    end
+end
+
 local function GB(mb) return string.format("%.1f GB", mb / 1024) end
 
 -- The lines for an estimate and the card's memory now (`now` nil: no card known). The first line holds what the game
@@ -189,10 +236,33 @@ function Attach(dialog, tabNow, setNow)
     local fill = Bitmap(trough)
     fill:DisableHitTest()
     LayoutHelpers.SetHeight(fill, 6)
-    State = { panel = panel, lines = {}, estimate = false, now = false, advice = {}, hidden = false, needed = 0, card = false }
+    -- the recommendation's button, under the last line when the dialog's choice is not the recommended one
+    local use = Bitmap(panel)
+    use:SetSolidColor('FF244A68')
+    local useLabel = UIUtil.CreateText(use, "Use recommended", 13, UIUtil.bodyFont)
+    useLabel:SetColor('FFE8F0F8')
+    useLabel:DisableHitTest()
+    LayoutHelpers.AtCenterIn(useLabel, use)
+    use.Width:Set(function() return useLabel.Width() + LayoutHelpers.ScaleNumber(20) end)
+    use.Height:Set(function() return useLabel.Height() + LayoutHelpers.ScaleNumber(8) end)
+    use.Left:Set(function() return panel.Left() + LayoutHelpers.ScaleNumber(10) end)
+    use.Depth:Set(function() return panel.Depth() + 2 end)
+    use:Hide()
+    State = { panel = panel, lines = {}, estimate = false, now = false, advice = {}, hidden = false, needed = 0, card = false,
+              recommendation = false, use = use }
     local mine = State
     local shown = ""
-    local function Lay(lines, share, over)
+    use.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then self:SetSolidColor('FF34668C') end
+        if event.Type == 'MouseExit' then self:SetSolidColor('FF244A68') end
+        if event.Type == 'ButtonPress' and mine.recommendation and mine.recommendation.differs then
+            UseRecommended(setNow and setNow(), mine.recommendation.want)
+            LOG("FA Remastered: the recommended settings were put into the Options dialog (" .. mine.recommendation.text .. ")")
+            shown = ""  -- (the lines are made anew at the next look)
+        end
+        return true
+    end
+    local function Lay(lines, share, over, withUse)
         -- each line wrapped to the panel's width (a long one goes on over two or three rows, never cut off)
         local rows = {}
         local width = panel.Width() - LayoutHelpers.ScaleNumber(20)
@@ -219,15 +289,23 @@ function Attach(dialog, tabNow, setNow)
         fill.Width:Set(function() return (trough.Right() - trough.Left()) * w end)
         fill:SetSolidColor(over and 'FFC86428' or 'FF4C9CD8')
         local last = texts[math.max(1, n)]
-        panel.Height:Set(function() return last.Bottom() - panel.Top() + LayoutHelpers.ScaleNumber(6) end)
+        if withUse then
+            use.Top:Set(function() return last.Bottom() + LayoutHelpers.ScaleNumber(5) end)
+            if use:IsHidden() then use:Show() end
+            panel.Height:Set(function() return use.Bottom() - panel.Top() + LayoutHelpers.ScaleNumber(7) end)
+        else
+            if not use:IsHidden() then use:Hide() end
+            panel.Height:Set(function() return last.Bottom() - panel.Top() + LayoutHelpers.ScaleNumber(6) end)
+        end
     end
     ForkThread(function()
         while State == mine and not IsDestroyed(panel) and not IsDestroyed(dialog) do
             local tab = tabNow and tabNow()
             local onTab = tab and (tab.tabData == O.options.video or tab.tabData == O.options.remaster)
             if not onTab then
-                if not panel:IsHidden() then panel:Hide() end
+                if not panel:IsHidden() then panel:Hide() end  -- (its button with it: a hidden parent's child)
                 mine.hidden = true
+                shown = ""  -- (shown again: laid out anew, the button's own showing with it)
             else
                 if panel:IsHidden() then panel:Show() end
                 mine.hidden = false
@@ -238,13 +316,20 @@ function Attach(dialog, tabNow, setNow)
                 local card = now and now.total or nil
                 local advice = (card and needed > card) and Advice(set, needed) or {}
                 local lines = Lines(e, now, advice)
-                local key = ""
+                local rec = Recommendation(set)
+                local offer = rec ~= nil and rec.differs
+                if offer then table.insert(lines, { text = "Recommended for this card: " .. rec.text .. ".", dim = true }) end
+                local key = (offer and "use|" or "")
                 for _, l in lines do key = key .. l.text .. "|" end
                 if key ~= shown then
                     shown = key
+                    if rec and not (mine.recommendation and mine.recommendation.reason == rec.reason) then
+                        LOG("FA Remastered: recommended for this card: " .. rec.text .. " (" .. tostring(rec.reason) .. ")")
+                    end
                     mine.estimate, mine.now, mine.advice, mine.lines, mine.needed, mine.card = e, now, advice, {}, needed, card
+                    mine.recommendation = rec or false
                     for _, l in lines do table.insert(mine.lines, l.text) end
-                    Lay(lines, card and needed / card or 0, card ~= nil and needed > card)
+                    Lay(lines, card and needed / card or 0, card ~= nil and needed > card, offer)
                 end
             end
             WaitFrames(15)  -- (frames, not seconds: in a game the interface's seconds are the game's, which stand while it is paused)

@@ -88,6 +88,42 @@ ForkThread(function()
     check("Texture Detail Low in the dialog lowers the estimate at once", low < high - 100, true)
     check("and nothing is applied: the profile keeps its value", optionslogic.GetCurrent().texture_level ~= 2 or high == low, true)
 
+    -- THE RECOMMENDATION (Chris, 2026-11-17: recommended, never set by itself; max stays the default): on this
+    -- imitated card without ray tracing the renderer suggests less than the defaults, so the strip says so and shows
+    -- its button; nothing is changed until the button is pressed, and then only in the dialog (not applied)
+    local rec = S.recommendation
+    LOG("TEST note recommended: " .. tostring(rec and rec.text) .. " | " .. tostring(rec and rec.reason))
+    check("the renderer's suggestion is there", rec ~= false and rec ~= nil, true)
+    if rec then
+        Choose('texture_level', 0)
+        Wait(40)
+        check("the defaults are not what is recommended for this card: the strip says so", S.recommendation.differs, true)
+        local line = false
+        for _, l in S.lines do
+            if string.find(l, "Recommended for this card: ", 1, true) == 1 then line = l end
+        end
+        check("in a line of its own", line ~= false, true)
+        check("with the button shown", S.use:IsHidden(), false)
+        check("and nothing set by itself: the profile's preset is still the default's (Ultra)", optionslogic.GetCurrent().remaster_preset, 4)
+        -- a real click on the button (the mouse, as a player's)
+        local x, y = (S.use.Left() + S.use.Right()) / 2, (S.use.Top() + S.use.Bottom()) / 2
+        moho64ui_MouseMove(x, y)
+        Wait(3)
+        moho64ui_MouseButton("Left", true, x, y)
+        moho64ui_MouseButton("Left", false, x, y)
+        Wait(40)
+        check("a click on it: the dialog's choice is the recommended one", S.recommendation.differs, false)
+        check("the button and the line are gone", S.use:IsHidden(), true)
+        check("Texture Detail's control shows the recommended value", Item('texture_level').control.keyMap[Item('texture_level').control:GetItem()], rec.want.texture_level)
+        check("still nothing applied: the profile keeps Ultra until Apply", optionslogic.GetCurrent().remaster_preset, 4)
+        Button(buttons, 'remaster'):OnClick()
+        Wait(40)
+        local preset = Item('remaster_preset').control
+        check("the Remastered tab shows the recommended preset", preset and preset.keyMap[preset:GetItem()], rec.want.remaster_preset)
+        Button(buttons, 'video'):OnClick()
+        Wait(40)
+    end
+
     -- the other tabs: no strip
     Button(buttons, 'gameplay'):OnClick()
     Wait(40)

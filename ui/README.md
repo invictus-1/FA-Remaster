@@ -151,7 +151,14 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the system gives the program right now, one line says other programs hold the rest. It changes no setting
   (`data/lua/memory_strip.lua`, `user/card_memory.cpp`: `moho64ui_CardMemoryEstimate`, `moho64ui_CardMemoryNow`;
   `MOHO64UI_CARD_IMITATION=<MB>` imitates a smaller card for tests; `tests/memory_strip.lua`). Centred under the
-  dialog, as Chris asked on its picture (2026-11-14).
+  dialog, as Chris asked on its picture (2026-11-14). It also carries THE RECOMMENDATION (Chris, 2026-11-17: "it
+  should recommend settings and if users want to use it but max is default"): where the dialog's choice is not what
+  the renderer suggests for the card (`moho64ui_SuggestedPreset`), a line says what is recommended and the button
+  "Use recommended" puts the Remastered Preset, Texture Detail and Shadow Fidelity into the dialog; nothing is ever
+  set by itself (`docs/ui-options-layout.md` 8).
+- Wreck Poses (ours as an option, 2026-11-17; the renderer's `SetWreckPoses`, the engine's batch 173): a wreck keeps
+  the pose its unit died in, as in the original (on, the default), or lies at rest (off); the Remastered tab's Units
+  & Readability, `remaster_wreck_poses` (`docs/ui-options-layout.md` 8).
 - The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
   Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
   `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog

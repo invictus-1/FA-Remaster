@@ -396,3 +396,23 @@ original's way to keep; the row starts at Team on his "is best".
 
 Test: `ui/tests/options_tabs.lua` (both at their defaults, switched by the console as the rows' `set` does, and
 back). What the picture then shows is the renderer's own check.
+
+## 8. Wreck Poses, and the recommendation under the dialog (2026-11-17)
+
+**Wreck Poses** (`remaster_wreck_poses`, console the same; ON by default; the Remastered tab's section Units &
+Readability, after Wrecks Appear Once Seen: 58 rows on the page now; set by no preset level). The renderer's
+`WorldPicture::SetWreckPoses` (render 7b30aa05) with the engine's batch 173: on is the original's way, a unit's wreck
+keeps the pose the unit died in (a tank's turret turned where it pointed, a walker lying as it fell); off, every
+wreck in its resting pose, as the remaster drew them until that day. The simulation is told to keep the poses
+(`sim.collectCopiedPoses`) whenever a picture of the world is drawn. `LookSettings::wreckPoses`.
+
+**The recommendation** (Chris, 2026-11-17, asked whether a first start should pick the preset for the card by itself:
+"it should recommend settings and if users want to use it but max is default"). Nothing is set by itself, at a
+first start or ever; the defaults stay at their highest. The graphics-memory strip under the dialog
+(`data/lua/memory_strip.lua`) asks the renderer what it suggests for this card (`moho64ui_SuggestedPreset`:
+`WorldPicture::SuggestedPreset`, by the card's memory and ray tracing alone: the Remastered Preset, Texture Detail,
+Shadow Fidelity). Where the dialog's choice differs, a line says "Recommended for this card: ..." and a button, "Use
+recommended", puts the three into the dialog as picking them there would (a setting on the tab shown through its
+control; one on the other tab into the dialog's working set, the preset with the looks its level sets). The player
+still presses Apply or OK; Cancel drops it. The reason in the renderer's words goes into the log once. Without a
+picture of the world on the interface's thread there is no suggestion and no line.
