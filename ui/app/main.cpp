@@ -360,6 +360,8 @@ int main(int argc, char** argv) {
   // newline and without the lead "render: "; the level is the engine's log's (1 info: was stdout, 2 warning: was
   // stderr). It is called on the thread that printed, from several threads at once: Logf takes the log's lock.
   render::WorldPicture::SetLogSink([](int level, const char* line) {
+    // (at a crash this is called from the crash's hook, perhaps with the log's lock held by the crashing thread:
+    // the engine's LogCrashing, its gate 172 of 2026-11-17, makes Logf try the lock there and write anyway)
     const LogLevel l = level <= 0 ? LogLevel::Debug : level == 1 ? LogLevel::Info : level == 2 ? LogLevel::Warning : LogLevel::Error;
     Logf(l, "render: %s", line ? line : "");
   });

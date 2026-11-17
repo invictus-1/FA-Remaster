@@ -534,8 +534,8 @@ void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::
   const size_t masked = MaskUserNameInPaths(dump);
   zip.Add(dumpPart, dump);
   *inside += "- " + dumpPart + ": the crash dump of " + which + " (the threads' stacks" +
-             ", the little memory its registers point at, the modules, the fault). Masked all the same\n"
-             "  (the engine's dumps before its gate 170 held more: the memory the stacks point at).\n"
+             " whole and their registers, a little code round each thread's place, the modules, the fault;\n"
+             "  no heap. The engine's dumps before its gate 170 held more: the memory the stacks point at).\n"
              "  Masked with '_', every string keeping its length so the dump stays readable: the values of the\n"
              "  program's environment variables wherever a piece of that block was caught, the user's and the PC's\n"
              "  names (" + std::to_string(environment) + " place(s)), the user's name in paths (" + std::to_string(masked) +

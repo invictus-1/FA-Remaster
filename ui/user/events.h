@@ -1,9 +1,10 @@
 // The interface's last events (ours; the report bundle's first part, Chris 2026-11-14: logs "extremely detailed so we
 // don't have to keep coming back and forth"): a ring of the last few hundred things the player did or the screen did
 // (a mouse button pressed on a control, a key that ran a key-map action, a console command, an order handed to the
-// simulation, a game begun or left), each with its time since the program started. Nothing of it goes to the log by
-// itself while the program runs: the ring is written into the log on demand (the console command remaster_events
-// [n]) and once at the program's end, so a log sent with a report says what came before the fault. The original
+// simulation, a game begun or left), each with its time since the program started. Each is written into the log as
+// it happens ("moho64ui: event <seconds> <kind> <text>"; a repeat only at 2, 4, 8, ... times), so the log of a run
+// that crashed holds what came before the fault; the ring is also written as one block on demand (the console
+// command remaster_events [n]), into a report (remaster_report) and once at the program's orderly end. The original
 // game keeps no such list.
 #pragma once
 #include <string>

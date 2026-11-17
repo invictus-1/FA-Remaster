@@ -637,6 +637,9 @@ static void RunKeyAction(lua_State* L, KeyMap& map, int vk, bool shift, bool ctr
 }
 
 void KeyMapKeyDown(lua_State* L, int vk, bool shift, bool ctrl, bool alt, bool repeat) {
+  // (a key action whose script error left its call by a jump never reached RunKeyAction's own reset: without this
+  // every console command after it would go unnoted for the rest of the run)
+  EventsFromKey() = false;
   KeyMap& map = Map(L);
   const bool wasDown = map.down.count(vk) != 0;
   map.down.insert(vk);
