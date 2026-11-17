@@ -129,11 +129,15 @@ void Report(EXCEPTION_POINTERS* ep) {
     HANDLE f = CreateFileW(g_dumpFileW, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE) {
       DumpExceptionInfo info{GetCurrentThreadId(), ep, FALSE};
-      // 0x1000 MiniDumpWithThreadInfo: every thread's stack and registers, the modules, nothing else. Not 0x40
-      // MiniDumpWithIndirectlyReferencedMemory (until 2026-11-15): the memory the stacks point at held the process's
-      // environment block whenever a stack pointed into it, so the player's environment values (passwords, keys) went
-      // into the file (found by the ui's report test; Chris: the smaller dump). The module list still names the
-      // install's folder: remaster_report (ui/user/report.cpp) masks the user's name before it zips a dump.
+      // 0x1000 MiniDumpWithThreadInfo. What it holds (read from two dumps with a parser, 2026-11-17): every thread's
+      // registers and its WHOLE stack (its memory list is the stacks: 178 KB in a running game), 256 bytes of code
+      // around each instruction pointer, 4 bytes of each module's header, Windows' shared system page (0x7ffe0000),
+      // the module list and system information. No heap. Not 0x40 MiniDumpWithIndirectlyReferencedMemory (until
+      // 2026-11-15): the memory the stacks point at held the process's environment block whenever a stack pointed
+      // into it, so the player's environment values (passwords, keys) went into the file (found by the ui's report
+      // test; Chris: the smaller dump). What can still be private: text a function keeps in a local buffer on a stack
+      // (a path, a log line) and the install's folder in the module list: remaster_report (ui/user/report.cpp) masks
+      // the user's and the PC's names and environment entries before it zips a dump; the window sends players there.
       dumped = g_writeDump(GetCurrentProcess(), GetCurrentProcessId(), f, 0x1000, ep ? &info : nullptr, nullptr, nullptr) != 0;
       CloseHandle(f);
     }
@@ -199,6 +203,7 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 
 LONG WINAPI OnException(EXCEPTION_POINTERS* ep) {
   if (InterlockedExchange(&g_inCrash, 1) != 0) return EXCEPTION_CONTINUE_SEARCH;
+  LogCrashing();  // (this thread's log writes no longer wait for the log's lock: core/log.h)
   const EXCEPTION_RECORD* er = ep->ExceptionRecord;
   char where[300], tick[40];
   Where(reinterpret_cast<DWORD64>(er->ExceptionAddress), where, sizeof where);
@@ -247,6 +252,7 @@ LONG WINAPI OnException(EXCEPTION_POINTERS* ep) {
 
 void OnAbort(int) {
   if (InterlockedExchange(&g_inCrash, 1) != 0) return;
+  LogCrashing();  // (this thread's log writes no longer wait for the log's lock: core/log.h)
   char tick[40];
   TickText(tick, sizeof tick);
   Line("crash: abort, %s", tick);
@@ -267,6 +273,7 @@ int g_probe[2] = {-1, -1};  // CrashReadable's pipe: a write from memory that ca
 
 void OnSignal(int sig, siginfo_t* si, void* uc) {
   if (__sync_lock_test_and_set(&g_inCrash, 1) != 0) return;
+  LogCrashing();  // (this thread's log writes no longer wait for the log's lock: core/log.h)
   char tick[40];
   TickText(tick, sizeof tick);
   unsigned long long pc = 0;

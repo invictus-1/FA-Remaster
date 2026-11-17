@@ -89,6 +89,7 @@ struct Options {
   bool rules = false;
   bool quiet = false;
   bool crashTest = false;  // --crash-test: fault on purpose after start-up (tools/paths_test.py reads the report)
+  bool crashTestLog = false;  // --crash-test-log: the same fault taken while the log's lock is held (core/log.h)
   std::string replay;   // --sim <replay>: start that session headless
   std::string session;  // --session <file>: start the session a lobby's game configuration describes
   uint32_t seed = 0;    // --seed N: that session's random seed (default: from the clock)
@@ -2022,6 +2023,7 @@ int main(int argc, char** argv) {
     } else if (a == "--mods") o.modsFile = next();
     else if (a == "--log") o.logFile = next();
     else if (a == "--crash-test") o.crashTest = true;
+    else if (a == "--crash-test-log") o.crashTest = o.crashTestLog = true;
     else if (a == "--check-lua") o.checkLua = true;
     else if (a == "--rules") o.rules = true;
     else if (a == "--quiet") o.quiet = true;
@@ -2129,6 +2131,7 @@ int main(int argc, char** argv) {
     volatile const void* environmentHeld = CrashTestEnvironmentBlock();
     (void)environmentHeld;
 #endif
+    if (o.crashTestLog) LogTestFaultUnderLock();  // (the hook above writes to the log: it must not wait for the lock)
     volatile uintptr_t nowhere = 16;
     *reinterpret_cast<volatile int*>(nowhere) = 1;
   }

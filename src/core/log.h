@@ -40,5 +40,13 @@ void Logf(LogLevel level, const char* fmt, ...)
 // log's lock (the crashing thread may hold it), then flushed; and the log file's buffer written out.
 void LogEmergency(const char* line);
 void LogFlush();
+// The crash handler says that this thread is in it (core/crash.cpp, before its first line): from then on this thread's
+// LogWrite / Logf / LogTripwire do not wait for the log's lock either (they try it and write anyway), so a host's
+// call at the crash (CrashSetBeforeReport; moho64ui's hands the renderer's last line to Logf) cannot hang on a lock
+// the crashing thread itself holds. Found by the check of 2026-11-17: a fault inside a log write then lost the dump.
+void LogCrashing();
+// For the crash tests only (moho64 --crash-test-log): takes the log's lock as a write does and faults while it holds
+// it: the crash handler, and a host's call in it that writes to the log, must not wait for that lock.
+void LogTestFaultUnderLock();
 
 }  // namespace moho

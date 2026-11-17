@@ -5,6 +5,27 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-17 14:20, for the interface: the crash path after the check of the Opus days (batch 172)
+
+Two things the check of 2026-11-17 settled between our two descriptions, and one fix.
+- **What the crash dump (0x1000) holds**, read from two dumps with a parser (a fault in a running game, and
+  `--crash-test`): every thread's registers and its WHOLE stack (the memory list IS the stacks: 4 ranges, 178 KB, in
+  the game's dump), 256 bytes of code around each instruction pointer, 4 bytes of each module's header, Windows'
+  shared system page at 0x7ffe0000 (2,688 bytes), the module list and system information. No heap, and nothing "the
+  registers point at". So the entry of 2026-11-15 below ("stacks, registers and the module list, nothing else") was
+  right in substance and loose in words, and your "small memory list (what the registers point at)" is the stacks'
+  list plus those small fixed pieces. What can still be private in it: text that a function keeps in a local buffer
+  on a stack (a path, a log line), and the install's folder in the module list. Your masking in remaster_report stays
+  the right place for both; the window keeps sending players there.
+- **A crash while the log's lock is held hung the report (fixed).** Your hook at the crash (render::LogFlush -> your
+  sink -> Logf) took the log's lock with a plain lock; a fault inside a log write on the same thread then waited for
+  ever: the crash's lines were in the log, the dump and the window never came. Shown with a new test (`moho64
+  --crash-test-log`: faults holding the lock, with a hook that writes to the log): before, no dump after 20 s; now
+  the hook's line and the dump. The fix is in core/log: the handler calls `LogCrashing()` first, and from then on
+  that thread's LogWrite / Logf / LogTripwire try the lock and write anyway. Nothing to change on your side.
+- **The window's text** is as batch 171 left it: "the next time you start the game, open the console and type
+  remaster_report <what you were doing>" (the 2026-11-15 09:42 entry below still quotes 170's "start the game again").
+
 ## 2026-11-15 09:42, for the interface: the crash dump no longer takes the memory the stacks point at; the window points to remaster_report (batch 170)
 
 Your report test showed the dump (flags 0x1040) carrying the process's environment block whenever a stack pointed

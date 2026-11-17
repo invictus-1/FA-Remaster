@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,6 +35,21 @@ using StackWalk64Fn = BOOL(WINAPI*)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64, PVOID
                                      PGET_MODULE_BASE_ROUTINE64, PTRANSLATE_ADDRESS_ROUTINE64);
 using SymFromAddrFn = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
 using SymGetLineFromAddr64Fn = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+
+// A held thread's lines, gathered while it is held and printed when it runs again: a print takes locks (the stream's; with
+// a host's sink the heap's and the host's log's) that the held thread may hold itself, and the dump would then wait for
+// ever with that thread never let go: a stall turned into a hang. (dbghelp's own lookups may take the heap all the same:
+// that part is as it was.) Fixed room, no memory taken: 40 frames of a name, a file and a module.
+char gHeld[40 * 1024];
+size_t gHeldUsed = 0;
+void Held(const char* format, ...) {
+  if (gHeldUsed + 1 >= sizeof gHeld) return;
+  va_list args;
+  va_start(args, format);
+  const int n = std::vsnprintf(gHeld + gHeldUsed, sizeof gHeld - gHeldUsed, format, args);
+  va_end(args);
+  if (n > 0) gHeldUsed = std::min(gHeldUsed + static_cast<size_t>(n), sizeof gHeld - 1);
+}
 
 void Dump() {
   HMODULE help = LoadLibraryA("dbghelp.dll");
@@ -69,6 +85,8 @@ void Dump() {
     HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
     if (!t) continue;
     if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+      gHeldUsed = 0;
+      gHeld[0] = 0;
       CONTEXT c{};
       c.ContextFlags = CONTEXT_FULL;
       if (GetThreadContext(t, &c)) {
@@ -79,7 +97,7 @@ void Dump() {
         f.AddrFrame.Mode = AddrModeFlat;
         f.AddrStack.Offset = c.Rsp;
         f.AddrStack.Mode = AddrModeFlat;
-        fprintf(stderr, "render: hang dump: thread %lu\n", te.th32ThreadID);
+        Held("render: hang dump: thread %lu\n", te.th32ThreadID);
         for (int k = 0; k < 40 && walk(IMAGE_FILE_MACHINE_AMD64, process, t, &f, &c, nullptr, access, base, nullptr) && f.AddrPC.Offset; ++k) {
           char buffer[sizeof(SYMBOL_INFO) + 256] = {};
           auto* s = reinterpret_cast<SYMBOL_INFO*>(buffer);
@@ -95,11 +113,13 @@ void Dump() {
           char module[MAX_PATH] = "?";
           const DWORD64 at = base(process, f.AddrPC.Offset);
           if (at) GetModuleFileNameA(reinterpret_cast<HMODULE>(at), module, MAX_PATH);
-          fprintf(stderr, "    %s%s%s:%lu  [%s+0x%llx]\n", named ? s->Name : "?", lined ? " " : "", lined ? l.FileName : "", lined ? l.LineNumber : 0ul,
-                       std::strrchr(module, '\\') ? std::strrchr(module, '\\') + 1 : module, static_cast<unsigned long long>(f.AddrPC.Offset - at));
+          Held("    %s%s%s:%lu  [%s+0x%llx]\n", named ? s->Name : "?", lined ? " " : "", lined ? l.FileName : "", lined ? l.LineNumber : 0ul,
+               std::strrchr(module, '\\') ? std::strrchr(module, '\\') + 1 : module, static_cast<unsigned long long>(f.AddrPC.Offset - at));
         }
       }
       ResumeThread(t);
+      // (now that it runs again; a line cut at the room's end gets its newline)
+      if (gHeldUsed) fprintf(stderr, "%s%s", gHeld, gHeld[gHeldUsed - 1] == '\n' ? "" : "\n");
     }
     CloseHandle(t);
   }

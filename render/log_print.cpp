@@ -42,10 +42,15 @@ struct Pending {
   ~Pending();
 };
 thread_local bool tGone = false;  // (trivial: still readable while and after the thread's Pending is destroyed)
+// (trivial too) The thread's Pending once it has printed through a sink, null before and after: LogFlush and SetLogSink
+// look here and never MAKE one (making it registers the thread's destructor, which may take memory: a host calls
+// LogFlush from its crash handler, on a thread that may never have printed and whose heap may be the thing that broke).
+thread_local Pending* tMine = nullptr;
 
 Pending* Mine() {
   if (tGone) return nullptr;
   thread_local Pending pending;
+  tMine = &pending;
   return &pending;
 }
 
@@ -63,6 +68,7 @@ void FlushInto(LogSink sink, Pending& p) {
 
 Pending::~Pending() {
   FlushInto(gSink.load(std::memory_order_acquire), *this);
+  tMine = nullptr;
   tGone = true;
 }
 
@@ -107,7 +113,7 @@ int ToSink(LogSink sink, int stream, const char* format, va_list args) {
 }  // namespace
 
 void SetLogSink(LogSink sink) {
-  if (Pending* p = Mine()) FlushInto(gSink.load(std::memory_order_acquire), *p);
+  if (Pending* p = tMine) FlushInto(gSink.load(std::memory_order_acquire), *p);
   gSink.store(sink, std::memory_order_release);
 }
 
@@ -158,8 +164,10 @@ void LogLine(int level, const char* format, ...) {
   Gather(sink, level, rest, text.data(), text.size());
 }
 
+// (takes no lock and no memory of its own: with nothing unfinished on this thread it does nothing at all; with a part of
+// a line it calls the sink once or twice, and what the sink takes is the host's)
 void LogFlush() {
-  if (Pending* p = Mine()) FlushInto(gSink.load(std::memory_order_acquire), *p);
+  if (Pending* p = tMine) FlushInto(gSink.load(std::memory_order_acquire), *p);
 }
 
 }  // namespace render

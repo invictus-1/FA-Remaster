@@ -308,13 +308,31 @@ bool ReadWhole(const std::string& path, std::vector<uint8_t>* out) {
 
 // (under another name first: a half-written file is never read; [snowhitch] a name of the writing thread's own, as two threads
 // may keep the same shader at once: the frames' and the device's own, Device::BeginBackgroundPipelines)
+// [keptrace] A kept file that is there is NEVER taken away while it holds these bytes. It was "remove the kept file, then
+// rename": between the two the file was not there, and a second thread that had just kept the same shader (many
+// pipelines share a vertex shader) and read it back in that moment found nothing: the device's own thread then said "its
+// shaders could not be compiled on the device's own thread" and the pipeline was made on the frames' thread (a cold
+// cache only; seen on both backends). Tried with two writers and a reader (_scratch/render/t1117/race, 10 s): the old
+// way, 60 % of the reads found no file; Windows' rename OVER the kept file, still 10 % (it is one step for the disk, not
+// for a reader opening the file meanwhile); this way, none of 80,000. So on Windows: renamed into place only where no
+// file is there; where one is, it is read: the same bytes (the usual case, by its name), it stays and the new one is
+// dropped; other bytes (a file cut short by a crash), it is replaced. Elsewhere rename replaces without a gap by itself.
 void WriteWhole(const std::string& path, const void* data, size_t size) {
   const std::string part = path + ".part" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000007u);
   if (FILE* f = fopen(part.c_str(), "wb")) {
     const bool ok = fwrite(data, 1, size, f) == size;
     fclose(f);
-    std::remove(path.c_str());
-    if (!ok || std::rename(part.c_str(), path.c_str()) != 0) std::remove(part.c_str());
+#if defined(_WIN32)
+    bool placed = ok && MoveFileExA(part.c_str(), path.c_str(), 0) != 0;  // (not over a file that is there)
+    if (ok && !placed) {
+      std::vector<uint8_t> kept;
+      const bool same = ReadWhole(path, &kept) && kept.size() == size && std::memcmp(kept.data(), data, size) == 0;
+      if (!same) placed = MoveFileExA(part.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+    }
+#else
+    const bool placed = ok && std::rename(part.c_str(), path.c_str()) == 0;
+#endif
+    if (!placed) std::remove(part.c_str());
   }
 }
 
