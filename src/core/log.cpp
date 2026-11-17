@@ -15,6 +15,18 @@
 namespace moho {
 namespace {
 std::mutex g_mutex;
+thread_local bool tl_crashing = false;  // LogCrashing: this thread is in the crash handler
+
+// The log's lock for a write: taken, or only tried when this thread is in the crash handler (it may hold it itself).
+struct WriteLock {
+  bool locked;
+  WriteLock() : locked(tl_crashing ? g_mutex.try_lock() : (g_mutex.lock(), true)) {}
+  ~WriteLock() {
+    if (locked) g_mutex.unlock();
+  }
+  WriteLock(const WriteLock&) = delete;
+  WriteLock& operator=(const WriteLock&) = delete;
+};
 FILE* g_file = nullptr;
 bool g_echo = true;
 // LogTallyToFile: the counted messages (never freed: the writer runs at the program's end)
@@ -142,14 +154,19 @@ void WriteLines(LogLevel level, std::string_view message);  // (the caller holds
 }
 
 void LogWrite(LogLevel level, std::string_view message) {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  if (g_tally && (level == LogLevel::Warning || level == LogLevel::Error)) TallyMessage(message);
+  WriteLock lock;
+  // (the count's map only under the lock; a crashing thread without it writes its line and counts nothing)
+  if (lock.locked && g_tally && (level == LogLevel::Warning || level == LogLevel::Error)) TallyMessage(message);
   WriteLines(level, message);
 }
 
 void LogTripwire(std::string_view message, int times) {
   if (times <= 0) return;
-  std::lock_guard<std::mutex> lock(g_mutex);
+  WriteLock lock;
+  if (!lock.locked) {  // (a crashing thread without the lock: the line, no count, the set untouched)
+    WriteLines(LogLevel::Warning, message);
+    return;
+  }
   if (g_tally) TallyMessage(message, times);
   if (!g_tripped) g_tripped = new std::set<std::string>();
   if (g_tripped->insert(std::string(message)).second) WriteLines(LogLevel::Warning, message);
@@ -204,6 +221,14 @@ void LogEmergency(const char* line) {
     std::fflush(g_file);
   }
   if (locked) g_mutex.unlock();
+}
+
+void LogCrashing() { tl_crashing = true; }
+
+void LogTestFaultUnderLock() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  volatile uintptr_t nowhere = 16;
+  *reinterpret_cast<volatile int*>(nowhere) = 1;
 }
 
 void LogFlush() {
