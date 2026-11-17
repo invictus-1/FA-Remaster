@@ -335,6 +335,10 @@ size_t MaskEnvironment(std::string& data) {
       std::string upper = name;
       for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
       if (upper.rfind("MOHO64", 0) == 0) continue;
+      // (a name of one or two letters is not looked for: "_=" (the shell's own variable) stands by chance in a few
+      // hundred KB of stack two or three times, and each would overwrite what follows it up to a NUL; found by the
+      // report's test, 2026-11-17. Windows' own two-letter name is OS, whose value says nothing)
+      if (name.size() < 3) continue;
       for (int wide = 0; wide <= 1; ++wide) {
         const size_t step = wide ? 2 : 1, len = (name.size() + 1) * step;  // ("NAME=")
         for (size_t i = start; i + len <= end; ++i) {

@@ -38,7 +38,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `HEADS` | test | `2`: a second head in a run without a window | suite (dualhead) |
 | `HELD_LOG` | look | a line for each held frame, with where the beats stood | - |
 | `LOCAL_MOD_FIXES` | place | one more folder in which our fixes of mods are looked for | - |
-| `LONG_FRAMES` | look | each long frame is logged with its parts and the functions that ran long | Chris's launchers (allowed: launch_switch_allow.txt) |
+| `LONG_FRAMES` | look | `<ms>`: each frame of a live window longer than that is logged with its parts, the card's time and the functions that ran long (16 when it is not a number); `0` or `off`: none. Unset: a live window logs those over 100 ms (without the functions' names), a run without a window none; at most 30 lines a minute, the others counted in one line | Chris's launchers (allowed: launch_switch_allow.txt) |
 | `MENUFLIGHT_CAPTURES` | test | battle ticks (`600,1500,...`) at which the menu flight's picture is saved | - |
 | `MENUFLIGHT_FAST` | test | `1`: the menu flight's battle runs as fast as it goes | suite (the flight jobs) |
 | `MENUFLIGHT_FAST_TO` | test | fast only up to that tick | - |

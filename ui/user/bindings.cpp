@@ -185,10 +185,11 @@ std::map<std::string, BindingCost>& BindingCosts() {
   static std::map<std::string, BindingCost> costs;  // (a map: the records stay where they are)
   return costs;
 }
-bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited; MOHO64UI_LONG_FRAMES: a
-                    // long frame names the functions that ran long in it)
+bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited; MOHO64UI_LONG_FRAMES set
+                    // to a threshold: a long frame names the functions that ran long in it. Not with a window's default
+                    // long-frame log, the variable unset: every engine function's call would be timed in every game)
   static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr || std::getenv("MOHO64UI_BEAT_LOG") != nullptr ||
-                         std::getenv("MOHO64UI_LONG_FRAMES") != nullptr;
+                         LongFramesVariable() > 0;
   return on;
 }
 int TimedBinding(lua_State* L) {

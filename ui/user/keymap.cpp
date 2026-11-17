@@ -2069,6 +2069,43 @@ void RegisterKeyMapBindings(lua_State* L) {
     lua_pushboolean(S, 1);
     return 1;
   });
+  // moho64ui_LongFrameLimitForTests(frames [, flush]) -> the lines, in a run with a test script only
+  // (TestFileWritesAllowed; elsewhere nil): the long-frame log's limit (LongFrameLimit) on its own, no window. Each of
+  // `frames` is {seconds, ms} (ms 0: a frame that is not long), given as the window's loop gives them (Tick, then Take
+  // for a long one; its frame number is its index); the result lists "written <index>" for each long frame whose line
+  // would be written and each line about those not written, in their order; with `flush` the window's end (Flush).
+  // Second: the long-frame log's threshold now, ms (0: off; a run without a window keeps 0 unless the variable is set).
+  lua_register(L, "moho64ui_LongFrameLimitForTests", [](lua_State* S) -> int {
+    if (!TestFileWritesAllowed() || !lua_istable(S, 1)) {  // (no top-level comma: lua_register is a macro)
+      lua_pushnil(S);
+      return 1;
+    }
+    LongFrameLimit limit;
+    std::vector<std::string> out;
+    const int n = luaL_getn(S, 1);
+    for (int i = 1; i <= n; ++i) {
+      lua_rawgeti(S, 1, i);
+      lua_rawgeti(S, -1, 1);
+      const double seconds = lua_tonumber(S, -1);
+      lua_rawgeti(S, -2, 2);
+      const double ms = lua_tonumber(S, -1);
+      lua_pop(S, 3);
+      std::string line = limit.Tick(seconds);
+      if (!line.empty()) out.push_back(line);
+      if (ms > 0 && limit.Take(seconds, ms, i)) out.push_back("written " + std::to_string(i));
+    }
+    if (lua_toboolean(S, 2)) {
+      std::string line = limit.Flush();
+      if (!line.empty()) out.push_back(line);
+    }
+    lua_newtable(S);
+    for (size_t k = 0; k < out.size(); ++k) {
+      lua_pushstring(S, out[k].c_str());
+      lua_rawseti(S, -2, static_cast<int>(k) + 1);
+    }
+    lua_pushnumber(S, LongFrames().thresholdMs);
+    return 2;
+  });
   lua_register(L, "moho64ui_LifeBars", l_LifeBars);
   lua_register(L, "moho64ui_ConsolePostFromThread", l_ConsolePostFromThread);
   // moho64ui_SimPrint(...): the simulation's print, here (its lines wait for the next frame). The
