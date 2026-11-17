@@ -12,6 +12,7 @@
 //   sim.collectEffects = true;                       before the simulation's first beat
 //   sim.collectProps = true;                         the same, for the scenery's changes (wreckage, trees)
 //   sim.collectPropsSeen = true;                     the same, for SetWrecksOnceSeen (which armies have seen a wreck)
+//   sim.collectCopiedPoses = true;                   the same, for wrecks that keep their unit's pose (SetWreckPoses)
 //   sim.collectHits = sim.collectImpacts = sim.collectHealth = true;
 //                                                    the same, for the looks that answer hits (marks on units,
 //                                                    ripples, blast waves; about 1% of a beat's time)
@@ -368,6 +369,12 @@ class WorldPicture {
   // a game, the wrecks not seen so far go from the next frame; put off, all held back show at once. A change of
   // the focus army is followed. Trees and other props made in the game are never held back. A player's option.
   void SetWrecksOnceSeen(bool on);
+  // [wreckpose] A unit's wreck keeps the pose its unit died in (World::wreckPoses): ON at first, the original's way
+  // (TryCopyPose: a wreck's turret stays turned where it pointed, a walker's legs where they stood). Off: every wreck
+  // in its mesh's rest pose, as this renderer drew them before. Needs Sim::collectCopiedPoses set before the
+  // simulation's first beat (without it no pose is told and every wreck is at rest); a wreck made before a save was
+  // loaded has none. May be set at any time. A player's option.
+  void SetWreckPoses(bool on);
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.
   void SetRemasteredEffects(bool on);

@@ -4,6 +4,32 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui (no request of yours: the engine's TryCopyPose, batch 173): wrecks keep the pose their unit died in - one line in the game's set-up, one option if Chris wants it (render [wreckpose], 2026-11-17)
+
+In the original a unit's wreck keeps the pose the unit had when it died (FAF's `Unit:CreateWreckageProp` calls
+`TryCopyPose`): a tank's turret stays turned where it pointed, a walker lies as its death animation left it. Ours stood
+in the mesh's rest pose. The engine now hands the poses out (`sim/sim_view.h`, `CopiedPose`, `CopiedPoses`), and the
+renderer draws them.
+
+What the ui does:
+
+- **Set `sim.collectCopiedPoses = true` before the simulation's first beat**, where you set `collectProps` and
+  `collectPropsSeen` (world_picture.h's list at the top names it). Without it no pose is told and every wreck is at rest,
+  as before; nothing else changes. The renderer takes the poses itself with each beat's prop events.
+- `WorldPicture::SetWreckPoses(bool)`: ON at first (the original's way). Off: every wreck in its rest pose, as this
+  renderer drew them until today. May be set at any time. A player's option if Chris wants one (his rule: a new look is
+  an option, the original's way included; here the original's way IS the new default).
+
+What to know:
+
+- A stream, not a state (the engine's words): a wreck made before a save was loaded, or before a view was opened, has
+  no pose and stands at rest.
+- A wreck drawn as its baked pile of debris (the debris look) has no pose either way; a remastered unit's own painted
+  wreck wears the pose only where it has the unit's bones (otherwise it stays at rest: checked bone by bone).
+- The map's own wreck fields are posed too where the game's set-up kills units with a death animation (Seton's middle:
+  14 walkers; the Loyalists lie fallen now).
+- The viewer: `--wrecks-at-rest` is the old way; `MOHO64_DEBUG_WRECKS=1` prints each pose as it is told.
+
 ## To the ui, request 57: the graphics-memory strip - the renderer's half is in: `WorldPicture::EstimateCardMemory` and `CardMemory()` (render 106f227f, 2026-11-14)
 
 As agreed (world_picture.h, after `SuggestedPreset`; added only, nothing drawn changes):

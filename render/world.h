@@ -269,6 +269,11 @@ class World {
   // (focusArmy -1) everything is drawn. Switched on in a game, the wrecks not seen so far go; switched off, or the
   // focus army changed, what was held back shows at once. Who has seen what: FramePropEvent::seenBy.
   bool wrecksOnceSeen = false;
+  // [wreckpose] A unit's wreck keeps the pose its unit died in (its turret's turn, its legs, its arms), as in the
+  // original (TryCopyPose; FramePropEvent::pose, where the simulation hands it out). On: the original's way. Off: every
+  // wreck in its mesh's rest pose, as before 2026-11-17. A wreck drawn as its baked pile of debris has no pose either way.
+  bool wreckPoses = true;
+  int WrecksPosed() const { return posedWrecks_; }  // [wreckpose] (drawn with their unit's pose in the last frame)
   int WrecksHeld() const { return static_cast<int>(heldProps_.size()); }  // (checks) held back now
   int groundChanges = 0;                // the simulation's changes of the ground's heights taken in (ChangeGround)
   int propCellsSeen = 0, propsAdded = 0;  // of the frame last begun: squares of scenery gone through, props handed to the mesh renderer
@@ -1322,6 +1327,9 @@ class World {
     // [fogglow] (Chris, 2026-11-08: a wreck's glow "should be hidden in fog of war. Unless you've seen that unit then it
     // stays") whether the army the picture is for ever saw the unit it is the wreck of; if not, it glows only in sight
     bool glowKnown = true;
+    // [wreckpose] it has a pose (wreckPoses_) its model can wear: drawn on its own with its bones, never in its square's
+    // group, while World::wreckPoses is on
+    bool posed = false;
   };
   struct Pickable {  // a unit of the frame, for UnitAt, UnitsAt and UnitsIn
     uint32_t id;
@@ -1359,6 +1367,20 @@ class World {
   // [debrispile] the made props drawn as their piles (PlacedProp::pile), by entity id: their units' kinds; whether the piles
   // are drawn this frame (the debris on, the modern look: else their models); each told to the debris or drawn (ListPiles)
   std::unordered_map<uint32_t, std::string> pileProps_;
+  // [wreckpose] the pose each wreck was given, by the prop's id, for as long as the prop lives (the simulation tells it
+  // once), and the place the posed mesh stands at (the prop's own, or the unit's when it died: FramePropEvent::poseOwnPlace)
+  struct WreckPose {
+    std::vector<FrameBone> bones;
+    bool ownPlace = false;
+    Vec3 at;
+    Quat turn;
+  };
+  std::unordered_map<uint32_t, WreckPose> wreckPoses_;
+  bool wreckPosesWas_ = true;  // (World::wreckPoses as the squares' groups were last filled by)
+  int posedWrecks_ = 0;        // (drawn with their pose in the last frame)
+  // Whether `prop` (made in the game, `id`) is drawn with a pose now, and where its posed mesh stands.
+  bool WreckPosed(uint32_t id, const PlacedProp& prop, const WreckPose** pose, Mat4* world) const;
+  void TakeWreckPose(const FramePropEvent& e);
   bool pilesNow_ = false;
   void ListPiles();
   FrameCombat combatPending_;  // AddCombat's, not yet due

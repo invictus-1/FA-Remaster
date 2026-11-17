@@ -554,6 +554,7 @@ void World::RestartGame() {
   propEvents_.clear();
   propsKept_.clear();  // [devicelost] (the new game's own from here; its looks come with its SetLooks)
   heldProps_.clear();  // [wrecksseen]
+  wreckPoses_.clear();  // [wreckpose]
   looksKept_.clear();
   recentProps_.clear();
   recentPruned_ = 0;
@@ -2331,6 +2332,13 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
   CpuTimes::Part("scenery listed");
   // the scenery's changes that are due by now, then the scenery
   RefreshWrecksSeen();  // [wrecksseen] (the switch or the focus army changed: what stands, judged anew)
+  if (wreckPoses != wreckPosesWas_) {  // [wreckpose] (the switch changed: the posed wrecks' squares filled anew, with or without them)
+    wreckPosesWas_ = wreckPoses;
+    for (const auto& worn : wreckPoses_) {
+      auto made = madeProps_.find(worn.first);
+      if (made != madeProps_.end() && made->second.posed && made->second.cell >= 0) propCells_[static_cast<size_t>(made->second.cell)].changed = true;
+    }
+  }
   while (!propEvents_.empty() && static_cast<double>(propEvents_.front().tick) * 0.1 <= clock + 1e-6) {
     ApplyPropEvent(propEvents_.front());
     propEvents_.pop_front();
@@ -2375,7 +2383,8 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
             auto made = madeProps_.find(id);
             // (a hot wreck is held out while it glows: added on its own with its heat, below)
             // ([debrispile] a wreck drawn as its pile, or its model on its own: ListPiles)
-            if (made != madeProps_.end() && made->second.model && !made->second.hot && !made->second.pile)
+            // ([wreckpose] one that keeps its unit's pose: on its own with its bones, below)
+            if (made != madeProps_.end() && made->second.model && !made->second.hot && !made->second.pile && !(made->second.posed && wreckPoses))
               meshes.AddToGroup(cell.group, made->second.model, made->second.world);
           }
           cell.changed = false;
@@ -2385,6 +2394,7 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
       }
   }
   // hot metal: the wrecks held out of their groups while they glow, each with its heat (hot_metal.h, HotMetal::Tint)
+  posedWrecks_ = 0;  // [wreckpose]
   for (uint32_t id : hotProps_) {
     auto made = madeProps_.find(id);
     if (made == madeProps_.end() || !made->second.model) continue;
@@ -2394,15 +2404,44 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     float radius;
     Sphere(p.model, p.world, &centre, &radius);
     const float age = static_cast<float>(clock_ - p.born), seconds = heat.WreckSeconds(radius);
+    // [wreckpose] (a hot wreck wears its pose too)
+    const WreckPose* worn = nullptr;
+    Mat4 wornWorld = p.world;
+    Pose wornPose;
+    if (WreckPosed(id, p, &worn, &wornWorld)) {
+      wornPose.now = wornPose.next = worn->bones.data();
+      wornPose.nowCount = wornPose.nextCount = worn->bones.size();
+      ++posedWrecks_;
+    }
     if (!GlowShown(p, centre)) {  // [fogglow] (a wreck the army never saw the unit of, out of sight: cold, no light, no smoke)
-      meshes.Add(p.model, p.world, {1, 1, 1}, 1);
+      meshes.Add(p.model, wornWorld, {1, 1, 1}, 1, worn ? &wornPose : nullptr);
       continue;
     }
     heatTint_ = HotMetal::Tint(age, seconds);
-    meshes.Add(p.model, p.world, {1, 1, 1}, 1, nullptr, &heatTint_);
+    meshes.Add(p.model, wornWorld, {1, 1, 1}, 1, worn ? &wornPose : nullptr, &heatTint_);
     if (!sidePicture && !extraView) heat.Glowing(id, centre, radius, age, seconds, true);
   }
   ListPiles();  // [debrispile]
+  // [wreckpose] the wrecks that keep their unit's pose and are neither hot (above) nor a pile (ListPiles): each on its
+  // own with its bones, as the scenery's groups are listed
+  {
+    const bool before = meshes.addingScenery;
+    meshes.addingScenery = true;
+    if (wreckPoses)
+      for (const auto& [id, worn] : wreckPoses_) {
+        auto made = madeProps_.find(id);
+        if (made == madeProps_.end() || !made->second.posed || !made->second.model || made->second.hot || made->second.pile || made->second.cell < 0) continue;
+        const WreckPose* pose = nullptr;
+        Mat4 world = made->second.world;
+        if (!WreckPosed(id, made->second, &pose, &world)) continue;
+        Pose p;
+        p.now = p.next = pose->bones.data();
+        p.nowCount = p.nextCount = pose->bones.size();
+        meshes.Add(made->second.model, world, {1, 1, 1}, 1, &p);
+        ++posedWrecks_;
+      }
+    meshes.addingScenery = before;
+  }
   // [rockhits] the scarred rocks held out of their groups, each with its scars (rock_hits.h, RockHits::Tint; the original
   // look's shading passes them over); those taken away since (reclaimed, or under a structure) not
   for (uint32_t i : rocks.HeldList()) {
@@ -2983,6 +3022,22 @@ void World::RefreshWrecksSeen() {
 
 void World::ApplyPropEvent(const FramePropEvent& e) {
   const bool ofMap = e.mapIndex >= 0;
+  if (e.kind == FramePropEvent::Pose) {  // [wreckpose] no change of the prop itself: one made earlier is given its pose
+    auto kept = propsKept_.find(e.id);
+    if (kept == propsKept_.end()) return;  // (gone meanwhile)
+    kept->second.posed = true, kept->second.poseOwnPlace = e.poseOwnPlace, kept->second.pose = e.pose;  // (for a world made anew)
+    std::memcpy(kept->second.posePosition, e.posePosition, sizeof e.posePosition);
+    std::memcpy(kept->second.poseOrientation, e.poseOrientation, sizeof e.poseOrientation);
+    TakeWreckPose(e);
+    auto made = madeProps_.find(e.id);
+    if (made != madeProps_.end() && made->second.model) {
+      bool fits = true;
+      for (const FrameBone& b : e.pose) fits = fits && b.bone < made->second.model->bones.size();
+      made->second.posed = fits && !e.pose.empty();
+      if (made->second.cell >= 0) propCells_[static_cast<size_t>(made->second.cell)].changed = true;  // (out of its group)
+    }
+    return;
+  }
   if (e.kind == FramePropEvent::Seen) {  // [wrecksseen] more armies have seen it: one held back for that is laid now
     auto kept = ofMap ? propsKept_.end() : propsKept_.find(e.id);
     if (kept == propsKept_.end()) return;  // (gone meanwhile)
@@ -3011,7 +3066,15 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     } else {
       auto [it, fresh] = propsKept_.try_emplace(key);
       const uint32_t madeAt = it->second.tick, seenWas = it->second.seenBy;
+      FramePropEvent poseWas;  // [wreckpose] (a change says nothing of the pose it was given: kept)
+      const bool keepPose = !fresh && !e.posed && it->second.posed;
+      if (keepPose) poseWas = std::move(it->second);
       it->second = e;
+      if (keepPose) {
+        it->second.posed = true, it->second.poseOwnPlace = poseWas.poseOwnPlace, it->second.pose = std::move(poseWas.pose);
+        std::memcpy(it->second.posePosition, poseWas.posePosition, sizeof poseWas.posePosition);
+        std::memcpy(it->second.poseOrientation, poseWas.poseOrientation, sizeof poseWas.poseOrientation);
+      }
       // (one made in the game: told again as its making, at the beat it was made - a wreck's age is by it)
       if (!ofMap && e.kind != FramePropEvent::Destroy) {
         it->second.kind = FramePropEvent::Create;
@@ -3022,7 +3085,10 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
   }
   if (!ofMap) {  // [wrecksseen] one the viewer's army has not seen is held back: nothing of it in the world
     if (e.kind == FramePropEvent::Destroy) {
-      if (heldProps_.erase(e.id)) return;  // (never drawn: nothing to take away)
+      if (heldProps_.erase(e.id)) {  // (never drawn: nothing to take away)
+        wreckPoses_.erase(e.id);     // ([wreckpose] but for a pose it was given while held)
+        return;
+      }
     } else {
       const auto kept = propsKept_.find(e.id);
       if (kept != propsKept_.end() && !WreckShown(kept->second.seenBy)) {
@@ -3058,7 +3124,7 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
       }
     }
     if (ofMap) props_[static_cast<size_t>(e.mapIndex)].model = nullptr;
-    else madeProps_.erase(e.id), pileProps_.erase(e.id);  // ([debrispile] its pile goes with it: ListPiles tells it no more)
+    else madeProps_.erase(e.id), pileProps_.erase(e.id), wreckPoses_.erase(e.id);  // ([debrispile] its pile goes with it: ListPiles tells it no more; [wreckpose] and its pose)
     ++propsGone;
     return;
   }
@@ -3081,6 +3147,13 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
     kept = placed;
     kept.born = born;
     kept.hot = hot;
+    // [wreckpose] the pose it was made with (or was given since: wreckPoses_ holds it), where its model has those bones
+    TakeWreckPose(e);
+    if (auto worn = wreckPoses_.find(e.id); worn != wreckPoses_.end() && kept.model) {
+      bool fits = !worn->second.bones.empty();
+      for (const FrameBone& b : worn->second.bones) fits = fits && b.bone < kept.model->bones.size();
+      kept.posed = fits;
+    }
     std::string low = e.blueprint + "|" + e.mesh;
     for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     kept.wreck = low.find("defaultwreckage") != std::string::npos || low.find("_mesh_wreck") != std::string::npos;
@@ -3301,11 +3374,49 @@ void World::ListPiles() {
       // [debrishull] (a water structure: its hull stands as its wreck, in the paint's burnt grey)
       if (const Model* hull = debris.baked.HullOf(it->second)) meshes.Add(hull, p.world, {0.3f, 0.3f, 0.3f});
     } else if (!p.hot) {
-      meshes.Add(p.model, p.world, {1, 1, 1});
+      // ([wreckpose] the piles off: its model, with the pose it keeps)
+      const WreckPose* worn = nullptr;
+      Mat4 wornWorld = p.world;
+      Pose wornPose;
+      if (WreckPosed(it->first, p, &worn, &wornWorld)) {
+        wornPose.now = wornPose.next = worn->bones.data();
+        wornPose.nowCount = wornPose.nextCount = worn->bones.size();
+        ++posedWrecks_;
+      }
+      meshes.Add(p.model, wornWorld, {1, 1, 1}, 1, worn ? &wornPose : nullptr);
     }
     ++it;
   }
   meshes.addingScenery = before;
+}
+
+// [wreckpose] (world.h) The pose is worn where the switch is on, the wreck has one, and every bone it names is one of
+// the model's (a remastered unit's own painted wreck may be one piece without the unit's bones: it keeps its rest).
+bool World::WreckPosed(uint32_t id, const PlacedProp& prop, const WreckPose** pose, Mat4* world) const {
+  if (!wreckPoses || !prop.posed || !prop.model) return false;
+  auto worn = wreckPoses_.find(id);
+  if (worn == wreckPoses_.end() || worn->second.bones.empty()) return false;
+  *pose = &worn->second;
+  if (worn->second.ownPlace) {  // (where its unit stood when it died, sized as the prop is)
+    Mat4 at = Mat4::FromTRS(worn->second.at, worn->second.turn, 1.0f);
+    for (int row = 0; row < 3; ++row)
+      for (int k = 0; k < 3; ++k) {
+        const float size = Length(Vec3{prop.world.m[0][k], prop.world.m[1][k], prop.world.m[2][k]});
+        at.m[row][k] *= size;
+      }
+    *world = at;
+  }
+  return true;
+}
+
+// [wreckpose] The pose an event brings (its making's, or a Pose told on its own), kept by the prop's id.
+void World::TakeWreckPose(const FramePropEvent& e) {
+  if (!e.posed || e.mapIndex >= 0) return;
+  WreckPose& worn = wreckPoses_[e.id];
+  worn.bones = e.pose;
+  worn.ownPlace = e.poseOwnPlace;
+  worn.at = {e.posePosition[0], e.posePosition[1], e.posePosition[2]};
+  worn.turn = Quat{e.poseOrientation[0], e.poseOrientation[1], e.poseOrientation[2], e.poseOrientation[3]};
 }
 
 // Hot metal (hot_metal.h): a fresh wreck is held out of its square's group of still scenery while it glows (the group's

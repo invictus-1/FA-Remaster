@@ -147,7 +147,8 @@ struct FrameGroundChange {
 // the map is named by its index in the map file's list of props.
 struct FramePropEvent {
   // (Seen [wrecksseen]: no change of the prop itself: more armies have had it in their sight, `seenBy`)
-  enum Kind { Create, Change, Destroy, Seen } kind = Create;
+  // (Pose [wreckpose]: no change of the prop itself: a prop made in an earlier beat is given its pose now)
+  enum Kind { Create, Change, Destroy, Seen, Pose } kind = Create;
   uint32_t tick = 0;  // the beat it was told in
   uint32_t id = 0;
   int mapIndex = -1;  // -1: made after the start
@@ -162,6 +163,15 @@ struct FramePropEvent {
   // nothing back.
   uint32_t seenBy = 0xffffffffu;
   bool superseded = false;     // [propqueue] (SimFrames' own: a newer change of the prop waits behind it; never handed out)
+  // [wreckpose] Create, Pose: the pose the prop was given (a unit's wreck: the pose its unit died in; the original's
+  // TryCopyPose, moho::CopiedPoses with Sim::collectCopiedPoses set before the first beat). `pose`: the bones away from
+  // rest, in rising order, each against the pose's own place, as a unit's (FrameBone); it never changes afterwards.
+  // `poseOwnPlace` (the original's bCopyWorldTransform): the posed mesh stands at posePosition / poseOrientation (the
+  // unit's when it died), not at the prop's own place. `posed` false: none (the rest pose).
+  bool posed = false, poseOwnPlace = false;
+  float posePosition[3] = {0, 0, 0};
+  float poseOrientation[4] = {0, 0, 0, 1};
+  std::vector<FrameBone> pose;
 };
 
 // A weapon's beam while it is on.

@@ -348,6 +348,8 @@
 // --range-fill  [range fill] with --ranges: the red group filled inside its lines (the original's range_Fill)
 // --wrecks-once-seen  [wrecksseen] a wreck made in the game is drawn only once the army the picture is for (--focus) has
 //           had its place in sight (World::wrecksOnceSeen; off: the original's way, drawn under the fog at once)
+// --wrecks-at-rest  [wreckpose] every wreck in its mesh's rest pose, as before (World::wreckPoses off; by default a
+//           unit's wreck keeps the pose its unit died in, as in the original: its turret's turn, its legs, its arms)
 // --focus-from <frame>,<army>  (checks) from that frame of a game the picture is for that army (0: for no one army), as
 //           an observer's change of army in a replay (the viewer's own world, not --picture)
 // --wrecks-once-seen-from <frame>, --wrecks-once-seen-until <frame>  (checks) the same, put on from that frame and / or
@@ -1244,6 +1246,7 @@ struct Options {
   float treadDepth = 0.007f;                   // [treads] --tread-depth
   bool hiddenOutlines = true;           // --no-hidden-outlines, --hidden-outlines
   bool wrecksOnceSeen = false;          // --wrecks-once-seen [wrecksseen]
+  bool wrecksAtRest = false;            // --wrecks-at-rest [wreckpose]
   int wrecksFrom = -1, wrecksUntil = -1;  // --wrecks-once-seen-from, --wrecks-once-seen-until (frames; -1: not given)
   int focusFromFrame = -1, focusFromArmy = 0;  // --focus-from <frame>,<army> (checks: the focus army changed in the game)
   bool hotMetal = false;                // --hot-metal
@@ -1630,6 +1633,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--hidden-outlines") o->hiddenOutlines = true;
     else if (a == "--no-hidden-outlines") o->hiddenOutlines = false;
     else if (a == "--wrecks-once-seen") o->wrecksOnceSeen = true;
+    else if (a == "--wrecks-at-rest") o->wrecksAtRest = true;  // [wreckpose]
     else if (a == "--hot-metal") o->hotMetal = true;
     else if (a == "--remastered-build") o->remasteredBuild = true;
     else if (a == "--exhausts") o->realExhausts = true;
@@ -3037,6 +3041,7 @@ int main(int argc, char** argv) {
   }
   world.hiddenOutlines = opt.hiddenOutlines;
   world.wrecksOnceSeen = opt.wrecksOnceSeen;
+  world.wreckPoses = !opt.wrecksAtRest;  // [wreckpose]
   world.hotMetal = opt.hotMetal;
   world.heat.softScorch = !opt.hotScorchOriginal;  // [softscorch]
   if (opt.hotLights >= 0) world.heat.mostLights = opt.hotLights;
@@ -5728,6 +5733,7 @@ int main(int argc, char** argv) {
       if (haveLive) printf("; simulation at tick %u, %.2f ms a tick", live.LastTick(), live.MsPerTick());
       if (haveLive) printf("; scenery: %d props made in the game stand, %d of the map's own gone", world.MadeProps(), world.MapPropsGone());
       if (haveLive && world.wrecksOnceSeen) printf(", %d wrecks held back as not seen", world.WrecksHeld());
+      if (haveLive && world.WrecksPosed()) printf(", %d wrecks in their unit's pose", world.WrecksPosed());  // [wreckpose]
       if (world.effects.staleKept > 0) printf("; %d lasting emitters started after a jump", world.effects.staleKept);  // [stalelast]
       if (world.effects.unitEmittersPlayed > 0) printf("; %d emitters played a unit's own way", world.effects.unitEmittersPlayed);  // [unitfx]
       if (world.horizonWeather)  // [horizon]

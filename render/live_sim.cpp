@@ -172,6 +172,7 @@ bool LiveSim::Load(std::string* error) {
   e.sim->collectEffects = true;  // the scripts' effect calls are kept for EffectEvents
   e.sim->collectProps = true;    // ... and how the scenery changes, for PropEvents
   e.sim->collectPropsSeen = true;  // ... and which armies have seen each wreck, for PropsSeen ([wrecksseen])
+  e.sim->collectCopiedPoses = true;  // ... and the pose a wreck is given, for CopiedPoses ([wreckpose])
   e.sim->collectHits = true;     // ... and hits, impacts and health changes, for TakeCombat (about 1% of a beat)
   e.sim->collectImpacts = true;
   e.sim->collectHealth = true;

@@ -701,6 +701,29 @@ void SimFrames::Beat(const moho::Sim& sim) {
   seenOf.reserve(seenList.size());
   for (const moho::PropSeenView& v : seenList) seenOf[v.id] = v.armies;
   const bool wrecksTold = getenv("MOHO64_DEBUG_WRECKS") != nullptr;  // (checks)
+  // [wreckpose] the poses TryCopyPose handed out in this beat (a unit's wreck, made in this beat: the pose its unit died
+  // in; empty while Sim::collectCopiedPoses is not set), each to go with its prop's making below
+  std::vector<moho::CopiedPose> copied;
+  moho::CopiedPoses(const_cast<moho::Sim&>(sim), &copied);
+  std::unordered_map<uint32_t, size_t> copiedOf;
+  for (size_t i = 0; i < copied.size(); ++i) copiedOf[copied[i].entityId] = i;  // (the last one given, should there be two)
+  auto givePose = [](FramePropEvent* f, const moho::CopiedPose& c) {
+    f->posed = true;
+    f->poseOwnPlace = c.withUnitTransform;
+    std::memcpy(f->posePosition, c.position, sizeof f->posePosition);
+    std::memcpy(f->poseOrientation, c.orientation, sizeof f->poseOrientation);
+    f->pose.clear();
+    f->pose.reserve(c.bones.size());
+    for (const moho::BonePose& b : c.bones) {
+      if (b.bone < 0) continue;
+      FrameBone bone;
+      bone.bone = static_cast<uint32_t>(b.bone);
+      std::memcpy(bone.position, b.position, sizeof bone.position);
+      std::memcpy(bone.orientation, b.orientation, sizeof bone.orientation);
+      f->pose.push_back(bone);
+    }
+    std::sort(f->pose.begin(), f->pose.end(), [](const FrameBone& a, const FrameBone& b) { return a.bone < b.bone; });
+  };
   std::vector<FramePropEvent> propEvents;
   propEvents.reserve(e.props.size() + seenList.size());
   for (moho::PropEvent& v : e.props) {
@@ -722,7 +745,37 @@ void SimFrames::Beat(const moho::Sim& sim) {
         if (wrecksTold) printf("render: wrecks: beat %u: %u made at %.0f, %.0f (%s), seen by armies %#x\n", sim.tick(), f.id, f.position[0], f.position[2], f.blueprint.c_str(), f.seenBy);
       }
     }
+    // [wreckpose] (made in this beat and given its pose in it)
+    if (f.mapIndex < 0 && f.kind == FramePropEvent::Create) {
+      if (auto given = copiedOf.find(f.id); given != copiedOf.end()) {
+        givePose(&f, copied[given->second]);
+        if (wrecksTold) {
+          const float dx = f.posePosition[0] - f.position[0], dy = f.posePosition[1] - f.position[1], dz = f.posePosition[2] - f.position[2];
+          float dot = 0;
+          for (int k = 0; k < 4; ++k) dot += f.poseOrientation[k] * f.orientation[k];
+          printf("render: wrecks: beat %u: %u at %.0f, %.0f keeps its unit %u's pose, %zu bones away from rest%s (%.2f from the prop's own place, turned %.1f degrees from it)\n",
+                 sim.tick(), f.id, f.position[0], f.position[2], copied[given->second].unitId, f.pose.size(), f.poseOwnPlace ? ", at the unit's place" : "", std::sqrt(dx * dx + dy * dy + dz * dz),
+                 2 * std::acos(std::min(1.0f, std::fabs(dot))) * 57.29578f);
+        }
+        copiedOf.erase(given);
+      }
+    }
     propEvents.push_back(std::move(f));
+  }
+  // [wreckpose] (a pose given to something made in an earlier beat, or whose making is not in this beat's list: told on
+  // its own, by its numbers: the same list in every run)
+  if (!copiedOf.empty()) {
+    const size_t before = propEvents.size();
+    for (const auto& [id, at] : copiedOf) {
+      FramePropEvent posed;
+      posed.kind = FramePropEvent::Pose;
+      posed.tick = sim.tick();
+      posed.id = id;
+      givePose(&posed, copied[at]);
+      propEvents.push_back(std::move(posed));
+    }
+    std::sort(propEvents.begin() + static_cast<std::ptrdiff_t>(before), propEvents.end(),
+              [](const FramePropEvent& a, const FramePropEvent& b) { return a.id < b.id; });
   }
   // [wrecksseen] the wrecks made earlier that more armies have seen in this beat (by their numbers: the same list in
   // every run)
@@ -814,7 +867,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
         ++propSuperseded_;
       }
       propWaiting_[f.id] = propEvents_.size();
-    } else if (f.kind != FramePropEvent::Seen) {  // ([wrecksseen] no change of the prop)
+    } else if (f.kind != FramePropEvent::Seen && f.kind != FramePropEvent::Pose) {  // ([wrecksseen], [wreckpose] no change of the prop)
       propWaiting_.erase(f.id);
     }
     propEvents_.push_back(std::move(f));
@@ -828,7 +881,7 @@ void SimFrames::Beat(const moho::Sim& sim) {
     propWaiting_.clear();
     for (size_t i = 0; i < propEvents_.size(); ++i) {
       if (propEvents_[i].kind == FramePropEvent::Change) propWaiting_[propEvents_[i].id] = i;
-      else if (propEvents_[i].kind != FramePropEvent::Seen) propWaiting_.erase(propEvents_[i].id);
+      else if (propEvents_[i].kind != FramePropEvent::Seen && propEvents_[i].kind != FramePropEvent::Pose) propWaiting_.erase(propEvents_[i].id);
     }
   }
   beats_.push_back(std::move(beat));

@@ -88,6 +88,7 @@ struct WorldPicture::Impl {
   bool lifeBarsOnEnemies = false;      // SetLifeBarsOnEnemies
   bool alliesPauseMarks = true;        // SetAlliesPauseMarks [pausemark2]
   bool wrecksOnceSeen = false;         // SetWrecksOnceSeen [wrecksseen]
+  bool wreckPoses = true;              // SetWreckPoses [wreckpose]
   bool remasteredEffects = true;       // SetRemasteredEffects
   float effectsQuality = 1;            // SetEffectsQuality
   float upscale = 1;                   // SetUpscale
@@ -324,6 +325,7 @@ struct WorldPicture::Impl {
       uint64_t allies = 0;
       bool lifeBarsOnEnemies = false, remasteredEffects = true, temporalUpscale = false, weather = false, wrecksOnceSeen = false;
       bool alliesPauseMarks = true;  // [pausemark2]
+      bool wreckPoses = true;        // [wreckpose]
       float effectsQuality = 1, upscale = 1, dayStart = -1;
       Lens lens;
     };
@@ -1114,6 +1116,7 @@ void WorldPicture::Impl::AskWarm(Load& l) {
   s.lifeBarsOnEnemies = lifeBarsOnEnemies;
   s.alliesPauseMarks = alliesPauseMarks;
   s.wrecksOnceSeen = wrecksOnceSeen;
+  s.wreckPoses = wreckPoses;  // [wreckpose]
   s.remasteredEffects = remasteredEffects;
   s.effectsQuality = effectsQuality;
   s.upscale = upscale;
@@ -1155,6 +1158,7 @@ void WorldPicture::Impl::WarmBehind(Load& l, bool withBeat) {
     w.lifeBarsOnEnemies = s.lifeBarsOnEnemies;
     w.pauseMarksOnAllies = s.alliesPauseMarks;
     w.wrecksOnceSeen = s.wrecksOnceSeen;
+    w.wreckPoses = s.wreckPoses;  // [wreckpose]
     w.effectsLook = s.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
     w.effectsQuality = s.effectsQuality;
     w.upscale = s.upscale;
@@ -1796,6 +1800,7 @@ void WorldPicture::PrepareWorld(const Camera& camera, int width, int height, dou
   m.world->lifeBarsOnEnemies = m.lifeBarsOnEnemies;
   m.world->pauseMarksOnAllies = m.alliesPauseMarks;  // [pausemark2]
   m.world->wrecksOnceSeen = m.wrecksOnceSeen;
+  m.world->wreckPoses = m.wreckPoses;  // [wreckpose]
   m.world->effectsLook = m.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;
   m.world->effectsQuality = m.effectsQuality;
   m.world->upscale = m.upscale;
@@ -1975,6 +1980,7 @@ void WorldPicture::SetLifeBarsOnEnemies(bool on) { impl_->lifeBarsOnEnemies = on
 void WorldPicture::SetAlliesPauseMarks(bool on) { impl_->alliesPauseMarks = on; }
 
 void WorldPicture::SetWrecksOnceSeen(bool on) { impl_->wrecksOnceSeen = on; }  // [wrecksseen]
+void WorldPicture::SetWreckPoses(bool on) { impl_->wreckPoses = on; }  // [wreckpose]
 
 void WorldPicture::SetRemasteredEffects(bool on) { impl_->remasteredEffects = on; }
 
