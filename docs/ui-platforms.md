@@ -123,6 +123,17 @@ files are left as they are), then `run_ext4.sh`.
   checks the headless build cannot have (`sound_device`, `sound_loops`, the commander's steps in the two no-world
   games). One fewer than on 2026-11-14.
 
+## After the landings of 2026-11-17 (the Fable lead's day): again from ext4 (19:25)
+
+The headless Linux build of 16de4510 (both Linux builds, full and headless, were compiled before each of the day's
+landings: no break this time), the copy in the Ubuntu refreshed (`wsl/refresh_ext4.sh`), `run_ext4.sh`: **of the 48
+plain jobs 43 give the Windows counts** (17 more need the world's picture and are left out). The 5 others are the
+known kinds, none a fault of Linux: the camera shake of `templates` and four sound checks the headless build cannot
+have. Among the 43: the day's new and changed tests (`long_frames_limit` 17, `options_tabs` 57 with the two new
+option rows). The runner compares with the Windows counts of the last full suite now
+(`wsl/windows_counts.log`, made from that suite's outputs; it had compared with a log of 2026-11-14 and called two
+jobs different that were not).
+
 ## The full build on Linux: SDL window, sound, text and the Vulkan picture (2026-11-14, 14:15 to 14:35)
 
 Chris, 2026-11-14: "Yeah you can do that and sdl3", and for the shader compiler "Yes you can download". He installed
