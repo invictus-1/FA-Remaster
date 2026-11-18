@@ -298,8 +298,16 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   F.groups[k].push_back(std::move(G));
 }
 
-bool BoxesOverlap(const FormGroup& a, const FormGroup& b) {  // (inferred: 0x5688c0)
-  return std::fabs(a.cx - b.cx) <= (a.extX + b.extX) * 0.5f && std::fabs(a.cz - b.cz) <= (a.extZ + b.extZ) * 0.5f;
+// 0x5688c0 (read 2026-11-18; a = ecx, b = eax): the groups' extents (+0x30 / +0x34, the full slot extents) are
+// taken as HALF extents round the centres (+0x20 / +0x24): no overlap when b's low edge is above a's high edge
+// (0x568913 subss, 0x56890f addss, ja) or a's low edge above b's high edge (0x568924, 0x568928), in x and then the
+// same in z. (Ours had halved the sum, a guess: an air group then missed land groups the original's test finds.)
+bool BoxesOverlap(const FormGroup& a, const FormGroup& b) {
+  if (b.cx - b.extX > a.extX + a.cx) return false;
+  if (a.cx - a.extX > b.extX + b.cx) return false;
+  if (b.cz - b.extZ > a.extZ + a.cz) return false;
+  if (a.cz - a.extZ > b.extZ + b.cz) return false;
+  return true;
 }
 
 void Rebuild(Formation& F) {
@@ -310,6 +318,7 @@ void Rebuild(Formation& F) {
   F.groups[0].clear();
   F.groups[1].clear();
   F.adjusted.clear();
+  F.raw.clear();
   F.reservations.clear();
   std::vector<Unit*> valid;
   double fx = 0, fz = 0;
@@ -339,19 +348,24 @@ void Rebuild(Formation& F) {
       if (LayerIndex(u) == k) list.push_back(u);
     if (!list.empty()) AssignGroup(F, list, k);
   }
-  // 0x568980: air escorts of a land formation travel at the land speed
+  // 0x568980 (read 2026-11-18): air escorts of a land formation travel at the land speed. Every group of the first
+  // list (F+0x50: the land groups) against every group of the second (F+0xf8: the air groups), with no early end:
+  // on an overlap (0x5688c0, the land group in ecx) both get the larger extent of the two, at least 10 (0xdff31c),
+  // in x and in z, and the lower speed, and the air group takes the land group's centre (0x568a40..0x568a63).
   if (FormationIsForm(F) && F.type != 15)
-    for (FormGroup& a : F.groups[1])
-      for (FormGroup& l : F.groups[0])
-        if (BoxesOverlap(a, l)) {
-          float s = std::min(a.speed, l.speed);
-          a.speed = l.speed = s;
+    for (FormGroup& l : F.groups[0])
+      for (FormGroup& a : F.groups[1])
+        if (BoxesOverlap(l, a)) {
+          float hz = a.extZ > l.extZ ? a.extZ : l.extZ;
+          if (10.0f > hz) hz = 10.0f;
+          float hx = a.extX > l.extX ? a.extX : l.extX;
+          if (10.0f > hx) hx = 10.0f;
+          const float s = a.speed > l.speed ? l.speed : a.speed;
           a.cx = l.cx;
           a.cz = l.cz;
-          float hx = std::max(10.0f, std::max(a.extX, l.extX)), hz = std::max(10.0f, std::max(a.extZ, l.extZ));
           a.extX = l.extX = hx;
           a.extZ = l.extZ = hz;
-          break;
+          a.speed = l.speed = s;
         }
   F.dirty = false;
   ++F.rebuilds;
@@ -410,7 +424,19 @@ Unit* GetLeader(Formation& F, Unit* u, FormGroup* g) {
   return GroupLeader(F, *g);
 }
 
-// vt+0x20 GetRawPosition (rebuilds a changed formation first, 0x569f7d..0x569f9f)
+// vt+0x20 GetRawPosition 0x569f70 (read whole 2026-11-18; it rebuilds a changed formation first, 0x569f7d..0x569f9f).
+// A dead unit (vt+0x28, 0x569fcc) gives its own place, not kept. Else what the RAW POSITION CACHE holds for its id
+// (F+0x2bc, 0x569ff8..0x56a017). Else, without a group, its own place, not kept (0x56a020 -> 0x56a111); with one, the
+// group's slot of it, the formation's centre + the slot's offset (0x56a0b6..0x56a0d4), or its own place when it is
+// not mobile (vt+0x30, 0x56a033) or has no slot in THAT group (0x56a07c), and whichever it was goes into the cache
+// (0x56a0f6), where it stays until a rebuild or a moved centre clears it (with the adjusted positions).
+// So the first asker's group decides. The formation's update asks for a group's travel leader with that group: an
+// air group that follows a land group's leader gets the leader's slot only because the land group's update, earlier
+// in the same pass, has put it into the cache. Seen: FAF 3839 pro replay 4v4_setons_2 8833, three interceptors and
+// land units on one FormMove: the original's slots for the aircraft lie round the land leader on its way
+// ((498.42, 529.22) for 0x700003); ours, with no such cache, took the leader's own place for its slot each time and
+// put the aircraft's slots at the goal ((461.92, 547.13)).
+// (A null group in ours means "its own group", for callers whose group a rebuild has just replaced.)
 void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
   if (F.dirty) {
     Rebuild(F);
@@ -418,12 +444,23 @@ void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
   }
   *x = u->position.x;
   *z = u->position.z;
+  if (u->dead) return;
+  const auto c = F.raw.find(u->id);
+  if (c != F.raw.end()) {
+    *x = c->second.first;
+    *z = c->second.second;
+    return;
+  }
   if (!g) g = GroupOf(F, u);
-  if (!g || !Mobile(u)) return;
-  auto it = g->nodes.find(u->id);
-  if (it == g->nodes.end()) return;
-  *x = F.cx + it->second.offX;
-  *z = F.cz + it->second.offZ;
+  if (!g) return;
+  if (Mobile(u)) {
+    auto it = g->nodes.find(u->id);
+    if (it != g->nodes.end()) {
+      *x = F.cx + it->second.offX;
+      *z = F.cz + it->second.offZ;
+    }
+  }
+  F.raw[u->id] = {*x, *z};
 }
 
 // The test 0x721231..0x72124f: the unit's GetVelocity (entity vt+0x3c, Unit::GetVelocity 0x6a9c90: the motion's
@@ -1067,6 +1104,7 @@ void FormationSetCentre(UnitCommand& c, float x, float z) {
   F.cx = x;
   F.cz = z;
   F.adjusted.clear();
+  F.raw.clear();
   F.reservations.clear();
 }
 

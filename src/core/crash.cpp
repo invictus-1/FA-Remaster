@@ -27,7 +27,7 @@
 namespace moho {
 
 volatile int64_t g_crashTick = -1;
-thread_local CrashPlace g_crashPlace;
+constinit thread_local CrashPlace g_crashPlace;
 
 namespace {
 
@@ -147,13 +147,15 @@ void Report(EXCEPTION_POINTERS* ep) {
   }
   if (g_messageBox && g_box) {
     wchar_t text[2600];
-    // (2026-11-15, Chris: the window points to remaster_report, whose zip holds this log and this dump with the
-    // player's names and environment masked, not to the raw files. It takes the newest crash among the kept logs, so
-    // the next start is the sure moment: the ui's note)
+    // (2026-11-15, Chris: the window points to the report zip, which holds this log and this dump with the player's
+    // names and environment masked, not to the raw files. 2026-11-18: the interface writes that zip by itself at the
+    // next start, onto the Desktop, once per crash (ui faf6a772, the option Crash Reports); typing remaster_report
+    // still makes one.)
     _snwprintf(text, 2600,
-               L"The game has stopped because of a fault in the program.\n\nTo report it: the next time you start the game, "
-               L"open the console and type\n\n    remaster_report <what you were doing>\n\nIt makes one zip with this crash's "
-               L"log%ls, your names hidden, beside your preferences. Send that zip.",
+               L"The game has stopped because of a fault in the program.\n\nTo report it: start the game again. It then "
+               L"writes one zip with this crash's log%ls, your names hidden, onto your Desktop by itself, and the main "
+               L"menu's top-left line names it. Send that zip.\n\n(Options > Interface > Crash Reports turns this off; "
+               L"typing  remaster_report <what you were doing>  in the console makes the zip too.)",
                dumped ? L" and memory dump" : L"");
     text[2599] = 0;
     g_box(nullptr, text, L"FA Remastered", 0x10 | 0x10000 | 0x40000);  // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST

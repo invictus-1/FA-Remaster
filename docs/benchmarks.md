@@ -118,6 +118,45 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## The headline on a quiet machine, and the one-thread cost found with it (2026-11-18, main 3e7ce074 against dfd0c579)
+
+Chris's quiet window of 18 November (07:58-08:18, PC clock): no game, viewer, interface program, bake or build of any
+chat; nothing on CPUs 16-31 either but the sampler. Method and machine as on 11-13 and 11-14 (`timing4.sh`: pinned to
+logical CPUs 0-15, one run at a time, before and after back to back in each pair, three pairs). 24 runs, every one
+its first try, none disturbed. Before: mcwrap's clean build of dfd0c579 (the exe of 11-13's 2.05x). After: main
+3e7ce074 (batches 164-175).
+
+| workload | config | before (dfd0c579), 3 pairs | after (main), 3 pairs | change | pairs faster |
+|---|---|---|---|---|---|
+| B3-16k, 2000 beats | P16 | 14.76 / 14.93 / 15.76 = 15.15 | 14.17 / 14.80 / 14.26 = 14.41 | **-4.9%** | 3 of 3 |
+| 50k, 600 beats | P16 | 46.13 / 47.08 / 42.76 = 45.32 | 42.91 / 42.86 / 42.08 = 42.61 | **-6.0%** | 3 of 3 |
+| B3-16k | O1 | 26.99 / 32.38 / 28.96 = 29.44 | 27.83 / 36.05 / 29.61 = 31.17 | **+5.9%** | 0 of 3 |
+| 50k | O1 | 78.00 / 81.06 / 81.33 = 80.13 | 90.66 / 85.44 / 82.43 = 86.18 | **+7.5%** | 0 of 3 |
+
+(ms a beat, means of the profile's tick times; P16 = parallel order at 16 threads, O1 = the original order at one.)
+
+**The headline, parallel order at 16 threads against the original order at one:** B3-16k **2.04x** against
+dfd0c579's one thread (29.44 / 14.41) and 2.16x against main's own (31.17 / 14.41); 50k **1.88x** (80.13 / 42.61) and
+2.02x. About twice, as on 11-13 (2.05x, 1.90x). What moved between the three sessions is the one-thread side: the
+same exe's O1 runs spread from 27.0 to 32.4 ms within this quiet session, and its mean was 32.45 (11-13), 26.33
+(11-14) and 29.44 (today). The 16-thread side is steady (dfd0c579: 15.86, 15.69, 15.15 ms; 47.17, 48.52, 45.32).
+So a headline is good to about 10%, and 11-14's "1.8x" was a fast one-thread night, not a loss.
+
+**The one-thread cost.** In the original order at one thread main is slower than dfd0c579 in all six pairs, and the
+loss sits in the stages that take one unit after another: weapons +15.3% (B3) and +18.8% (50k), steering +9.9% and
++16.2%, the entity pass +5.9% and +7.2%, the navigators +4.9% and +7.5% (per phase:
+`_scratch/engine/quiet_20261118/phases_o1.txt`). The cause is batch 167's crash place: `CrashEntityScope`
+(core/crash.h) sits round every unit's turn of every stage (wtrap::Turn) and looked up the extern `thread_local`
+record nine times a turn. With the record looked up once and kept as a pointer, and its declaration `constinit`
+(no wrapper call), three builds timed at the same moment (one thread each on its own core, the cores rotated;
+`pairs3.sh`, the machine not quiet, so the times are larger and only the comparison counts) give, against
+dfd0c579: main +4.0% (B3) and +5.7% (50k), the fix +1.2% and +2.2%; weapons +9.1% / +14.6% down to +0.2% / +2.6%;
+steering +13.6% / +22.1% down to +3.7% / +6.6%. Landed as batch 178. The rest (+1 to +2%) is within that
+measure's noise and is the pool's bookkeeping paid without threads (11-14's +1.2% / +4.4% before batch 167).
+
+Measured by the engine lead (Fable 5.2). Tables: `_scratch/engine/quiet_20261118` (table_p.txt, table_o1.txt),
+`_scratch/engine/pairs3/cs1/table.txt`; runs `SCR/agents/mcwrap/runs/t_1118_p`, `t_1118_o1`.
+
 ## The multicore round as a whole: main 6e8d7177 against dfd0c579 (2026-11-14, account B)
 
 The round's items 1-5 (batches 162-166: the unit economy's sums, the combat prefill, the snapshot pool, the

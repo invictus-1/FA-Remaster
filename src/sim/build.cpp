@@ -425,7 +425,14 @@ bool Cat(Sim& sim, const Unit* u, const char* c);
 // the target's OnFailedToBeBuilt first); the builder loses its focus.
 void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success) {
   Unit* target = FindUnitAny(sim, t.targetId);  // (the helper's weak pointer: non-null until freed)
-  if (t.started && Alive(builder)) {
+  // CBuildTaskHelper::OnStopBuild 0x5f5a20 asks the builder's IsDead only (vt+0x28 at 0x5f5a36): a builder whose
+  // Destroy is queued but not yet drained still gets its callbacks. Seen: FAF 3840 pro replay 4v4_1 7878, a factory
+  // of a defeated army handed to an ally at 7877 (the old unit's Destroy queued) while its half-built engineer
+  // 0x60003c was killed with the army's other units: at 7878 the old factory's build ends, FAF's OnStopBuild
+  // (factoryunit.lua:142) destroys the dead, unfinished engineer, and its DeathThread goes with it; ours raised no
+  // OnStopBuild for a destroy-queued builder, and the engineer's DeathThread ran on to 7881 (its Random draws at
+  // 7880 the first draw difference).
+  if (t.started && builder && !builder->dead) {
     if (!success) {
       sim.CallMethod(L, builder, "OnFailedToBuild", 0);
       if (target && target->HasLuaObject()) sim.CallMethod(L, target, "OnFailedToBeBuilt", 0);

@@ -1298,6 +1298,10 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
       float rim = pow(1 - facing, 2.5);
       float wave = sin(i.world.y * 7 - time * 2.2 + sin(i.world.x * 1.7 + i.world.z * 1.3 + time * 0.7) * 2.5) * 0.5 + 0.5;
       float shimmer = smoothstep(0.55, 1, wave);
+      // [veilnight] (its own light, of one strength: faint against the day's picture, but in the night's, which is shown
+      // many times brighter, a stealth boat's whole hull glowed pale blue: the night's dimming of glowing effects, as the
+      // particles' and the beams')
+      float veilNight = look > 0.5 && falling.w > 0 ? falling.w : 1;
       [branch] if (i.color.a < 1.3) {
         // the cloaked body: what stands behind it, bent as through clear glass the shape of the unit (more toward its outline,
         // where the light crosses more of it), its colours split a little at the edge, rippled by the shimmer's slow waves;
@@ -1314,10 +1318,10 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
                              cloakBehind.SampleLevel(samplerLinearClamp, at, 0).g,
                              cloakBehind.SampleLevel(samplerLinearClamp, at - bend * split, 0).b);
         float back = pow(saturate(dot(-normalize(cameraPosition - i.world), sunDirection)), 4);
-        float3 colour = seen * lerp(float3(1, 1, 1), float3(0.93, 0.97, 1.03), 0.6) + tint * (0.55 * rim * (0.6 + 0.4 * shimmer) + 0.25 * back * rim);
+        float3 colour = seen * lerp(float3(1, 1, 1), float3(0.93, 0.97, 1.03), 0.6) + tint * ((0.55 * rim * (0.6 + 0.4 * shimmer) + 0.25 * back * rim) * veilNight);
         return float4(colour, saturate(0.82 + 0.18 * rim));
       }
-      return float4(tint * (0.4 + 0.9 * rim + 0.4 * shimmer), saturate(0.25 * rim * (0.6 + 0.4 * shimmer) + 0.04 * shimmer));
+      return float4(tint * ((0.4 + 0.9 * rim + 0.4 * shimmer) * veilNight), saturate(0.25 * rim * (0.6 + 0.4 * shimmer) + 0.04 * shimmer));
     }
     // ([ghostfaint] Chris, 2026-11-06: a queued building's ghost "should be more transparent": 0.22 + 0.5 at the edge before)
     // ([ghostfaint] its outline softer: a bright rim on thin edges shimmered from frame to frame, Chris's re-test 2026-11-06)

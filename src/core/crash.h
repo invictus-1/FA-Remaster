@@ -48,26 +48,30 @@ struct CrashPlace {
   void* lua = nullptr;              // lua_State* being resumed (script/threads.cpp), else null
   void* luaMain = nullptr;          // lua_State* the thread's beats run on (sim/sim.cpp), else null
 };
-extern thread_local CrashPlace g_crashPlace;
+// (constinit: every other file reads it without the wrapper call an extern thread_local otherwise costs)
+extern constinit thread_local CrashPlace g_crashPlace;
 
 // The entity and callback for the length of a scope (Sim::CallMethod, an entity's turn); the one before comes back.
 class CrashEntityScope {
  public:
+  // (the thread's place looked up once: a scope sits round every unit's turn of every stage, and each look-up of a
+  // thread_local costs; batch 167's form took nine, and the original order ran 6 to 7% slower on one thread)
   CrashEntityScope(uint32_t entity, const char* blueprint, const char* callback)
-      : prev_entity_(g_crashPlace.entity), prev_bp_(g_crashPlace.blueprint), prev_cb_(g_crashPlace.callback) {
-    g_crashPlace.entity = entity;
-    g_crashPlace.blueprint = blueprint;
-    g_crashPlace.callback = callback;
+      : place_(&g_crashPlace), prev_entity_(place_->entity), prev_bp_(place_->blueprint), prev_cb_(place_->callback) {
+    place_->entity = entity;
+    place_->blueprint = blueprint;
+    place_->callback = callback;
   }
   ~CrashEntityScope() {
-    g_crashPlace.entity = prev_entity_;
-    g_crashPlace.blueprint = prev_bp_;
-    g_crashPlace.callback = prev_cb_;
+    place_->entity = prev_entity_;
+    place_->blueprint = prev_bp_;
+    place_->callback = prev_cb_;
   }
   CrashEntityScope(const CrashEntityScope&) = delete;
   CrashEntityScope& operator=(const CrashEntityScope&) = delete;
 
  private:
+  CrashPlace* place_;
   uint32_t prev_entity_;
   const char* prev_bp_;
   const char* prev_cb_;
