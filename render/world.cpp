@@ -3165,7 +3165,13 @@ void World::ApplyPropEvent(const FramePropEvent& e) {
       const std::string unit = slash != std::string::npos && end != std::string::npos && end > slash ? low.substr(slash + 1, end - slash - 1) : std::string();
       kept.pile = !unit.empty() && PileKind(unit);
       if (kept.pile) pileProps_[e.id] = unit;
-      kept.ownWreck = !unit.empty() && models.RemasteredWreck(unit) == kept.model;  // [wreckpose]
+      // [wreckpose] (a remastered unit's own wreck model in ONE piece: its vertices on one bone, by the boxes round each
+      // bone's part; one bound to several of the unit's bones takes the pose as a stock wreck does)
+      if (!unit.empty() && models.RemasteredWreck(unit) == kept.model) {
+        int parts = 0;
+        for (const Model::BoneBox& box : kept.model->boneBoxes) parts += box.lo.x <= box.hi.x ? 1 : 0;
+        kept.ownWreck = parts <= 1;
+      }
     }
     if (!kept.pile) pileProps_.erase(e.id);
     if (kept.ownWreck) kept.posed = false;  // [wreckpose] (made as the wreck: as its artist left it)

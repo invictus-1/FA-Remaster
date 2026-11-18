@@ -373,8 +373,8 @@ class WorldPicture {
   // (TryCopyPose: a wreck's turret stays turned where it pointed, a walker's legs where they stood). Off: every wreck
   // in its mesh's rest pose, as this renderer drew them before. Needs Sim::collectCopiedPoses set before the
   // simulation's first beat (without it no pose is told and every wreck is at rest); a wreck made before a save was
-  // loaded has none; a remastered unit's own wreck model, made as the wreck, never wears one. May be set at any time.
-  // A player's option.
+  // loaded has none; a remastered unit's own wreck model made in one piece (every vertex on one bone) never wears one,
+  // one bound to the unit's bones does. May be set at any time. A player's option.
   void SetWreckPoses(bool on);
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.

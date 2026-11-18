@@ -28,7 +28,8 @@ What to know:
   model never wears one: the visuals track makes it as the wreck, in one piece on the root bone, and it lies as its
   artist left it (render 2026-11-17: a walker's fallen pose moved that one piece into the ground). So today the pose
   shows on the wrecks of units that are not remastered, and on a remastered unit's wreck where it has no wreck model
-  of its own.
+  of its own. (render, later the same day: the rule is by the mesh itself: a remastered wreck model bound to
+  several of the unit's bones takes the pose; Chris has the wrecks redone that way after Cybran.)
 - The map's own wreck fields are told poses too where the game's set-up kills units with a death animation (Seton's
   middle: 14 walkers; all 14 are remastered units with wreck models of their own today, so they lie as made).
 - The viewer: `--wrecks-at-rest` is the old way; `MOHO64_DEBUG_WRECKS=1` prints each pose as it is told.
