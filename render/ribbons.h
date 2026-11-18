@@ -84,6 +84,12 @@ class Ribbons {
   // rounds) is drawn hot instead: white at the shell, through yellow and orange to a dull red where
   // it ends, wider at the shell and never thinner than a pixel. false: as the files say.
   bool tracers = true;
+  // [tracerkinds] The tracer look is a shell's: hot metal. The files give the same plain white adding line for the
+  // Seraphim's and the Aeon's energy shots (aero bolter, tau cannon, shrieker, chronotron, quarnon, sonic gun, disruptor,
+  // quantum cannon) and for three torpedoes' trails under water, and the rule drew those orange too: a Seraphim bot's
+  // bolts flew on orange lines beside their own violet sparks. A trail blueprint named "seraphim_", "aeon_" or
+  // "torpedo" is drawn as its files say (white, adding, with the modern glow). true: as before, every one a tracer.
+  bool tracersEnergy = false;
   // [contrailvapour] The game's contrails (an aircraft's trail blueprint with "contrail" in its name: the files give
   // contrail_polytrail_01 as a plain white line that adds its light, which the tracer rule above took for a shell's
   // trail and drew white hot with an orange end, as bright at one in the night as at noon). Modern look: drawn as
@@ -109,8 +115,10 @@ class Ribbons {
     std::string rampPath;          // trails: the colour ramp's file
     bool hot = false;              // trails: a plain white one that adds its light (see `tracers`)
     bool vapour = false;           // [contrailvapour] trails: a contrail by its file's name (see `contrailVapour`)
+    bool energy = false;           // [tracerkinds] trails: an energy shot's or a torpedo's by its file's name (see `tracersEnergy`)
   };
   bool Vapour(const Kind& k) const { return contrailVapour && k.trail && k.vapour; }  // [contrailvapour]
+  bool Hot(const Kind& k) const { return tracers && k.hot && (tracersEnergy || !k.energy); }  // [tracerkinds]
   struct Vertex {
     float position[3];
     float uv[2];

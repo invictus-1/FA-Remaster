@@ -102,6 +102,9 @@ struct EmitterBlueprint {
   // BlinkingLightsFx, red while its army's mass or energy store runs low, green, yellow; the beacons' blinkers):
   // Particles::statusLights.
   bool status = false;
+  // [hoverglow] Whether it is the Cybran gunships' hover exhaust (cybran_hover_01_emit: the movement effect Hover04 of
+  // the Renegade, the Jester and the Wailer): Particles::hoverExhaust.
+  bool hoverExhaust = false;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -280,6 +283,11 @@ class Particles {
   // yellow and green ones) times this of `glow`: 0.4, as bright as the original draws them, not a 2.5-fold star that
   // blooms (1: as before, viewer --status-lights old). Their colours and beat are the game's: they tell the player of a stall.
   float statusLights = 0.4f;
+  // [hoverglow] (Chris, 2026-11-18, on a picture of the Renegade and the Wailer in flight: "Tone it down") the Cybran
+  // gunships' hover exhaust: six flat red glows a tick, each about the aircraft's size, laid over one another; at 2.5
+  // times their texture they summed to a white-hot blob as big as the aircraft, by day and by night. Times this of
+  // `glow` (1: as before, viewer --hover-exhaust old).
+  float hoverExhaust = 0.3f;
   int liveParticles = 0;  // after the last Draw
   int liveEmitters = 0;   // after the last Update
   int quietEmitters = 0;  // of those: out of sight or too far away in the last Update
