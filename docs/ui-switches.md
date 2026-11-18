@@ -33,6 +33,8 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `FLIGHT_HAZE` | test | the menu flight's share of the haze (0..2; 0.4 unless given), for pictures side by side | - |
 | `FLIGHT_REOPEN` | old way | the menu's map is always opened again after a game, never kept | - (the measure's other half) |
 | `FORCE_MAXSP` | test | a local game's maxSP as if it had been measured | suite (spmaxsp) |
+| `FREEZE_SECONDS` | test | `<s>`: the freeze watch's time without a frame before the log says so (unset: 5; `user/events.h`) | none (kept for a test) |
+| `FREEZE_TEST` | test | `<frame>:<seconds>`: the main loop sleeps that long at that frame, for the freeze watch's test (the log's "no frame for 5 s" lines, a freeze's report) | report |
 | `FULL_REDRAW` | old way | the whole interface is drawn every frame, not only where it changed | - |
 | `GC` | old way | `classic`: Lua 5.0's own collector, not the incremental one stepped each frame | - |
 | `HEAD1_SIZE` | test | with `HEADS=2`: the second head's size (`WxH`) | suite (dualhead) |
