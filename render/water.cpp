@@ -1227,9 +1227,10 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // plain water's march goes off the calmer surface, as the ocean's; a ray over the picture's top mirrors the land
     // standing at that edge; and what is met is read softly (nine taps, six pixels of a 1080-line picture apart): read
     // at one place its fine detail jumped with the waves (a film's flicker 11 % of pixels against the rays' 2.6 %;
-    // softly 4.9 %). Seen low over the sea the mirror then has the rays' level (101.5 against 99.2; stock 116.9); from
-    // the game's height nothing changes. NOT the default: patches of sky with hard edges remain in it, and it
-    // flickers twice as much as the rays' mirror (_scratch/render/t1117/seamirror/NOTES.md, 2026-11-17).
+    // softly 4.6 %; and with the march made twice, below, 2.5 %). Seen low over the sea the mirror then has the rays'
+    // level (102.8 against 99.2; stock 116.9); from the game's height the picture looks the same. Not the default: it
+    // changes the look of every game without ray tracing, which is Chris's word to give; softer patches of sky remain
+    // in it, and it costs half a millisecond of a fast card (_scratch/render/t1117/seamirror/NOTES.md, 2026-11-17).
     bool marchAlone = groundInfo.w > 0.5;
 #if RAYS
     marchAlone = marchAlone && rayEffects.x <= 0.5;
@@ -1241,6 +1242,20 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       marchR = normalize(marchR);
     }
 #endif
+    // [seamirror] (with the switch: the march twice, the second off a surface calmed further, and the two mirrors'
+    // mean: an edge between what one ray met and the sky the other saw is half as hard. The march below is not indented
+    // for it, to leave its lines as they were.)
+    const float3 mirrorWas = mirror, pWas = p;
+    const float strideWas = stride;
+    const int marches = marchAlone ? 2 : 1;
+    float3 mirrorSum = 0;
+    for (int march = 0; march < marches; ++march) {
+    if (march > 0) {
+      mirror = mirrorWas, p = pWas, stride = strideWas;
+      marchR = reflect(toPixel, normalize(lerp(N, float3(0, 1, 0), 0.85)));
+      marchR.y = max(marchR.y, 0.02);
+      marchR = normalize(marchR);
+    }
     float2 atBefore = i.position.xy * viewport.zw;
     for (int k = first; k < 14; ++k) {
 #if OCEAN
@@ -1305,6 +1320,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
         if (!marchAlone) break;  // ([seamirror] with the switch: on, where the ray only passed behind it)
       }
     }
+    mirrorSum += mirror;
+    }
+    mirror = mirrorSum / marches;
   }
   // [fxmirror] the effects' mirror image (World::waterFxMirror; fx_mirror.h): what is drawn after the water (fire, flashes,
   // smoke, beams, tracers, blasts, shields), drawn mirrored about the water's level into a picture of its own before it.
