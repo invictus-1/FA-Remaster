@@ -526,3 +526,13 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     thing it was made for, not worse against the others: KEPT. What the check changes is the record, not the code:
     a change to what a player's game does is judged on the engine it lands on, and a condition set for a landing is
     met before it, or the change waits.
+
+47. **The wing and the fleet together (2026-11-17).** 45 ended on trying its two better halves at once: the
+    anti-ship aircraft as one wing and the ships as a gathered fleet, on main's AI (46's), 16 full games against M28,
+    paired by seed with main's own set on the same engine. Score +1.4 (p 0.26), 10 seeds better, 1 the same, 5 worse;
+    the games last 31.5 minutes against 29.5; mass lost per mass killed 5.41 against 7.11 (the wing alone 5.65, the
+    fleet alone 8.60); still no win in 16. The best direction of any M28 candidate since 43's, and not beyond the
+    noise: not taken. Its Lua is the two files of 45's candidates unchanged (the wing's brain.lua, the fleet's
+    navy.lua). What is still missing by 43's ledger is the size of the navy itself (M28 has two to four times ours
+    by minute 20): the next candidate adds ships to these two, and by 46's lesson it is judged on today's engine,
+    with FAF's sets before any landing.
