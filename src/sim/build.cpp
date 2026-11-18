@@ -430,7 +430,13 @@ void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success
       sim.CallMethod(L, builder, "OnFailedToBuild", 0);
       if (target && target->HasLuaObject()) sim.CallMethod(L, target, "OnFailedToBeBuilt", 0);
     }
-    PushObject(L, target && !target->destroyQueued ? target : nullptr);
+    // CBuildTaskHelper::OnStopBuild 0x5f5a20 -> CScriptObject::OnStopBuild 0x5fc730 (0x5f5a79..0x5f5a86) hands the
+    // script the helper's weak pointer to the target (helper+8) as it is: a target only queued for destruction is
+    // still passed (its Lua object lives until the purge). Seen (oracle scene upg, FAF 3840, cells clear): the upgrade
+    // task's dtor destroys the unfinished upgrade (0x5f85eb) before OnStopBuild (0x5f85fe), and the original's
+    // F.OnStopBuild got the upgrade; ours passed nil for a destroy-queued target. (Gate 173 failed with this alone:
+    // the roll-off order then reached a factory shell; l_IssueMoveOffFactory's filter is the other half.)
+    PushObject(L, target);
     lua_pushstring(L, t.order.c_str());
     sim.CallMethod(L, builder, "OnStopBuild", 2);
   }
@@ -5064,6 +5070,12 @@ int l_IssueMoveOffFactory(lua_State* L) {
   c->hasPos = true;
   c->factoryIssued = true;  // IssueMoveOffFactory 0x6f29d0 = IssueMove (append) + cmd+0x142
   for (Unit* u : units) {
+    // The order goes to the units FilterByCommandCap 0x6eecf0 kept (0x6f2a80, RULEUCC_Move; IssueToUnits 0x6f12c0 is
+    // handed that set): a unit without the Move cap is left out (0x6eed20), and so is an immobile factory (a builder
+    // that is a factory and not mobile, 0x6eed3d..0x6eed68). Until 2026-11-17 the test stood only before the error
+    // above and every unit of the list took the Move. Seen: MP1 4601, a factory's upgrade cancelled (0x700076): with
+    // OnStopBuild handed the upgrade (StopBuild), FAF's roll-off gave that factory shell a Move the original's never has.
+    if (!(LiveCommandCaps(L, u) & 0x1u) || IsImmobileFactory(*sim, u)) continue;
     if (c->units.count(u)) continue;
     if (c->units.empty()) {  // (made for the first unit that takes it, as IssueToUnits 0x6f12c0)
       AssignEngineCommandId(*sim, c);
