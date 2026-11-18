@@ -157,6 +157,7 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
   p.SetWrecksOnceSeen(looks.wrecksOnceSeen);
   p.SetAlliesPauseMarks(looks.alliesPauseMarks);
   p.SetWreckPoses(looks.wreckPoses);
+  p.SetStrongWaterMirror(looks.strongWaterMirror);
   p.SetMinimapMeshes(looks.minimapLod != 0);
 }
 // A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
@@ -710,6 +711,7 @@ struct GameSession::Picture : WorldSource {
     // (Allies' Pause Marks, ours: the renderer's answer to ui request 54)
     if (!lookApplied || looks.alliesPauseMarks != lookNow.alliesPauseMarks) picture.SetAlliesPauseMarks(looks.alliesPauseMarks);
     if (!lookApplied || looks.wreckPoses != lookNow.wreckPoses) picture.SetWreckPoses(looks.wreckPoses);
+    if (!lookApplied || looks.strongWaterMirror != lookNow.strongWaterMirror) picture.SetStrongWaterMirror(looks.strongWaterMirror);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
