@@ -376,6 +376,10 @@ class WorldPicture {
   // loaded has none; a remastered unit's own wreck model made in one piece (every vertex on one bone) never wears one,
   // one bound to the unit's bones does. May be set at any time. A player's option.
   void SetWreckPoses(bool on);
+  // [seamirror] The water's mirror of land and rocks WITHOUT ray tracing made stronger (Water::strongMirror): ON at first
+  // (Chris, 2026-11-17). Off: the mirror as this renderer drew it before (seen low over the sea the water mirrors mostly
+  // the sky there). With ray tracing on it changes nothing. May be set at any time. A player's option, if one is wanted.
+  void SetStrongWaterMirror(bool on);
   // The game's effects remastered (the visuals track's files where it has made some: true, as at
   // first) or as the original has them (false). A player's option.
   void SetRemasteredEffects(bool on);

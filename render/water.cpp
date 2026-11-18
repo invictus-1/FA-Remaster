@@ -1218,7 +1218,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
 #else
     float3 marchR = R;
 #endif
-    // [seamirror] (Water::strongMirror, groundInfo.w; OFF by default) Without rays this march is the whole mirror, and
+    // [seamirror] (Water::strongMirror, groundInfo.w; on by default since Chris's word of 2026-11-17) Without rays this march is the whole mirror, and
     // it is a weak one: a hit's weight falls with the step it was found at (a cliff 50 units off is met at step 8 or 9
     // and mirrored at 40 %, the sky showing through), the march ends at the first thing the picture has in front of the
     // ray even where the ray only passes behind it (the sky stays there, with a hard edge), and a ray that leaves the
@@ -1228,9 +1228,9 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     // standing at that edge; and what is met is read softly (nine taps, six pixels of a 1080-line picture apart): read
     // at one place its fine detail jumped with the waves (a film's flicker 11 % of pixels against the rays' 2.6 %;
     // softly 4.6 %; and with the march made twice, below, 2.5 %). Seen low over the sea the mirror then has the rays'
-    // level (102.8 against 99.2; stock 116.9); from the game's height the picture looks the same. Not the default: it
-    // changes the look of every game without ray tracing, which is Chris's word to give; softer patches of sky remain
-    // in it, and it costs half a millisecond of a fast card (_scratch/render/t1117/seamirror/NOTES.md, 2026-11-17).
+    // level (102.8 against 99.2; stock 116.9); from the game's height the picture looks the same. Softer patches of
+    // sky remain in it, and it costs half a millisecond of a fast card (_scratch/render/t1117/seamirror/NOTES.md,
+    // 2026-11-17). Switched off: every branch as it was before.
     bool marchAlone = groundInfo.w > 0.5;
 #if RAYS
     marchAlone = marchAlone && rayEffects.x <= 0.5;
@@ -1270,8 +1270,14 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
       if (any(at < 0) || any(at > 1)) {
         if (marchAlone && at.y < 0 && atBefore.y > 0) {  // (over the picture's top: where it crossed the edge)
           float2 edgeAt = float2(lerp(atBefore.x, at.x, atBefore.y / (atBefore.y - at.y)), 0.5 * viewport.w);
-          if (edgeAt.x > 0 && edgeAt.x < 1 && SCENE_DEPTH(int2(edgeAt * viewport.xy), 0) > 0)
-            mirror = lerp(mirror, behind.SampleLevel(samplerLinearClamp, edgeAt, 0).rgb, saturate(min(edgeAt.x, 1 - edgeAt.x) * 10) * saturate((200 - length(p - i.world)) / 80));
+          float thereEdge = SCENE_DEPTH(int2(edgeAt * viewport.xy), 0);
+          // (only land that stands CLOSE ahead of the ray where it leaves, against how far the ray has come: a cliff
+          // rising out of the picture before a low eye. Land far beyond the edge, a low island at the picture's top
+          // behind a far sea, is not what the ray meets: taken for it, the sea got pale blocks with upright edges)
+          float gone = length(p - i.world), ahead = cameraBack.w / max(thereEdge, 1e-6) - cameraBack.w / max(c.z / c.w, 1e-6);
+          if (edgeAt.x > 0 && edgeAt.x < 1 && thereEdge > 0 && ahead > -1)
+            mirror = lerp(mirror, behind.SampleLevel(samplerLinearClamp, edgeAt, 0).rgb,
+                          saturate(min(edgeAt.x, 1 - edgeAt.x) * 10) * saturate((200 - gone) / 80) * saturate(1 - ahead / (0.5 * gone + 1)));
         }
         break;
       }
