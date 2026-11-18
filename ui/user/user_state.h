@@ -678,6 +678,12 @@ struct LookSettings {
   // default: a tank's turret stays turned, a walker lies as it fell), or every wreck in its resting pose (false, as
   // the remaster drew them until then). The renderer's WorldPicture::SetWreckPoses. Console remaster_wreck_poses 0|1.
   bool wreckPoses = true;
+  // Land Mirrored in Water (the renderer's WorldPicture::SetStrongWaterMirror, render 507b42ca; Chris to the renderer,
+  // 2026-11-17: "Yes, default on"; an option by his rule that a new look keeps the earlier way): without ray tracing
+  // the water mirrors land and rocks strongly, as the ray-traced mirror does (true, the default), or as the remaster
+  // drew it until then, mostly the sky (false). With ray tracing on it changes nothing. Console
+  // remaster_land_mirror 0|1.
+  bool strongWaterMirror = true;
   // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
   // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
   // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's

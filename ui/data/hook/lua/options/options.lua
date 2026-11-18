@@ -803,6 +803,22 @@ local looks = {
         },
     },
     {
+        -- ours as an option (2026-11-17): the renderer's WorldPicture::SetStrongWaterMirror (render 507b42ca; Chris to
+        -- the renderer: "Yes, default on"); off = the mirror as the remaster drew it before; set by no preset level
+        title = "Land Mirrored in Water",
+        key = 'remaster_land_mirror',
+        tip = "On: without Ray Tracing the water mirrors the land and rocks beside it strongly, as the ray-traced mirror does. Off: the earlier look, where the water mirrors mostly the sky. With Ray Tracing on it changes nothing.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_land_mirror"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's World::waterFxMirror (its request 69, 2026-11-10; with the modern look, on maps with water)
         title = "Effects Mirrored in Water",
         key = 'remaster_water_mirror',
@@ -1005,7 +1021,7 @@ local remasterSections = {
     { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak',
-                 'remaster_water_mirror' } },
+                 'remaster_land_mirror', 'remaster_water_mirror' } },
     { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
                             'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway',
                             'remaster_warpin_colours' } },

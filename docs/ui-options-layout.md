@@ -406,6 +406,13 @@ keeps the pose the unit died in (a tank's turret turned where it pointed, a walk
 wreck in its resting pose, as the remaster drew them until that day. The simulation is told to keep the poses
 (`sim.collectCopiedPoses`) whenever a picture of the world is drawn. `LookSettings::wreckPoses`.
 
+**Land Mirrored in Water** (`remaster_land_mirror`, console the same; ON by default; the Remastered tab's section
+Water, before Effects Mirrored in Water: 59 rows on the page now; set by no preset level). The renderer's
+`WorldPicture::SetStrongWaterMirror` (render 507b42ca; Chris to the renderer, 2026-11-17: "Yes, default on"): without
+ray tracing the water mirrors land and rocks strongly, as the ray-traced mirror does; off, the earlier look (mostly the
+sky). With ray tracing on it changes nothing. An option by Chris's rule that a new look keeps the earlier way.
+`LookSettings::strongWaterMirror`.
+
 **The recommendation** (Chris, 2026-11-17, asked whether a first start should pick the preset for the card by itself:
 "it should recommend settings and if users want to use it but max is default"). Nothing is set by itself, at a
 first start or ever; the defaults stay at their highest. The graphics-memory strip under the dialog
