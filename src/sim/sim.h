@@ -487,6 +487,13 @@ class Sim {
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
   // By handle (EntityRef): byHandle_, which holds every registered entity at its handle's index.
   Entity* FindEntity(uint32_t id) const { return id < byHandle_.size() ? byHandle_[id] : nullptr; }
+  // The handles FindEntity has turned null for since the last call (the destroy drain: ProcessDestroyQueue), in that
+  // order; EffectsEndOfBeat takes them
+  std::vector<uint32_t> TakePurgedHandles() {
+    std::vector<uint32_t> r;
+    r.swap(purgedHandles_);
+    return r;
+  }
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   // While the destroy drain runs the units' ~Unit work (EntityDb::Purge order): an entity of the drain whose ~Unit has
   // not run yet, by handle (a weak pointer to it is still set then); null otherwise.
@@ -860,7 +867,16 @@ class Sim {
   void NoteOwned(ScriptObject* o);
   // The tasks no holder reaches any more are deleted (sim.cpp; the end of ProcessDestroyQueue); FreeDead()
   void SweepTasks();
+  // The mark of SweepTasks: every task a registered unit's task reaches gets reachedSweep = the returned number
+  uint32_t MarkReachedTasks();
+  bool Freeable(const BuildTask* t, uint32_t sweep) const;  // (SweepTasks' test: unreached, no Lua object, its slot)
   uint64_t tasksFreed = 0;  // (for the stats lines only)
+  // MOHO64_SWEEP_EVERY / MOHO64_SWEEP_CHECK (sim.cpp, SweepTasks): the drains since the last sweep; in the check mode
+  // the tasks a full sweep would have freed on a skipped beat, still waiting, and the counts for the end's line
+  uint32_t sweepSkips_ = 0;
+  std::vector<BuildTask*> sweepWaiting_;
+  size_t sweepWaitingPeak = 0;
+  uint64_t sweepChecks = 0, sweepCheckedTasks = 0;
   uint64_t propsFreed = 0, motorsFreed = 0;  // (the same; props: ProcessDestroyQueue, motors: MotorsSweep)
   uint64_t entitiesFreed = 0;  // (the same: script entities, shields, beams, blips; level 3)
   // For a file that owns a class of objects through Own and deletes its dead ones (prop_motor.cpp, level 2): the
@@ -897,6 +913,7 @@ class Sim {
   // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity
   // without the map's search (265 M calls in B1, ~280 ns each in the map). A removed entity's slot is null.
   std::vector<Entity*> byHandle_;
+  std::vector<uint32_t> purgedHandles_;  // (TakePurgedHandles)
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
   std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)

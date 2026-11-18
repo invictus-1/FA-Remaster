@@ -1095,6 +1095,9 @@ Sim::~Sim() {
     Logf(LogLevel::Info, "%s", line.c_str());
   }
   wtrap::Report();  // (MOHO64_PAR_WRITETRAP's lines)
+  if (getenv("MOHO64_SWEEP_CHECK") && strcmp(getenv("MOHO64_SWEEP_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_SWEEP_CHECK: %llu sweeps freed all %llu tasks the skipped drains had found freeable; at most %zu waited unswept\n",
+            static_cast<unsigned long long>(sweepChecks), static_cast<unsigned long long>(sweepCheckedTasks), sweepWaitingPeak);
   if (CmdOrderCheck())
     fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: %llu command orders and re-link lists compared with the sort / scan: all equal\n",
             static_cast<unsigned long long>(cmdOrderChecks));
@@ -2012,6 +2015,7 @@ void Sim::ProcessDestroyQueue() {
     CallMethod(L, e, "OnDestroy", 0);
     others_.erase(e->handle);
     if (e->handle < byHandle_.size()) byHandle_[e->handle] = nullptr;
+    purgedHandles_.push_back(e->handle);  // (TakePurgedHandles: EffectsEndOfBeat)
     byId_.erase(e->id);
     if (e->kind != Entity::Kind::Projectile) goneIds_[e->handle] = e->id;
     ReleaseEntityIntel(*this, e);
@@ -2153,7 +2157,33 @@ void Sim::ProcessDestroyQueue() {
         ++(kind == Entity::Kind::Projectile ? shellsFreed : kind == Entity::Kind::Prop ? propsFreed : entitiesFreed);
       }
     }
-  if (FreeDead()) SweepTasks();
+  if (FreeDead()) {
+    // The task sweep every N drains (MOHO64_SWEEP_EVERY=N, default 10; 1: every beat, as before 2026-11-18). Its frees
+    // have no effect on the game: a swept task is reached by no holder and has no Lua object, and deleting it calls
+    // no script, gives back no id, changes no run list and draws nothing (~BuildTask: UnbindLua with nothing bound,
+    // its shared data structs, plain data). A task once unreached stays unreached (nothing reads a freed task: the
+    // dead trap's proofs), so the sweep N beats later frees the same tasks, later. In 50k the every-beat sweep was
+    // 66% of the destroy + sync stage (3.3 ms a beat: the walk of every unit's task tree and every task).
+    // MOHO64_SWEEP_CHECK=1: on each skipped drain the mark alone is made and the tasks a sweep would free are kept;
+    // the next sweep must free every one of them (else it stops, naming the task, its type and who reaches it).
+    static const uint32_t every = [] {
+      const char* v = getenv("MOHO64_SWEEP_EVERY");
+      const int n = v ? atoi(v) : 10;
+      return static_cast<uint32_t>(n >= 1 ? n : 1);
+    }();
+    static const bool check = getenv("MOHO64_SWEEP_CHECK") && strcmp(getenv("MOHO64_SWEEP_CHECK"), "0");
+    if (++sweepSkips_ >= every) {
+      sweepSkips_ = 0;
+      SweepTasks();
+    } else if (check && !tasks_.empty()) {
+      const uint32_t sweep = MarkReachedTasks();
+      for (BuildTask* t : tasks_)
+        if (Freeable(t, sweep)) sweepWaiting_.push_back(t);
+      std::sort(sweepWaiting_.begin(), sweepWaiting_.end());
+      sweepWaiting_.erase(std::unique(sweepWaiting_.begin(), sweepWaiting_.end()), sweepWaiting_.end());
+      sweepWaitingPeak = std::max(sweepWaitingPeak, sweepWaiting_.size());
+    }
+  }
   if (freeProps) MotorsSweep(*this);
 }
 
@@ -2186,8 +2216,7 @@ void Sim::NoteOwned(ScriptObject* o) {
 // member of the engine that holds a task. A task that went through Own, is reached by none and has no Lua object
 // (a script task's is unbound when it ends; one that still has it is left alone, so the Lua side never changes)
 // is deleted. The proof is the trap, MOHO64_DEAD_TRAP=1: a deleted task's pages are gone.
-void Sim::SweepTasks() {
-  if (tasks_.empty()) return;
+uint32_t Sim::MarkReachedTasks() {
   const uint32_t sweep = ++taskSweep_;
   static thread_local std::vector<BuildTask*> stack;
   stack.clear();
@@ -2205,9 +2234,49 @@ void Sim::SweepTasks() {
     const int n = TaskChildren(*t, kids);
     for (int i = 0; i < n; ++i) reach(kids[i]);
   }
+  return sweep;
+}
+bool Sim::Freeable(const BuildTask* t, uint32_t sweep) const {
+  return !(t->reachedSweep == sweep || t->HasLuaObject() || t->ownedSlot >= owned_.size() || owned_[t->ownedSlot].get() != t);
+}
+void Sim::SweepTasks() {
+  if (tasks_.empty()) {
+    sweepWaiting_.clear();
+    return;
+  }
+  const uint32_t sweep = MarkReachedTasks();
+  if (!sweepWaiting_.empty()) {  // (MOHO64_SWEEP_CHECK: every task a skipped drain's mark found freeable is freed now)
+    for (BuildTask* t : sweepWaiting_) {
+      if (Freeable(t, sweep)) continue;
+      const char* why = t->reachedSweep == sweep ? "reached again" : t->HasLuaObject() ? "has a Lua object again" : "lost its slot";
+      uint32_t holder = 0;
+      if (t->reachedSweep == sweep)
+        for (Unit* u : units_) {  // (who reaches it: the unit whose task tree holds it)
+          std::vector<BuildTask*> st;
+          if (u->task) st.push_back(u->task);
+          while (!st.empty() && !holder) {
+            BuildTask* x = st.back();
+            st.pop_back();
+            if (x == t) holder = u->id;
+            BuildTask* kids[8];
+            const int n = TaskChildren(*x, kids);
+            for (int i = 0; i < n; ++i) st.push_back(kids[i]);
+          }
+          if (holder) break;
+        }
+      Logf(LogLevel::Error, "moho64 MOHO64_SWEEP_CHECK: a task unreached at an earlier drain is not freeable at beat %u: %s (type %d, order %s, unit %u; reached from unit 0x%x)",
+           tick_, why, static_cast<int>(t->type), t->order.c_str(), t->unitId, holder);
+      fprintf(stderr, "moho64 MOHO64_SWEEP_CHECK: a task unreached at an earlier drain is not freeable at beat %u: %s (type %d, order %s; reached from unit 0x%x)\n",
+              tick_, why, static_cast<int>(t->type), t->order.c_str(), holder);
+      abort();
+    }
+    ++sweepChecks;
+    sweepCheckedTasks += sweepWaiting_.size();
+    sweepWaiting_.clear();
+  }
   size_t keep = 0;
   for (BuildTask* t : tasks_) {
-    if (t->reachedSweep == sweep || t->HasLuaObject() || t->ownedSlot >= owned_.size() || owned_[t->ownedSlot].get() != t) {
+    if (!Freeable(t, sweep)) {
       tasks_[keep++] = t;
       continue;
     }
