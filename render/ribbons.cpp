@@ -169,7 +169,7 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
   if (!kind->ok || (kind->blend != 2 && !(kind->blend == 3 && !kind->trail))) return false;
   if (kind->vapour && contrailVapour) return false;  // [contrailvapour] (vapour lights nothing)
   rampPath->clear();
-  if (kind->trail && kind->hot && tracers) {  // (a tracer glows warm, whatever its white ramp says)
+  if (kind->trail && Hot(*kind)) {  // (a tracer glows warm, whatever its white ramp says)
     *color = Vec3{1.0f, 0.62f, 0.28f};
     return true;
   }
@@ -224,6 +224,8 @@ const Ribbons::Kind* Ribbons::ReadKind(const std::string& path, const std::strin
       std::string name = file;  // [contrailvapour]
       for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
       kind->vapour = name.find("contrail") != std::string::npos;
+      kind->energy = name.find("seraphim_") != std::string::npos || name.find("aeon_") != std::string::npos ||
+                     name.find("torpedo") != std::string::npos;  // [tracerkinds]
     }
     kind->halfWidth = Number(v["Size"], 0.1f);
     kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);
@@ -451,7 +453,7 @@ void Ribbons::DrawMirror(const View& mirrored, const FxMirror& mirror) {
     device_->SetPipeline(mirrorPipelines_[blend == 0 ? 0 : blend == 2 ? 1 : 2]);
     device_->SetConstants(0, &mirrored.constants, sizeof mirrored.constants);
     mirror.Bind();
-    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (Hot(*b.kind) ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
     device_->SetConstants(1, options, sizeof options);
     device_->SetTexture(0, b.kind->texture);
@@ -477,7 +479,7 @@ void Ribbons::Draw(const View& view) {
     const int blend = vapour ? 0 : b.kind->blend;
     device_->SetPipeline(b.kind->trail ? trailPipelines_[blend] : pipelines_[blend]);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (Hot(*b.kind) ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
     device_->SetConstants(1, options, sizeof options);
     device_->SetTexture(0, b.kind->texture);
@@ -538,7 +540,7 @@ void Ribbons::Lay(const View& view) {
           const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye) * pixelScale;
           return std::max(k.halfWidth * (1 + std::clamp(age, 0.0f, 1.0f)), 0.75f * pixel);
         }
-        if (!tracers || !k.hot) return k.halfWidth;
+        if (!Hot(k)) return k.halfWidth;
         const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye) * pixelScale;  // (photofix)
         // (and a head: over the first twentieth of its length it swells to a bright bead at the shell)
         const float t = std::clamp(age, 0.0f, 1.0f);
