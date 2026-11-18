@@ -963,6 +963,15 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // stands for the target with a 2x2 footprint (0x61f1cc, 0x61f218..0x61f2e5); state 0 (0x61f3af..0x61f4c8) walks
   // next to it as for a prop (gap > MaxBuildDistance or nearer than 1: PrepareMove beside the 2x2 rect, spacing 1,
   // NewMoveTask); state 1 then ends it (0x61f4e6..0x61f4ef: result 2).
+  // State 0 walks with no question of the unit's Immobile state (0x61f3dc..0x61f4c0: the gap against MaxBuildDistance
+  // bp+0x564 and 1 against the distance, then PrepareMove 0x62b780 and NewMoveTask 0x6190a0, nothing between): a unit
+  // just dropped by its transport, Immobile until it has landed, is given the walk and starts it when it lands. Ours
+  // ended the task for an Immobile unit (CanMove), and its patrol took the next prop. Seen: FAF 3840 pro replay 6v6_2,
+  // beat 9232: five engineers dropped on an AggressiveMove at 9225; their patrols pick the prop 0x2ff00019 at 9226 and
+  // the reclaim child's first Execute at 9232 starts the walk (Moving beside Immobile; they land at 9236 and move
+  // from 9237); ours ended the child at 9232 and walked to another prop from 9238. (A unit that is not mobile by its
+  // blueprint still ends here: ours has no navigator for it.)
+  const bool canWalk = u->motion.bp && u->motion.bp->mobile();
   if (c.reclaimAtPoint) {
     if (c.moving) {
       c.moving = false;
@@ -979,7 +988,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     const NamedFootprint& ufp = Footprint(*u->blueprint);
     const float gap = dist - static_cast<float>(std::max(ufp.sizeX, ufp.sizeZ)) - 2.0f;
     c.state = 1;
-    if (!(gap > u->bpData->maxBuildDistance || dist < 1.0f) || !CanMove(u)) return kTaskFailed;
+    if (!(gap > u->bpData->maxBuildDistance || dist < 1.0f) || !canWalk) return kTaskFailed;
     const int px0 = RoundEven(c.site.x - 1.0f), pz0 = RoundEven(c.site.z - 1.0f);
     const float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + 2.0f,
                            static_cast<float>(pz0) + 2.0f};
@@ -1020,7 +1029,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     case 0:
       if (!(tu && tu->beingBuilt) && (!BpInCategory(sim, e->blueprint, "RECLAIMABLE") || e == u)) return kTaskFailed;
       if (gap > maxBD || dist < 1.0f) {  // PrepareMove next to the prop's footprint rect, reserve, move
-        if (!CanMove(u)) return kTaskFailed;
+        if (!canWalk) return kTaskFailed;
         int px0 = RoundEven(tp.x - pfx * 0.5f), pz0 = RoundEven(tp.z - pfz * 0.5f);
         float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + pfx,
                          static_cast<float>(pz0) + pfz};

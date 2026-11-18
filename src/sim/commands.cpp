@@ -2672,7 +2672,13 @@ int l_IssueTarget(lua_State* L) {
   constexpr bool kTargetFirst = T == CommandType::Guard || T == CommandType::Patrol || T == CommandType::AggressiveMove;
   std::vector<Unit*> units;
   constexpr uint32_t kCap = ScriptIssueCap(T);
-  if (kGetTarget && !kTargetFirst) {
+  // (IssueReclaim / Repair / Capture / OverCharge take their unit list first too: cfunc_IssueRepairL 0x6f60d0 reads the
+  // list (0x6f616e), filters it by the cap (0x6f6183, FilterByCommandCap 0x6eecf0) and ends when none is left
+  // (0x6f61bf), before it looks at the entity (UpdateTarget 0x5d55b0 at 0x6f622f: the target point's draw); the
+  // same in 0x6f69d0, 0x6f6c90 and 0x6f1df0. Ours drew first. Seen: FAF 3840 pro replay 4v4_1 10493, FAF's shield
+  // (shield.lua 606-608) tells the shield's guards to repair and then guard it again; the guard here is a mobile
+  // flak, which has no Repair cap: the original draws nothing for the IssueRepair, ours drew one target point.)
+  if (!kTargetFirst) {
     units = UnitsArg(L, 1);
     KeepUnitsWithCap(L, units, kCap);
     if (units.empty()) {  // (0x6f3797: nothing left -> nil before SCR_GetTarget)
@@ -2695,7 +2701,7 @@ int l_IssueTarget(lua_State* L) {
   };
   if (kBadPoint && !kTargetFirst && !kForm && !ScriptTargetPointValid(L, 2, te) && validateKeptOne())
     luaL_error(L, "%s", kBadPoint);
-  if (!kGetTarget || kTargetFirst) {
+  if (kTargetFirst) {
     units = UnitsArg(L, 1);
     KeepUnitsWithCap(L, units, kCap);
     if (units.empty()) {
