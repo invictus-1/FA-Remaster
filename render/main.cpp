@@ -665,6 +665,7 @@
 // --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
 //           to try a factor before a unit's lights list is changed (docs/render-unit-lights.md)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
+// --contrails-hot  [contrailvapour] the game's contrails as before: hot tracers, as bright at night as by day (Ribbons::contrailVapour off)
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
 //           and sea go on beyond the edge in the modern look
@@ -1048,6 +1049,7 @@ struct Options {
   std::vector<std::array<float, 9>> lightsAt;  // --light-at x,z,height,reach[,r,g,b[,vx,vz]] ([lightshade])
   float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
+  bool contrailVapour = true;           // --contrails-hot: off
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
@@ -1501,6 +1503,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-hull-shade") o->hullShade = false;      // [hullshade]
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
+    else if (a == "--contrails-hot") o->contrailVapour = false;  // [contrailvapour]
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--sea-mirror-strong") o->seaMirrorStrong = true;  // [seamirror] (the default now; kept for older scripts)
     else if (a == "--sea-mirror-plain") o->seaMirrorStrong = false;  // [seamirror]
@@ -3131,6 +3134,7 @@ int main(int argc, char** argv) {
   if (opt.guidePull >= 0) world.guidePull = opt.guidePull;  // [glitches]
   if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;
+  world.ribbons.contrailVapour = opt.contrailVapour;  // [contrailvapour]
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;

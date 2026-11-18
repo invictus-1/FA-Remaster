@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/dmath.h"
 #include "core/log.h"
 #include "script/script_state.h"
 #include "sim/ai_platoon.h"
@@ -813,7 +814,10 @@ int l_FindPlaceToBuild(lua_State* L) {
 std::shared_ptr<UnitCommand> OrderBuildStructure(Sim& sim, Unit* builder, const char* name, Vec3 pos, float angle,
                                                  const Vec3& end) {
   const float h = static_cast<float>(static_cast<double>(angle) * static_cast<double>(0.01745329238474369f) * -0.5);
-  const float sn = std::sin(h), cs = std::cos(h);  // sinf 0x5734e0 / cosf 0x5734d0
+  // sinf 0x5734e0 / cosf 0x5734d0 (x87 fsin / fcos, stored as float: the correctly rounded value). dmath's, not the C
+  // library's: the float sinf / cosf of Windows' and Linux' libraries differ in 1.2% of arguments (10 of the 360 whole
+  // degrees here), and Windows' is not the correctly rounded one at 125 degrees (linsim, 2026-11-14).
+  const float sn = dmath::Sin(h), cs = dmath::Cos(h);
   const BlueprintInfo* bp = FindUnitBp(sim, name);
   if (!bp || !builder) return nullptr;
   const NamedFootprint fp = bp->hasFootprint ? bp->footprint : NamedFootprint{"", 1, 1, 1, 0, 0, 0, 0};

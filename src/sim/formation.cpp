@@ -793,7 +793,7 @@ void Update(Formation& F) {
             // off in x (130.686478 for the original's 130.686493); its desired velocity then differed in the last bits
             // until 2627, where an exact 15.0 against ours's 14.999999 flipped the air damping factor
             // (CalcAirMovementDampingFactor 0x6bca10: KMove at full length, max speed / length below it).
-            const double hFx = std::atan2(static_cast<double>(F.fwd.x), static_cast<double>(F.fwd.z));
+            const double hFx = dmath::Atan2d(static_cast<double>(F.fwd.x), static_cast<double>(F.fwd.z));
             float diff = Wrap(static_cast<float>(static_cast<double>(hL) - hFx));
             float t = Dist2D(m->position.x, m->position.z, L->position.x, L->position.z) / maxR * 0.05f + 0.94f;
             a = (1 - t) * diff + n.angle * t;

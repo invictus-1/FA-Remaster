@@ -84,6 +84,13 @@ class Ribbons {
   // rounds) is drawn hot instead: white at the shell, through yellow and orange to a dull red where
   // it ends, wider at the shell and never thinner than a pixel. false: as the files say.
   bool tracers = true;
+  // [contrailvapour] The game's contrails (an aircraft's trail blueprint with "contrail" in its name: the files give
+  // contrail_polytrail_01 as a plain white line that adds its light, which the tracer rule above took for a shell's
+  // trail and drew white hot with an orange end, as bright at one in the night as at noon). Modern look: drawn as
+  // vapour instead: it covers (no light added), pale, lit by the hour's sun or moon and sky as a thin cloud is, in
+  // the clouds' shadow where they shade it, widening a little as it ages, never thinner than a pixel (what it lacks
+  // in width it lacks in how much shows), and it lights nothing. false: as before (a tracer while `tracers` is on).
+  bool contrailVapour = true;
   // (photofix) A photo's frame: this many of its pixels make one of the window's (a tracer's least width is the
   // window's pixel, as the window shows it); 1 in the game's frames.
   float pixelScale = 1;
@@ -101,7 +108,9 @@ class Ribbons {
     float life = 1;                // trails: how long a place stays, seconds
     std::string rampPath;          // trails: the colour ramp's file
     bool hot = false;              // trails: a plain white one that adds its light (see `tracers`)
+    bool vapour = false;           // [contrailvapour] trails: a contrail by its file's name (see `contrailVapour`)
   };
+  bool Vapour(const Kind& k) const { return contrailVapour && k.trail && k.vapour; }  // [contrailvapour]
   struct Vertex {
     float position[3];
     float uv[2];

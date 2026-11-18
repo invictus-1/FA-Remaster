@@ -23,6 +23,7 @@ const char kShader[] = R"hlsl(
 cbuffer RibbonSet : register(b1) {
   float4 options;  // x: how the colour leaves (0 alpha, 1 darkening, 2 adding, 3 premultiplied),
                    // y: brightness of what glows in the modern look, z: 1 = a trail (it ends where its age does), 2 = a trail drawn as a tracer,
+                   //    3 = [contrailvapour] a contrail drawn as vapour
                    // w: 1 = adds its colour as it is, whatever its alpha (the original's beams)
 };
 Texture2D bandTexture : register(t0);
@@ -60,8 +61,17 @@ float4 PS(VOut i) : SV_Target {
 #endif
   float4 c = bandTexture.Sample(samplerLinear, i.uv) * rampTexture.Sample(samplerLinearClamp, i.rampUv) * i.color;
   if (options.x > 0.5 && options.x < 1.5) return float4(saturate(c.rgb), 1);
+  [branch] if (look > 0.5 && options.z > 2.5) {
+    // [contrailvapour] vapour, not light: how much of it there is from what the files' adding white gave (its colour by
+    // its alpha; the vertex's alpha: what a band widened to a pixel lacks in width); its colour a thin cloud's in the
+    // hour's light: the sun's or the moon's where the clouds let it through, and the sky's from every side
+    float vapour = saturate(max(c.r, max(c.g, c.b)) * c.a * 0.85);
+    float3 sky = skyZenith.w > 0.5 ? SkyAmbient(float3(0, 1, 0)) : pow(max(shadowFill, 0), 2.2) * 1.3;
+    float3 light = pow(max(sunColor, 0), 2.2) * (lightMultiplier * modern.x) * (0.75 * CloudShadow(i.world)) + sky * modern.y;
+    c = float4(0.8 * light, vapour);
+  } else
   if (look > 0.5) c.rgb = pow(max(c.rgb, 0), 2.2) * (options.x > 1.5 && options.x < 2.5 ? options.y * (falling.w > 0 ? falling.w : 1) : 1);
-  if (look > 0.5 && options.z > 1.5) {
+  if (look > 0.5 && options.z > 1.5 && options.z < 2.5) {
     // a tracer: its own brightness in the colours of something hot, by how old that part of the
     // trail is: white at the shell, yellow, orange, a dull red where it ends
     float age = saturate(i.rampUv.x);
@@ -157,6 +167,7 @@ bool Ribbons::Glows(const std::string& blueprint, std::string* rampPath, Vec3* c
   // (what adds its light glows; so does a premultiplied beam, which covers what is behind it and adds its own
   // light over it: a mod's beam made so that red over grass stays red keeps its light on the ground)
   if (!kind->ok || (kind->blend != 2 && !(kind->blend == 3 && !kind->trail))) return false;
+  if (kind->vapour && contrailVapour) return false;  // [contrailvapour] (vapour lights nothing)
   rampPath->clear();
   if (kind->trail && kind->hot && tracers) {  // (a tracer glows warm, whatever its white ramp says)
     *color = Vec3{1.0f, 0.62f, 0.28f};
@@ -210,6 +221,9 @@ const Ribbons::Kind* Ribbons::ReadKind(const std::string& path, const std::strin
       std::string ramp = kind->rampPath;
       for (char& c : ramp) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
       kind->hot = kind->blend == 2 && ramp.find("ramp_white") != std::string::npos;
+      std::string name = file;  // [contrailvapour]
+      for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      kind->vapour = name.find("contrail") != std::string::npos;
     }
     kind->halfWidth = Number(v["Size"], 0.1f);
     kind->life = std::max(0.05f, Number(v["TrailLength"], 1) * kTick);
@@ -432,10 +446,12 @@ void Ribbons::DrawMirror(const View& mirrored, const FxMirror& mirror) {
   uint32_t first = 0;
   for (const Batch& b : batches_) {
     if (b.vertices.empty() || b.kind->blend == 1) continue;
-    device_->SetPipeline(mirrorPipelines_[b.kind->blend == 0 ? 0 : b.kind->blend == 2 ? 1 : 2]);
+    const bool vapour = Vapour(*b.kind);  // [contrailvapour] (it covers: the alpha pipeline)
+    const int blend = vapour ? 0 : b.kind->blend;
+    device_->SetPipeline(mirrorPipelines_[blend == 0 ? 0 : blend == 2 ? 1 : 2]);
     device_->SetConstants(0, &mirrored.constants, sizeof mirrored.constants);
     mirror.Bind();
-    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
     device_->SetConstants(1, options, sizeof options);
     device_->SetTexture(0, b.kind->texture);
@@ -457,9 +473,11 @@ void Ribbons::Draw(const View& view) {
   uint32_t first = 0;
   for (const Batch& b : batches_) {
     if (b.vertices.empty()) continue;
-    device_->SetPipeline(b.kind->trail ? trailPipelines_[b.kind->blend] : pipelines_[b.kind->blend]);
+    const bool vapour = Vapour(*b.kind);  // [contrailvapour] (it covers: the alpha pipeline)
+    const int blend = vapour ? 0 : b.kind->blend;
+    device_->SetPipeline(b.kind->trail ? trailPipelines_[blend] : pipelines_[blend]);
     device_->SetConstants(0, &view.constants, sizeof view.constants);
-    const float options[4] = {static_cast<float>(b.kind->blend), glow, b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
+    const float options[4] = {static_cast<float>(blend), glow, vapour ? 3.0f : b.kind->trail ? (tracers && b.kind->hot ? 2.0f : 1.0f) : 0.0f,
                               !b.kind->trail && b.kind->blend == 2 ? 1.0f : 0.0f};
     device_->SetConstants(1, options, sizeof options);
     device_->SetTexture(0, b.kind->texture);
@@ -516,13 +534,24 @@ void Ribbons::Lay(const View& view) {
       // (a tracer: wider at the shell, thinner toward its end, and nowhere under a pixel's width,
       // or from far up it is a line that flickers in and out)
       auto half = [&](Vec3 p, float age) {
+        if (Vapour(k)) {  // [contrailvapour] it spreads as it ages; never thinner than a pixel and a half
+          const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye) * pixelScale;
+          return std::max(k.halfWidth * (1 + std::clamp(age, 0.0f, 1.0f)), 0.75f * pixel);
+        }
         if (!tracers || !k.hot) return k.halfWidth;
         const float pixel = 2 * std::tan(view.fovY * 0.5f) / static_cast<float>(std::max(view.height, 1)) * Length(p - view.eye) * pixelScale;  // (photofix)
         // (and a head: over the first twentieth of its length it swells to a bright bead at the shell)
         const float t = std::clamp(age, 0.0f, 1.0f);
         return std::max(k.halfWidth, 0.6f * pixel) * (1.7f - 1.2f * t + 2.6f * std::exp(-t * 45.0f));
       };
-      Band(batch, view, a, b, half(a, ageA), half(b, ageB), uvA, uvB, rampA, rampB, 0xffffffffu, 0xffffffffu);
+      // ([contrailvapour] what the band is wider than the vapour is, it shows the less: the same vapour over more pixels)
+      auto thin = [&](float drawn, float age) {
+        if (!Vapour(k)) return 0xffffffffu;
+        const float share = std::clamp(k.halfWidth * (1 + std::clamp(age, 0.0f, 1.0f)) / std::max(drawn, 1e-6f), 0.0f, 1.0f);
+        return static_cast<uint32_t>(share * 255.0f + 0.5f) << 24 | 0x00ffffffu;
+      };
+      const float halfA = half(a, ageA), halfB = half(b, ageB);
+      Band(batch, view, a, b, halfA, halfB, uvA, uvB, rampA, rampB, thin(halfA, ageA), thin(halfB, ageB));
     }
     if (count > 1) ++drawnBands;
   }
