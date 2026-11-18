@@ -4,7 +4,8 @@
 -- the option Crash Reports off. This script runs in the front end and reads what the menu's own asking did
 -- (RemasterAutoCrash): it does not ask the host itself before that is read, as the option is the menu's to honour.
 -- The lab's runner (suite/report.sh) makes the crashes and reads the zips.
--- `-- /expect report`, `-- /expect none` (nothing to report) or `-- /expect off` (the option is off).
+-- `-- /expect report` (a crash), `-- /expect unclean` (a run that did not close in order), `-- /expect none`
+-- (nothing to report) or `-- /expect off` (the option is off).
 --   moho64ui --own ui/data --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/auto_report.lua
 --            --frames 300 --log <folder>/moho64ui_<date>.log -- /expect report
 local failed = 0
@@ -31,7 +32,15 @@ ForkThread(function()
     LOG("TEST note the menu's asking: asked " .. tostring(did.asked) .. ", file " .. tostring(did.file) .. ", why " .. tostring(did.why))
     local notices = moho64ui_Notices()
     local said = has(notices, "The game stopped with a fault the last time it ran. A report for it is ")
-    if expect == "report" then
+    local saidNotClosed = has(notices, "The game did not close properly the last time it ran (a freeze, a forced close, or the PC going off). A report for it is ")
+    if expect == "unclean" then
+        -- the run before froze or was closed by force: no dump, the report all the same
+        check("the menu asked the host", did.asked, true)
+        check("and a report's zip was written", type(did.file) == 'string' and string.find(did.file, "remaster_report_", 1, true) ~= nil and string.sub(did.file, -4) == ".zip", true)
+        check("the notice line says the game did not close properly", saidNotClosed, true)
+        check("and not that it stopped with a fault", said, false)
+        check("the menu shows it", has(main.RemasterMenuNotice.texts, "did not close properly"), true)
+    elseif expect == "report" then
         check("the menu asked the host", did.asked, true)
         check("and a report's zip was written", type(did.file) == 'string' and string.find(did.file, "remaster_report_", 1, true) ~= nil and string.sub(did.file, -4) == ".zip", true)
         check("the notice line says so", said, true)
@@ -47,7 +56,7 @@ ForkThread(function()
     else
         check("the menu asked the host", did.asked, true)
         check("nothing was to report", did.file, false)
-        check("and the menu says nothing of a report", said, false)
+        check("and the menu says nothing of a report", tostring(said) .. " " .. tostring(saidNotClosed), "false false")
     end
     LOG("TEST done: " .. failed .. " failed")
 end)

@@ -522,13 +522,78 @@ std::filesystem::path LastCrashedBefore(const std::filesystem::path& now) {
   return best;
 }
 
+bool MarksItsEnd(const std::string& log);    // (below, with the run that did not close in order)
+bool ClosedInOrder(const std::string& log);
+
+// A LOG AT A GLANCE, for the report's README (2026-11-18: whoever opens a report should see the gist before any
+// digging): from a log's text (the user's folder already hidden) the machine and the game's files, a fault's lines,
+// the last things the player did (the "moho64ui: event" lines), the last errors and warnings and the last long
+// frames, each a few lines, each line cut at 240 characters; and whether the run closed in order. "" for a log that
+// holds none of it.
+std::string Glance(const std::string& log, const std::string& part, bool running = false) {
+  std::vector<std::string> machine, fault, events, commands, bad, frames;
+  // (an event's kind: the word after "info: moho64ui: event" and the seconds)
+  auto kindOf = [](const std::string& line) {
+    size_t at = line.find_first_not_of(' ', 22);
+    at = at == std::string::npos ? at : line.find(' ', at);
+    at = at == std::string::npos ? at : line.find_first_not_of(' ', at);
+    if (at == std::string::npos) return std::string();
+    return line.substr(at, line.find(' ', at) - at);
+  };
+  auto keepLast = [](std::vector<std::string>& list, std::string line, size_t most) {
+    list.push_back(std::move(line));
+    if (list.size() > most) list.erase(list.begin());
+  };
+  auto begins = [](const std::string& line, const char* with) { return line.rfind(with, 0) == 0; };
+  for (size_t at = 0; at < log.size();) {
+    size_t end = log.find('\n', at);
+    if (end == std::string::npos) end = log.size();
+    std::string line = log.substr(at, end - at);
+    at = end + 1;
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    if (line.size() > 240) line = line.substr(0, 240) + "...";
+    if (begins(line, "info: moho64ui: the machine: (")) continue;  // (the block's own head)
+    if (begins(line, "info: moho64ui: the machine: ") && machine.size() < 16) machine.push_back(line.substr(29));
+    else if (begins(line, "info: moho64ui: the game: ") && machine.size() < 18) machine.push_back(line.substr(16));
+    else if (begins(line, "error: crash: ")) { if (fault.size() < 16) fault.push_back(line.substr(7)); }
+    // (console commands apart: the game's scripts run about ninety at every start, which would push the player's own
+    // clicks, keys and orders out of a list of the last twenty)
+    else if (begins(line, "info: moho64ui: event ") && kindOf(line) == "console") keepLast(commands, line.substr(16), 5);
+    else if (begins(line, "info: moho64ui: event ")) keepLast(events, line.substr(16), 20);
+    else if (begins(line, "error: ") || begins(line, "warning: ")) keepLast(bad, line, 10);
+    else if (line.find("moho64ui: long frame ") != std::string::npos || line.find("moho64ui: a long frame: ") != std::string::npos)
+      keepLast(frames, line.substr(line.find("moho64ui: ") + 10), 5);
+  }
+  if (machine.empty() && fault.empty() && events.empty() && commands.empty() && bad.empty() && frames.empty()) return "";
+  std::string out = "\n== " + part + " at a glance ==\n";
+  auto section = [&](const char* title, const std::vector<std::string>& lines) {
+    if (lines.empty()) return;
+    out += std::string(title) + "\n";
+    for (const std::string& l : lines) out += "  " + l + "\n";
+  };
+  if (running) out += "This run was still going when the report was written from inside it.\n";
+  else if (!fault.empty()) out += "THIS RUN STOPPED WITH A FAULT.\n";
+  else if (MarksItsEnd(log))
+    out += ClosedInOrder(log) ? "This run closed in order.\n"
+                              : "THIS RUN DID NOT CLOSE IN ORDER (its log has no last line: a freeze, a forced close, or the PC going off).\n";
+  section("The fault:", fault);
+  section("The machine and the game's files:", machine);
+  section("The last things done in the interface (seconds since the start, kind, what):", events);
+  section("The last console commands (the game's scripts run many at a start):", commands);
+  section("The last errors and warnings:", bad);
+  section("The last long frames:", frames);
+  return out;
+}
+
 // A crashed run's log and its dump into the zip as <part>.txt and <part>.dmp, the dump masked; the README's lines
 void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::filesystem::path& dumpFile,
                    const std::string& logPart, const std::string& dumpPart, const std::string& which, std::string* inside,
-                   bool withLog) {
+                   bool withLog, std::string* glance) {
   std::string text;
   if (withLog && ReadWhole(log, &text)) {
-    zip.Add(logPart, ShortenUserFolder(text));
+    text = ShortenUserFolder(text);
+    *glance += Glance(text, logPart);
+    zip.Add(logPart, text);
     *inside += "- " + logPart + ": the log of " + which + " (" + Name(log) + ")\n";
   }
   std::string dump;
@@ -595,16 +660,45 @@ std::filesystem::path DesktopFolder() {
 #endif
 }
 
-std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, bool byItself, std::string* why);
+// The log of the run before this one, "" when none is kept: by the log's kind (DefaultLogName).
+std::filesystem::path RunBefore(const std::filesystem::path& now) {
+  if (DefaultLogName(now)) return LogBefore(now);
+  std::error_code ec;
+  const std::filesystem::path before = now.parent_path() / PathOf(Name(now.stem()) + "_prev" + Name(now.extension()));
+  return std::filesystem::is_regular_file(before, ec) ? before : std::filesystem::path();
+}
+
+// A RUN THAT DID NOT CLOSE IN ORDER (a freeze the player ended, a forced close, the PC going off: no crash handler
+// runs, no dump is written, and such ends are as common as faults). A run's log says at its head that it will end
+// with the line "moho64ui: closed in order" (main.cpp: so a log of a build before 2026-11-18, which never wrote that
+// line, is not taken for one), and the program writes that line as its last. A log with the first and without the
+// second, and no crash's lines (a crash is the dump's matter), is of a run that did not close in order, unless the
+// file is still held open by another running copy of the program.
+bool MarksItsEnd(const std::string& log) { return log.find("ends this log with the line 'moho64ui: closed in order'") != std::string::npos; }
+bool ClosedInOrder(const std::string& log) { return log.find("info: moho64ui: closed in order") != std::string::npos; }
+bool HeldOpenElsewhere(const std::filesystem::path& file) {
+#ifdef _WIN32
+  // (asked for alone: refused with a sharing violation while any program has the file open; a log's writer has)
+  const HANDLE h = CreateFileW(file.wstring().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION;
+  CloseHandle(h);
+#else
+  (void)file;
+#endif
+  return false;
+}
+
+// `byItself`: "" for a report asked for; else what it was written for by itself ("a crash", ...).
+std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, const std::string& byItself, std::string* why);
 
 }  // namespace
 
 // The report's zip written; its file, or "" with `why` set.
 std::string WriteReport(lua_State* L, const std::string& note, std::string* why) {
-  return WriteReportInto(L, note, {}, false, why);
+  return WriteReportInto(L, note, {}, "", why);
 }
 
-// THE AUTOMATIC CRASH REPORT (the first step of Chris's debugger, 2026-11-15: "something that auto activates the
+// THE AUTOMATIC REPORT (the first steps of Chris's debugger, 2026-11-15: "something that auto activates the
 // second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
 // details on desktop and the user can send it over"; 2026-11-18: "Yes, on the Desktop"). Called once when the main
 // menu is made (the menu's hook, which has read the option Crash Reports): when a kept earlier run crashed (its dump
@@ -612,6 +706,8 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
 // "reports" folder when there is no Desktop), the menu's notice line says so, and the dump is remembered in
 // reports/auto_reported.txt (its name, size and time), so it is done once for a crash, not at every start. A crash
 // handler does none of this: zipping in a crashing program could fault again; the next start is whole.
+// The same for the run before when it did not close in order (a freeze, a forced close, the PC off: MarksItsEnd): no
+// dump exists then, the report holds that run's log, which the program now writes to its disk every second.
 // Returns the zip's file; "" when nothing was to do or it failed (`why` says which).
 std::string AutoCrashReport(lua_State* L, std::string* why) {
   static bool asked = false;
@@ -621,37 +717,64 @@ std::string AutoCrashReport(lua_State* L, std::string* why) {
   const UserState::Config& cfg = UserState::From(L)->config();
   const std::string log = RunLogFile();
   if (log.empty() || cfg.prefsFile.empty()) return *why = "this run writes no log or keeps no preferences file", "";
-  const std::filesystem::path dump = NewestCrashDump(PathOf(log));
-  if (dump.empty()) return *why = "no earlier run that crashed is kept", "";
   std::error_code ec;
-  const auto size = std::filesystem::file_size(dump, ec);
-  const auto time = std::filesystem::last_write_time(dump, ec).time_since_epoch().count();
-  const std::string identity = Name(dump) + " " + std::to_string(size) + " " + std::to_string(static_cast<long long>(time));
   const std::filesystem::path folder = PathOf(cfg.prefsFile).parent_path() / "reports";
   const std::filesystem::path marks = folder / "auto_reported.txt";
   std::string known;
   ReadWhole(marks, &known);
-  if (("\n" + known).find("\n" + identity + "\n") != std::string::npos) return *why = "a report was written for that crash already", "";
+  auto stamp = [&](const std::filesystem::path& file) {
+    const auto size = std::filesystem::file_size(file, ec);
+    const auto time = std::filesystem::last_write_time(file, ec).time_since_epoch().count();
+    return Name(file) + " " + std::to_string(size) + " " + std::to_string(static_cast<long long>(time));
+  };
+  auto reported = [&](const std::string& identity) { return ("\n" + known).find("\n" + identity + "\n") != std::string::npos; };
+  // (1) a crash: the newest kept run with a dump, not reported yet
+  std::string identity, what, sentence;
+  const std::filesystem::path dump = NewestCrashDump(PathOf(log));
+  if (!dump.empty() && !reported(stamp(dump))) {
+    identity = stamp(dump);
+    what = "a crash";
+    sentence = "The game stopped with a fault the last time it ran.";
+  }
+  // (2) else the run before this one, when it did not close in order (see MarksItsEnd)
+  if (identity.empty()) {
+    const std::filesystem::path before = RunBefore(PathOf(log));
+    std::string text;
+    if (!before.empty() && ReadWhole(before, &text) && MarksItsEnd(text) && !ClosedInOrder(text) && !HeldOpenElsewhere(before) &&
+        !reported("not closed " + stamp(before))) {
+      const bool faulted = text.find("error: crash: ") != std::string::npos;
+      if (!faulted) {
+        identity = "not closed " + stamp(before);
+        what = "a run that did not close in order";
+        sentence = "The game did not close properly the last time it ran (a freeze, a forced close, or the PC going off).";
+      } else if (DumpOf(before).empty() && (DefaultLogName(PathOf(log)) || dump.empty())) {
+        // (a fault whose dump could not be written: its log's crash lines are all there is, and worth a report)
+        identity = "not closed " + stamp(before);
+        what = "a crash whose dump could not be written";
+        sentence = "The game stopped with a fault the last time it ran.";
+      }
+    }
+  }
+  if (identity.empty()) return *why = dump.empty() ? "no earlier run crashed or failed to close in order" : "a report was written for that crash already", "";
   const std::filesystem::path desktop = DesktopFolder();
   const bool onDesktop = !desktop.empty() && std::filesystem::is_directory(desktop, ec);
   std::string failed;
-  const std::string file = WriteReportInto(L, "", onDesktop ? desktop : std::filesystem::path(), true, &failed);
+  const std::string file = WriteReportInto(L, "", onDesktop ? desktop : std::filesystem::path(), what, &failed);
   if (file.empty()) return *why = failed, "";
   std::filesystem::create_directories(folder, ec);
   if (std::ofstream out(marks, std::ios::binary | std::ios::app); out) out << identity << "\n";
   written = file;
   const std::string name = Name(PathOf(file));
-  AddMenuNotice("The game stopped with a fault the last time it ran. A report for it is " +
-                std::string(onDesktop ? "on your Desktop" : "in the game's reports folder") + ": " + name +
+  AddMenuNotice(sentence + " A report for it is " + std::string(onDesktop ? "on your Desktop" : "in the game's reports folder") + ": " + name +
                 ". Nothing was sent anywhere; passing it on helps find the cause. (Options > Interface > Crash Reports turns this off.)");
-  Logf(LogLevel::Info, "moho64ui: the report: written by itself for the crash of %s (%s)", Name(dump).c_str(), onDesktop ? "onto the Desktop" : "into the reports folder");
+  Logf(LogLevel::Info, "moho64ui: the report: written by itself for %s (%s; %s)", what.c_str(), identity.c_str(), onDesktop ? "onto the Desktop" : "into the reports folder");
   return file;
 }
 
 namespace {
 
-// `into`: the folder ("": "reports" beside the preferences); `byItself`: the automatic crash report's.
-std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, bool byItself, std::string* why) {
+// `into`: the folder ("": "reports" beside the preferences); `byItself`: what the automatic report is for ("": by hand).
+std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, const std::string& byItself, std::string* why) {
   const UserState::Config& cfg = UserState::From(L)->config();
   const std::string log = RunLogFile();
   std::filesystem::path folder = into;
@@ -672,9 +795,12 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
 
   ZipWriter zip;
   std::string inside;
+  std::string glance, glanceNow;  // (the logs at a glance, for the README: the earlier runs' first, this run's last)
   std::string text;
   if (!log.empty() && ReadWhole(PathOf(log), &text)) {
-    zip.Add("log_now.txt", ShortenUserFolder(text));
+    text = ShortenUserFolder(text);
+    glanceNow = Glance(text, "log_now.txt", true);
+    zip.Add("log_now.txt", text);
     inside += "- log_now.txt: this run's log so far (its head names the machine; the last 400 interface events are written\n"
               "  into it just before its end)\n";
   } else {
@@ -683,7 +809,9 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
   if (!log.empty() && DefaultLogName(PathOf(log))) {
     const std::filesystem::path before = LogBefore(PathOf(log));
     if (!before.empty() && ReadWhole(before, &text)) {
-      zip.Add("log_before.txt", ShortenUserFolder(text));
+      text = ShortenUserFolder(text);
+      glance += Glance(text, "log_before.txt");
+      zip.Add("log_before.txt", text);
       inside += "- log_before.txt: the log of the run before this one (" + Name(before) + ")\n";
     } else {
       inside += "- (no log of a run before this one in the same folder)\n";
@@ -695,9 +823,9 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
     if (!crashed.empty()) {
       const bool isBefore = !before.empty() && Name(crashed) == Name(before);
       if (isBefore)
-        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_before.txt", "dump_before.dmp", "the run before this one, which CRASHED", &inside, false);
+        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_before.txt", "dump_before.dmp", "the run before this one, which CRASHED", &inside, false, &glance);
       else
-        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_crash.txt", "dump_crash.dmp", "the last run that crashed", &inside, true);
+        AddCrashedRun(zip, crashed, DumpOf(crashed), "log_crash.txt", "dump_crash.dmp", "the last run that crashed", &inside, true, &glance);
     }
   } else if (!log.empty()) {
     // A log named by a launcher: the run before is <name>_prev<.ext>, a crash's dump <log>.dmp beside this log.
@@ -706,7 +834,9 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
     bool beforeCrashed = false;
     if (ReadWhole(before, &text)) {
       beforeCrashed = text.find("error: crash: ") != std::string::npos;
-      zip.Add("log_before.txt", ShortenUserFolder(text));
+      text = ShortenUserFolder(text);
+      glance += Glance(text, "log_before.txt");
+      zip.Add("log_before.txt", text);
       inside += "- log_before.txt: the log of the run before this one (" + Name(before) + ", kept by the launcher)\n";
     } else {
       inside += "- (no log of a run before this one: the launcher kept none as " + Name(before) + ")\n";
@@ -716,10 +846,10 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
       const std::string when = FileTime(dump);
       if (beforeCrashed)
         AddCrashedRun(zip, before, dump, "log_before.txt", "dump_before.dmp",
-                      "the run before this one, which CRASHED (the dump's file is of " + when + ")", &inside, false);
+                      "the run before this one, which CRASHED (the dump's file is of " + when + ")", &inside, false, &glance);
       else
         AddCrashedRun(zip, before, dump, "log_crash.txt", "dump_crash.dmp",
-                      "an earlier run that crashed (the dump's file is of " + when + "; that run's log is no longer kept)", &inside, false);
+                      "an earlier run that crashed (the dump's file is of " + when + "; that run's log is no longer kept)", &inside, false, &glance);
     }
   }
   const std::string replay = cfg.currentReplay ? cfg.currentReplay() : std::string();
@@ -735,12 +865,13 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
     inside += "- game.prefs: the preferences (the options, the key bindings, the profiles)\n";
   }
   std::string readme = std::string("FA Remastered: a report (") +
-                       (byItself ? "written by itself at the start after a crash: the option Crash Reports, Options > Interface"
-                                 : "the console's remaster_report") +
+                       (!byItself.empty() ? "written by itself at the start after " + byItself + ": the option Crash Reports, Options > Interface"
+                                          : std::string("the console's remaster_report")) +
                        "), written " + Stamp("%Y-%m-%d %H:%M:%S") + ".\nOur build: commit " + std::string(kBuildCommit) + ".\n";
   readme += !note.empty() ? "The player's note: " + note + "\n"
-            : byItself    ? std::string("The player's note: none (the console's remaster_report <a note> writes a report with one).\n")
+            : !byItself.empty() ? std::string("The player's note: none (the console's remaster_report <a note> writes a report with one).\n")
                           : std::string("The player's note: none (remaster_report <a note> adds one).\n");
+  readme += glance + glanceNow;
   readme += "\nInside:\n" + inside +
             "\nIn the text files the user's own folder is written <user folder>; nothing else is changed.\n"
             "Nothing was sent anywhere: this file stays on this PC until you pass it on yourself.\n";
@@ -755,7 +886,7 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
   }
   out.close();
   Logf(LogLevel::Info, "moho64ui: the report: written, %zu bytes: %s", bytes.size(), ShortenUserFolder(TextOf(file)).c_str());
-  NoteEvent("report", byItself ? "a report written by itself (a crash the time before)" : "a report written");
+  NoteEvent("report", !byItself.empty() ? "a report written by itself (" + byItself + " the time before)" : std::string("a report written"));
   return TextOf(file);
 }
 

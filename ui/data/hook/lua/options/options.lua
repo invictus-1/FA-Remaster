@@ -1222,7 +1222,7 @@ table.insert(options.ui.items, {
 table.insert(options.ui.items, {
     title = "Crash Reports",
     key = 'remaster_crash_reports',
-    tip = "On: when the game stopped with a fault, its next start writes a report as one zip onto your Desktop (the logs, the fault's dump with your user name hidden, the replay, your settings) and says so on the main menu. Nothing is sent anywhere: you decide whether to pass it on. Off: no report is written by itself; the console's remaster_report still writes one.",
+    tip = "On: when the game stopped with a fault or did not close properly (a freeze, a forced close), its next start writes a report as one zip onto your Desktop (the logs, the fault's dump with your user name hidden, the replay, your settings) and says so on the main menu. Nothing is sent anywhere: you decide whether to pass it on. Off: no report is written by itself; the console's remaster_report still writes one.",
     type = 'toggle',
     default = 1,
     set = function(key, value, startup) end,

@@ -1,10 +1,12 @@
 // The interface's last events: see events.h.
 #include "user/events.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <deque>
 #include <mutex>
+#include <thread>
 
 #include "core/log.h"
 #include "script/script_state.h"
@@ -70,6 +72,33 @@ void NoteEvent(const char* kind, const std::string& text) {
   }
   if (times == 1) Logf(LogLevel::Info, "moho64ui: event %9.3f %-7s %s", e.seconds, e.kind.c_str(), e.text.c_str());
   else if ((times & (times - 1)) == 0) Logf(LogLevel::Info, "moho64ui: event %9.3f %-7s %s (%d times so far)", e.seconds, e.kind.c_str(), e.text.c_str(), times);
+  else return;
+  LogFlush();  // (to its disk at once: what the player did last is what a frozen or killed run's log is read for)
+}
+
+// The log written out to its disk once a second (the engine's log keeps its lines in the C library's buffer until
+// that is full or a crash flushes it: a run that froze and was ended by the player, or lost its power, left a log
+// that stopped up to a buffer short of the end). A thread of its own, from the log's opening to the program's orderly
+// end; LogFlush takes no lock it waits for.
+namespace {
+std::atomic<bool> g_keeping{false};
+std::thread g_keeper;
+}  // namespace
+
+void StartLogKeeper() {
+  if (g_keeping.exchange(true)) return;
+  g_keeper = std::thread([] {
+    int ticks = 0;
+    while (g_keeping.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (++ticks >= 10) ticks = 0, LogFlush();
+    }
+  });
+}
+
+void StopLogKeeper() {
+  if (!g_keeping.exchange(false)) return;
+  if (g_keeper.joinable()) g_keeper.join();
 }
 
 std::vector<InterfaceEvent> LastEvents(size_t count) {
