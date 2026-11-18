@@ -402,11 +402,20 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
   // 6's engineer 0x600015, killed on a Move whose path ended short of its goal: the original's states lose
   // ProblemGettingToGoal in the kill's beat; ours kept it (the queue forgotten without the move's abort).
   IssueClearCommandsTo(sim, u, false);
-  // the emptied queue's event (Unit::UpdateSpeedThroughStatus 0x6ac940) reaches a killed aircraft too: with nothing
-  // queued its speed-through flag goes (seen: five patrolling aircraft killed in one beat, each 1 -> 0)
+  // A killed aircraft's speed-through flag goes with the tasks its queue held: their dtors ask
+  // Unit::UpdateSpeedThroughStatus 0x6ac940, which with nothing queued gives false (seen: five patrolling aircraft
+  // killed in one beat, each 1 -> 0) unless the unit is in ForceSpeedThrough or CannotFindPlaceToLand (its first
+  // rules, states 32 and 36: true). ClearCommandQueue 0x6ee2d0 itself raises only the queue's event 2 (0x6ee2ed),
+  // which the dispatcher (OnEvent 0x599030) answers by re-linking its thread, not with the status (that is event 0):
+  // an aircraft killed with an EMPTY queue keeps its flag. (Read 2026-11-18. Seen: FAF 3840 pro replay 4v4_setons_1
+  // 9047, army 5's interceptor 0x500117, out of fuel, CannotFindPlaceToLand, no order: the original's flag stays 1
+  // after its death; ours cleared it, the replay's only difference in 10,800 beats.)
   if (u->motion.air) {
-    u->motion.airSpeedThrough = false;
-    u->motion.air->fullSpeed = false;
+    if (hadCommands) {
+      const bool keep = u->unitStates.Has(US("ForceSpeedThrough")) || u->unitStates.Has(US("CannotFindPlaceToLand"));
+      u->motion.airSpeedThrough = keep;
+      u->motion.air->fullSpeed = keep;
+    }
   } else if (hadCommands && u->motion.nav) {
     // and a ground unit's: IAiCommandDispatchImpl::OnEvent 0x599030 (event 0) -> UpdateSpeedThroughStatus, whose
     // empty queue gives navigator->SetSpeedThroughGoal(false) (0x6acaf1, vt+0x18) -> CAiSteeringImpl 0x5d2390

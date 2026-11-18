@@ -674,9 +674,8 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
 // Seen: Skirmish 1268, engineer 0x700007 on AggressiveMove reclaims a prop 1 cell away first (its navigator idle
 // until the reclaim child moves it at 1274); ours walked off toward the goal.
 Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
-  if (!BpInCategory(sim, u->blueprint, "PATROLHELPER")) return nullptr;
-  if (p.aggressive && (BpInCategory(sim, u->blueprint, "COMMAND") || BpInCategory(sim, u->blueprint, "SACU_BEHAVIOR")))
-    return nullptr;
+  if (!PatrolHelperOf(u)) return nullptr;  // (the blueprint's answer kept in its combat data: combat.h)
+  if (p.aggressive && CommandOrSacuOf(u)) return nullptr;
   if (!u->army) return nullptr;
   const ArmyEconomy& eco = u->army->econ;
   const bool energyHigh = eco.stored[kEnergy] > static_cast<float>(static_cast<double>(eco.maxStorage[kEnergy]) * 0.75);

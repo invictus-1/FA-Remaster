@@ -1098,6 +1098,9 @@ Sim::~Sim() {
   if (CmdOrderCheck())
     fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: %llu command orders and re-link lists compared with the sort / scan: all equal\n",
             static_cast<unsigned long long>(cmdOrderChecks));
+  if (getenv("MOHO64_CATCACHE_CHECK") && strcmp(getenv("MOHO64_CATCACHE_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_CATCACHE_CHECK: %llu kept category answers compared with BpInCategory: all equal\n",
+            static_cast<unsigned long long>(catCacheChecks));
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
@@ -3869,7 +3872,9 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kRecon);
   MOHO_LAP(lap, "formations");  // (the effects, then the formation DB: PhaseTimer's "formations")
   EffectsTick(*this);  // step 11: the effect manager (sim+0x8c0 vt+0x34, 0x74a1ab), before the formation DB
-  {
+  if (order == SimOrder::kParallel) {
+    FormationsTickParallel(*this);  // (the block below with the formations' updates on the pool: formation.cpp)
+  } else {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
     // PENDING transform, so the formation update still sees every unit where it stood before this beat's
     // motion (the oracle recorder: the original's slot point at tick t = ours at t-1 with post-motion positions).
