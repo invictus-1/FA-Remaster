@@ -105,6 +105,10 @@ struct EmitterBlueprint {
   // [hoverglow] Whether it is the Cybran gunships' hover exhaust (cybran_hover_01_emit: the movement effect Hover04 of
   // the Renegade, the Jester and the Wailer): Particles::hoverExhaust.
   bool hoverExhaust = false;
+  // [dustnight] Whether it is dust of the ground itself: what a unit's treads, feet, landing or take-off kick up and what a
+  // shell throws up where it lands (the terrain types' emitters /effects/emitters/tt_* and tti_*, and dust_cloud_*; not
+  // the water's): Particles::dustNight.
+  bool groundDust = false;
   int sortOrder = 0;
   float lodCutoff = 0;      // an emitter that hangs on something throws nothing out farther from the camera (0: no limit)
   float longestLife = 1;    // the longest a particle of it can live, in ticks
@@ -288,6 +292,12 @@ class Particles {
   // times their texture they summed to a white-hot blob as big as the aircraft, by day and by night. Times this of
   // `glow` (1: as before, viewer --hover-exhaust old).
   float hoverExhaust = 0.3f;
+  // [dustnight] (found 2026-11-18 on a night look at the UEF's land units: every tracked vehicle drew a pale plume
+  // behind it, three times as bright as the ground it came from; by day the same dust is as dark as that ground) the
+  // share of the night's air light ([smoke air light], below) that the ground's dust takes. That light keeps smoke from
+  // reading as a dark line against the night's pale haze; dust hugs the ground and is seen against it, and at the
+  // haze's full colour it glowed. 1: as before (viewer --dust-night old).
+  float dustNight = 0.3f;
   int liveParticles = 0;  // after the last Draw
   int liveEmitters = 0;   // after the last Update
   int quietEmitters = 0;  // of those: out of sight or too far away in the last Update
