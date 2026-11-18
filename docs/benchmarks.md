@@ -118,6 +118,33 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## Two serial stages made cheaper: the commands stage and destroy + sync (2026-11-18, batches 179 to 181)
+
+A helper's study of the two stages that stay on one thread in the parallel order (16 threads; the measuring patch
+is not in main) found work repeated every beat that changes nothing. Four exact changes came of it, each proven
+against the old way on every beat by a check switch: the command order kept instead of sorted again and the
+re-linked threads from a list (`MOHO64_CMDORDER_CHECK`, batch 179), a patrol's category answers kept per blueprint
+(`MOHO64_CATCACHE_CHECK`, batch 180), the end of beat walking only the manipulators that can end
+(`MOHO64_FXMANIP_CHECK`, batch 181), and the task sweep every 10 drains (`MOHO64_SWEEP_EVERY`,
+`MOHO64_SWEEP_CHECK`, batch 181).
+
+First timing, three back-to-back pairs each, ON A MACHINE BUSY WITH GATES: the stages count, the whole beat does
+not (its pairs spread from -48 % to +27 %). ms a beat, means of the three pairs:
+
+| Stage | Workload | before (3e7ce074) | order kept | + patrol answers | + manipulator list | + sweep every 10 |
+|---|---|---|---|---|---|---|
+| commands | 50,000 units | 8.46 | 5.98 (-29 %) | 5.62 (-34 %) | 5.61 | 5.99 |
+| commands | B3-16k | 3.40 | 2.37 (-30 %) | 2.14 (-37 %) | 2.11 | 1.92 |
+| destroy + sync | 50,000 units | 5.01 | 4.57 | 4.58 | 4.69 | 2.03 (-60 %) |
+| destroy + sync | B3-16k | 2.26 | 2.05 | 2.04 | 1.98 | 1.00 (-56 %) |
+
+Every pair is faster for the kept order, the patrol answers (commands) and the sweep (destroy + sync); the
+manipulator list is within the noise, and in these workloads and six replays neither the old walk nor the list
+ever freed a manipulator. Together about 5.5 ms a beat on 50,000 units, where the quiet beat above is 42.6 ms.
+OWED: the three-build pair of the section below on a quiet machine with today's main, before any headline changes.
+What the study names next: patrol tasks that are asleep are still visited every beat (28 % of the commands stage,
+about 2.4 ms on 50,000 units), and the 6-beat patrol scans' queries could run ahead on the pool (about 0.6 ms).
+
 ## The headline on a quiet machine, and the one-thread cost found with it (2026-11-18, main 3e7ce074 against dfd0c579)
 
 Chris's quiet window of 18 November (07:58-08:18, PC clock): no game, viewer, interface program, bake or build of any
