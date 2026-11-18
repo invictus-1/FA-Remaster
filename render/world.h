@@ -1330,9 +1330,10 @@ class World {
     // [wreckpose] it has a pose (wreckPoses_) its model can wear: drawn on its own with its bones, never in its square's
     // group, while World::wreckPoses is on
     bool posed = false;
-    // [wreckpose] its model is a remastered unit's OWN wreck (ModelCache::RemasteredWreck: made as the wreck, in one piece
-    // on the root bone, though it lists the unit's bones): it never wears a pose (a walker's fallen pose moved the whole
-    // piece into the ground: URL0303, 2026-11-17)
+    // [wreckpose] its model is a remastered unit's OWN wreck (ModelCache::RemasteredWreck) made in ONE piece: every vertex
+    // on one bone, though it lists the unit's bones. It never wears a pose (a walker's fallen pose moved the whole piece
+    // into the ground: URL0303, 2026-11-17). A remastered wreck bound to several of the unit's bones is not one of these
+    // and takes the pose (Chris, 2026-11-17: the wrecks are redone that way after Cybran).
     bool ownWreck = false;
   };
   struct Pickable {  // a unit of the frame, for UnitAt, UnitsAt and UnitsIn
