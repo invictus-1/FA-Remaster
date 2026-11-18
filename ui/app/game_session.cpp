@@ -4253,6 +4253,9 @@ void GameSession::PushDeviceState(lua_State* L) {
   boolean("pending", deviceAsk_ != DeviceAsk::None || deviceLoseDone_);
   boolean("closing", deviceClosing_);
   str("shaderCache", shaderCache);
+  // (whether the simulation running keeps the poses units die in for their wrecks: set with the picture's other
+  // collections before the first beat; for the tests of Wreck Poses)
+  boolean("copiedPoses", sim_ && sim_->collectCopiedPoses);
 #ifdef MOHO64UI_WORLD_PICTURE
   render::WorldPicture* shown = picture_ ? &picture_->picture : windowPicture_ ? &windowPicture_->picture : nullptr;
   boolean("lost", (windowPicture_ && windowPicture_->picture.DeviceLost()) || (picture_ && picture_->picture.DeviceLost()) ||
@@ -4320,6 +4323,8 @@ void GameSession::PushDeviceState(lua_State* L) {
     boolean("starryNight", w->starryNight);
     boolean("remasteredGate", w->remasteredGate);
     boolean("waterFxMirror", w->waterFxMirror);
+    boolean("wreckPoses", w->wreckPoses);
+    boolean("strongWaterMirror", w->water.strongMirror);
     boolean("photoLook", w->photoLook.on);
     num("shadowSize", w->shadowSize);
     num("meshDetail", w->meshes.detail);
