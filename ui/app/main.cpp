@@ -353,6 +353,25 @@ int main(int argc, char** argv) {
   // The machine's block (the report bundle's part (b), 2026-11-15): what this run ran on, before anything else is
   // written, so that a log sent from another PC answers "what machine" by itself. Only where a log is written.
   if (!logName.empty()) ui::LogMachineBlock();
+  // The log's orderly end is marked (the automatic report, user/report.cpp: a run that froze, was closed by force or
+  // lost its power writes no last line, and its next start writes the report for it): said here, so that a log of a
+  // build that never wrote the line is not taken for such a run; and the log goes to its disk every second from now.
+  // The last line is written when main is left by any of its returns, after everything made below here is gone (a
+  // run that hangs while it takes its world down has not closed in order either); a crash never comes here.
+  struct OrderlyEnd {
+    bool marked = false;
+    ~OrderlyEnd() {
+      if (!marked) return;
+      ui::StopLogKeeper();
+      Logf(LogLevel::Info, "moho64ui: closed in order");
+      LogFlush();
+    }
+  } orderlyEnd;
+  if (!logName.empty()) {
+    Logf(LogLevel::Info, "moho64ui: a run that closes in order ends this log with the line 'moho64ui: closed in order'");
+    ui::StartLogKeeper();
+    orderlyEnd.marked = true;
+  }
 #ifdef MOHO64UI_WORLD_PICTURE
   // The renderer's lines into this log (its request 79, 2026-11-14: "the card's report" and the rest it prints went
   // to stdout / stderr, which a game started from a shortcut has not: on another machine all of it was lost). Set

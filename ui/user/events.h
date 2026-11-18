@@ -31,6 +31,10 @@ void LogLastEvents(const char* why, size_t count);
 // While true, ExecuteConsoleCommand does not note a "console" event: the key-down that runs a key-map action notes
 // the key and its action itself (one event, not two).
 bool& EventsFromKey();
+// The log written to its disk once a second, from the log's opening (Start) to the program's orderly end (Stop): so
+// that the log of a run that froze, was closed by force or lost its power holds what came before (events.cpp).
+void StartLogKeeper();
+void StopLogKeeper();
 // moho64ui_Events([n]) -> { {seconds, kind, text}, ... } (tests); remaster_events [n] is the console's way
 // (keymap.cpp).
 void RegisterEventBindings(lua_State* L);

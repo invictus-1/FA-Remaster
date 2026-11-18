@@ -148,7 +148,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the player's Desktop (the "reports" folder when there is none) and the menu's notice line says so, with the zip's
   name and where the option is. Once for a crash (`reports/auto_reported.txt` remembers the dump); never with the
   option Crash Reports off (Options > Interface, on by default; the menu's hook reads the profile's value). Nothing is
-  sent anywhere. No crash handler does any of it: the next start is a whole program (`user/report.cpp`
+  sent anywhere. No crash handler does any of it: the next start is a whole program. The same for a run that DID
+  NOT CLOSE IN ORDER (a freeze the player ended, a forced close, the PC going off: no dump exists): a log says at its
+  head that it will end with the line "moho64ui: closed in order", the program writes that line when `main` is left
+  (by any return), and a log with the first and without the second is of such a run; the log goes to its disk every
+  second and at every event (`StartLogKeeper`), so it holds what came before. Every report's README begins with each
+  log AT A GLANCE: the fault's lines, the machine and the game's files, the last things done in the interface, the
+  last errors and warnings, the last long frames (`user/report.cpp`
   `AutoCrashReport`, `moho64ui_AutoCrashReport()`, `data/hook/lua/ui/menus/main.lua`; `MOHO64UI_REPORT_FOLDER=<folder>`
   stands in for the Desktop in tests; `tests/auto_report.lua`, the lab's suite/report.sh: a crash, the start after it,
   the start after that, the option off and on, the launchers' log names).
