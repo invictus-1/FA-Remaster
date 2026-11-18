@@ -560,14 +560,103 @@ std::string Stamp(const char* form) {
   return text;
 }
 
+// The crash dump of the newest earlier run that crashed, "" when none is kept: by the log's kind (DefaultLogName), as
+// WriteReport finds what it puts in.
+std::filesystem::path NewestCrashDump(const std::filesystem::path& now) {
+  if (!DefaultLogName(now)) return DumpOf(now);
+  const std::filesystem::path crashed = LastCrashedBefore(now);
+  return crashed.empty() ? std::filesystem::path() : DumpOf(crashed);
+}
+
+// The player's Desktop (the automatic crash report's place: Chris, 2026-11-18, "Yes, on the Desktop"; his plan of
+// 2026-11-15: "if a crash occurs it post the details on desktop and the user can send it over"). MOHO64UI_REPORT_FOLDER
+// names another folder (the tests': never the lab's own Desktop). Windows: the shell's own answer (the Desktop may
+// lie in OneDrive); elsewhere $HOME/Desktop when there is one. "" when none is found.
+std::filesystem::path DesktopFolder() {
+  if (const char* named = std::getenv("MOHO64UI_REPORT_FOLDER"); named && *named) return PathOf(named);
+#ifdef _WIN32
+  using Get = HRESULT(WINAPI*)(HWND, int, HANDLE, DWORD, LPWSTR);
+  std::filesystem::path found;
+  if (HMODULE shell = LoadLibraryW(L"shell32.dll")) {  // (by name: this file includes no shell header)
+    if (auto get = reinterpret_cast<Get>(reinterpret_cast<void*>(GetProcAddress(shell, "SHGetFolderPathW")))) {
+      wchar_t path[MAX_PATH] = {};
+      if (get(nullptr, 0x0010 /* CSIDL_DESKTOPDIRECTORY */, nullptr, 0, path) == 0 && path[0]) found = path;
+    }
+    FreeLibrary(shell);
+  }
+  return found;
+#else
+  std::error_code ec;
+  if (const char* home = std::getenv("HOME")) {
+    const std::filesystem::path desktop = PathOf(home) / "Desktop";
+    if (std::filesystem::is_directory(desktop, ec)) return desktop;
+  }
+  return {};
+#endif
+}
+
+std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, bool byItself, std::string* why);
+
 }  // namespace
 
 // The report's zip written; its file, or "" with `why` set.
 std::string WriteReport(lua_State* L, const std::string& note, std::string* why) {
+  return WriteReportInto(L, note, {}, false, why);
+}
+
+// THE AUTOMATIC CRASH REPORT (the first step of Chris's debugger, 2026-11-15: "something that auto activates the
+// second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
+// details on desktop and the user can send it over"; 2026-11-18: "Yes, on the Desktop"). Called once when the main
+// menu is made (the menu's hook, which has read the option Crash Reports): when a kept earlier run crashed (its dump
+// is there) and no report was written for that dump yet, the report is written by itself onto the Desktop (the
+// "reports" folder when there is no Desktop), the menu's notice line says so, and the dump is remembered in
+// reports/auto_reported.txt (its name, size and time), so it is done once for a crash, not at every start. A crash
+// handler does none of this: zipping in a crashing program could fault again; the next start is whole.
+// Returns the zip's file; "" when nothing was to do or it failed (`why` says which).
+std::string AutoCrashReport(lua_State* L, std::string* why) {
+  static bool asked = false;
+  static std::string written;
+  if (asked) return *why = written.empty() ? "asked already in this run: nothing was to report" : "written already in this run: " + written, "";
+  asked = true;
   const UserState::Config& cfg = UserState::From(L)->config();
   const std::string log = RunLogFile();
-  std::filesystem::path folder;
-  if (!cfg.prefsFile.empty()) folder = PathOf(cfg.prefsFile).parent_path() / "reports";
+  if (log.empty() || cfg.prefsFile.empty()) return *why = "this run writes no log or keeps no preferences file", "";
+  const std::filesystem::path dump = NewestCrashDump(PathOf(log));
+  if (dump.empty()) return *why = "no earlier run that crashed is kept", "";
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(dump, ec);
+  const auto time = std::filesystem::last_write_time(dump, ec).time_since_epoch().count();
+  const std::string identity = Name(dump) + " " + std::to_string(size) + " " + std::to_string(static_cast<long long>(time));
+  const std::filesystem::path folder = PathOf(cfg.prefsFile).parent_path() / "reports";
+  const std::filesystem::path marks = folder / "auto_reported.txt";
+  std::string known;
+  ReadWhole(marks, &known);
+  if (("\n" + known).find("\n" + identity + "\n") != std::string::npos) return *why = "a report was written for that crash already", "";
+  const std::filesystem::path desktop = DesktopFolder();
+  const bool onDesktop = !desktop.empty() && std::filesystem::is_directory(desktop, ec);
+  std::string failed;
+  const std::string file = WriteReportInto(L, "", onDesktop ? desktop : std::filesystem::path(), true, &failed);
+  if (file.empty()) return *why = failed, "";
+  std::filesystem::create_directories(folder, ec);
+  if (std::ofstream out(marks, std::ios::binary | std::ios::app); out) out << identity << "\n";
+  written = file;
+  const std::string name = Name(PathOf(file));
+  AddMenuNotice("The game stopped with a fault the last time it ran. A report for it is " +
+                std::string(onDesktop ? "on your Desktop" : "in the game's reports folder") + ": " + name +
+                ". Nothing was sent anywhere; passing it on helps find the cause. (Options > Interface > Crash Reports turns this off.)");
+  Logf(LogLevel::Info, "moho64ui: the report: written by itself for the crash of %s (%s)", Name(dump).c_str(), onDesktop ? "onto the Desktop" : "into the reports folder");
+  return file;
+}
+
+namespace {
+
+// `into`: the folder ("": "reports" beside the preferences); `byItself`: the automatic crash report's.
+std::string WriteReportInto(lua_State* L, const std::string& note, const std::filesystem::path& into, bool byItself, std::string* why) {
+  const UserState::Config& cfg = UserState::From(L)->config();
+  const std::string log = RunLogFile();
+  std::filesystem::path folder = into;
+  if (!folder.empty()) {
+  } else if (!cfg.prefsFile.empty()) folder = PathOf(cfg.prefsFile).parent_path() / "reports";
   else if (!log.empty()) folder = PathOf(log).parent_path().parent_path() / "reports";
   if (folder.empty()) return *why = "this run has no preferences file and no log, so no folder to write the report into", "";
   std::error_code ec;
@@ -645,10 +734,13 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
     zip.Add("game.prefs", ShortenUserFolder(text));
     inside += "- game.prefs: the preferences (the options, the key bindings, the profiles)\n";
   }
-  std::string readme = "FA Remastered: a report (the console's remaster_report), written " + Stamp("%Y-%m-%d %H:%M:%S") +
-                       ".\nOur build: commit " + std::string(kBuildCommit) + ".\n";
-  readme += note.empty() ? std::string("The player's note: none (remaster_report <a note> adds one).\n")
-                         : "The player's note: " + note + "\n";
+  std::string readme = std::string("FA Remastered: a report (") +
+                       (byItself ? "written by itself at the start after a crash: the option Crash Reports, Options > Interface"
+                                 : "the console's remaster_report") +
+                       "), written " + Stamp("%Y-%m-%d %H:%M:%S") + ".\nOur build: commit " + std::string(kBuildCommit) + ".\n";
+  readme += !note.empty() ? "The player's note: " + note + "\n"
+            : byItself    ? std::string("The player's note: none (the console's remaster_report <a note> writes a report with one).\n")
+                          : std::string("The player's note: none (remaster_report <a note> adds one).\n");
   readme += "\nInside:\n" + inside +
             "\nIn the text files the user's own folder is written <user folder>; nothing else is changed.\n"
             "Nothing was sent anywhere: this file stays on this PC until you pass it on yourself.\n";
@@ -663,11 +755,9 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
   }
   out.close();
   Logf(LogLevel::Info, "moho64ui: the report: written, %zu bytes: %s", bytes.size(), ShortenUserFolder(TextOf(file)).c_str());
-  NoteEvent("report", "a report written");
+  NoteEvent("report", byItself ? "a report written by itself (a crash the time before)" : "a report written");
   return TextOf(file);
 }
-
-namespace {
 
 int l_Report(lua_State* L) {
   const char* note = lua_isstring(L, 1) ? lua_tostring(L, 1) : "";
@@ -682,8 +772,25 @@ int l_Report(lua_State* L) {
   return 1;
 }
 
+// moho64ui_AutoCrashReport() -> the zip's file | nil, why: the automatic crash report (AutoCrashReport), asked by the
+// main menu's hook once the option allows it; a second call in a run writes nothing and says what the first did.
+int l_AutoCrashReport(lua_State* L) {
+  std::string why;
+  const std::string file = AutoCrashReport(L, &why);
+  if (file.empty()) {
+    lua_pushnil(L);
+    lua_pushstring(L, why.c_str());
+    return 2;
+  }
+  lua_pushstring(L, file.c_str());
+  return 1;
+}
+
 }  // namespace
 
-void RegisterReportBindings(lua_State* L) { lua_register(L, "moho64ui_Report", l_Report); }
+void RegisterReportBindings(lua_State* L) {
+  lua_register(L, "moho64ui_Report", l_Report);
+  lua_register(L, "moho64ui_AutoCrashReport", l_AutoCrashReport);
+}
 
 }  // namespace moho::ui

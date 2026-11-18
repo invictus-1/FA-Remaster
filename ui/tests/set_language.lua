@@ -5,6 +5,24 @@
 --            --frames 600 --log out.log -- /lang ru
 -- `-- /uiscale 1.5` instead: the profile's option ui_scale (FAF's /lua/maui/layouthelpers.lua reads it at the
 -- next start: the interface's sizes times that), for the lab's layout.sh.
+-- `-- /setoption <key> <number>` instead: any profile option set to a number (for the suite's report.sh: the option
+-- Crash Reports off and on again).
+local setoption = GetCommandLineArg("/setoption", 2)
+if setoption and setoption[1] and tonumber(setoption[2]) then
+    ForkThread(function()
+        WaitSeconds(1)
+        local Prefs = import('/lua/user/prefs.lua')
+        local options = Prefs.GetFromCurrentProfile('options') or {}
+        options[setoption[1]] = tonumber(setoption[2])
+        Prefs.SetToCurrentProfile('options', options)
+        SavePreferences()
+        local now = (Prefs.GetFromCurrentProfile('options') or {})[setoption[1]]
+        LOG("TEST ok   the profile's option " .. setoption[1] .. " is set to " .. tostring(now))
+        LOG("TEST done: " .. (now == tonumber(setoption[2]) and 0 or 1) .. " failed")
+        ExitApplication()
+    end)
+    return
+end
 local lang = (GetCommandLineArg("/lang", 1) or {})[1] or "us"
 local scale = tonumber((GetCommandLineArg("/uiscale", 1) or {})[1])
 if scale then

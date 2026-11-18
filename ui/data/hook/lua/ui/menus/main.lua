@@ -69,6 +69,28 @@ function RemasterShowNotices(parent)
     return true
 end
 
+-- The automatic crash report (ours; ui/user/report.cpp AutoCrashReport; Chris's debugger, 2026-11-15 and 2026-11-18):
+-- when the menu is made, the host is asked once to write the report of a crash the time before, unless the profile's
+-- option Crash Reports (Options > Interface) is off. The host says it on the notice line below.
+-- What the menu's asking did, for the tests: asked (the host was asked), file (the zip written, or false), why (why none).
+RemasterAutoCrash = { asked = false, file = false, why = "the menu was not made yet" }
+
+function RemasterAutoCrashReport()
+    if not rawget(_G, 'moho64ui_AutoCrashReport') then
+        RemasterAutoCrash = { asked = false, file = false, why = "no host function" }
+        return nil, RemasterAutoCrash.why
+    end
+    local options = import('/lua/user/prefs.lua').GetFromCurrentProfile('options') or {}
+    if options.remaster_crash_reports == 0 then
+        RemasterAutoCrash = { asked = false, file = false, why = "the option Crash Reports is off" }
+        return nil, RemasterAutoCrash.why
+    end
+    local file, why = moho64ui_AutoCrashReport()
+    -- (the menu is made again when the player comes back from a game: the first asking's answer is kept)
+    if not RemasterAutoCrash.asked then RemasterAutoCrash = { asked = true, file = file or false, why = why or "" } end
+    return file, why
+end
+
 -- The menu's own screen group is a local of the game's CreateUI: it is caught as CreateUI makes it, so the box is
 -- the menu's child and goes with it.
 local RemasterMenuCreateUI = CreateUI
@@ -82,6 +104,8 @@ function CreateUI(...)
     local ok, result = pcall(RemasterMenuCreateUI, unpack(arg))
     RemasterMenuUIUtil.CreateScreenGroup = real
     if not ok then error(result, 0) end
+    local asked, file, whyNot = pcall(RemasterAutoCrashReport)
+    LOG("FA Remastered: the automatic crash report: " .. (asked and (file and "written" or tostring(whyNot)) or ("failed: " .. tostring(file))))
     -- (another main menu script may name its group otherwise: the box is then the head's own child)
     local shown, why = pcall(RemasterShowNotices, group or GetFrame(0))
     if not shown then WARN("FA Remastered: the menu's notice line: " .. tostring(why)) end

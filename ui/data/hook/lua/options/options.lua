@@ -1216,6 +1216,23 @@ table.insert(options.ui.items, {
 -- battle on Seton's Clutch Remastered (the default; without that map: Dusk), the evening flight over the stock map as
 -- before, or one still picture. Live: the main menu changes at once. And the battle's sound: none (the original's menu
 -- played music only, the default) or heard from afar.
+-- The automatic crash report (ours; ui/user/report.cpp AutoCrashReport; Chris, 2026-11-15: "a background thing that
+-- can be disabled in settings"). Read by the main menu's hook when the menu is made (the profile's value: nothing is
+-- sent to the program by `set`).
+table.insert(options.ui.items, {
+    title = "Crash Reports",
+    key = 'remaster_crash_reports',
+    tip = "On: when the game stopped with a fault, its next start writes a report as one zip onto your Desktop (the logs, the fault's dump with your user name hidden, the replay, your settings) and says so on the main menu. Nothing is sent anywhere: you decide whether to pass it on. Off: no report is written by itself; the console's remaster_report still writes one.",
+    type = 'toggle',
+    default = 1,
+    set = function(key, value, startup) end,
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 0 },
+            { text = "<LOC _On>", key = 1 },
+        },
+    },
+})
 table.insert(options.ui.items, {
     title = "Menu Background",
     key = 'remaster_menu_background',

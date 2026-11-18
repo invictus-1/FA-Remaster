@@ -141,6 +141,17 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   hidden too. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
   `moho64ui_Report([note])`; `tests/report.lua`; the lab's suite/report.sh reads the zips, with a made-up user folder
   and both ways of naming).
+- The automatic crash report (ours; the first step of Chris's debugger: 2026-11-15, "something that auto activates the
+  second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
+  details on desktop and the user can send it over"; 2026-11-18, "Yes, on the Desktop"): when the main menu is made
+  and a kept earlier run crashed (its dump is there) without a report yet, the report above is written by itself onto
+  the player's Desktop (the "reports" folder when there is none) and the menu's notice line says so, with the zip's
+  name and where the option is. Once for a crash (`reports/auto_reported.txt` remembers the dump); never with the
+  option Crash Reports off (Options > Interface, on by default; the menu's hook reads the profile's value). Nothing is
+  sent anywhere. No crash handler does any of it: the next start is a whole program (`user/report.cpp`
+  `AutoCrashReport`, `moho64ui_AutoCrashReport()`, `data/hook/lua/ui/menus/main.lua`; `MOHO64UI_REPORT_FOLDER=<folder>`
+  stands in for the Desktop in tests; `tests/auto_report.lua`, the lab's suite/report.sh: a crash, the start after it,
+  the start after that, the option off and on, the launchers' log names).
 - The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57;
   its numbers' rule decided with the renderer at the Fable check, 2026-11-17): a small panel under the Options dialog
   on its Video and Remastered tabs. Its first line: what a large late game needs with the settings as chosen in the
