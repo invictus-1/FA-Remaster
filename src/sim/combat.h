@@ -179,8 +179,10 @@ class SlaveManipulator : public ScriptObject {
   Quat cur;                         // +0x84: the rotation given to the destination bone
   Quat srcLocal;                    // the source's local rotation in the pose that is being replaced
   bool enabled = true, alive = true;
+  bool signalled = false;           // +4 (CTaskEvent): each move sets it: at the source's rotation, or still turning
   int precedence = 0;
   uint32_t seq = 0;
+  int EventState() const override { return signalled ? 1 : 0; }
 };
 
 // CCollisionManipulator (CreateCollisionDetector 0x638020, ManipulatorUpdate 0x637c90): watches bones of a unit

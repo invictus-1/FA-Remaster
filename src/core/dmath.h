@@ -111,6 +111,41 @@ inline double Logd(double x) {
   return 2 * sum + e * 0.69314718055994530942;
 }
 inline float Log(float x) { return static_cast<float>(Logd(x)); }
+// log2 (x > 0): the exponent plus ln(m) / ln 2 of the mantissa in [sqrt(1/2), sqrt(2)): exact for a power of two.
+inline double Log2d(double x) {
+  if (!(x > 0)) return x == 0 ? -HUGE_VAL : NAN;
+  if (std::isinf(x)) return x;
+  int e;
+  double m = std::frexp(x, &e);  // [0.5, 1)
+  if (m < 0.70710678118654752440) {
+    m *= 2;
+    --e;
+  }
+  double t = (m - 1) / (m + 1), t2 = t * t, term = t, sum = t;
+  for (int n = 3; n <= 41; n += 2) {
+    term *= t2;
+    sum += term / n;
+  }
+  return e + 2 * sum * 1.44269504088896338700;
+}
+
+// e^x (|x| < 700): x = k ln2 + r with |r| <= ln2/2 (ln2 split in two for the reduction), a series to r^20, times 2^k.
+inline double Expd(double x) {
+  constexpr double kLn2Hi = 6.93147180369123816490e-01, kLn2Lo = 1.90821492927058770002e-10;
+  double k = std::nearbyint(x * 1.44269504088896338700);
+  double r = (x - k * kLn2Hi) - k * kLn2Lo;
+  double term = 1.0, sum = 1.0;
+  for (int n = 1; n <= 20; ++n) {
+    term *= r / n;
+    sum += term;
+  }
+  return std::ldexp(sum, static_cast<int>(k));
+}
+// 2^f for a small f (|f| <= 1 is what its callers give)
+inline double Exp2d(double f) { return Expd(f * 0.69314718055994530942); }
+// x^y for x > 0, rounded once to float (the C library's powf differs between Windows and Linux in about 1 of 1300
+// arguments: linsim, 2026-11-14)
+inline float Pow(float x, float y) { return static_cast<float>(Expd(static_cast<double>(y) * Logd(x))); }
 
 // COORDS_Orient 0x50b480, the look rotation of a direction (the world's up): Z = the direction, X = (Z.z, 0, -0.0 -
 // Z.x), each through the normalise 0x452af0; a zero Z gives the identity, a zero X (straight up or down) the quarter

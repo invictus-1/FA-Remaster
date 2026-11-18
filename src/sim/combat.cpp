@@ -3165,8 +3165,10 @@ static Quat ThrustArcExe(const Vec3& a, const Vec3& b) {
 // 0x4eb830: from c toward t by at most the angle `rate`. d = conj(c) x t (0x4eb833..0x4eb942); 0x4eb740 caps it (only
 // when rate / 2 is below pi / 2, and only when |d.xyz| is above the sine of rate / 2: then d = (cos, the axis x sin,
 // the sine negated when d.w < 0)); a capped d gives c x d (0x4eb966..0x4eba48, not normalised), an uncapped one t
-// itself (0x4eba55).
-static Quat ThrustRateStepExe(const Quat& c, const Quat& t, float rate) {
+// itself (0x4eba55). *there is the byte the routine writes for its caller (0x4eba38: 0 when it capped the turn,
+// 0x4eba6c: 1 when it gave t). Its callers: the thrust manipulator (0x64aaf4) and the slave manipulator (0x646209).
+static Quat RateStepExe(const Quat& c, const Quat& t, float rate, bool* there = nullptr) {
+  if (there) *there = true;
   const float cx = -0.0f - c.x, cy = -0.0f - c.y, cz = -0.0f - c.z;
   Quat d;
   d.w = ((t.w * c.w - t.x * cx) - t.y * cy) - t.z * cz;
@@ -3182,6 +3184,7 @@ static Quat ThrustRateStepExe(const Quat& c, const Quat& t, float rate) {
   Vec3 n{d.x, d.y, d.z};
   vm::NormalizeExe(n);
   d = {n.x * s, n.y * s, n.z * s, dmath::Cos(half)};
+  if (there) *there = false;
   Quat o;
   o.w = ((c.w * d.w - c.x * d.x) - c.y * d.y) - c.z * d.z;
   o.x = ((c.y * d.z + c.x * d.w) + c.w * d.x) - c.z * d.y;
@@ -3232,7 +3235,7 @@ static void ThrustStep(Unit* u, ThrustManipulator* m) {
   // 0x64aad3: the arc from the bone's forward axis to there; 0x64aaf4: last beat's turn toward it by at most
   // turnSpeed; 0x64ab02: the bone's local rotation x that (CAniPoseBone::Rotate 0x54bc00); kept for the next beat
   const Quat goal = ThrustArcExe(m->fwd, c);
-  const Quat o = ThrustRateStepExe(m->cur, goal, m->turnSpeed);
+  const Quat o = RateStepExe(m->cur, goal, m->turnSpeed);
   PoseRotate(u, m->bone, o);
   m->cur = o;
   static const long dbg = getenv("MOHO64_DEBUG_THRUST") ? atol(getenv("MOHO64_DEBUG_THRUST")) : -2;
@@ -3362,23 +3365,18 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     }
     SlaveManipulator* m = static_cast<SlaveManipulator*>(e.p);  // CSlaveManipulator::MoveManipulator 0x646140
     if (!m->alive || !m->enabled || m->destBone < 0 || m->srcBone < 0) continue;
-    if (m->maxRate >= 0.0f) {
-      // (0x4eb830: toward the source's rotation by at most the rate; no script in the game files sets one, and
-      // this is a plain shortest-arc step, not read from the exe)
-      const Quat d = ComposeQ(Conj(m->cur), m->srcLocal);
-      const float w = std::fmin(1.0f, std::fabs(d.w));
-      const float ang = 2.0f * std::acos(w);
-      if (ang <= m->maxRate || ang < 1e-6f) {
-        m->cur = m->srcLocal;
-      } else {
-        const float k = m->maxRate / ang, s = std::sin(ang * 0.5f), sk = std::sin(ang * 0.5f * k);
-        const float sign = d.w < 0 ? -1.0f : 1.0f, f = s > 1e-9f ? sk / s * sign : 0.0f;
-        m->cur = QNorm(ComposeQ(m->cur, Quat{d.x * f, d.y * f, d.z * f, std::cos(ang * 0.5f * k)}));
-      }
-    } else {
-      m->cur = m->srcLocal;
-    }
+    // 0x6461d6: a rate of 0 or more (comiss with 0.0, jb) turns last beat's rotation toward the source's by at most
+    // the rate (0x646209: the same 0x4eb830 as the thrust manipulator's, its result kept unnormalised); a rate below
+    // 0 takes the source's at once. The event (CTaskEvent, the manipulator's +4) is set every move to "there" (the
+    // byte 0x4eb830 writes: 1 unless it capped the turn; 0x646294 EventSetSignaled 0x406d90, which wakes the waiting
+    // threads when it sets it). No script in the game's files sets a rate; mods' may.
+    bool there = true;
+    if (m->maxRate >= 0.0f) m->cur = RateStepExe(m->cur, m->srcLocal, m->maxRate, &there);
+    else m->cur = m->srcLocal;
     PoseRotate(u, m->destBone, m->cur);  // (0x646289: the destination's local rotation x that)
+    const bool was = m->signalled;
+    m->signalled = there;
+    if (!was && there) sim.SignalEvent(m);
   }
   if (!u->colliders.empty()) CollidersTick(sim, u);
 }
