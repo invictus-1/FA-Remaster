@@ -8,9 +8,11 @@
 #include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 
 #include "core/dmath.h"
 #include "core/log.h"
+#include "core/workers.h"
 #include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/blueprints.h"
@@ -19,17 +21,22 @@
 #include "sim/entity_grid.h"
 #include "sim/landnav.h"
 #include "sim/motion.h"
+#include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
 #include "sim/slot_sort.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
+#include "sim/write_trap.h"
 
 namespace moho {
 namespace {
 
 constexpr float kInfF = std::numeric_limits<float>::infinity();
+// CanMoveAt asked the unit grid (Sim::ForUnitsInRect) in this thread's formation update: parallel order's stage
+// (FormationsTickParallel) makes a due grid before its updates and, when none of them asked it, leaves it due again
+thread_local bool tl_formUnitGrid = false;
 
 Unit* UnitOf(Sim& sim, uint32_t h) {
   Entity* e = h ? sim.FindEntity(h) : nullptr;
@@ -486,6 +493,7 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
   // (candidates come by their centre: the margin has to cover half the longest hull, a battleship lying askew
   // reaches 15 and more from its middle)
   static const long dbgSpot = getenv("MOHO64_DEBUG_FORMSPOT") ? atol(getenv("MOHO64_DEBUG_FORMSPOT")) : -1;
+  tl_formUnitGrid = true;
   sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* e) {
     if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot && e != u) {  // every unit within 2 of the box
       WorldShape ds;
@@ -739,10 +747,11 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   g.atGoal = true;
 }
 
-// vt+0x44 Update (4.1)
-void Update(Formation& F) {
+// vt+0x44 Update (4.1), after its rebuild (EnsureBuilt): reads the units, the terrain, the path and unit grids, and
+// writes this formation only (its groups' nodes, mid, at-goal flag and leader cache, its adjusted places and
+// reservations). No Lua: the formation script runs in the rebuild alone.
+void UpdateBuilt(Formation& F) {
   Sim& sim = *F.sim;
-  EnsureBuilt(F);
   if (!FormationIsForm(F) || F.units.empty()) return;
   for (int k = 0; k < 2; ++k)
     for (FormGroup& g : F.groups[k]) {
@@ -858,6 +867,12 @@ void Update(Formation& F) {
     }
 }
 
+// vt+0x44 Update (4.1)
+void Update(Formation& F) {
+  EnsureBuilt(F);
+  UpdateBuilt(F);
+}
+
 // vt+0x30 GetFormationSpeed (3.2)
 float FormationSpeed(Formation& F, Unit* u, float* mult, FormGroup* g) {
   if (!FormationIsForm(F)) return 0;
@@ -887,6 +902,15 @@ float FormationSpeed(Formation& F, Unit* u, float* mult, FormGroup* g) {
 // map by the sim's address (RegistryMap).
 struct FormationState {
   std::vector<std::weak_ptr<Formation>> registry;
+  // parallel order's stage (FormationsTickParallel), kept from beat to beat: per index of the sim's units as the
+  // stage began, the unit put back on its committed transform (or null) and its pending one; the updates of a run
+  // between two rebuilds, the owners that keep them alive meanwhile, and which of them asked the unit grid
+  std::vector<Unit*> who;
+  std::vector<Vec3> movedPos;
+  std::vector<Quat> movedOri;
+  std::vector<Formation*> batch;
+  std::vector<std::shared_ptr<Formation>> hold;
+  std::vector<uint8_t> askedGrid;
 };
 
 namespace {
@@ -1187,6 +1211,128 @@ void FormationsTick(Sim& sim) {
     auto f = reg[i].lock();
     if (!f || f->released) continue;
     Update(*f);
+  }
+  reg.erase(std::remove_if(reg.begin(), reg.end(),
+                           [](const std::weak_ptr<Formation>& w) {
+                             auto f = w.lock();
+                             return !f || f->released;
+                           }),
+            reg.end());
+}
+
+// Parallel order's formation DB step (docs/parallel-mode.md 3.4: each formation's update on the pool). The same game
+// as Sim::AdvanceBeat's serial block (every moved unit put on its committed transform, FormationsTick, the pending
+// transforms back), at any thread count:
+// - No live formation: nothing reads a unit, so nobody is moved back and forth (the registry's clean-up only).
+// - The moves back and forth write each unit's own transform: on the pool, per index of the sim's unit list.
+// - A formation's update (UpdateBuilt) writes that formation only, and reads the units (nothing writes them in the
+//   stage), the terrain, the path grids (their pending terrain changes taken before), the entity grid and the unit
+//   grid (made before when due). So the updates of a run of formations go on the pool in any order.
+// - A rebuild (a dirty formation: AddUnit, SetScale, SetOrientation since its last one) runs the formation script,
+//   Lua: on the sim's thread, in the registry's order, and only after every update before it in that order has run
+//   (the run so far is finished first), so each script sees what the serial loop's would, and every update after it
+//   sees what the script did.
+// - The unit grid: the serial loop rebuilds a due grid at the first CanMoveAt (with the units on their committed
+//   transforms) and keeps it; here a due grid is made before a run's updates and made due again when none of them
+//   asked it, so the grid is in the same state after the stage.
+// The pool's work is skipped (the same loops on the sim's thread) with the write trap (then the updates are a trapped
+// phase: no unit may be written), MOHO64_PAR_FORMATIONS=0, a debug log of the formation code, a sim without its
+// navigation or entity grid made (their first reader makes them; navigation's reads Lua), or one thread.
+void FormationsTickParallel(Sim& sim) {
+  auto& reg = Registry(sim);
+  FormationState& st = *sim.formationState;
+  bool any = false;
+  for (const auto& w : reg) {
+    auto f = w.lock();
+    if (f && !f->released) {
+      any = true;
+      break;
+    }
+  }
+  if (any) {
+    WorkerPool& pool = sim.workers();
+    const bool checked = pool.Check().mode != ParCheck::kOff;
+    // MOHO64_PAR_FORMATIONS=0: on the sim's thread; =all: every run of updates on the pool, however small (a test)
+    static const char* parEnv = getenv("MOHO64_PAR_FORMATIONS");
+    static const bool parForm = !(parEnv && !strcmp(parEnv, "0")), parAll = parEnv && !strcmp(parEnv, "all");
+    static const bool dbgLogs =
+        getenv("MOHO64_DEBUG_ATGOAL") || getenv("MOHO64_DEBUG_FORMSPOT") || getenv("MOHO64_DEBUG_GRIDCHECK");
+    const bool onPool = (checked || (parForm && pool.Threads() > 1)) && !wtrap::On() && !dbgLogs;
+    // every unit that moved in this beat on its committed transform (Sim::AdvanceBeat's serial block)
+    const std::vector<Unit*>& all = sim.units();
+    const size_t n = all.size();
+    const uint32_t tick = sim.tick();
+    st.who.resize(n);
+    st.movedPos.resize(n);
+    st.movedOri.resize(n);
+    auto back = [&](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i) {
+        Unit* u = all[i];
+        if (u->lastPosTick == tick && !u->destroyQueued) {
+          st.who[i] = u;
+          st.movedPos[i] = u->position;
+          st.movedOri[i] = u->orientation;
+          u->position = u->lastPosition;
+          u->orientation = u->lastOrientation;
+        } else {
+          st.who[i] = nullptr;
+        }
+      }
+    };
+    if (onPool) pool.ParallelFor("formations: committed places", n, 512, back);
+    else back(0, n, 0);
+    // (an update is some microseconds: a run goes to the pool from a few formations and their units on, below that
+    // the pool's wake-up costs more than it saves (MP1 parallel order, 16 threads: 17 us busy a beat, 49 us wall);
+    // the order check takes every run)
+    constexpr size_t kPoolFormations = 4, kPoolMembers = 128;
+    size_t members = 0;
+    auto run = [&]() {
+      if (st.batch.empty()) return;
+      const EntityGrid* eg = sim.EntityGridIfMade();
+      const bool big = checked || parAll || (st.batch.size() >= kPoolFormations && members >= kPoolMembers);
+      members = 0;
+      if (onPool && big && sim.HasNavigation() && eg && (eg->ready() || !sim.map())) {
+        const bool gridDue = sim.UnitGridDue();
+        if (gridDue) sim.EnsureUnitGrid();
+        sim.navigation().ApplyTerrainChanges();
+        st.askedGrid.assign(st.batch.size(), 0);
+        pool.ParallelFor("formations", st.batch.size(), 1, [&](size_t b, size_t e, int) {
+          for (size_t k = b; k < e; ++k) {
+            tl_formUnitGrid = false;
+            UpdateBuilt(*st.batch[k]);
+            st.askedGrid[k] = tl_formUnitGrid ? 1 : 0;
+          }
+        });
+        if (gridDue && std::find(st.askedGrid.begin(), st.askedGrid.end(), 1) == st.askedGrid.end()) sim.MarkUnitsMoved();
+      } else {
+        std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the updates write no unit)
+        if (wtrap::On()) trap.emplace(sim.tick(), "formations");
+        for (Formation* f : st.batch) UpdateBuilt(*f);
+      }
+      st.batch.clear();
+      st.hold.clear();
+    };
+    for (size_t i = 0; i < reg.size(); ++i) {  // (FormationsTick's loop; a script may add formations: size each time)
+      auto f = reg[i].lock();
+      if (!f || f->released) continue;
+      if (f->dirty) {
+        run();
+        Rebuild(*f);
+      }
+      members += f->units.size();
+      st.batch.push_back(f.get());
+      st.hold.push_back(std::move(f));
+    }
+    run();
+    auto forth = [&](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i)
+        if (Unit* u = st.who[i]) {
+          u->position = st.movedPos[i];
+          u->orientation = st.movedOri[i];
+        }
+    };
+    if (onPool) pool.ParallelFor("formations: pending places", n, 512, forth);
+    else forth(0, n, 0);
   }
   reg.erase(std::remove_if(reg.begin(), reg.end(),
                            [](const std::weak_ptr<Formation>& w) {

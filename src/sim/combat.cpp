@@ -1117,6 +1117,7 @@ struct CombatBpData {
   float intel[5] = {0, 0, 0, 0, 0};  // Vision, WaterVision, Radar, Sonar, Omni radii
   bool radarStealth = false, sonarStealth = false, cloak = false;
   bool command = false, benign = false, structure = false;
+  bool patrolHelper = false, sacuBehavior = false;  // (PatrolHelperOf, CommandOrSacuOf)
 };
 
 static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
@@ -1166,6 +1167,8 @@ static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const Bluepri
   d.command = BpInCategory(sim, &bp, "COMMAND");
   d.benign = BpInCategory(sim, &bp, "BENIGN");
   d.structure = BpInCategory(sim, &bp, "STRUCTURE");
+  d.patrolHelper = BpInCategory(sim, &bp, "PATROLHELPER");
+  d.sacuBehavior = BpInCategory(sim, &bp, "SACU_BEHAVIOR");
   return cache.emplace(&bp, std::move(d)).first->second;
 }
 
@@ -1481,6 +1484,24 @@ __attribute__((noinline)) bool PickPointBelowWater(Sim& sim, Entity* e, int* bon
 // in this beat (its position, +0xac, against the one before, +0xc8, by memcmp 0x4f0a50: 0x6d7924..0x6d7938), or
 // when the count is down to 0 (0x6d793a). The entry keeps no place of its own: an entity that moved some beats ago
 // and stands again stays on the list.
+// (Both places are the COMMITTED transforms, as in the miss test below (MovedCommitted): "moved between the last two
+// AdvanceCoords". Since batch 150 the decay also runs from a shell's impact inside the entity pass (the miss drop's
+// SetTarget with an entity target), where an entity that has already taken its step has its pending place in
+// `position`: ours compared that with the committed one, "moved in this beat". Seen: FAF 3840 pro replay 2v2_3 10766,
+// three-shot salvos of army 3 on two Rhinos that stop and start: one salvo went to the other Rhino.)
+static bool MovedCommitted(const Sim& sim, const Entity* e) {
+  if (e->kind == Entity::Kind::Unit) {
+    const Unit* x = static_cast<const Unit*>(e);
+    if (x->lastPosTick == sim.tick()) return !SameBits(x->lastPosition, x->prevLastPosition);
+    return !SameBits(x->position, x->lastPosition);
+  }
+  if (e->kind == Entity::Kind::Projectile) {
+    const Projectile* x = static_cast<const Projectile*>(e);
+    if (x->prevPosTick == sim.tick()) return !SameBits(x->prevPos, x->prevPosBefore);
+    return !SameBits(x->position, x->prevPos);
+  }
+  return false;
+}
 void DecayBlacklist(Sim& sim, UnitWeapon* w) {
   auto& bl = w->blacklist;
   bl.erase(std::remove_if(bl.begin(), bl.end(),
@@ -1488,12 +1509,7 @@ void DecayBlacklist(Sim& sim, UnitWeapon* w) {
                             const int left = --b.counter;
                             Entity* e = sim.FindEntity(b.id);
                             if (!e) return true;
-                            const Vec3& before = e->kind == Entity::Kind::Unit
-                                                     ? static_cast<const Unit*>(e)->lastPosition
-                                                     : e->kind == Entity::Kind::Projectile
-                                                           ? static_cast<const Projectile*>(e)->prevPos
-                                                           : e->position;
-                            if (!SameBits(e->position, before)) return true;
+                            if (MovedCommitted(sim, e)) return true;
                             return left <= 0;
                           }),
            bl.end());
@@ -1553,19 +1569,7 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
   // entity that has already taken its step in this beat. Then its committed position is what the step started
   // from: a unit's lastPosition, the one before its prevLastPosition; a shell's prevPos, the one before
   // prevPosBefore.)
-  auto moved = [&sim](const Entity* e) {
-    if (e->kind == Entity::Kind::Unit) {
-      const Unit* x = static_cast<const Unit*>(e);
-      if (x->lastPosTick == sim.tick()) return !SameBits(x->lastPosition, x->prevLastPosition);
-      return !SameBits(x->position, x->lastPosition);
-    }
-    if (e->kind == Entity::Kind::Projectile) {
-      const Projectile* x = static_cast<const Projectile*>(e);
-      if (x->prevPosTick == sim.tick()) return !SameBits(x->prevPos, x->prevPosBefore);
-      return !SameBits(x->position, x->prevPos);
-    }
-    return false;
-  };
+  auto moved = [&sim](const Entity* e) { return MovedCommitted(sim, e); };
   if (!u->weapons.empty() && u->weapons[0] == w) {  // (weapon +0xa4 == 0: the unit's first weapon)
     Entity* de = u->desiredTarget.type == 1 ? TargetEntity(sim, u->desiredTarget) : nullptr;
     if (de && IsMobile(u) && !moved(u) && EntityLayerBit(de) != 16 && !moved(de)) {
@@ -3797,6 +3801,37 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
 // within GuardScanRadius of the unit (score = distance; no angle). The blip cache is read as the weapons
 // last built it (not refreshed here).
 float GuardScanRadiusOf(Unit* u) { return CB(u).guardScanRadius; }
+static bool CatCacheCheck() {
+  static const bool on = getenv("MOHO64_CATCACHE_CHECK") && strcmp(getenv("MOHO64_CATCACHE_CHECK"), "0");
+  return on;
+}
+static void CatCacheVerify(Unit* u, const char* name, bool kept) {
+  Sim& sim = *Sim::From(u->luaState());
+  if (BpInCategory(sim, u->blueprint, name) == kept) {
+    ++sim.catCacheChecks;
+    return;
+  }
+  Logf(LogLevel::Error, "moho64 MOHO64_CATCACHE_CHECK: unit %u (%s) %s kept %d, BpInCategory says %d (beat %u)", u->id,
+       u->blueprint ? u->blueprint->id.c_str() : "?", name, kept ? 1 : 0, kept ? 0 : 1, sim.tick());
+  fprintf(stderr, "moho64 MOHO64_CATCACHE_CHECK: unit %u %s kept %d differs from BpInCategory (beat %u)\n", u->id, name,
+          kept ? 1 : 0, sim.tick());
+  abort();
+}
+bool PatrolHelperOf(Unit* u) {
+  const bool r = u->blueprint && CB(u).patrolHelper;
+  if (CatCacheCheck()) CatCacheVerify(u, "PATROLHELPER", r);
+  return r;
+}
+bool CommandOrSacuOf(Unit* u) {
+  const bool r = u->blueprint && (CB(u).command || CB(u).sacuBehavior);
+  if (CatCacheCheck()) {
+    Sim& sim = *Sim::From(u->luaState());
+    const bool ref = BpInCategory(sim, u->blueprint, "COMMAND") || BpInCategory(sim, u->blueprint, "SACU_BEHAVIOR");
+    if (ref != r) CatCacheVerify(u, "COMMAND|SACU_BEHAVIOR", r);
+    else ++sim.catCacheChecks;
+  }
+  return r;
+}
 
 // (the weapons stage does the same for its units, WeaponsTickParallel; the entity pass also has the units made after
 // that stage in the beat: a unit made by a script in the commands or threads stage, given a target there, whose

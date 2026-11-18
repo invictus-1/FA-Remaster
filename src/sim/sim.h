@@ -838,6 +838,7 @@ class Sim {
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
   uint64_t cmdOrderChecks = 0;  // (MOHO64_CMDORDER_CHECK: the orders and lists compared)
+  uint64_t catCacheChecks = 0;  // (MOHO64_CATCACHE_CHECK: the kept category answers compared)
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
