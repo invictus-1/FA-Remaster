@@ -299,6 +299,8 @@
 // --status-lights old|<share>  [statuslights] the game's signal lamps (a factory's red blinker while its army's store runs
 //           low, its green and yellow) as bright as before (old: 2.5 times their texture, as every particle that adds its
 //           light), or that share of it (0.4 unless given: as the original draws them; Particles::statusLights)
+// --hover-exhaust old|<share>  [hoverglow] the Cybran gunships' hover exhaust as bright as before (old: 2.5 times its
+//           texture), or that share of it (0.3 unless given; Particles::hoverExhaust)
 // --lamp-budget even  [lampbudget] every unit in reach lights the same share of its lamps, as before (World::lampsNearFirst:
 //           those near what the camera looks at all of them)
 // --merge-bright  [mergeflux] lights merged in crowded squares as bright as all of them at their middle, as before
@@ -665,6 +667,7 @@
 // --lamp-scale <n>  [unit lamps] every remastered unit's lamps n times the strength their list gives (ModelCache::lampScale, 1):
 //           to try a factor before a unit's lights list is changed (docs/render-unit-lights.md)
 // --no-tracers  plain white shell trails are drawn as the game's files give them, not as hot tracers
+// --tracers-energy  [tracerkinds] the Aeon's and the Seraphim's energy shots and torpedoes' trails as hot tracers too, as before
 // --contrails-hot  [contrailvapour] the game's contrails as before: hot tracers, as bright at night as by day (Ribbons::contrailVapour off)
 // --plain-ground  a remastered map's ground without its layers' third maps (roughness, creases, height)
 // --map-ends  the map ends at its edge (with --border: in its frame), as the original; unless given, land
@@ -1050,6 +1053,7 @@ struct Options {
   float lampScale = 1;                  // --lamp-scale [unit lamps]
   bool tracers = true;                  // --no-tracers
   bool contrailVapour = true;           // --contrails-hot: off
+  bool tracersEnergy = false;           // --tracers-energy [tracerkinds]
   bool richGround = true;               // --plain-ground
   bool worldBeyond = true;              // --map-ends
   bool timings = false;                 // --timings
@@ -1221,6 +1225,7 @@ struct Options {
   float hullGlow = 0.75f;               // --hull-glow ([hullglow]; < 0: old)
   float buildingGlow = -1;              // --building-glow ([buildingglow]; -1: its own, -2: old)
   float statusLights = -1;              // --status-lights ([statuslights]; -1: its own; old: 1)
+  float hoverExhaust = -1;              // --hover-exhaust ([hoverglow]; -1: its own; old: 1)
   bool lampsNearFirst = true;           // --lamp-budget ([lampbudget])
   bool mergeFlux = true;                // --merge-bright ([mergeflux])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
@@ -1504,6 +1509,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--merge-bright") o->mergeFlux = false;        // [mergeflux]
     else if (a == "--no-tracers") o->tracers = false;
     else if (a == "--contrails-hot") o->contrailVapour = false;  // [contrailvapour]
+    else if (a == "--tracers-energy") o->tracersEnergy = true;  // [tracerkinds]
     else if (a == "--no-shore-soak") o->shoreSoak = false;  // [bigtest]
     else if (a == "--sea-mirror-strong") o->seaMirrorStrong = true;  // [seamirror] (the default now; kept for older scripts)
     else if (a == "--sea-mirror-plain") o->seaMirrorStrong = false;  // [seamirror]
@@ -1896,6 +1902,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-glint") o->energyGlint = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [shellglint]
     else if (a == "--building-glow") o->buildingGlow = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [buildingglow]
     else if (a == "--status-lights") o->statusLights = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [statuslights]
+    else if (a == "--hover-exhaust") o->hoverExhaust = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hoverglow]
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
     else if (a == "--head-lamp-colour") o->headLampColour = std::string(v) == "faction" ? 1 : std::string(v) == "team" ? 2 : 0;  // [headcolour]
     else if (a == "--hull-glow") o->hullGlow = std::string(v) == "old" ? -1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hullglow]
@@ -3020,6 +3027,7 @@ int main(int argc, char** argv) {
   if (opt.buildingGlow == -2) world.hullBuildings = false;                  // [buildingglow] (old: as a unit's)
   else if (opt.buildingGlow >= 0) world.hullBuildingGlow = opt.buildingGlow;
   if (opt.statusLights >= 0) world.particles.statusLights = opt.statusLights;  // [statuslights]
+  if (opt.hoverExhaust >= 0) world.particles.hoverExhaust = opt.hoverExhaust;  // [hoverglow]
   world.lampsNearFirst = opt.lampsNearFirst;  // [lampbudget]
   world.lights.mergeFlux = opt.mergeFlux;     // [mergeflux]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
@@ -3135,6 +3143,7 @@ int main(int argc, char** argv) {
   if (opt.airDeep > 0) world.air.deep = opt.airDeep;
   world.ribbons.tracers = opt.tracers;
   world.ribbons.contrailVapour = opt.contrailVapour;  // [contrailvapour]
+  world.ribbons.tracersEnergy = opt.tracersEnergy;  // [tracerkinds]
   world.terrain.richGround = opt.richGround;
   world.worldBeyond = opt.worldBeyond;
   world.effectsLook = opt.remasteredEffects ? World::EffectsLook::Remastered : World::EffectsLook::Original;

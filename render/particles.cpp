@@ -804,6 +804,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
     bp->fire = (has("fire") || has("flame") || has("burn") || has("ember") || has("napalm")) && !has("build") &&
                !has("teleport") && !has("afterburn") && !has("exhaust") && !has("engine") && !has("thrust");
     bp->status = name.rfind("/effects/emitters/light_", 0) == 0;  // [statuslights] (the game's signal lamps)
+    bp->hoverExhaust = has("/cybran_hover_01_emit");  // [hoverglow] (the Cybran gunships' hover exhaust)
   }
   const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
@@ -1410,7 +1411,8 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
     const float constants[36] = {right.x, right.y, right.z, now,
                                  up.x, up.y, up.z, shape,
                                  static_cast<float>(spans[i].first), bp.frameCount > 1 || bp.stripCount > 1 ? 1.0f : 0.0f, static_cast<float>(kind),
-                                 bp.status ? glow * std::max(statusLights, 0.0f) : glow,  // [statuslights]
+                                 bp.status ? glow * std::max(statusLights, 0.0f)  // [statuslights]
+                                 : bp.hoverExhaust ? glow * std::max(hoverExhaust, 0.0f) : glow,  // [hoverglow]
                                  1 / static_cast<float>(bp.frameCount), 1 / static_cast<float>(bp.stripCount), bp.resistance ? 1.0f : 0.0f, zNear,
                                  soften, 0, 0, 0,
                                  bp.gridAnimate ? 1.0f : 0.0f, bp.gridLoop ? 1.0f : 0.0f,
