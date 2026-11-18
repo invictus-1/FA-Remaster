@@ -299,6 +299,8 @@
 // --status-lights old|<share>  [statuslights] the game's signal lamps (a factory's red blinker while its army's store runs
 //           low, its green and yellow) as bright as before (old: 2.5 times their texture, as every particle that adds its
 //           light), or that share of it (0.4 unless given: as the original draws them; Particles::statusLights)
+// --dust-night old|<share>  [dustnight] the ground's dust (kicked up by treads and feet, thrown up by shells) lit by the
+//           night's air light in full, as before (old), or by that share of it (0.3 unless given; Particles::dustNight)
 // --hover-exhaust old|<share>  [hoverglow] the Cybran gunships' hover exhaust as bright as before (old: 2.5 times its
 //           texture), or that share of it (0.3 unless given; Particles::hoverExhaust)
 // --lamp-budget even  [lampbudget] every unit in reach lights the same share of its lamps, as before (World::lampsNearFirst:
@@ -1226,6 +1228,7 @@ struct Options {
   float buildingGlow = -1;              // --building-glow ([buildingglow]; -1: its own, -2: old)
   float statusLights = -1;              // --status-lights ([statuslights]; -1: its own; old: 1)
   float hoverExhaust = -1;              // --hover-exhaust ([hoverglow]; -1: its own; old: 1)
+  float dustNight = -1;                 // --dust-night ([dustnight]; -1: its own; old: 1)
   bool lampsNearFirst = true;           // --lamp-budget ([lampbudget])
   bool mergeFlux = true;                // --merge-bright ([mergeflux])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
@@ -1902,6 +1905,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-glint") o->energyGlint = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [shellglint]
     else if (a == "--building-glow") o->buildingGlow = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [buildingglow]
     else if (a == "--status-lights") o->statusLights = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [statuslights]
+    else if (a == "--dust-night") o->dustNight = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [dustnight]
     else if (a == "--hover-exhaust") o->hoverExhaust = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hoverglow]
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
     else if (a == "--head-lamp-colour") o->headLampColour = std::string(v) == "faction" ? 1 : std::string(v) == "team" ? 2 : 0;  // [headcolour]
@@ -3028,6 +3032,7 @@ int main(int argc, char** argv) {
   else if (opt.buildingGlow >= 0) world.hullBuildingGlow = opt.buildingGlow;
   if (opt.statusLights >= 0) world.particles.statusLights = opt.statusLights;  // [statuslights]
   if (opt.hoverExhaust >= 0) world.particles.hoverExhaust = opt.hoverExhaust;  // [hoverglow]
+  if (opt.dustNight >= 0) world.particles.dustNight = opt.dustNight;  // [dustnight]
   world.lampsNearFirst = opt.lampsNearFirst;  // [lampbudget]
   world.lights.mergeFlux = opt.mergeFlux;     // [mergeflux]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;

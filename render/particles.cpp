@@ -369,7 +369,7 @@ float3 LitSmoke(VOut i, float3 day, float3 own, float4 c) {
 float3 SmokeAirLight(VOut i, float3 c, float3 own, float alpha, bool premultiplied) {
   float fog = saturate(weather.z / 0.0035);  // (World::Begin: 0.0035 a world unit in full fog)
   float night = skyZenith.w > 0.5 ? 1 - smoothstep(0.1, 0.5, skyGlow.w) : 0;  // (by day, from noon to dusk: none)
-  float strength = max(fog, night);
+  float strength = max(fog, night * six.z);  // ([dustnight] the ground's dust takes a share of the night's)
   if (strength <= 0) return c;
   float3 light = AirColor();
   [branch] if (air.x > 0.5) {
@@ -479,7 +479,7 @@ float4 PS(VOut i, out uint coverage : SV_Coverage) : SV_Target {
     }
 #if LIT_SMOKE
     }
-    [branch] if (six.z > 0.5) c.rgb = SmokeAirLight(i, c.rgb, own, c.a, options.z > 2.5);  // [smoke air light]
+    [branch] if (six.z > 0.01) c.rgb = SmokeAirLight(i, c.rgb, own, c.a, options.z > 2.5);  // [smoke air light] ([dustnight] six.z: its share of the night's)
 #endif
     [branch] if (air.x > 0.5) {  // light in the air (air.h): what comes through of its own, and the air's light before it
       float4 a = AirAt(i.world);
@@ -805,6 +805,7 @@ const EmitterBlueprint* Particles::Blueprint(const std::string& path, const std:
                !has("teleport") && !has("afterburn") && !has("exhaust") && !has("engine") && !has("thrust");
     bp->status = name.rfind("/effects/emitters/light_", 0) == 0;  // [statuslights] (the game's signal lamps)
     bp->hoverExhaust = has("/cybran_hover_01_emit");  // [hoverglow] (the Cybran gunships' hover exhaust)
+    bp->groundDust = (has("/emitters/tt_") || has("/emitters/tti_") || has("/emitters/dust_cloud_")) && !has("water");  // [dustnight]
   }
   const std::string file = own ? FactionEffectFile(path, faction) : moho::Vfs::Normalize(EffectFile(*vfs_, path, remastered));
   auto text = vfs_->ReadFile(file);
@@ -1424,7 +1425,8 @@ void Particles::DrawSets(const View& view, int pass, gfx::Texture behind, gfx::T
                                  // (six-way frames turned upright in the smoke's shadow too, so that it has their shape)
                                  sixWay || (shadow && bp.sixWay) ? 1.0f : 0.0f, bp.sixWayEmission,
                                  // ([smoke air light] lit by the air's own light too: lit smoke's sets, with the switch on)
-                                 litSet && litNow && airLight ? 1.0f : 0.0f, 0};
+                                 // ([dustnight] and how much of the night's: the ground's dust a share)
+                                 litSet && litNow && airLight ? (bp.groundDust ? std::clamp(dustNight, 0.02f, 1.0f) : 1.0f) : 0.0f, 0};
     // (the unlit pipelines read the first 28)
     device_->SetConstants(1, constants, litSet || shadow ? sizeof constants : 28 * sizeof(float));
     device_->SetTexture(0, bp.texture);
