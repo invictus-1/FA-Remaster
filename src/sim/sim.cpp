@@ -1077,6 +1077,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 
 std::unique_ptr<ScriptState> Sim::TakeRules() { return std::move(rules_); }
 
+static bool CmdOrderCheck();  // (MOHO64_CMDORDER_CHECK: Sim::CommandOrder)
 Sim::~Sim() {
   if (surfaceSpec_ && surfaceSpec_->active()) {
     const std::string line = surfaceSpec_->counts().Line("MOTION (surface contacts)");
@@ -1094,6 +1095,9 @@ Sim::~Sim() {
     Logf(LogLevel::Info, "%s", line.c_str());
   }
   wtrap::Report();  // (MOHO64_PAR_WRITETRAP's lines)
+  if (CmdOrderCheck())
+    fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: %llu command orders and re-link lists compared with the sort / scan: all equal\n",
+            static_cast<unsigned long long>(cmdOrderChecks));
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
@@ -2316,13 +2320,100 @@ int Relation(const Army* a, const Army* b);  // (combat.cpp)
 }
 int Sim::ArmyRelation(const Army* a, const Army* b) { return combat::Relation(a, b); }
 
+// MOHO64_CMDORDER_CHECK=1 (a test switch; reads only): every order CommandOrder keeps and every list
+// CommandLinkedSince gives is compared with the full sort / the scan of every unit they replace; a difference stops
+// the program with the beat and the place.
+static bool CmdOrderCheck() {
+  static const bool on = getenv("MOHO64_CMDORDER_CHECK") && strcmp(getenv("MOHO64_CMDORDER_CHECK"), "0");
+  return on;
+}
+bool Sim::UnitListed(const Unit* u) const {
+  auto it = std::lower_bound(units_.begin(), units_.end(), u, [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  return it != units_.end() && *it == u;
+}
+// The units ordered by cmdSeq (ascending; each cmdSeq is given once, so the order is the one order of the keys). It
+// is no longer sorted afresh whenever a unit was re-linked (in 50k, 0.6 of the beats, ~2.8 ms a sort of 50,000
+// units by a key read from each unit): every cmdSeq given since the order was made is above every cmdSeq it holds
+// (cmdSeqNext_ only grows), so the new order is the old one without the units that changed (re-linked: the place of
+// their old cmdSeq, found by binary search in cmdOrderSeq_; taken off the lists), followed by the units given a new
+// cmdSeq that are still in units_, in cmdSeq order. The same vector as the sort's, bit for bit
+// (MOHO64_CMDORDER_CHECK compares them).
 const std::vector<Unit*>& Sim::CommandOrder() {
   if (cmdOrderDirty_) {
-    cmdOrder_ = units_;
-    std::sort(cmdOrder_.begin(), cmdOrder_.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+    const size_t n = cmdOrder_.size();
+    if (!cmdOrderKept_ || cmdChanges_.size() > n / 2) {
+      cmdOrder_ = units_;
+      std::sort(cmdOrder_.begin(), cmdOrder_.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      cmdOrderSeq_.resize(cmdOrder_.size());
+      for (size_t i = 0; i < cmdOrder_.size(); ++i) cmdOrderSeq_[i] = cmdOrder_[i]->cmdSeq;
+    } else {
+      for (const CmdChange& c : cmdChanges_) {
+        if (!c.oldSeq) continue;
+        auto it = std::lower_bound(cmdOrderSeq_.begin(), cmdOrderSeq_.end(), c.oldSeq);
+        if (it != cmdOrderSeq_.end() && *it == c.oldSeq) {
+          const size_t i = static_cast<size_t>(it - cmdOrderSeq_.begin());
+          if (cmdOrder_[i] == c.u) cmdOrder_[i] = nullptr;
+        }
+      }
+      size_t k = 0;
+      for (size_t i = 0; i < n; ++i)
+        if (cmdOrder_[i]) {
+          cmdOrder_[k] = cmdOrder_[i];
+          cmdOrderSeq_[k] = cmdOrderSeq_[i];
+          ++k;
+        }
+      cmdOrder_.resize(k);
+      cmdOrderSeq_.resize(k);
+      std::vector<Unit*> add;
+      add.reserve(cmdChanges_.size());
+      for (const CmdChange& c : cmdChanges_)
+        if (!c.removed) add.push_back(c.u);
+      std::sort(add.begin(), add.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      add.erase(std::unique(add.begin(), add.end()), add.end());
+      for (Unit* u : add)
+        if (UnitListed(u)) {
+          cmdOrder_.push_back(u);
+          cmdOrderSeq_.push_back(u->cmdSeq);
+        }
+    }
+    cmdChanges_.clear();
+    cmdOrderKept_ = true;
     cmdOrderDirty_ = false;
+    if (CmdOrderCheck()) {
+      std::vector<Unit*> ref = units_;
+      std::sort(ref.begin(), ref.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      if (ref != cmdOrder_) {
+        size_t i = 0;
+        while (i < ref.size() && i < cmdOrder_.size() && ref[i] == cmdOrder_[i]) ++i;
+        Logf(LogLevel::Error, "moho64 MOHO64_CMDORDER_CHECK: the kept command order differs from the sort at beat %u, place %zu (%zu / %zu units)",
+             tick_, i, cmdOrder_.size(), ref.size());
+        fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: the kept command order differs from the sort at beat %u, place %zu\n", tick_, i);
+        abort();
+      }
+      ++cmdOrderChecks;
+    }
   }
   return cmdOrder_;
+}
+void Sim::CommandLinkedSince(size_t mark, uint64_t hi, std::vector<Unit*>* out) {
+  out->clear();
+  for (size_t i = mark; i < cmdLinked_.size(); ++i) out->push_back(cmdLinked_[i]);
+  std::sort(out->begin(), out->end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+  out->erase(std::unique(out->begin(), out->end()), out->end());
+  out->erase(std::remove_if(out->begin(), out->end(), [this](const Unit* u) { return !UnitListed(u); }), out->end());
+  if (CmdOrderCheck()) {
+    std::vector<Unit*> ref;
+    for (Unit* u : units_)
+      if (u->cmdSeq > hi) ref.push_back(u);
+    std::sort(ref.begin(), ref.end(), [](const Unit* x, const Unit* y) { return x->cmdSeq < y->cmdSeq; });
+    if (ref != *out) {
+      Logf(LogLevel::Error, "moho64 MOHO64_CMDORDER_CHECK: the re-linked threads differ from the scan at beat %u (%zu / %zu)",
+           tick_, out->size(), ref.size());
+      fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: the re-linked threads differ from the scan at beat %u\n", tick_);
+      abort();
+    }
+    ++cmdOrderChecks;
+  }
 }
 const std::vector<Unit*>& Sim::MotionOrder() {
   if (motionOrderDirty_) {
@@ -2359,7 +2450,9 @@ const std::vector<Unit*>& Sim::ArmyStageOrder() {
 }
 void Sim::ResumeCommandThread(Unit* u) {
   if (u == resumeHeld) return;  // (re-linked already by its queue's clear event: see resumeHeld)
+  cmdChanges_.push_back({u->cmdSeq, u, false});
   u->cmdSeq = ++cmdSeqNext_;
+  cmdLinked_.push_back(u);
   cmdOrderDirty_ = true;
   // MOHO64_DEBUG_RESUME=<unit id> (or -2: every unit): a command thread re-linked at the end, and who did it
   static const long dbg = getenv("MOHO64_DEBUG_RESUME") ? atol(getenv("MOHO64_DEBUG_RESUME")) : -1;
@@ -2381,6 +2474,8 @@ void Sim::AddUnitToLists(Unit* u) {
   if (keepSnapshots) snapUnitsMade.push_back(u->handle);  // (the sync point's placement copy, sim/sim_snapshot.h)
   gridDirty_ = true;
   u->cmdSeq = ++cmdSeqNext_;
+  cmdChanges_.push_back({0, u, false});
+  cmdLinked_.push_back(u);
   cmdOrderDirty_ = true;
   u->entSeq = ++entSeqNext_;
   u->motSeq = u->entSeq;
@@ -2400,6 +2495,7 @@ void Sim::RemoveUnitFromLists(Unit* u) {
   }
   gridDirty_ = true;
   dirtyOrderDirty_ = true;
+  cmdChanges_.push_back({u->cmdSeq, u, true});
   cmdOrderDirty_ = true;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;

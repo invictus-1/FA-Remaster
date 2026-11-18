@@ -62,6 +62,7 @@ struct Formation {
   int largest = 0;              // largest footprint
   std::vector<FormGroup> groups[2];  // [0] non-air, [1] air
   std::map<uint32_t, std::pair<float, float>> adjusted;  // per entity id: adjusted position cache
+  std::map<uint32_t, std::pair<float, float>> raw;       // per entity id: raw position cache (F+0x2bc), cleared with it
   struct Reservation {
     float x, z;
     int size, layer;

@@ -550,6 +550,13 @@ class Sim {
   // ResumeCommandThread skips the unit held here while it is torn down.
   Unit* resumeHeld = nullptr;
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
+  // The command stage's threads made or re-linked during its pass (they run in it, after every older thread): the
+  // units of units() whose cmdSeq is above the stage's mark, in cmdSeq order, from the list of units given a new
+  // cmdSeq rather than a scan of every unit. CommandLinkBegin at the stage's start; a mark is taken where the stage
+  // reads CommandSeqHigh (no cmdSeq is given in between).
+  void CommandLinkBegin() { cmdLinked_.clear(); }
+  size_t CommandLinkMark() const { return cmdLinked_.size(); }
+  void CommandLinkedSince(size_t mark, uint64_t hi, std::vector<Unit*>* out);
   // The stamp of a unit that takes a new parent (Unit::attachSeq). The original keeps a parent's children in a list
   // (entity+0x17c): Entity::AttachTo 0x679550 appends the child (0x6795d5..0x67961c), Entity::DetachFrom 0x6796f0
   // takes it out and moves the rest down (0x679725..0x67974f), so the list is in attach order; Entity::SyncInterface
@@ -830,6 +837,7 @@ class Sim {
   std::shared_ptr<struct OrderLatency> orderLatency;  // sim/sim.cpp: MOHO64_PROFILE's order latency (ProfileTrackOrder)
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
+  uint64_t cmdOrderChecks = 0;  // (MOHO64_CMDORDER_CHECK: the orders and lists compared)
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
@@ -901,6 +909,19 @@ class Sim {
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;
+  // CommandOrder kept instead of sorted again (the same order: see CommandOrder): each unit's cmdSeq when the order
+  // was last made, and what changed a unit's place since (a new cmdSeq: made or re-linked; or taken off the lists),
+  // with the cmdSeq it had before
+  struct CmdChange {
+    uint64_t oldSeq;  // 0: none (a new unit)
+    Unit* u;
+    bool removed;
+  };
+  std::vector<uint64_t> cmdOrderSeq_;
+  std::vector<CmdChange> cmdChanges_;
+  bool cmdOrderKept_ = false;  // cmdOrder_ / cmdOrderSeq_ hold the last order made (else: the next one sorts afresh)
+  std::vector<Unit*> cmdLinked_;  // the units given a new cmdSeq since the command stage began (CommandLinkedSince)
+  bool UnitListed(const Unit* u) const;  // u is in units_ (binary search by id)
   std::vector<Unit*> motionOrder_;
   uint64_t entSeqNext_ = 0;
   uint64_t attachSeqNext_ = 0;

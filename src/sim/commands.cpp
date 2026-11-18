@@ -1637,15 +1637,18 @@ void CommandStage(Sim& sim) {
     if (!ArrivalStep(sim, u)) CommandStep(sim, u);
   };
   std::vector<Unit*> order = sim.CommandOrder();
+  sim.CommandLinkBegin();
   uint64_t hi = sim.CommandSeqHigh();
+  size_t mark = sim.CommandLinkMark();
   for (Unit* u : order) step(u);
+  std::vector<Unit*> more;
   for (;;) {
-    std::vector<Unit*> more;
-    for (Unit* u : sim.units())
-      if (u->cmdSeq > hi) more.push_back(u);
+    // the units whose cmdSeq is above hi, in cmdSeq order (Sim::CommandLinkedSince: from the list of the units given a
+    // new cmdSeq since the mark, not a scan of every unit; the same list)
+    sim.CommandLinkedSince(mark, hi, &more);
     if (more.empty()) break;
-    std::sort(more.begin(), more.end(), [](const Unit* x, const Unit* y) { return x->cmdSeq < y->cmdSeq; });
     hi = sim.CommandSeqHigh();
+    mark = sim.CommandLinkMark();
     for (Unit* u : more) step(u);
   }
   // path searches, first come first served
