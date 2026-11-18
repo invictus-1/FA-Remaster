@@ -399,6 +399,9 @@ void RegisterCardMemoryBindings(lua_State* L);
 // The report (report.cpp, the report bundle's part (c)): the zip written into "reports" beside the preferences; its
 // file, or "" with `why`. The console's remaster_report [note] and moho64ui_Report([note]).
 std::string WriteReport(lua_State* L, const std::string& note, std::string* why);
+// The automatic crash report (report.cpp): once in a run, when a kept earlier run crashed and has no report yet, the
+// report written onto the Desktop and said on the menu's notice line; its file, or "" with `why`.
+std::string AutoCrashReport(lua_State* L, std::string* why);
 void RegisterReportBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Take over the original game's profiles once, when our preferences file does not exist yet

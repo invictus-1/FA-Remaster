@@ -25,6 +25,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `BINDING_PROFILE` | look | every engine function the scripts call is timed (calls and time) | - |
 | `CARD_IMITATION` | test | `<MB>`: every picture of the session imitates a smaller card (the renderer's `SetCardImitation(true, MB)`: no ray tracing, that much card memory; 8192 a GTX 1080's kind) | memory_strip.sh (suite job memory_strip) |
 | `CAPTURE_FRAME` | test | the frame (300 unless given) at which `--window-capture`'s and the second window's pictures are taken | tests/dualhead.lua's runs |
+| `REPORT_FOLDER` | test | `<folder>`: the automatic crash report is written there, not onto the Desktop (the tests': never the lab's own Desktop) | report |
 | `CRASH_TEST` | test | (`=log`: the fault is taken while the log's lock is held, and the hook's line and the dump must still come) a fault on purpose right after the start's crash set-up, half a line printed the renderer's way before it: the log must hold the crash's lines and that half line after them (`CrashSetBeforeReport(render::LogFlush)`); on Windows the environment block is held from the stack at the fault (the worst case for what a dump catches: the engine's dump since its gate 170 holds none of it) | crash_test.sh (suite job crash_test) |
 | `DEFAULT_LOG` | test | a run without a window writes the default log file, as a window does | suite (the log job) |
 | `DIRTY_CHECK` | test | every frame's repaint of the changed parts is compared with a full redraw | window_checks.sh, wc_game_ab.sh |
