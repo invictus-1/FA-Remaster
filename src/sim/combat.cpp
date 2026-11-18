@@ -2046,18 +2046,41 @@ UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t) {
   return nullptr;
 }
 
-// LeashOrInvisible 0x5d8ad0 (the leash part): while Attacking, the unit is more than GuardReturnRadius (3D)
-// from its leash point - the guarded unit's position, else u+0x4e8 - when there is one
-bool LeashOrInvisible(Sim& sim, Unit* u) {
+// LeashOrInvisible 0x5d8ad0, for the unit's commanded target d; only while the unit is Attacking (0x5d8adb).
+// The leash: the unit is more than GuardReturnRadius (3D) from its leash point - the guarded unit's position, else
+// u+0x4e8 - when there is one.
+// The invisible part (0x5d8be9..0x5d8c36, read 2026-11-18; it follows when the leash holds or there is none): a unit
+// that is NOT mobile (vt+0x30 at 0x5d8bfa) whose target's entity as held (the CAiTarget's +4) is a recon blip
+// (vt+0x1c gives one) is "invisible" when the blip's record for the unit's army (blip+0x4c4, 0x34 bytes an army, the
+// flags at +4) has none of the bits 0x1f: not on radar, sonar or omni, not in sight, and never seen. The acquire
+// task then reports 5, and a standing attacker's order ends as failed (the listener's event 5).
+// Seen: FAF 3840 pro replay 2v2_2 8297, army 0's point defence 0x2e (xsb2301) on a player's Attack of the blip of
+// army 3's 0x300075, which drives off: the original's order is gone in 8297, with the tank still 49.80 away (range
+// 50); ours kept it a beat longer, until the tank had left the range (50.08).
+bool LeashOrInvisible(Sim& sim, Unit* u, const AiTarget& d) {
   if (!u->unitStates.Has(US("Attacking"))) return false;
   Vec3 leash = u->leashPos;
   if (u->guardedId)
     if (Entity* g = sim.FindEntity(u->guardedId)) leash = g->position;
-  if (BitsZero(leash)) return false;  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
-  float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
-  float r = CB(u).guardReturnRadius;
-  // the distance itself, the squares summed z, y, x (0x5d8bad..0x5d8bc6), the root 0x452fc0, against the radius
-  return std::sqrt((dz * dz + dy * dy) + dx * dx) > r;
+  if (!BitsZero(leash)) {  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
+    float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
+    float r = CB(u).guardReturnRadius;
+    // the distance itself, the squares summed z, y, x (0x5d8bad..0x5d8bc6), the root 0x452fc0, against the radius
+    if (std::sqrt((dz * dz + dy * dy) + dx * dx) > r) return true;
+  }
+  if (d.type != 1 || IsMobile(u)) return false;
+  const int a = u->army ? u->army->index - 1 : -1;
+  if (a < 0 || a >= 16) return false;
+  if (d.fakeId) {  // a jammer's fake blip: its own record
+    const Entity* f = sim.FindEntity(d.fakeId);
+    if (!f || f->kind != Entity::Kind::Blip) return false;
+    return (static_cast<const ReconBlip*>(f)->rflags[a] & 0x1f) == 0;
+  }
+  if (!d.viaBlip) return false;  // (held as the unit itself: vt+0x1c gives no blip)
+  // (a real blip's record is its unit's Unit::recon; with the unit gone the blip's own is not kept by ours: no answer)
+  const Entity* e = TargetEntity(sim, d);
+  if (!e || e->kind != Entity::Kind::Unit) return false;
+  return (static_cast<const Unit*>(e)->recon[a] & 0x1f) == 0;
 }
 
 void RelinkSuspendedAttackThread(Unit* u);  // (below AttackData)
@@ -2149,7 +2172,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   int tc = dHas ? TargetStatus(sim, w, d) : 3;
   int code;
   if (!dHas || EntityLost(sim, d)) code = 4;  // (0x5d8fca: EntityLost 0x5e2db0, then HasTarget)
-  else if (LeashOrInvisible(sim, u) || TargetExempt(sim, u, TargetEntity(sim, d))) code = 5;
+  else if (LeashOrInvisible(sim, u, d) || TargetExempt(sim, u, TargetEntity(sim, d))) code = 5;
   else if (w->suppress != 0 || !w->canReach) code = 6;
   else if (tc == 0 && !CanAttackTarget(sim, w, d)) code = 3;
   else if (!cb.canFly && tc != 0) code = tc == 1 ? 7 : 2;

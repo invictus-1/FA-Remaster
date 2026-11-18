@@ -198,6 +198,24 @@ void PopHeadQuiet(Unit* u) {
   u->headState = kNotStarted;
 }
 
+// MoveFirstCommandToBackOfQueue 0x6edfc0 by itself: the head order goes behind the others when the queue holds more
+// than one (0x6edff6: nothing moves otherwise), and the unit goes on holding it: the order's units and its formation
+// are not touched (no FormRemoveUnit, no release). The head's task is over either way.
+void HeadToBack(Unit* u) {
+  EndMoveTaskRect(u);
+  if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
+  if (u->task) {
+    EndBuildTask(*Sim::From(u->luaState()), u, *u->task, true);
+    u->task = nullptr;
+  }
+  if (u->commands.size() > 1) {
+    std::shared_ptr<UnitCommand> head = u->commands.front();
+    u->commands.pop_front();
+    u->commands.push_back(std::move(head));
+  }
+  u->headState = kNotStarted;
+}
+
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
 
 // IAiCommandDispatchImpl::TaskTick 0x598e80, once DispatchTask made no task for the head order (0x598eea..0x598f67):
@@ -1518,11 +1536,18 @@ void CommandStep(Sim& sim, Unit* u) {
         // Seen (oracle scene patrol_one, FAF 3840): IssuePatrol with one point, the unit's queue is empty on the beat
         // its leg ends (tank 345: q 0) and it coasts to a stop 58.1 from its start; ours kept the order and drove
         // on to the point (60.2) and kept re-patrolling.
-        std::shared_ptr<UnitCommand> keep = u->commands.front();
-        PopHead(u);
-        if (u->dispatchResult == 2 || !u->commands.empty()) {
-          u->commands.push_back(keep);
-          keep->units.insert(u);
+        // In the result-2 branch the order goes to the back by 0x6edfc0 alone (0x598ee0): the unit stays in the
+        // order's formation there; FormRemoveUnit 0x6e8d70 is only the other branch's (0x598ff8), which PopHead's
+        // release does. (Read 2026-11-18; ours took the unit out of the formation in both.)
+        if (u->dispatchResult == 2) {
+          HeadToBack(u);
+        } else {
+          std::shared_ptr<UnitCommand> keep = u->commands.front();
+          PopHead(u);
+          if (!u->commands.empty()) {
+            u->commands.push_back(keep);
+            keep->units.insert(u);
+          }
         }
         // IAiCommandDispatchImpl::TaskTick 0x598ebb: with its result word at 2 (the patrol's last child failed) the
         // point goes to the back (0x598ee0) and the next one is dispatched at once (0x598f6d); otherwise (0x598fed)
