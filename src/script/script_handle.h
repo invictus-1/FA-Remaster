@@ -23,6 +23,10 @@ class ScriptObject {
  public:
   virtual ~ScriptObject();
   uint32_t typeBits = 0;  // the ScriptTypeOf bits of the object's class and its bases
+  // The object's key in its sim's table of per-object script values (sim/entities.cpp SetObjectValue): 0 until a
+  // value is first set, then the sim's next number (Sim::nextValuesKey), the same in every run of the same game.
+  // (It was the object's address, as a light userdata, whose hash moved that table's rehashes from run to run.)
+  uint32_t valuesKey = 0;
   // Engine events scripts can WaitFor: -1 not an event, 0 pending, 1 signalled.
   virtual int EventState() const { return -1; }
 

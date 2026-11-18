@@ -709,6 +709,10 @@ class Sim {
   // game's Lua are the hook files of the repository's data/fixes/hook, given to the sim state only with `fixes`
   // (and to the rules state, loaded again, in a game with a mod a blueprint fix is for: RulesFixesWanted).
   bool fixes = false;
+  // The last key given to an object's script values (entities.cpp SetObjectValue; ScriptObject::valuesKey): numbers
+  // in the order the objects first got a value, so that the values table's hash, sizes and rehashes are the same in
+  // every run (a light userdata key hashes the object's address).
+  uint32_t nextValuesKey = 0;
   // The beat's order (docs/parallel-mode.md 5), decided by Start(SessionDescription) after `fixes`: the session's
   // simOrder, else the scenario's Options.RemasterSimOrder (missing: the original's); MOHO64_SIM_ORDER=original |
   // parallel overrides it. Parallel order needs the fixes (a session asking for it without them does not start).

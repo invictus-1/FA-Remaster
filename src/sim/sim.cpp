@@ -173,7 +173,6 @@ void BeatStartSnapshot(Sim& sim, const std::vector<Unit*>& order) {
 
 namespace {
 
-const char kSimKey = 0;
 
 Sim* S(lua_State* L) { return Sim::From(L); }
 
@@ -1473,7 +1472,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
   prof::InstallLuaHooks(L);  // (MOHO64_PROFILE_HITCH only: the collector's timer, and the debug hooks if asked)
-  lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
+  lua_pushstring(L, "moho64.sim");  // (a fixed string, not &kSimKey: an address key hashes differently each run)
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
   lua_setextra(L, 1, this);

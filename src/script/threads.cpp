@@ -20,7 +20,8 @@ extern void (*lua_gpg_resume_error_hook)(lua_State* L, int status);
 namespace moho {
 namespace {
 
-const char kSchedKey = 0;
+// The registry key of the state's scheduler: a fixed string (an address key hashes differently each run, ASLR).
+const char* const kSchedKey = "moho64.scheduler";
 // traceback captured when a coroutine fails; one per OS thread, since the sim's and the interface's schedulers
 // may run on different threads (an interface host may tick the sim on a worker)
 thread_local std::string g_threadError;
@@ -118,8 +119,7 @@ ThreadScheduler::~ThreadScheduler() {
 }
 
 ThreadScheduler* ThreadScheduler::From(lua_State* L) {
-  lua_pushlightuserdata(L, const_cast<char*>(&kSchedKey));
-  lua_rawget(L, LUA_REGISTRYINDEX);
+  lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kSchedKey);
   auto* s = static_cast<ThreadScheduler*>(lua_touserdata(L, -1));
   lua_pop(L, 1);
   return s;
@@ -510,7 +510,7 @@ void ThreadScheduler::RunTick(uint32_t tick) {
 }
 
 void RegisterThreadBindings(lua_State* L, ThreadScheduler* sched) {
-  lua_pushlightuserdata(L, const_cast<char*>(&kSchedKey));
+  lua_pushstring(L, kSchedKey);
   lua_pushlightuserdata(L, sched);
   lua_rawset(L, LUA_REGISTRYINDEX);
   lua_register(L, "ForkThread", l_ForkThread);

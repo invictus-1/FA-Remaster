@@ -16,7 +16,6 @@ namespace moho {
 namespace {
 
 const char* kRecordKey = "moho64.registered";
-const char kBpsKey = 0;
 
 std::string Lower(std::string s) {
   for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -514,7 +513,7 @@ void SimBlueprints::ReadFootprints(lua_State* L, int list) {
 }
 
 void SimBlueprints::CopyToSim(lua_State* rules, lua_State* sim) {
-  lua_pushlightuserdata(sim, const_cast<char*>(&kBpsKey));
+  lua_pushstring(sim, "moho64.blueprints");  // (a fixed string, not &kBpsKey: an address key hashes differently each run)
   lua_pushlightuserdata(sim, this);
   lua_rawset(sim, LUA_REGISTRYINDEX);
   lua_setextra(sim, 2, this);
