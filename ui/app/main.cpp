@@ -1568,6 +1568,7 @@ int main(int argc, char** argv) {
                            auto timed = [&](const char* what, auto&& f) {
                              MOHO_ZONE("ui: host step");  // (its name as the zone's text)
                              MOHO_ZONE_TEXT(what, std::strlen(what));
+                             ui::FramePartScope part(what);  // (the freeze watch, user/events.h)
                              if (longFrames.thresholdMs <= 0) return f();
                              const auto t0 = std::chrono::steady_clock::now();
                              f();
@@ -1672,6 +1673,8 @@ int main(int argc, char** argv) {
     double longestFrameMs = 0;
     auto msBetween = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     for (; done < o.frames && !ui::ExitRequested(); ++done) {
+      ui::NoteFrame();  // (the freeze watch, user/events.h)
+      ui::NoteFramePart("a frame's work round the interface (a game's start or end, the beats)");
       double seconds = 1.0 / 60.0;
       if (realTime) {
         const auto now = Clock::now();
@@ -1681,7 +1684,10 @@ int main(int argc, char** argv) {
       if (session.RewindArrived()) finishRewind();
       if (session.Rewinding() && game) heldUiSeconds += seconds;
       const auto frameFrom = Clock::now();
-      if (!(session.Rewinding() && !game)) shown->Frame(seconds);  // (a jump back held: not the front end from before)
+      {
+        ui::FramePartScope part("the interface's frame");
+        if (!(session.Rewinding() && !game)) shown->Frame(seconds);  // (a jump back held: not the front end from before)
+      }
       const double frameMs = msBetween(frameFrom, Clock::now());
       // (--menu-flight: the main menu's battle while no game is there, as the window's menu would show it; its end
       // starts it over at once, nothing to cover)
@@ -1727,6 +1733,7 @@ int main(int argc, char** argv) {
     }
     Logf(LogLevel::Info, "moho64ui: long frames (over 100 ms of the interface's work): %d, the longest %.0f ms", longFrames, longestFrameMs);
   }
+  ui::EndFrames();  // (the freeze watch: what follows is the program's end, not a frame)
   if (o.frames) Logf(LogLevel::Info, "moho64ui: ran %d frames", done);
   // (the program closes: CScApp::Destroy writes the preferences; in a jump back held before the new interface is there,
   // the game's were written when it went, and the front end shown holds older ones)

@@ -17,6 +17,7 @@
 #include "maui/input.h"
 #include "maui/font.h"
 #include "script/script_state.h"
+#include "user/events.h"
 #include "user/user_state.h"
 #ifdef MOHO64UI_WORLD_PICTURE
 #include "render/hitch_log.h"
@@ -443,6 +444,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
   auto msSince = [](Clock::time_point a) { return std::chrono::duration<double, std::milli>(Clock::now() - a).count(); };
   while ((maxFrames == 0 || frames < maxFrames) && !ExitRequested()) {
     const auto loopTop = Clock::now();
+    NoteFrame();  // (the freeze watch, user/events.h; the parts below are its)
     // While the game's beat runs on its own thread (game_session.h, BeatRunning), a frame only
     // shows the world, moving on between the beats, with the interface as it stands: no input, no
     // step of the interface, nothing that touches the simulation. Those come in the next frame
@@ -451,6 +453,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // (Low Latency: the wait for the frame's time comes before the input is read, so that what is read is fresh.)
     {
       MOHO_LAYER_ZONE(Ui, "ui: wait for the frame's time");
+      NoteFramePart("wait for the frame's time");
       if (hooks.waitForFrame) hooks.waitForFrame();
     }
     parts.wait = msSince(loopTop);
@@ -458,6 +461,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     bool pumped = true;
     {
       MOHO_LAYER_ZONE(Ui, "ui: input");
+      NoteFramePart("input");
       pumped = busy || window.Pump();
     }
     if (!pumped) break;
@@ -471,6 +475,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
         if (hooks.clock) hooks.clock(dt > 0.25 ? 0.25 : dt);  // (the picture's moment moves on)
         const auto tp = Clock::now();
         MOHO_LAYER_ZONE(Ui, "ui: present (a beat running: the world only)");
+        NoteFramePart("present (a beat running: the world only)");
         hooks.present(*target, IntRect{});
         const double shown = std::chrono::duration<double>(Clock::now() - tp).count();
         presentSeconds += shown, drawSeconds += shown;
@@ -498,6 +503,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       target->ResetTouched();
       {
         MOHO_LAYER_ZONE(Ui, "ui: the host's frame (the game's picture, beats, sounds)");
+        NoteFramePart("the host's frame (the game's picture, beats, sounds)");
         if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
       }
       changed = changed.Union(target->Touched());
@@ -506,6 +512,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const auto tp = Clock::now();
       {
         MOHO_LAYER_ZONE(Ui, "ui: present (the picture held)");
+        NoteFramePart("present (the picture held)");
         if (direct) hooks.present(*target, changed);
         else window.Present(*target);
       }
@@ -560,6 +567,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       window.LockMouse(LockCursor().on);       // the player's "Lock Fullscreen Cursor To Window"
       {
         MOHO_LAYER_ZONE(Ui, "ui: the interface's step (scripts, the beat's sync)");
+        NoteFramePart("the interface's step (scripts, the beat's sync)");
         current().Frame(uiDt > 0.25 ? 0.25 : uiDt);  // a long stall (the window being dragged) is not replayed as one huge step
       }
       frameSeconds += std::chrono::duration<double>(Clock::now() - now).count();
@@ -571,6 +579,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       IntRect changed;
       {
       MOHO_LAYER_ZONE(Ui, "ui: drawing the interface");
+      NoteFramePart("drawing the interface");
       if (incremental) {
         recorder.Begin(target->Width(), target->Height());
         user.ui().Render(user.L(), recorder, 0);
@@ -605,6 +614,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       target->ResetTouched();
       {
         MOHO_LAYER_ZONE(Ui, "ui: the host's frame (the game's picture, beats, sounds)");
+        NoteFramePart("the host's frame (the game's picture, beats, sounds)");
         if (eachFrame) eachFrame(dt > 0.25 ? 0.25 : dt, *target);
         if (Overlay().on != layersShown) layersShown = Overlay().on, trace::SetLayers(layersShown);  // (the overlay's layer times)
         if (Overlay().on) stats.Draw(*target, hooks, current().L());  // (eachFrame may have replaced the state shown)
@@ -624,6 +634,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       IntRect changed1;
       if (window2 && target1) {
         MOHO_LAYER_ZONE(Ui, "ui: the second head's interface");
+        NoteFramePart("the second head's interface");
         const bool second = direct && hooks.secondOn && hooks.secondOn();
         if (second != rendered2) {  // (the window's picture made anew, failed, or its second window opened later)
           rendered2 = second;
@@ -650,6 +661,7 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
       const auto tShow = Clock::now();  // (head 1's drawing counts in the frame's showing part, as before)
       {
         MOHO_LAYER_ZONE(Ui, "ui: present (the world, the screen's wait)");
+        NoteFramePart("present (the world, the screen's wait)");
         if (direct) hooks.present(*target, changed);  // (the world under it and the screen's wait are the renderer's)
         else window.Present(*target);
       }
@@ -764,8 +776,10 @@ int RunWindow(const std::function<UserState&()>& current, int width, int height,
     // (Shown by the renderer with vertical sync, its present waits for the screen: no wait here.)
     double period = pacing.verticalSync ? (direct ? 0.0 : 1.0 / std::max(24, refresh)) : pacing.frameMs / 1000.0;
     if (hooks.framePeriod) period = std::max(period, hooks.framePeriod());
+    NoteFramePart("the wait for the next frame's time");
     std::this_thread::sleep_until(now + std::chrono::microseconds(static_cast<long long>(period * 1e6)));
   }
+  EndFrames();
   if (longFrames.thresholdMs > 0) {  // (the long frames of the minute that had not ended, not written)
     const std::string heldLine = longFrames.limit.Flush();
     if (!heldLine.empty()) Logf(LogLevel::Info, "%s", heldLine.c_str());

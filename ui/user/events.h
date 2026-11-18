@@ -35,6 +35,26 @@ bool& EventsFromKey();
 // that the log of a run that froze, was closed by force or lost its power holds what came before (events.cpp).
 void StartLogKeeper();
 void StopLogKeeper();
+// THE FREEZE WATCH (2026-11-18, the debugger's base: a report for a run that did not close in order should say
+// whether the program had FROZEN, since when and in what). The main loop says when each frame begins and what it
+// does; the log keeper's thread, which looks ten times a second, writes into the log
+//   moho64ui: no frame for 5 s, since second 123.4 of the run (the main loop is in: drawing the interface)
+//   moho64ui: still no frame after 10 s (the main loop is in: ...)          (at 10, 20, 40, ... seconds)
+//   moho64ui: frames again, after 7.2 s without one
+// each to its disk at once. Only lines: nothing is stopped, read or dumped, so a slow moment that passes costs the
+// game nothing. At most 20 such times in a run. MOHO64UI_FREEZE_SECONDS=<s> is the 5 (a test's).
+// MOHO64UI_FREEZE_TEST=<frame>:<seconds> (a test's): the main loop sleeps that long at that frame.
+void NoteFrame();                      // a frame begins (the main loop, a window's or not)
+void NoteFramePart(const char* part);  // what the main loop does from now (a literal, or a text that stays)
+const char* FramePart();
+void EndFrames();                      // the main loop is left: nothing is watched from here
+struct FramePartScope {                // a part for the length of a scope; the one before comes back
+  explicit FramePartScope(const char* part) : before(FramePart()) { NoteFramePart(part); }
+  ~FramePartScope() { NoteFramePart(before); }
+  FramePartScope(const FramePartScope&) = delete;
+  FramePartScope& operator=(const FramePartScope&) = delete;
+  const char* before;
+};
 // moho64ui_Events([n]) -> { {seconds, kind, text}, ... } (tests); remaster_events [n] is the console's way
 // (keymap.cpp).
 void RegisterEventBindings(lua_State* L);

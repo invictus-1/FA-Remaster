@@ -530,8 +530,9 @@ bool ClosedInOrder(const std::string& log);
 // the last things the player did (the "moho64ui: event" lines), the last errors and warnings and the last long
 // frames, each a few lines, each line cut at 240 characters; and whether the run closed in order. "" for a log that
 // holds none of it.
+bool EndedFrozen(const std::string& log, double* since, double* atLeast, std::string* part);  // (below)
 std::string Glance(const std::string& log, const std::string& part, bool running = false) {
-  std::vector<std::string> machine, fault, events, commands, bad, frames;
+  std::vector<std::string> machine, fault, events, commands, bad, frames, stalls;
   // (an event's kind: the word after "info: moho64ui: event" and the seconds)
   auto kindOf = [](const std::string& line) {
     size_t at = line.find_first_not_of(' ', 22);
@@ -560,11 +561,14 @@ std::string Glance(const std::string& log, const std::string& part, bool running
     // clicks, keys and orders out of a list of the last twenty)
     else if (begins(line, "info: moho64ui: event ") && kindOf(line) == "console") keepLast(commands, line.substr(16), 5);
     else if (begins(line, "info: moho64ui: event ")) keepLast(events, line.substr(16), 20);
+    else if (begins(line, "info: moho64ui: no frame for ") || begins(line, "info: moho64ui: still no frame after ") ||
+             begins(line, "info: moho64ui: frames again") || begins(line, "info: moho64ui: the main loop went on"))
+      keepLast(stalls, line.substr(16), 8);
     else if (begins(line, "error: ") || begins(line, "warning: ")) keepLast(bad, line, 10);
     else if (line.find("moho64ui: long frame ") != std::string::npos || line.find("moho64ui: a long frame: ") != std::string::npos)
       keepLast(frames, line.substr(line.find("moho64ui: ") + 10), 5);
   }
-  if (machine.empty() && fault.empty() && events.empty() && commands.empty() && bad.empty() && frames.empty()) return "";
+  if (machine.empty() && fault.empty() && events.empty() && commands.empty() && bad.empty() && frames.empty() && stalls.empty()) return "";
   std::string out = "\n== " + part + " at a glance ==\n";
   auto section = [&](const char* title, const std::vector<std::string>& lines) {
     if (lines.empty()) return;
@@ -573,14 +577,24 @@ std::string Glance(const std::string& log, const std::string& part, bool running
   };
   if (running) out += "This run was still going when the report was written from inside it.\n";
   else if (!fault.empty()) out += "THIS RUN STOPPED WITH A FAULT.\n";
-  else if (MarksItsEnd(log))
-    out += ClosedInOrder(log) ? "This run closed in order.\n"
-                              : "THIS RUN DID NOT CLOSE IN ORDER (its log has no last line: a freeze, a forced close, or the PC going off).\n";
+  else if (MarksItsEnd(log) && ClosedInOrder(log)) out += "This run closed in order.\n";
+  else if (MarksItsEnd(log)) {
+    double since = 0, atLeast = 0;
+    std::string in;
+    if (EndedFrozen(log, &since, &atLeast, &in)) {
+      char buf[160];
+      std::snprintf(buf, sizeof buf, "THIS RUN FROZE: no frame from second %.1f of the run on, for at least %.0f s before it ended", since, atLeast);
+      out += std::string(buf) + " (the main loop was in: " + in + ").\n";
+    } else {
+      out += "THIS RUN DID NOT CLOSE IN ORDER (its log has no last line: a forced close, the PC going off, or a freeze shorter than the watch's 5 s).\n";
+    }
+  }
   section("The fault:", fault);
   section("The machine and the game's files:", machine);
   section("The last things done in the interface (seconds since the start, kind, what):", events);
   section("The last console commands (the game's scripts run many at a start):", commands);
   section("The last errors and warnings:", bad);
+  section("The times without a frame (5 s or more: the freeze watch):", stalls);
   section("The last long frames:", frames);
   return out;
 }
@@ -676,6 +690,38 @@ std::filesystem::path RunBefore(const std::filesystem::path& now) {
 // file is still held open by another running copy of the program.
 bool MarksItsEnd(const std::string& log) { return log.find("ends this log with the line 'moho64ui: closed in order'") != std::string::npos; }
 bool ClosedInOrder(const std::string& log) { return log.find("info: moho64ui: closed in order") != std::string::npos; }
+// A run's freeze (the freeze watch's lines, user/events.h): true when the log ENDS inside a time without frames (a
+// "no frame for" line with no "frames again" after it): since which second of the run, for at least how many
+// seconds before the log ends, and what the main loop was in.
+bool EndedFrozen(const std::string& log, double* since, double* atLeast, std::string* part) {
+  bool open = false;
+  auto partOf = [](const std::string& line) {
+    const size_t at = line.find("(the main loop is in: ");
+    const size_t end = line.rfind(')');
+    return at == std::string::npos || end == std::string::npos || end < at + 22 ? std::string("?") : line.substr(at + 22, end - at - 22);
+  };
+  for (size_t at = 0; at < log.size();) {
+    size_t end = log.find('\n', at);
+    if (end == std::string::npos) end = log.size();
+    std::string line = log.substr(at, end - at);
+    at = end + 1;
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    if (line.rfind("info: moho64ui: no frame for ", 0) == 0) {
+      open = true;
+      *atLeast = std::atof(line.c_str() + 29);
+      const size_t s = line.find("since second ");
+      *since = s == std::string::npos ? 0 : std::atof(line.c_str() + s + 13);
+      *part = partOf(line);
+    } else if (open && line.rfind("info: moho64ui: still no frame after ", 0) == 0) {
+      *atLeast = std::atof(line.c_str() + 37);
+      *part = partOf(line);
+    } else if (line.rfind("info: moho64ui: frames again", 0) == 0 || line.rfind("info: moho64ui: the main loop went on", 0) == 0) {
+      open = false;
+    }
+  }
+  return open;
+}
+
 bool HeldOpenElsewhere(const std::filesystem::path& file) {
 #ifdef _WIN32
   // (asked for alone: refused with a sharing violation while any program has the file open; a log's writer has)
@@ -707,7 +753,8 @@ std::string WriteReport(lua_State* L, const std::string& note, std::string* why)
 // reports/auto_reported.txt (its name, size and time), so it is done once for a crash, not at every start. A crash
 // handler does none of this: zipping in a crashing program could fault again; the next start is whole.
 // The same for the run before when it did not close in order (a freeze, a forced close, the PC off: MarksItsEnd): no
-// dump exists then, the report holds that run's log, which the program now writes to its disk every second.
+// dump exists then, the report holds that run's log, which the program now writes to its disk every second. When that
+// log ends inside a time without frames (the freeze watch's lines, EndedFrozen), the report and the menu say "froze".
 // Returns the zip's file; "" when nothing was to do or it failed (`why` says which).
 std::string AutoCrashReport(lua_State* L, std::string* why) {
   static bool asked = false;
@@ -743,7 +790,14 @@ std::string AutoCrashReport(lua_State* L, std::string* why) {
     if (!before.empty() && ReadWhole(before, &text) && MarksItsEnd(text) && !ClosedInOrder(text) && !HeldOpenElsewhere(before) &&
         !reported("not closed " + stamp(before))) {
       const bool faulted = text.find("error: crash: ") != std::string::npos;
-      if (!faulted) {
+      double since = 0, atLeast = 0;
+      std::string part;
+      if (!faulted && EndedFrozen(text, &since, &atLeast, &part)) {
+        // (the freeze watch saw it stand: said as what it was)
+        identity = "not closed " + stamp(before);
+        what = "a freeze";
+        sentence = "The game froze the last time it ran and was closed.";
+      } else if (!faulted) {
         identity = "not closed " + stamp(before);
         what = "a run that did not close in order";
         sentence = "The game did not close properly the last time it ran (a freeze, a forced close, or the PC going off).";

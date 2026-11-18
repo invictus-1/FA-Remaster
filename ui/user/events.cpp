@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -83,7 +85,75 @@ void NoteEvent(const char* kind, const std::string& text) {
 namespace {
 std::atomic<bool> g_keeping{false};
 std::thread g_keeper;
+// (the freeze watch, events.h) the last frame's beginning in nanoseconds since g_start, 0 while no main loop runs
+std::atomic<long long> g_frameAt{0};
+std::atomic<const char*> g_framePart{"?"};
+constexpr int kStallsSaid = 20;
+
+double FreezeSeconds() {
+  const char* v = std::getenv("MOHO64UI_FREEZE_SECONDS");
+  const double s = v ? std::atof(v) : 0;
+  return s >= 0.5 ? s : 5.0;
+}
+
+// One look of the watch (the keeper's thread only).
+void WatchFrames() {
+  static const double limit = FreezeSeconds();
+  static long long stalledAt = 0;  // (the frame the main loop stands in, once that was said; 0: none)
+  static double nextSay = 0;
+  static int said = 0;
+  const long long at = g_frameAt.load();
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
+  if (stalledAt != 0 && at != stalledAt) {  // (it went on: the next frame began, or the loop was left)
+    if (said <= kStallsSaid) {
+      if (at != 0) Logf(LogLevel::Info, "moho64ui: frames again, after %.1f s without one", (at - stalledAt) / 1e9);
+      else Logf(LogLevel::Info, "moho64ui: the main loop went on and ended, after %.1f s without a frame", now - stalledAt / 1e9);
+      LogFlush();
+    }
+    stalledAt = 0;
+  }
+  if (at == 0) return;
+  const double gap = now - at / 1e9;
+  const char* part = g_framePart.load();
+  if (stalledAt == 0 && gap >= limit) {
+    stalledAt = at, nextSay = limit * 2;
+    if (++said <= kStallsSaid) {
+      Logf(LogLevel::Info, "moho64ui: no frame for %.0f s, since second %.1f of the run (the main loop is in: %s)", limit, at / 1e9, part ? part : "?");
+      LogFlush();
+    }
+  } else if (stalledAt != 0 && gap >= nextSay) {
+    if (said <= kStallsSaid) {
+      Logf(LogLevel::Info, "moho64ui: still no frame after %.0f s (the main loop is in: %s)", gap, part ? part : "?");
+      LogFlush();
+    }
+    nextSay *= 2;
+  }
+}
 }  // namespace
+
+void NoteFrame() {
+  const long long at = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();
+  g_frameAt.store(at > 0 ? at : 1);
+  // (MOHO64UI_FREEZE_TEST=<frame>:<seconds>: the main loop sleeps at that frame, for the watch's test)
+  struct Test {
+    int frame = -1;
+    double seconds = 0;
+    Test() {
+      if (const char* v = std::getenv("MOHO64UI_FREEZE_TEST"))
+        if (const char* colon = std::strchr(v, ':')) frame = std::atoi(v), seconds = std::atof(colon + 1);
+    }
+  };
+  static const Test test;
+  static int frame = 0;
+  if (test.frame >= 0 && ++frame == test.frame) {
+    FramePartScope part("MOHO64UI_FREEZE_TEST's sleep");
+    std::this_thread::sleep_for(std::chrono::duration<double>(test.seconds));
+  }
+}
+
+void NoteFramePart(const char* part) { g_framePart.store(part); }
+const char* FramePart() { return g_framePart.load(); }
+void EndFrames() { g_frameAt.store(0); }
 
 void StartLogKeeper() {
   if (g_keeping.exchange(true)) return;
@@ -91,6 +161,7 @@ void StartLogKeeper() {
     int ticks = 0;
     while (g_keeping.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      WatchFrames();
       if (++ticks >= 10) ticks = 0, LogFlush();
     }
   });
