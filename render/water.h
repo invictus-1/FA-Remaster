@@ -44,10 +44,11 @@ class Water {
   // --no-shore-soak).
   bool shoreSoak = true;
   // [seamirror] The mirror WITHOUT ray tracing made stronger (a card like the GTX 1080: seen low over the sea the water
-  // barely mirrors cliffs and rocks; water.cpp says how, at marchAlone). OFF: the mirror as before. A trial kept
-  // behind this switch for Chris's eye and the next hand: from a low eye its level matches the rays' mirror, but
-  // patches of sky with hard edges remain and it flickers about twice as much as the rays' (viewer
-  // --sea-mirror-strong; _scratch/render/t1117/seamirror/NOTES.md). With ray tracing on it changes nothing.
+  // barely mirrors cliffs and rocks; water.cpp says how, at marchAlone). OFF: the mirror as before. Kept behind this
+  // switch for Chris's eye: from a low eye its level and its flicker match the rays' mirror (two rays a pixel, read
+  // softly), softer patches of sky remain, and it costs about half a millisecond of a fast card with the water filling
+  // the picture (viewer --sea-mirror-strong; _scratch/render/t1117/seamirror/NOTES.md). With ray tracing on it changes
+  // nothing; from the game's height the picture looks the same either way.
   bool strongMirror = false;
   // [soakfix] (Chris's second test, 2026-11-04: the soak "better, still weird at times", as he turns the camera "it looks like
   // it all shifts at once") With it: the soak and the ground's wet band by the map's own heights (its ground at its finest,
