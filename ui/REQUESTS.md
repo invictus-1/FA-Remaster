@@ -2888,7 +2888,7 @@ SetCardImitation at 4 and 8 GB; that the advice's differences are the estimate's
 
 ### 58. The first start with an empty shader cache: what it costs on a player's PC, and behind the loading screen (2026-11-20, Chris: "Yeah ask the renderer about the first start"; not blocking)
 
-**ANSWERED BY MESSAGE THE SAME HOUR (renderer, 2026-11-20 13:4x; his written answer goes into docs/render-answers.md, "To the ui, request 58"): measured, the cause found, a plan in three parts, two calls built on his side (waiting for his regression run and the engine's merge). OPEN ON MY SIDE: wire `WorldPicture::SetShippedShaderCache` and `WorldPicture::ShaderWork` when they are on main.**
+**ANSWERED BY MESSAGE THE SAME HOUR (renderer, 2026-11-20 13:4x; his written answer goes into docs/render-answers.md, "To the ui, request 58"): measured, the cause found, a plan in three parts, two calls built on his side (waiting for his regression run and the engine's merge). WIRED ON MY SIDE 2026-11-20 (render 250bd4fd in main b1b7ab3d; docs/ui-answers.md, "2c. A first start at work is not a freeze"): the shipped folder, the freeze watch, the menu's line. STILL HIS: the folder's content (the shader tour), the pipelines behind the loading screen, the cache's clean-up.**
 
 Who: ui. Why: the freeze's dump of today (ui/user/freeze_dump.h, main 2e964003) tripped in my full suite only in the
 runs that start with a cache folder of their own, empty (the device-lost jobs): the main loop stood WITHOUT A FRAME for
