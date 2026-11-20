@@ -55,8 +55,15 @@ bool DxcLoad(std::string* where, std::string* why);
 // messages went to the pipeline's error), and shaders read back from a cache instead of compiled.
 struct ShaderCounts {
   int compiled = 0, failed = 0, fromCache = 0;
+  int compiling = 0;  // [firststart] how many compiles are running at this moment, on any thread
 };
 ShaderCounts ShaderCountsNow();
+// [firststart] (Chris, 2026-11-20; the interface's request 58: a first start compiled 411 shaders, 300 of them inside its
+// first frames, and stood for a minute and more) A folder of compiled shaders SHIPPED with the build, read where the
+// player's own cache has none and never written: what DXC makes (DXIL, SPIR-V) does not depend on the card, and a
+// cached shader's name is made of its own source and arguments, so a cache filled where the build was made is valid on
+// every machine for that build. "": none. Set once, before a device is made (not while shaders are compiled).
+void SetShippedShaderCache(const std::string& folder);
 // [cardlog] Where DXC is taken from (Windows: the full path beside the program; elsewhere the library's name) and whether it is
 // loaded now (it is loaded at the first shader, or by DxcLoad).
 std::string DxcPlace(bool* loaded);

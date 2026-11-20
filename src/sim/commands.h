@@ -96,6 +96,17 @@ struct UnitCommand : std::enable_shared_from_this<UnitCommand> {
   // through AddIssueData). Only its order matters (AppendCommandToQueue's patrol rule), so a process-wide counter
   // serves: every command of one sim is made on that sim's thread, in the sim's order.
   uint64_t createSeq = NextCommandCreateSeq();
+  // The command's listeners that are a transport's move task (a ferry's leg, the landing move of an unload: sim/
+  // transport.cpp LinkMoveListener), in the order they linked: CUnitMoveTask's ctor puts its listener node at the
+  // TAIL of the command's list (0x61827f..0x6182ac: node.prev = head.prev, node.next = head), and the broadcast
+  // 0x6e94a0 calls the nodes from head.next on, so the oldest link hears a SetCommandTarget first. Entries whose move
+  // has ended stay until the unit links again (it then goes to the tail); RetargetUnloadMoves asks each entry whether
+  // its move still links this command.
+  struct MoveLink {
+    uint32_t unitRef = 0;           // EntityRef of the transport
+    std::weak_ptr<void> data;       // its TransportTaskData (the ferry task's for a leg, the unload's for a landing)
+  };
+  std::vector<MoveLink> moveLinks;
 };
 
 // CUnitCommand::IsCoordinating 0x5f24e0: the coordination list is not empty (dead partners count).

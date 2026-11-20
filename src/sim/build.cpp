@@ -4307,6 +4307,17 @@ bool TaskThreadAsleepOnMove(const Unit* u, const BuildTask* from) {
     // again (clear, the transport last in the message): the original runs the cargo's new call tasks before the
     // transport's new load task at 4339 (they find it not yet loading and wait 10 beats: WaitingForTransport at
     // 4350); ours had not re-linked the transport, ran its new task first, and the cargo walked from 4341.
+    // A pod's assist work (CUnitPodAssist's repair / reclaim task, TryIssueFocusedAssistTask 0x61de50, PodStartWork)
+    // is pushed on the pod's own thread above the pod task, so its walking child suspends that thread as any task's
+    // does, and a clear of the pod's queue re-links it (OnEvent 0x599030: +0x18 set). Ours looked at the pod task's
+    // own moves only. Seen: 6v6_2 (FAF 3840) 11134, Lua clears army 11's UEF drones 0xb00043 (its reclaim walking
+    // since 11115) and then 0xb0004c (its reclaim ended that beat; the pod task waits two beats); their new
+    // AssistCommander tasks take the commander's pod bones at 11135 in thread order: the original gives 0xb0004c the
+    // first free bone and 0xb00043 the second (0xb00043 re-linked to the end); ours ran 0xb00043 first.
+    if (const BuildTask* w = PodWorkTask(t)) {
+      t = w;
+      continue;
+    }
     if (t->tdata) return TransportTaskAsleepOnMove(t);
     if (t->sub) {
       t = t->sub;
