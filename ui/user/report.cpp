@@ -258,7 +258,7 @@ size_t MaskWord(std::string& data, const std::string& needle, bool wide) {
   return masked;
 }
 
-// The raw memory a minidump holds, as (file offset, size) ranges: each thread's stack (ThreadList, stream 3) and the
+// The raw memory a minidump holds, as (file offset, size) ranges: each thread's stack and saved registers (ThreadList, stream 3), the faulting thread's registers (stream 6) and the
 // memory near the stacks (MemoryList, stream 5). Empty when the file is not a dump this reads.
 std::vector<std::pair<size_t, size_t>> DumpRanges(const std::string& d) {
   std::vector<std::pair<size_t, size_t>> out;
@@ -274,7 +274,15 @@ std::vector<std::pair<size_t, size_t>> DumpRanges(const std::string& d) {
   for (uint32_t i = 0; i < streams && i < 256; ++i) {
     const uint32_t type = u32(dir + 12 * i), rva = u32(dir + 12 * i + 8);
     if (type == 3)  // MINIDUMP_THREAD: 48 bytes, its Stack descriptor (start u64, size u32, rva u32) at +24
-      for (uint32_t n = u32(rva), k = 0; k < n && k < 4096; ++k) add(u32(rva + 4 + 48 * k + 32), u32(rva + 4 + 48 * k + 36));
+      for (uint32_t n = u32(rva), k = 0; k < n && k < 4096; ++k) {
+        add(u32(rva + 4 + 48 * k + 32), u32(rva + 4 + 48 * k + 36));
+        // and its registers (ThreadContext: size u32, rva u32 at +40). Found 2026-11-20 by the report's test: a copy
+        // of the environment block made with the wide registers leaves its last 16-byte pieces IN them, so a
+        // thread's saved registers held "...=", "WINDIR=C:" in UTF-16: the end of the block, whatever stands there.
+        add(u32(rva + 4 + 48 * k + 40), u32(rva + 4 + 48 * k + 44));
+      }
+    if (type == 6)  // MINIDUMP_EXCEPTION_STREAM: the faulting thread's registers once more (ThreadContext at +160)
+      add(u32(rva + 160), u32(rva + 164));
     if (type == 5)  // MINIDUMP_MEMORY_DESCRIPTOR: 16 bytes (start u64, size u32, rva u32)
       for (uint32_t n = u32(rva), k = 0; k < n && k < 65536; ++k) add(u32(rva + 4 + 16 * k + 8), u32(rva + 4 + 16 * k + 12));
   }
