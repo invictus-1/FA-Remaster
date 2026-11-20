@@ -536,6 +536,22 @@ local looks = {
         },
     },
     {
+        -- the renderer's World::ribbons.contrailVapour (render 74a8c0c7; Chris, 2026-11-20: "Yes add the option for
+        -- contrails"): on = the look since that render; off = the bright trail the remaster drew before; in no preset
+        title = "Vapour Contrails",
+        key = 'remaster_contrail_vapour',
+        tip = "On: an aircraft's contrail is pale vapour, lit by the sun or the moon like a thin cloud. Off: the earlier bright trail, as bright at night as by day.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_contrail_vapour"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         title = "Rich Ground on Remastered Maps",
         key = 'remaster_rich_ground',
         tip = "The richer ground of FA Remastered's own remastered maps. Off: their ground as plain as the original's.",
@@ -1022,7 +1038,7 @@ local remasterSections = {
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak',
                  'remaster_land_mirror', 'remaster_water_mirror' } },
-    { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
+    { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_contrail_vapour', 'remaster_battle_effects',
                             'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway',
                             'remaster_warpin_colours' } },
     { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour', 'remaster_head_lamp_colour',

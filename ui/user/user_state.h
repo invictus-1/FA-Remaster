@@ -687,6 +687,12 @@ struct LookSettings {
   // drew it until then, mostly the sky (false). With ray tracing on it changes nothing. Console
   // remaster_land_mirror 0|1.
   bool strongWaterMirror = true;
+  // Vapour Contrails (the renderer's World::ribbons.contrailVapour, render 74a8c0c7 [contrailvapour]; Chris, 2026-11-20:
+  // "Yes add the option for contrails"; an option by his rule that a new look keeps the earlier way): an aircraft's
+  // contrail is drawn as vapour: pale, lit by the hour's sun or moon as a thin cloud is, lighting nothing (true, the
+  // default: the look since that render), or as the remaster drew it until then: a bright trail by the tracers' rule,
+  // as bright at night as by day (false). Console remaster_contrail_vapour 0|1.
+  bool contrailVapour = true;
   // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
   // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
   // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's
