@@ -5,6 +5,24 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-20 10:42, for the renderer: the turn of the point an effect is made at (request 80; batch 184)
+
+`EffectEvent` (sim/sim_view.h) has two new fields, set for a Create on an entity:
+
+    bool hasOrientation = false;
+    float orientation[4] = {0, 0, 0, 1};   // x, y, z, w like a unit's
+
+- Taken exactly when `position` is taken, from the same call (BoneWorld): the entity's turn, with the bone's where
+  one is named; first at the script's call, then again when the list is taken at the beat's end if the entity still
+  exists (as the place follows it until then). So an entity turned with SetOrientation(..., true) before the call,
+  and one turned later in the same beat, give the turn it has at the beat's end; one destroyed before the list is
+  taken keeps the turn it had at the call.
+- Not set (hasOrientation false) for a position given by the script (decals, CreateEmitterAtPosition-like calls with
+  a point) and for Call / Destroy events. AttachBeamToEntity's Call sets it with its place.
+- A shield's helper entity (no mesh, in no list) gives its own turn at bone -1.
+- View only: no simulation state. Seen in a run with --view (replay LAND, beat 46): `effect 15
+  CreateAttachedEmitter ... on 0x100002 bone 17 at 282.68 24.39 693.65 turn 0.150 0.162 0.042 0.974`.
+
 ## 2026-11-17 15:41, for the renderer: a dying unit's pose for its wreck (TryCopyPose; batch 173)
 
 In the original FAF's Unit:CreateWreckageProp calls `TryCopyPose(unit, wreck, true)` and the wreck keeps the unit's

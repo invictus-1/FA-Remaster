@@ -118,6 +118,127 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## The quiet-machine before / after of batches 176 to 182 (2026-11-20, main 2c538a21 against 3e7ce074)
+
+Chris's quiet window of 20 November (10:10-10:38, PC clock): no game, viewer, interface program, bake or build of any
+chat. Method and machine as on 11-13, 11-14 and 11-18 (`timing4.sh`: pinned to logical CPUs 0-15, one run at a time,
+before and after back to back in each pair, three pairs; session script `keep_20261117/quiet_1120.sh`, tables in
+`_scratch/engine/quiet_20261120`). Before: 3e7ce074 (batches to 175; the exe of 11-18's headline). After: main
+2c538a21 (batches 176 to 182), built from the clean tree at 10:09. 24 runs, every one its first try. The visuals chat
+reported a one-process script of its own running unpinned for about 90 s inside the window (10:14-10:15:30): the
+three pairs that overlapped it (B3 pair 2 and 3, 50k pair 2 at 16 threads) were taken again and are the ones below;
+their first takes agreed (12.92 -> 11.73 and 39.47 -> 35.76 as means with them).
+
+ms a beat, the three pairs and their mean:
+
+| workload | config | before (3e7ce074) | after (main 2c538a21) | change | pairs faster |
+|---|---|---|---|---|---|
+| B3-16k, 2000 beats | P16 | 13.01 / 12.54 / 12.60 = 12.72 | 11.67 / 11.34 / 11.26 = 11.42 | **-10.2%** | 3 of 3 |
+| 50k, 600 beats | P16 | 39.67 / 38.46 / 39.09 = 39.07 | 36.09 / 34.73 / 35.56 = 35.46 | **-9.2%** | 3 of 3 |
+| B3-16k | O1 | 26.13 / 24.70 / 24.59 = 25.14 | 23.62 / 23.44 / 23.80 = 23.62 | **-6.0%** | 3 of 3 |
+| 50k | O1 | 72.11 / 71.55 / 71.59 = 71.75 | 66.36 / 65.02 / 67.16 = 66.18 | **-7.8%** | 3 of 3 |
+
+(P16: the parallel order on 16 threads. O1: the original's order on one thread.)
+
+The stages the batches aimed at, ms a beat, means of the three pairs (every pair faster in each row but the last):
+
+| Stage | Workload | config | before | after | change |
+|---|---|---|---|---|---|
+| commands | 50,000 units | P16 | 3.49 | 2.41 | -31% |
+| commands | B3-16k | P16 | 1.11 | 0.83 | -25% |
+| commands | 50,000 units | O1 | 3.47 | 2.48 | -29% |
+| destroy + sync | 50,000 units | P16 | 2.40 | 1.00 | -58% |
+| destroy + sync | B3-16k | P16 | 0.93 | 0.54 | -42% |
+| destroy + sync | 50,000 units | O1 | 2.36 | 1.00 | -58% |
+| formations | 50,000 units | P16 | 1.01 | 0.18 | -82% |
+| formations | B3-16k | P16 | 0.27 | 0.07 | -75% |
+| formations | 50,000 units | O1 | 1.12 | 1.20 | +7% (not on the pool in the original's order) |
+
+What it says:
+
+- The whole beat of a new game on 16 threads is 9 to 10% shorter than on 18 November's main, every pair. The shares
+  the busy-machine timing of 11-18 gave the stages hold (commands about a third less, destroy + sync about three
+  fifths less on 50,000 units); its absolute figures were higher because that machine was busy.
+- The original's order on one thread gained 6 to 8% too: the kept command order, the patrol answers, the manipulator
+  list and the task sweep serve both orders, and batch 178 took back the one-thread cost of batch 167's crash place
+  (found on 11-18).
+- THE HEADLINE stays about twice. In this session main's parallel order on 16 threads against main's original order
+  on one: 23.62 / 11.42 = **2.07x** (B3-16k) and 66.18 / 35.46 = **1.87x** (50,000 units). Against the yardstick of
+  11-13 and 11-18, dfd0c579's original order on one thread, taken at the end of this session (three runs each,
+  24.09 and 66.94 ms): **2.11x** and **1.89x**. Both sides of the ratio got faster, so the ratio hardly moved; what
+  moved is the beat itself: 50,000 units now take 35.5 ms of a 100 ms beat.
+- The one-thread side moves between sessions more than the pairs within one: dfd0c579 O1 read 29.4 ms (B3) on
+  11-18 and 24.1 ms today. This whole session ran faster than 11-18's, on 16 threads too (the same exe 3e7ce074:
+  14.41 ms on B3 and 42.61 on 50k then, 12.72 and 39.07 today; why is not known: the machine, not the engine). So
+  figures of two sessions are not to be set against each other; a headline is good to about a tenth, before / after
+  pairs of one session to about a hundredth.
+
+## Two serial stages made cheaper: the commands stage and destroy + sync (2026-11-18, batches 179 to 181)
+
+A helper's study of the two stages that stay on one thread in the parallel order (16 threads; the measuring patch
+is not in main) found work repeated every beat that changes nothing. Four exact changes came of it, each proven
+against the old way on every beat by a check switch: the command order kept instead of sorted again and the
+re-linked threads from a list (`MOHO64_CMDORDER_CHECK`, batch 179), a patrol's category answers kept per blueprint
+(`MOHO64_CATCACHE_CHECK`, batch 180), the end of beat walking only the manipulators that can end
+(`MOHO64_FXMANIP_CHECK`, batch 181), and the task sweep every 10 drains (`MOHO64_SWEEP_EVERY`,
+`MOHO64_SWEEP_CHECK`, batch 181).
+
+First timing, three back-to-back pairs each, ON A MACHINE BUSY WITH GATES: the stages count, the whole beat does
+not (its pairs spread from -48 % to +27 %). ms a beat, means of the three pairs:
+
+| Stage | Workload | before (3e7ce074) | order kept | + patrol answers | + manipulator list | + sweep every 10 |
+|---|---|---|---|---|---|---|
+| commands | 50,000 units | 8.46 | 5.98 (-29 %) | 5.62 (-34 %) | 5.61 | 5.99 |
+| commands | B3-16k | 3.40 | 2.37 (-30 %) | 2.14 (-37 %) | 2.11 | 1.92 |
+| destroy + sync | 50,000 units | 5.01 | 4.57 | 4.58 | 4.69 | 2.03 (-60 %) |
+| destroy + sync | B3-16k | 2.26 | 2.05 | 2.04 | 1.98 | 1.00 (-56 %) |
+
+Every pair is faster for the kept order, the patrol answers (commands) and the sweep (destroy + sync); the
+manipulator list is within the noise, and in these workloads and six replays neither the old walk nor the list
+ever freed a manipulator. Together about 5.5 ms a beat on 50,000 units, where the quiet beat above is 42.6 ms.
+(The quiet-machine pair owed here was taken on 2026-11-20: the section above.)
+What the study names next: patrol tasks that are asleep are still visited every beat (28 % of the commands stage,
+about 2.4 ms on 50,000 units), and the 6-beat patrol scans' queries could run ahead on the pool (about 0.6 ms).
+
+## The headline on a quiet machine, and the one-thread cost found with it (2026-11-18, main 3e7ce074 against dfd0c579)
+
+Chris's quiet window of 18 November (07:58-08:18, PC clock): no game, viewer, interface program, bake or build of any
+chat; nothing on CPUs 16-31 either but the sampler. Method and machine as on 11-13 and 11-14 (`timing4.sh`: pinned to
+logical CPUs 0-15, one run at a time, before and after back to back in each pair, three pairs). 24 runs, every one
+its first try, none disturbed. Before: mcwrap's clean build of dfd0c579 (the exe of 11-13's 2.05x). After: main
+3e7ce074 (batches 164-175).
+
+| workload | config | before (dfd0c579), 3 pairs | after (main), 3 pairs | change | pairs faster |
+|---|---|---|---|---|---|
+| B3-16k, 2000 beats | P16 | 14.76 / 14.93 / 15.76 = 15.15 | 14.17 / 14.80 / 14.26 = 14.41 | **-4.9%** | 3 of 3 |
+| 50k, 600 beats | P16 | 46.13 / 47.08 / 42.76 = 45.32 | 42.91 / 42.86 / 42.08 = 42.61 | **-6.0%** | 3 of 3 |
+| B3-16k | O1 | 26.99 / 32.38 / 28.96 = 29.44 | 27.83 / 36.05 / 29.61 = 31.17 | **+5.9%** | 0 of 3 |
+| 50k | O1 | 78.00 / 81.06 / 81.33 = 80.13 | 90.66 / 85.44 / 82.43 = 86.18 | **+7.5%** | 0 of 3 |
+
+(ms a beat, means of the profile's tick times; P16 = parallel order at 16 threads, O1 = the original order at one.)
+
+**The headline, parallel order at 16 threads against the original order at one:** B3-16k **2.04x** against
+dfd0c579's one thread (29.44 / 14.41) and 2.16x against main's own (31.17 / 14.41); 50k **1.88x** (80.13 / 42.61) and
+2.02x. About twice, as on 11-13 (2.05x, 1.90x). What moved between the three sessions is the one-thread side: the
+same exe's O1 runs spread from 27.0 to 32.4 ms within this quiet session, and its mean was 32.45 (11-13), 26.33
+(11-14) and 29.44 (today). The 16-thread side is steady (dfd0c579: 15.86, 15.69, 15.15 ms; 47.17, 48.52, 45.32).
+So a headline is good to about 10%, and 11-14's "1.8x" was a fast one-thread night, not a loss.
+
+**The one-thread cost.** In the original order at one thread main is slower than dfd0c579 in all six pairs, and the
+loss sits in the stages that take one unit after another: weapons +15.3% (B3) and +18.8% (50k), steering +9.9% and
++16.2%, the entity pass +5.9% and +7.2%, the navigators +4.9% and +7.5% (per phase:
+`_scratch/engine/quiet_20261118/phases_o1.txt`). The cause is batch 167's crash place: `CrashEntityScope`
+(core/crash.h) sits round every unit's turn of every stage (wtrap::Turn) and looked up the extern `thread_local`
+record nine times a turn. With the record looked up once and kept as a pointer, and its declaration `constinit`
+(no wrapper call), three builds timed at the same moment (one thread each on its own core, the cores rotated;
+`pairs3.sh`, the machine not quiet, so the times are larger and only the comparison counts) give, against
+dfd0c579: main +4.0% (B3) and +5.7% (50k), the fix +1.2% and +2.2%; weapons +9.1% / +14.6% down to +0.2% / +2.6%;
+steering +13.6% / +22.1% down to +3.7% / +6.6%. Landed as batch 178. The rest (+1 to +2%) is within that
+measure's noise and is the pool's bookkeeping paid without threads (11-14's +1.2% / +4.4% before batch 167).
+
+Measured by the engine lead (Fable 5.2). Tables: `_scratch/engine/quiet_20261118` (table_p.txt, table_o1.txt),
+`_scratch/engine/pairs3/cs1/table.txt`; runs `SCR/agents/mcwrap/runs/t_1118_p`, `t_1118_o1`.
+
 ## The multicore round as a whole: main 6e8d7177 against dfd0c579 (2026-11-14, account B)
 
 The round's items 1-5 (batches 162-166: the unit economy's sums, the combat prefill, the snapshot pool, the

@@ -1130,14 +1130,15 @@ float moho_lua_pow(float x, float y) {
     if (k == 0) return LuaIndefinite();
     negate = (k == 1);
   }
-  const double L = std::log2(std::fabs(static_cast<double>(x)));
+  // (dmath's log2 and 2^f, here and in exp below: the C library's are not the same in every library and version)
+  const double L = moho::dmath::Log2d(std::fabs(static_cast<double>(x)));
   const double hi = yd * L;
   const double lo = std::fma(yd, L, -hi);
   double n = std::nearbyint(hi);  // frndint of the wide z = hi + lo
   if (hi - n == 0.5 && lo > 0.0) n += 1.0;  // (a tie in hi only: the wide z lies past it)
   else if (hi - n == -0.5 && lo < 0.0) n -= 1.0;
   const float f = static_cast<float>((hi - n) + lo);              // fsubr at PC_24 (and fchs)
-  const float one = static_cast<float>(std::exp2(static_cast<double>(f)));  // f2xm1, fld1 faddp at PC_24
+  const float one = static_cast<float>(moho::dmath::Exp2d(static_cast<double>(f)));  // f2xm1, fld1 faddp at PC_24
   const double e = n > 4096.0 ? 4096.0 : (n < -4096.0 ? -4096.0 : n);
   const float r = static_cast<float>(std::ldexp(static_cast<double>(one), static_cast<int>(e)));  // fscale, fstp
   return negate ? -r : r;
@@ -1149,7 +1150,7 @@ float moho_lua_exp(float x) {
   if (t < -200.0f) return 0.0f;
   const float n = std::nearbyint(t);
   const float f = t - n;
-  const float g = static_cast<float>(1.0 + (std::exp2(static_cast<double>(f)) - 1.0));
+  const float g = static_cast<float>(1.0 + (moho::dmath::Exp2d(static_cast<double>(f)) - 1.0));
   return std::ldexp(g, static_cast<int>(n));
 }
 }

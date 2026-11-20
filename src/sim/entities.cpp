@@ -1355,6 +1355,13 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
 
 // ---- per-object script values ---------------------------------------------------------------
 
+// registry["moho64.values"][obj->valuesKey] = the object's table of values. The key is a number the sim gives the
+// object when it first gets a value (Sim::nextValuesKey), never its address: a light userdata hashes the pointer
+// (ltable.c hashpointer), so where the keys landed, which dead slots (DropObjectValues) new keys reused and with it
+// the moments and sizes of the table's rehashes changed from run to run with the C++ heap's layout. That moved the
+// Lua heap's byte count (the fingerprint's lua= figure, 1280 bytes at beats 253-255 of lab_20261008_073633), and
+// through it a classic collection's trigger (lgc.h luaC_checkGC) and the incremental collector's units for the
+// table's traversal (lgcinc.c). A number hashes by its value (and sits in the array part while the keys are dense).
 void SetObjectValue(lua_State* L, ScriptObject* obj, const char* key, int valueIdx) {
   if (valueIdx < 0) valueIdx = lua_gettop(L) + valueIdx + 1;
   lua_pushstring(L, kValuesKey);
@@ -1366,14 +1373,13 @@ void SetObjectValue(lua_State* L, ScriptObject* obj, const char* key, int valueI
     lua_pushvalue(L, -2);
     lua_rawset(L, LUA_REGISTRYINDEX);
   }
-  lua_pushlightuserdata(L, obj);
-  lua_rawget(L, -2);
+  if (obj->valuesKey == 0) obj->valuesKey = ++S(L)->nextValuesKey;
+  lua_rawgeti(L, -1, static_cast<int>(obj->valuesKey));
   if (lua_isnil(L, -1)) {
     lua_pop(L, 1);
     lua_newtable(L);
-    lua_pushlightuserdata(L, obj);
-    lua_pushvalue(L, -2);
-    lua_rawset(L, -4);
+    lua_pushvalue(L, -1);
+    lua_rawseti(L, -3, static_cast<int>(obj->valuesKey));
   }
   lua_pushstring(L, key);
   lua_pushvalue(L, valueIdx);
@@ -1385,8 +1391,7 @@ void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
   lua_pushstring(L, kValuesKey);
   lua_rawget(L, LUA_REGISTRYINDEX);
   if (lua_isnil(L, -1)) return;
-  lua_pushlightuserdata(L, obj);
-  lua_rawget(L, -2);
+  lua_rawgeti(L, -1, static_cast<int>(obj->valuesKey));  // (0: no value set yet, so nil)
   lua_remove(L, -2);
   if (lua_isnil(L, -1)) return;
   lua_pushstring(L, key);
@@ -1397,15 +1402,13 @@ void PushObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
 // (rawset of nil only on a key that is there: a new key would grow the table)
 void DropObjectValues(lua_State* L, ScriptObject* obj) {
   lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kValuesKey);
-  if (lua_istable(L, -1)) {
-    lua_pushlightuserdata(L, obj);
-    lua_rawget(L, -2);
+  if (lua_istable(L, -1) && obj->valuesKey != 0) {
+    lua_rawgeti(L, -1, static_cast<int>(obj->valuesKey));
     const bool had = !lua_isnil(L, -1);
     lua_pop(L, 1);
     if (had) {
-      lua_pushlightuserdata(L, obj);
       lua_pushnil(L);
-      lua_rawset(L, -3);
+      lua_rawseti(L, -2, static_cast<int>(obj->valuesKey));
     }
   }
   lua_pop(L, 1);
@@ -1415,8 +1418,7 @@ void DropObjectValues(lua_State* L, ScriptObject* obj) {
 void PeekObjectValue(lua_State* L, ScriptObject* obj, const char* key) {
   lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, kValuesKey);
   if (!lua_istable(L, -1)) return;
-  lua_pushlightuserdata(L, obj);
-  lua_rawget(L, -2);
+  lua_rawgeti(L, -1, static_cast<int>(obj->valuesKey));
   lua_remove(L, -2);
   if (!lua_istable(L, -1)) return;
   lua_gpg_rawgetstr(L, -1, key);

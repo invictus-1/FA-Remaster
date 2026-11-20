@@ -16,7 +16,6 @@ extern int (*lua_gpg_rename_hook)(const char* from, const char* to);
 
 namespace moho {
 namespace {
-const char kStateKey = 0;  // address used as a registry key
 
 // Scripts name files the Windows way; reads go through the host mapping. Scripts may not
 // modify files outside the engine's own data folder (none is configured yet), so the
@@ -68,7 +67,7 @@ ScriptState::ScriptState(Kind kind, Vfs* vfs) : kind_(kind), vfs_(vfs) {
   luaopen_math(L_);
   luaopen_debug(L_);
   lua_settop(L_, 0);
-  lua_pushlightuserdata(L_, const_cast<char*>(&kStateKey));
+  lua_pushstring(L_, "moho64.state");  // (a fixed string, not &kStateKey: an address key hashes differently each run)
   lua_pushlightuserdata(L_, this);
   lua_rawset(L_, LUA_REGISTRYINDEX);
   lua_setextra(L_, 0, this);

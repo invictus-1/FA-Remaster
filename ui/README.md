@@ -141,6 +141,23 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   hidden too. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
   `moho64ui_Report([note])`; `tests/report.lua`; the lab's suite/report.sh reads the zips, with a made-up user folder
   and both ways of naming).
+- The automatic crash report (ours; the first step of Chris's debugger: 2026-11-15, "something that auto activates the
+  second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
+  details on desktop and the user can send it over"; 2026-11-18, "Yes, on the Desktop"): when the main menu is made
+  and a kept earlier run crashed (its dump is there) without a report yet, the report above is written by itself onto
+  the player's Desktop (the "reports" folder when there is none) and the menu's notice line says so, with the zip's
+  name and where the option is. Once for a crash (`reports/auto_reported.txt` remembers the dump); never with the
+  option Crash Reports off (Options > Interface, on by default; the menu's hook reads the profile's value). Nothing is
+  sent anywhere. No crash handler does any of it: the next start is a whole program. The same for a run that DID
+  NOT CLOSE IN ORDER (a freeze the player ended, a forced close, the PC going off: no dump exists): a log says at its
+  head that it will end with the line "moho64ui: closed in order", the program writes that line when `main` is left
+  (by any return), and a log with the first and without the second is of such a run; the log goes to its disk every
+  second and at every event (`StartLogKeeper`), so it holds what came before. Every report's README begins with each
+  log AT A GLANCE: the fault's lines, the machine and the game's files, the last things done in the interface, the
+  last errors and warnings, the last long frames (`user/report.cpp`
+  `AutoCrashReport`, `moho64ui_AutoCrashReport()`, `data/hook/lua/ui/menus/main.lua`; `MOHO64UI_REPORT_FOLDER=<folder>`
+  stands in for the Desktop in tests; `tests/auto_report.lua`, the lab's suite/report.sh: a crash, the start after it,
+  the start after that, the option off and on, the launchers' log names).
 - The Options' graphics-memory strip (ours; Chris's wish of 2026-11-14, a "small vram calculator spot"; ui/REQUESTS 57;
   its numbers' rule decided with the renderer at the Fable check, 2026-11-17): a small panel under the Options dialog
   on its Video and Remastered tabs. Its first line: what a large late game needs with the settings as chosen in the
@@ -159,6 +176,9 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
 - Wreck Poses (ours as an option, 2026-11-17; the renderer's `SetWreckPoses`, the engine's batch 173): a wreck keeps
   the pose its unit died in, as in the original (on, the default), or lies at rest (off); the Remastered tab's Units
   & Readability, `remaster_wreck_poses` (`docs/ui-options-layout.md` 8).
+- Land Mirrored in Water (ours as an option, 2026-11-17; the renderer's `SetStrongWaterMirror`): without ray tracing
+  the water mirrors land and rocks strongly (on, the default: Chris's "Yes, default on"), or as before (off); the
+  Remastered tab's Water, `remaster_land_mirror` (`docs/ui-options-layout.md` 8).
 - The Options' sliders show their effect while they are dragged (ours; Chris's pick of 2026-11-09): Unit Glow at
   Night, Haze & Mist and Sharpen send their look at every step of a drag (the game's dialog calls an option's
   `update` there), so with the menu's flight or a game behind the dialog a look is judged at once. When the dialog

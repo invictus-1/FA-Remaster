@@ -179,8 +179,10 @@ class SlaveManipulator : public ScriptObject {
   Quat cur;                         // +0x84: the rotation given to the destination bone
   Quat srcLocal;                    // the source's local rotation in the pose that is being replaced
   bool enabled = true, alive = true;
+  bool signalled = false;           // +4 (CTaskEvent): each move sets it: at the source's rotation, or still turning
   int precedence = 0;
   uint32_t seq = 0;
+  int EventState() const override { return signalled ? 1 : 0; }
 };
 
 // CCollisionManipulator (CreateCollisionDetector 0x638020, ManipulatorUpdate 0x637c90): watches bones of a unit
@@ -348,6 +350,12 @@ void EndUnitManipulators(Unit* u);
 // Attack commands (CUnitAttackTargetTask), run as the unit's command task.
 BuildTask* StartAttackTask(Sim& sim, Unit* u, const UnitCommand& c);
 float GuardScanRadiusOf(Unit* u);
+// The unit's blueprint in PATROLHELPER / COMMAND / SACU_BEHAVIOR, from its combat data (filled once per blueprint, as
+// COMMAND / BENIGN / STRUCTURE are): the patrol's reclaim helper asks them at every scan (commands.cpp
+// PatrolReclaimTarget), and BpInCategory looks the name up in a map keyed by string each time.
+// MOHO64_CATCACHE_CHECK=1 asks BpInCategory too at every call and stops on a difference.
+bool PatrolHelperOf(Unit* u);
+bool CommandOrSacuOf(Unit* u);
 Unit* GuardBestEnemy(Sim& sim, Unit* u);
 // The patrol's search box (an OBB in xz: centre, unit direction along the leg, half extents across / along).
 struct PatrolBox {

@@ -709,8 +709,7 @@ bool UnitStateOf(Sim& sim, uint32_t unitId, UnitStateView* out) {
     // making nothing (lua_gpg_rawgetstr, StrField below; lua_next and lua_rawget make nothing either)
     lua_gpg_rawgetstr(L, LUA_REGISTRYINDEX, "moho64.values");  // (entities.cpp kValuesKey)
     if (lua_istable(L, -1)) {
-      lua_pushlightuserdata(L, u);
-      lua_rawget(L, -2);
+      lua_rawgeti(L, -1, static_cast<int>(u->valuesKey));  // (entities.cpp SetObjectValue's key; 0: none, nil)
       if (lua_istable(L, -1)) {
         lua_pushnil(L);
         while (lua_next(L, -2)) {

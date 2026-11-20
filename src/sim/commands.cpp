@@ -198,6 +198,24 @@ void PopHeadQuiet(Unit* u) {
   u->headState = kNotStarted;
 }
 
+// MoveFirstCommandToBackOfQueue 0x6edfc0 by itself: the head order goes behind the others when the queue holds more
+// than one (0x6edff6: nothing moves otherwise), and the unit goes on holding it: the order's units and its formation
+// are not touched (no FormRemoveUnit, no release). The head's task is over either way.
+void HeadToBack(Unit* u) {
+  EndMoveTaskRect(u);
+  if (u->engageId) ClearEngagement(*Sim::From(u->luaState()), u);
+  if (u->task) {
+    EndBuildTask(*Sim::From(u->luaState()), u, *u->task, true);
+    u->task = nullptr;
+  }
+  if (u->commands.size() > 1) {
+    std::shared_ptr<UnitCommand> head = u->commands.front();
+    u->commands.pop_front();
+    u->commands.push_back(std::move(head));
+  }
+  u->headState = kNotStarted;
+}
+
 bool NextIsMove(const Unit* u) { return u->commands.size() > 1 && MoveLike(u->commands[1]->type); }
 
 // IAiCommandDispatchImpl::TaskTick 0x598e80, once DispatchTask made no task for the head order (0x598eea..0x598f67):
@@ -656,9 +674,8 @@ bool AtPatrolGoal(Sim& sim, Unit* u, const PatrolData& p) {
 // Seen: Skirmish 1268, engineer 0x700007 on AggressiveMove reclaims a prop 1 cell away first (its navigator idle
 // until the reclaim child moves it at 1274); ours walked off toward the goal.
 Entity* PatrolReclaimTarget(Sim& sim, Unit* u, PatrolData& p) {
-  if (!BpInCategory(sim, u->blueprint, "PATROLHELPER")) return nullptr;
-  if (p.aggressive && (BpInCategory(sim, u->blueprint, "COMMAND") || BpInCategory(sim, u->blueprint, "SACU_BEHAVIOR")))
-    return nullptr;
+  if (!PatrolHelperOf(u)) return nullptr;  // (the blueprint's answer kept in its combat data: combat.h)
+  if (p.aggressive && CommandOrSacuOf(u)) return nullptr;
   if (!u->army) return nullptr;
   const ArmyEconomy& eco = u->army->econ;
   const bool energyHigh = eco.stored[kEnergy] > static_cast<float>(static_cast<double>(eco.maxStorage[kEnergy]) * 0.75);
@@ -1518,11 +1535,18 @@ void CommandStep(Sim& sim, Unit* u) {
         // Seen (oracle scene patrol_one, FAF 3840): IssuePatrol with one point, the unit's queue is empty on the beat
         // its leg ends (tank 345: q 0) and it coasts to a stop 58.1 from its start; ours kept the order and drove
         // on to the point (60.2) and kept re-patrolling.
-        std::shared_ptr<UnitCommand> keep = u->commands.front();
-        PopHead(u);
-        if (u->dispatchResult == 2 || !u->commands.empty()) {
-          u->commands.push_back(keep);
-          keep->units.insert(u);
+        // In the result-2 branch the order goes to the back by 0x6edfc0 alone (0x598ee0): the unit stays in the
+        // order's formation there; FormRemoveUnit 0x6e8d70 is only the other branch's (0x598ff8), which PopHead's
+        // release does. (Read 2026-11-18; ours took the unit out of the formation in both.)
+        if (u->dispatchResult == 2) {
+          HeadToBack(u);
+        } else {
+          std::shared_ptr<UnitCommand> keep = u->commands.front();
+          PopHead(u);
+          if (!u->commands.empty()) {
+            u->commands.push_back(keep);
+            keep->units.insert(u);
+          }
         }
         // IAiCommandDispatchImpl::TaskTick 0x598ebb: with its result word at 2 (the patrol's last child failed) the
         // point goes to the back (0x598ee0) and the next one is dispatched at once (0x598f6d); otherwise (0x598fed)
@@ -1612,15 +1636,18 @@ void CommandStage(Sim& sim) {
     if (!ArrivalStep(sim, u)) CommandStep(sim, u);
   };
   std::vector<Unit*> order = sim.CommandOrder();
+  sim.CommandLinkBegin();
   uint64_t hi = sim.CommandSeqHigh();
+  size_t mark = sim.CommandLinkMark();
   for (Unit* u : order) step(u);
+  std::vector<Unit*> more;
   for (;;) {
-    std::vector<Unit*> more;
-    for (Unit* u : sim.units())
-      if (u->cmdSeq > hi) more.push_back(u);
+    // the units whose cmdSeq is above hi, in cmdSeq order (Sim::CommandLinkedSince: from the list of the units given a
+    // new cmdSeq since the mark, not a scan of every unit; the same list)
+    sim.CommandLinkedSince(mark, hi, &more);
     if (more.empty()) break;
-    std::sort(more.begin(), more.end(), [](const Unit* x, const Unit* y) { return x->cmdSeq < y->cmdSeq; });
     hi = sim.CommandSeqHigh();
+    mark = sim.CommandLinkMark();
     for (Unit* u : more) step(u);
   }
   // path searches, first come first served
@@ -2645,7 +2672,13 @@ int l_IssueTarget(lua_State* L) {
   constexpr bool kTargetFirst = T == CommandType::Guard || T == CommandType::Patrol || T == CommandType::AggressiveMove;
   std::vector<Unit*> units;
   constexpr uint32_t kCap = ScriptIssueCap(T);
-  if (kGetTarget && !kTargetFirst) {
+  // (IssueReclaim / Repair / Capture / OverCharge take their unit list first too: cfunc_IssueRepairL 0x6f60d0 reads the
+  // list (0x6f616e), filters it by the cap (0x6f6183, FilterByCommandCap 0x6eecf0) and ends when none is left
+  // (0x6f61bf), before it looks at the entity (UpdateTarget 0x5d55b0 at 0x6f622f: the target point's draw); the
+  // same in 0x6f69d0, 0x6f6c90 and 0x6f1df0. Ours drew first. Seen: FAF 3840 pro replay 4v4_1 10493, FAF's shield
+  // (shield.lua 606-608) tells the shield's guards to repair and then guard it again; the guard here is a mobile
+  // flak, which has no Repair cap: the original draws nothing for the IssueRepair, ours drew one target point.)
+  if (!kTargetFirst) {
     units = UnitsArg(L, 1);
     KeepUnitsWithCap(L, units, kCap);
     if (units.empty()) {  // (0x6f3797: nothing left -> nil before SCR_GetTarget)
@@ -2668,7 +2701,7 @@ int l_IssueTarget(lua_State* L) {
   };
   if (kBadPoint && !kTargetFirst && !kForm && !ScriptTargetPointValid(L, 2, te) && validateKeptOne())
     luaL_error(L, "%s", kBadPoint);
-  if (!kGetTarget || kTargetFirst) {
+  if (kTargetFirst) {
     units = UnitsArg(L, 1);
     KeepUnitsWithCap(L, units, kCap);
     if (units.empty()) {

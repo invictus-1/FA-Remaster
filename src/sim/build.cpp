@@ -425,12 +425,25 @@ bool Cat(Sim& sim, const Unit* u, const char* c);
 // the target's OnFailedToBeBuilt first); the builder loses its focus.
 void StopBuild(Sim& sim, lua_State* L, Unit* builder, BuildTask& t, bool success) {
   Unit* target = FindUnitAny(sim, t.targetId);  // (the helper's weak pointer: non-null until freed)
-  if (t.started && Alive(builder)) {
+  // CBuildTaskHelper::OnStopBuild 0x5f5a20 asks the builder's IsDead only (vt+0x28 at 0x5f5a36): a builder whose
+  // Destroy is queued but not yet drained still gets its callbacks. Seen: FAF 3840 pro replay 4v4_1 7878, a factory
+  // of a defeated army handed to an ally at 7877 (the old unit's Destroy queued) while its half-built engineer
+  // 0x60003c was killed with the army's other units: at 7878 the old factory's build ends, FAF's OnStopBuild
+  // (factoryunit.lua:142) destroys the dead, unfinished engineer, and its DeathThread goes with it; ours raised no
+  // OnStopBuild for a destroy-queued builder, and the engineer's DeathThread ran on to 7881 (its Random draws at
+  // 7880 the first draw difference).
+  if (t.started && builder && !builder->dead) {
     if (!success) {
       sim.CallMethod(L, builder, "OnFailedToBuild", 0);
       if (target && target->HasLuaObject()) sim.CallMethod(L, target, "OnFailedToBeBuilt", 0);
     }
-    PushObject(L, target && !target->destroyQueued ? target : nullptr);
+    // CBuildTaskHelper::OnStopBuild 0x5f5a20 -> CScriptObject::OnStopBuild 0x5fc730 (0x5f5a79..0x5f5a86) hands the
+    // script the helper's weak pointer to the target (helper+8) as it is: a target only queued for destruction is
+    // still passed (its Lua object lives until the purge). Seen (oracle scene upg, FAF 3840, cells clear): the upgrade
+    // task's dtor destroys the unfinished upgrade (0x5f85eb) before OnStopBuild (0x5f85fe), and the original's
+    // F.OnStopBuild got the upgrade; ours passed nil for a destroy-queued target. (Gate 173 failed with this alone:
+    // the roll-off order then reached a factory shell; l_IssueMoveOffFactory's filter is the other half.)
+    PushObject(L, target);
     lua_pushstring(L, t.order.c_str());
     sim.CallMethod(L, builder, "OnStopBuild", 2);
   }
@@ -613,6 +626,17 @@ bool InBuildRange(const Unit* builder, const BlueprintInfo& targetBp, const Vec3
 }
 
 bool CanMove(const Unit* u) { return u->motion.bp && u->motion.bp->mobile() && !u->immobile; }
+// Mobile by its blueprint, whatever the script's SetImmobile says: what the original's engineer tasks ask before
+// they start their walk, where they ask at all. Read 2026-11-20: CUnitMobileBuildTask's state 0 asks IUnit::IsMobile
+// (vt+0x30 = 0x6a4a10: the unit has a motion) at 0x5f74ec..0x5f74f8 and nothing of the Immobile state; CUnitRepairTask's
+// state 0 asks only its own no-move byte (+0x98, 0x5f95f3) before the range, PrepareMove 0x62b780 (0x5f97aa) and
+// NewMoveTask 0x6190a0 (0x5f9829); CUnitCaptureTask's state 0 asks the gap against 5 (0x604606) and the AIR byte
+// (0x604650), then 0x6046fe / 0x60477d; CUnitSacrificeTask goes from the target's place (0x5fb739) to 0x5fb790 /
+// 0x5fb809 with no question of the unit; CUnitReclaimTask the same (batch 182). So a unit that is Immobile for now (an
+// engineer falling from its transport) is given the walk and starts it when it may move; ours skipped the walk
+// (CanMove) and the task then failed on the range. (A unit not mobile by its blueprint gets no walk: ours has no
+// navigator for one.)
+bool MobileByBp(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
 
 void MoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   std::vector<Vec3> path;
@@ -950,6 +974,15 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // stands for the target with a 2x2 footprint (0x61f1cc, 0x61f218..0x61f2e5); state 0 (0x61f3af..0x61f4c8) walks
   // next to it as for a prop (gap > MaxBuildDistance or nearer than 1: PrepareMove beside the 2x2 rect, spacing 1,
   // NewMoveTask); state 1 then ends it (0x61f4e6..0x61f4ef: result 2).
+  // State 0 walks with no question of the unit's Immobile state (0x61f3dc..0x61f4c0: the gap against MaxBuildDistance
+  // bp+0x564 and 1 against the distance, then PrepareMove 0x62b780 and NewMoveTask 0x6190a0, nothing between): a unit
+  // just dropped by its transport, Immobile until it has landed, is given the walk and starts it when it lands. Ours
+  // ended the task for an Immobile unit (CanMove), and its patrol took the next prop. Seen: FAF 3840 pro replay 6v6_2,
+  // beat 9232: five engineers dropped on an AggressiveMove at 9225; their patrols pick the prop 0x2ff00019 at 9226 and
+  // the reclaim child's first Execute at 9232 starts the walk (Moving beside Immobile; they land at 9236 and move
+  // from 9237); ours ended the child at 9232 and walked to another prop from 9238. (A unit that is not mobile by its
+  // blueprint still ends here: ours has no navigator for it.)
+  const bool canWalk = u->motion.bp && u->motion.bp->mobile();
   if (c.reclaimAtPoint) {
     if (c.moving) {
       c.moving = false;
@@ -966,7 +999,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     const NamedFootprint& ufp = Footprint(*u->blueprint);
     const float gap = dist - static_cast<float>(std::max(ufp.sizeX, ufp.sizeZ)) - 2.0f;
     c.state = 1;
-    if (!(gap > u->bpData->maxBuildDistance || dist < 1.0f) || !CanMove(u)) return kTaskFailed;
+    if (!(gap > u->bpData->maxBuildDistance || dist < 1.0f) || !canWalk) return kTaskFailed;
     const int px0 = RoundEven(c.site.x - 1.0f), pz0 = RoundEven(c.site.z - 1.0f);
     const float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + 2.0f,
                            static_cast<float>(pz0) + 2.0f};
@@ -1007,7 +1040,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     case 0:
       if (!(tu && tu->beingBuilt) && (!BpInCategory(sim, e->blueprint, "RECLAIMABLE") || e == u)) return kTaskFailed;
       if (gap > maxBD || dist < 1.0f) {  // PrepareMove next to the prop's footprint rect, reserve, move
-        if (!CanMove(u)) return kTaskFailed;
+        if (!canWalk) return kTaskFailed;
         int px0 = RoundEven(tp.x - pfx * 0.5f), pz0 = RoundEven(tp.z - pfz * 0.5f);
         float excl[4] = {static_cast<float>(px0), static_cast<float>(pz0), static_cast<float>(px0) + pfx,
                          static_cast<float>(pz0) + pfz};
@@ -1465,7 +1498,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         t.subFrom = sim.tick() + 1;
         return kTaskRunning;
       }
-      if (CanMove(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
+      if (MobileByBp(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
         // the site rect (task+0xd8) is the blueprint's SKIRT rect at the site (GetSkirtRect 0x51ec50: the
         // footprint only where SkirtSize is 0), and the builder's own rect is its skirt rect too (0x6a7600)
         const FRect sr = SkirtRect(*t.bp, GetUnitBpData(L, *t.bp), t.site.x, t.site.z);
@@ -2640,7 +2673,8 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           }
         }
         t.state = 1;
-        if (!t.noMove && CanMove(u) && (!UnitFitsAt(sim, u, u->position.x, u->position.z) || RepairGap(u, R) > mbd)) {
+        if (!t.noMove && MobileByBp(u) &&
+            (!UnitFitsAt(sim, u, u->position.x, u->position.z) || RepairGap(u, R) > mbd)) {
           float excl[4];
           SkirtRect(R, excl);
           excl[0] -= 1.0f;
@@ -2931,7 +2965,7 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0:  // within 5: stay; otherwise a move to a free spot beside the target
       t.state = 1;
-      if (gap > 5.0f && CanMove(u)) {
+      if (gap > 5.0f && MobileByBp(u)) {
         // 0x604663..0x6046be: the rect kept free is the target's skirt (Unit::GetSkirtRect 0x6a7600) only when the
         // task's CAiTarget holds a unit (vt+0x10); a target held through the army's recon blip (a player's order:
         // the interface only knows blips) gives the empty rect, so the spot may lie beside the target's footprint.
@@ -3136,7 +3170,7 @@ int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         }
       }
       t.state = 1;
-      if (CanMove(u)) {
+      if (MobileByBp(u)) {
         const NamedFootprint& uf = Fp(u);
         float excl[4] = {0, 0, 0, 0};
         SkirtRect(G, excl);
@@ -5064,6 +5098,12 @@ int l_IssueMoveOffFactory(lua_State* L) {
   c->hasPos = true;
   c->factoryIssued = true;  // IssueMoveOffFactory 0x6f29d0 = IssueMove (append) + cmd+0x142
   for (Unit* u : units) {
+    // The order goes to the units FilterByCommandCap 0x6eecf0 kept (0x6f2a80, RULEUCC_Move; IssueToUnits 0x6f12c0 is
+    // handed that set): a unit without the Move cap is left out (0x6eed20), and so is an immobile factory (a builder
+    // that is a factory and not mobile, 0x6eed3d..0x6eed68). Until 2026-11-17 the test stood only before the error
+    // above and every unit of the list took the Move. Seen: MP1 4601, a factory's upgrade cancelled (0x700076): with
+    // OnStopBuild handed the upgrade (StopBuild), FAF's roll-off gave that factory shell a Move the original's never has.
+    if (!(LiveCommandCaps(L, u) & 0x1u) || IsImmobileFactory(*sim, u)) continue;
     if (c->units.count(u)) continue;
     if (c->units.empty()) {  // (made for the first unit that takes it, as IssueToUnits 0x6f12c0)
       AssignEngineCommandId(*sim, c);

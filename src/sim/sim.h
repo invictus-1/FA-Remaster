@@ -487,6 +487,13 @@ class Sim {
   Platoon* CreatePlatoon(lua_State* L, Army* army, const std::string& name, const std::string& plan);
   // By handle (EntityRef): byHandle_, which holds every registered entity at its handle's index.
   Entity* FindEntity(uint32_t id) const { return id < byHandle_.size() ? byHandle_[id] : nullptr; }
+  // The handles FindEntity has turned null for since the last call (the destroy drain: ProcessDestroyQueue), in that
+  // order; EffectsEndOfBeat takes them
+  std::vector<uint32_t> TakePurgedHandles() {
+    std::vector<uint32_t> r;
+    r.swap(purgedHandles_);
+    return r;
+  }
   void QueueDestroy(Entity* e);  // Entity:Destroy(): OnDestroy and removal happen at the end of the tick
   // While the destroy drain runs the units' ~Unit work (EntityDb::Purge order): an entity of the drain whose ~Unit has
   // not run yet, by handle (a weak pointer to it is still set then); null otherwise.
@@ -550,6 +557,13 @@ class Sim {
   // ResumeCommandThread skips the unit held here while it is torn down.
   Unit* resumeHeld = nullptr;
   uint64_t CommandSeqHigh() const { return cmdSeqNext_; }
+  // The command stage's threads made or re-linked during its pass (they run in it, after every older thread): the
+  // units of units() whose cmdSeq is above the stage's mark, in cmdSeq order, from the list of units given a new
+  // cmdSeq rather than a scan of every unit. CommandLinkBegin at the stage's start; a mark is taken where the stage
+  // reads CommandSeqHigh (no cmdSeq is given in between).
+  void CommandLinkBegin() { cmdLinked_.clear(); }
+  size_t CommandLinkMark() const { return cmdLinked_.size(); }
+  void CommandLinkedSince(size_t mark, uint64_t hi, std::vector<Unit*>* out);
   // The stamp of a unit that takes a new parent (Unit::attachSeq). The original keeps a parent's children in a list
   // (entity+0x17c): Entity::AttachTo 0x679550 appends the child (0x6795d5..0x67961c), Entity::DetachFrom 0x6796f0
   // takes it out and moves the rest down (0x679725..0x67974f), so the list is in attach order; Entity::SyncInterface
@@ -709,6 +723,10 @@ class Sim {
   // game's Lua are the hook files of the repository's data/fixes/hook, given to the sim state only with `fixes`
   // (and to the rules state, loaded again, in a game with a mod a blueprint fix is for: RulesFixesWanted).
   bool fixes = false;
+  // The last key given to an object's script values (entities.cpp SetObjectValue; ScriptObject::valuesKey): numbers
+  // in the order the objects first got a value, so that the values table's hash, sizes and rehashes are the same in
+  // every run (a light userdata key hashes the object's address).
+  uint32_t nextValuesKey = 0;
   // The beat's order (docs/parallel-mode.md 5), decided by Start(SessionDescription) after `fixes`: the session's
   // simOrder, else the scenario's Options.RemasterSimOrder (missing: the original's); MOHO64_SIM_ORDER=original |
   // parallel overrides it. Parallel order needs the fixes (a session asking for it without them does not start).
@@ -826,6 +844,8 @@ class Sim {
   std::shared_ptr<struct OrderLatency> orderLatency;  // sim/sim.cpp: MOHO64_PROFILE's order latency (ProfileTrackOrder)
   // Counts for the debug and stats lines (MOHO64_DEBUG_COMBAT, MOHO64_STATS); nothing in the simulation reads them
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
+  uint64_t cmdOrderChecks = 0;  // (MOHO64_CMDORDER_CHECK: the orders and lists compared)
+  uint64_t catCacheChecks = 0;  // (MOHO64_CATCACHE_CHECK: the kept category answers compared)
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
@@ -847,7 +867,16 @@ class Sim {
   void NoteOwned(ScriptObject* o);
   // The tasks no holder reaches any more are deleted (sim.cpp; the end of ProcessDestroyQueue); FreeDead()
   void SweepTasks();
+  // The mark of SweepTasks: every task a registered unit's task reaches gets reachedSweep = the returned number
+  uint32_t MarkReachedTasks();
+  bool Freeable(const BuildTask* t, uint32_t sweep) const;  // (SweepTasks' test: unreached, no Lua object, its slot)
   uint64_t tasksFreed = 0;  // (for the stats lines only)
+  // MOHO64_SWEEP_EVERY / MOHO64_SWEEP_CHECK (sim.cpp, SweepTasks): the drains since the last sweep; in the check mode
+  // the tasks a full sweep would have freed on a skipped beat, still waiting, and the counts for the end's line
+  uint32_t sweepSkips_ = 0;
+  std::vector<BuildTask*> sweepWaiting_;
+  size_t sweepWaitingPeak = 0;
+  uint64_t sweepChecks = 0, sweepCheckedTasks = 0;
   uint64_t propsFreed = 0, motorsFreed = 0;  // (the same; props: ProcessDestroyQueue, motors: MotorsSweep)
   uint64_t entitiesFreed = 0;  // (the same: script entities, shields, beams, blips; level 3)
   // For a file that owns a class of objects through Own and deletes its dead ones (prop_motor.cpp, level 2): the
@@ -884,6 +913,7 @@ class Sim {
   // The same by handle as an array (handles are given out one after another from 1 and never again): FindEntity
   // without the map's search (265 M calls in B1, ~280 ns each in the map). A removed entity's slot is null.
   std::vector<Entity*> byHandle_;
+  std::vector<uint32_t> purgedHandles_;  // (TakePurgedHandles)
   std::vector<Unit*> units_;
   std::vector<std::string> pendingSync_;
   std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)
@@ -897,6 +927,19 @@ class Sim {
   std::vector<Unit*> cmdOrder_;
   uint64_t cmdSeqNext_ = 0;
   bool cmdOrderDirty_ = true;
+  // CommandOrder kept instead of sorted again (the same order: see CommandOrder): each unit's cmdSeq when the order
+  // was last made, and what changed a unit's place since (a new cmdSeq: made or re-linked; or taken off the lists),
+  // with the cmdSeq it had before
+  struct CmdChange {
+    uint64_t oldSeq;  // 0: none (a new unit)
+    Unit* u;
+    bool removed;
+  };
+  std::vector<uint64_t> cmdOrderSeq_;
+  std::vector<CmdChange> cmdChanges_;
+  bool cmdOrderKept_ = false;  // cmdOrder_ / cmdOrderSeq_ hold the last order made (else: the next one sorts afresh)
+  std::vector<Unit*> cmdLinked_;  // the units given a new cmdSeq since the command stage began (CommandLinkedSince)
+  bool UnitListed(const Unit* u) const;  // u is in units_ (binary search by id)
   std::vector<Unit*> motionOrder_;
   uint64_t entSeqNext_ = 0;
   uint64_t attachSeqNext_ = 0;

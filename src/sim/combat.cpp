@@ -1117,6 +1117,7 @@ struct CombatBpData {
   float intel[5] = {0, 0, 0, 0, 0};  // Vision, WaterVision, Radar, Sonar, Omni radii
   bool radarStealth = false, sonarStealth = false, cloak = false;
   bool command = false, benign = false, structure = false;
+  bool patrolHelper = false, sacuBehavior = false;  // (PatrolHelperOf, CommandOrSacuOf)
 };
 
 static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const BlueprintInfo& bp) {
@@ -1166,6 +1167,8 @@ static const CombatBpData& GetCombatBpData(Sim& sim, lua_State* L, const Bluepri
   d.command = BpInCategory(sim, &bp, "COMMAND");
   d.benign = BpInCategory(sim, &bp, "BENIGN");
   d.structure = BpInCategory(sim, &bp, "STRUCTURE");
+  d.patrolHelper = BpInCategory(sim, &bp, "PATROLHELPER");
+  d.sacuBehavior = BpInCategory(sim, &bp, "SACU_BEHAVIOR");
   return cache.emplace(&bp, std::move(d)).first->second;
 }
 
@@ -1481,6 +1484,24 @@ __attribute__((noinline)) bool PickPointBelowWater(Sim& sim, Entity* e, int* bon
 // in this beat (its position, +0xac, against the one before, +0xc8, by memcmp 0x4f0a50: 0x6d7924..0x6d7938), or
 // when the count is down to 0 (0x6d793a). The entry keeps no place of its own: an entity that moved some beats ago
 // and stands again stays on the list.
+// (Both places are the COMMITTED transforms, as in the miss test below (MovedCommitted): "moved between the last two
+// AdvanceCoords". Since batch 150 the decay also runs from a shell's impact inside the entity pass (the miss drop's
+// SetTarget with an entity target), where an entity that has already taken its step has its pending place in
+// `position`: ours compared that with the committed one, "moved in this beat". Seen: FAF 3840 pro replay 2v2_3 10766,
+// three-shot salvos of army 3 on two Rhinos that stop and start: one salvo went to the other Rhino.)
+static bool MovedCommitted(const Sim& sim, const Entity* e) {
+  if (e->kind == Entity::Kind::Unit) {
+    const Unit* x = static_cast<const Unit*>(e);
+    if (x->lastPosTick == sim.tick()) return !SameBits(x->lastPosition, x->prevLastPosition);
+    return !SameBits(x->position, x->lastPosition);
+  }
+  if (e->kind == Entity::Kind::Projectile) {
+    const Projectile* x = static_cast<const Projectile*>(e);
+    if (x->prevPosTick == sim.tick()) return !SameBits(x->prevPos, x->prevPosBefore);
+    return !SameBits(x->position, x->prevPos);
+  }
+  return false;
+}
 void DecayBlacklist(Sim& sim, UnitWeapon* w) {
   auto& bl = w->blacklist;
   bl.erase(std::remove_if(bl.begin(), bl.end(),
@@ -1488,12 +1509,7 @@ void DecayBlacklist(Sim& sim, UnitWeapon* w) {
                             const int left = --b.counter;
                             Entity* e = sim.FindEntity(b.id);
                             if (!e) return true;
-                            const Vec3& before = e->kind == Entity::Kind::Unit
-                                                     ? static_cast<const Unit*>(e)->lastPosition
-                                                     : e->kind == Entity::Kind::Projectile
-                                                           ? static_cast<const Projectile*>(e)->prevPos
-                                                           : e->position;
-                            if (!SameBits(e->position, before)) return true;
+                            if (MovedCommitted(sim, e)) return true;
                             return left <= 0;
                           }),
            bl.end());
@@ -1553,19 +1569,7 @@ void WeaponImpactEvent(Sim& sim, UnitWeapon* w, int event) {
   // entity that has already taken its step in this beat. Then its committed position is what the step started
   // from: a unit's lastPosition, the one before its prevLastPosition; a shell's prevPos, the one before
   // prevPosBefore.)
-  auto moved = [&sim](const Entity* e) {
-    if (e->kind == Entity::Kind::Unit) {
-      const Unit* x = static_cast<const Unit*>(e);
-      if (x->lastPosTick == sim.tick()) return !SameBits(x->lastPosition, x->prevLastPosition);
-      return !SameBits(x->position, x->lastPosition);
-    }
-    if (e->kind == Entity::Kind::Projectile) {
-      const Projectile* x = static_cast<const Projectile*>(e);
-      if (x->prevPosTick == sim.tick()) return !SameBits(x->prevPos, x->prevPosBefore);
-      return !SameBits(x->position, x->prevPos);
-    }
-    return false;
-  };
+  auto moved = [&sim](const Entity* e) { return MovedCommitted(sim, e); };
   if (!u->weapons.empty() && u->weapons[0] == w) {  // (weapon +0xa4 == 0: the unit's first weapon)
     Entity* de = u->desiredTarget.type == 1 ? TargetEntity(sim, u->desiredTarget) : nullptr;
     if (de && IsMobile(u) && !moved(u) && EntityLayerBit(de) != 16 && !moved(de)) {
@@ -2046,18 +2050,41 @@ UnitWeapon* TargetWeapon(Sim& sim, Unit* u, const AiTarget& t) {
   return nullptr;
 }
 
-// LeashOrInvisible 0x5d8ad0 (the leash part): while Attacking, the unit is more than GuardReturnRadius (3D)
-// from its leash point - the guarded unit's position, else u+0x4e8 - when there is one
-bool LeashOrInvisible(Sim& sim, Unit* u) {
+// LeashOrInvisible 0x5d8ad0, for the unit's commanded target d; only while the unit is Attacking (0x5d8adb).
+// The leash: the unit is more than GuardReturnRadius (3D) from its leash point - the guarded unit's position, else
+// u+0x4e8 - when there is one.
+// The invisible part (0x5d8be9..0x5d8c36, read 2026-11-18; it follows when the leash holds or there is none): a unit
+// that is NOT mobile (vt+0x30 at 0x5d8bfa) whose target's entity as held (the CAiTarget's +4) is a recon blip
+// (vt+0x1c gives one) is "invisible" when the blip's record for the unit's army (blip+0x4c4, 0x34 bytes an army, the
+// flags at +4) has none of the bits 0x1f: not on radar, sonar or omni, not in sight, and never seen. The acquire
+// task then reports 5, and a standing attacker's order ends as failed (the listener's event 5).
+// Seen: FAF 3840 pro replay 2v2_2 8297, army 0's point defence 0x2e (xsb2301) on a player's Attack of the blip of
+// army 3's 0x300075, which drives off: the original's order is gone in 8297, with the tank still 49.80 away (range
+// 50); ours kept it a beat longer, until the tank had left the range (50.08).
+bool LeashOrInvisible(Sim& sim, Unit* u, const AiTarget& d) {
   if (!u->unitStates.Has(US("Attacking"))) return false;
   Vec3 leash = u->leashPos;
   if (u->guardedId)
     if (Entity* g = sim.FindEntity(u->guardedId)) leash = g->position;
-  if (BitsZero(leash)) return false;  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
-  float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
-  float r = CB(u).guardReturnRadius;
-  // the distance itself, the squares summed z, y, x (0x5d8bad..0x5d8bc6), the root 0x452fc0, against the radius
-  return std::sqrt((dz * dz + dy * dy) + dx * dx) > r;
+  if (!BitsZero(leash)) {  // (0x5d8b5d..0x5d8b6d: memcmp 0x4f0a50 with the zero vector)
+    float dx = u->position.x - leash.x, dy = u->position.y - leash.y, dz = u->position.z - leash.z;
+    float r = CB(u).guardReturnRadius;
+    // the distance itself, the squares summed z, y, x (0x5d8bad..0x5d8bc6), the root 0x452fc0, against the radius
+    if (std::sqrt((dz * dz + dy * dy) + dx * dx) > r) return true;
+  }
+  if (d.type != 1 || IsMobile(u)) return false;
+  const int a = u->army ? u->army->index - 1 : -1;
+  if (a < 0 || a >= 16) return false;
+  if (d.fakeId) {  // a jammer's fake blip: its own record
+    const Entity* f = sim.FindEntity(d.fakeId);
+    if (!f || f->kind != Entity::Kind::Blip) return false;
+    return (static_cast<const ReconBlip*>(f)->rflags[a] & 0x1f) == 0;
+  }
+  if (!d.viaBlip) return false;  // (held as the unit itself: vt+0x1c gives no blip)
+  // (a real blip's record is its unit's Unit::recon; with the unit gone the blip's own is not kept by ours: no answer)
+  const Entity* e = TargetEntity(sim, d);
+  if (!e || e->kind != Entity::Kind::Unit) return false;
+  return (static_cast<const Unit*>(e)->recon[a] & 0x1f) == 0;
 }
 
 void RelinkSuspendedAttackThread(Unit* u);  // (below AttackData)
@@ -2149,7 +2176,7 @@ int AcquireTick(Sim& sim, UnitWeapon* w) {
   int tc = dHas ? TargetStatus(sim, w, d) : 3;
   int code;
   if (!dHas || EntityLost(sim, d)) code = 4;  // (0x5d8fca: EntityLost 0x5e2db0, then HasTarget)
-  else if (LeashOrInvisible(sim, u) || TargetExempt(sim, u, TargetEntity(sim, d))) code = 5;
+  else if (LeashOrInvisible(sim, u, d) || TargetExempt(sim, u, TargetEntity(sim, d))) code = 5;
   else if (w->suppress != 0 || !w->canReach) code = 6;
   else if (tc == 0 && !CanAttackTarget(sim, w, d)) code = 3;
   else if (!cb.canFly && tc != 0) code = tc == 1 ? 7 : 2;
@@ -3165,8 +3192,10 @@ static Quat ThrustArcExe(const Vec3& a, const Vec3& b) {
 // 0x4eb830: from c toward t by at most the angle `rate`. d = conj(c) x t (0x4eb833..0x4eb942); 0x4eb740 caps it (only
 // when rate / 2 is below pi / 2, and only when |d.xyz| is above the sine of rate / 2: then d = (cos, the axis x sin,
 // the sine negated when d.w < 0)); a capped d gives c x d (0x4eb966..0x4eba48, not normalised), an uncapped one t
-// itself (0x4eba55).
-static Quat ThrustRateStepExe(const Quat& c, const Quat& t, float rate) {
+// itself (0x4eba55). *there is the byte the routine writes for its caller (0x4eba38: 0 when it capped the turn,
+// 0x4eba6c: 1 when it gave t). Its callers: the thrust manipulator (0x64aaf4) and the slave manipulator (0x646209).
+static Quat RateStepExe(const Quat& c, const Quat& t, float rate, bool* there = nullptr) {
+  if (there) *there = true;
   const float cx = -0.0f - c.x, cy = -0.0f - c.y, cz = -0.0f - c.z;
   Quat d;
   d.w = ((t.w * c.w - t.x * cx) - t.y * cy) - t.z * cz;
@@ -3182,6 +3211,7 @@ static Quat ThrustRateStepExe(const Quat& c, const Quat& t, float rate) {
   Vec3 n{d.x, d.y, d.z};
   vm::NormalizeExe(n);
   d = {n.x * s, n.y * s, n.z * s, dmath::Cos(half)};
+  if (there) *there = false;
   Quat o;
   o.w = ((c.w * d.w - c.x * d.x) - c.y * d.y) - c.z * d.z;
   o.x = ((c.y * d.z + c.x * d.w) + c.w * d.x) - c.z * d.y;
@@ -3232,7 +3262,7 @@ static void ThrustStep(Unit* u, ThrustManipulator* m) {
   // 0x64aad3: the arc from the bone's forward axis to there; 0x64aaf4: last beat's turn toward it by at most
   // turnSpeed; 0x64ab02: the bone's local rotation x that (CAniPoseBone::Rotate 0x54bc00); kept for the next beat
   const Quat goal = ThrustArcExe(m->fwd, c);
-  const Quat o = ThrustRateStepExe(m->cur, goal, m->turnSpeed);
+  const Quat o = RateStepExe(m->cur, goal, m->turnSpeed);
   PoseRotate(u, m->bone, o);
   m->cur = o;
   static const long dbg = getenv("MOHO64_DEBUG_THRUST") ? atol(getenv("MOHO64_DEBUG_THRUST")) : -2;
@@ -3362,23 +3392,18 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
     }
     SlaveManipulator* m = static_cast<SlaveManipulator*>(e.p);  // CSlaveManipulator::MoveManipulator 0x646140
     if (!m->alive || !m->enabled || m->destBone < 0 || m->srcBone < 0) continue;
-    if (m->maxRate >= 0.0f) {
-      // (0x4eb830: toward the source's rotation by at most the rate; no script in the game files sets one, and
-      // this is a plain shortest-arc step, not read from the exe)
-      const Quat d = ComposeQ(Conj(m->cur), m->srcLocal);
-      const float w = std::fmin(1.0f, std::fabs(d.w));
-      const float ang = 2.0f * std::acos(w);
-      if (ang <= m->maxRate || ang < 1e-6f) {
-        m->cur = m->srcLocal;
-      } else {
-        const float k = m->maxRate / ang, s = std::sin(ang * 0.5f), sk = std::sin(ang * 0.5f * k);
-        const float sign = d.w < 0 ? -1.0f : 1.0f, f = s > 1e-9f ? sk / s * sign : 0.0f;
-        m->cur = QNorm(ComposeQ(m->cur, Quat{d.x * f, d.y * f, d.z * f, std::cos(ang * 0.5f * k)}));
-      }
-    } else {
-      m->cur = m->srcLocal;
-    }
+    // 0x6461d6: a rate of 0 or more (comiss with 0.0, jb) turns last beat's rotation toward the source's by at most
+    // the rate (0x646209: the same 0x4eb830 as the thrust manipulator's, its result kept unnormalised); a rate below
+    // 0 takes the source's at once. The event (CTaskEvent, the manipulator's +4) is set every move to "there" (the
+    // byte 0x4eb830 writes: 1 unless it capped the turn; 0x646294 EventSetSignaled 0x406d90, which wakes the waiting
+    // threads when it sets it). No script in the game's files sets a rate; mods' may.
+    bool there = true;
+    if (m->maxRate >= 0.0f) m->cur = RateStepExe(m->cur, m->srcLocal, m->maxRate, &there);
+    else m->cur = m->srcLocal;
     PoseRotate(u, m->destBone, m->cur);  // (0x646289: the destination's local rotation x that)
+    const bool was = m->signalled;
+    m->signalled = there;
+    if (!was && there) sim.SignalEvent(m);
   }
   if (!u->colliders.empty()) CollidersTick(sim, u);
 }
@@ -3776,6 +3801,37 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
 // within GuardScanRadius of the unit (score = distance; no angle). The blip cache is read as the weapons
 // last built it (not refreshed here).
 float GuardScanRadiusOf(Unit* u) { return CB(u).guardScanRadius; }
+static bool CatCacheCheck() {
+  static const bool on = getenv("MOHO64_CATCACHE_CHECK") && strcmp(getenv("MOHO64_CATCACHE_CHECK"), "0");
+  return on;
+}
+static void CatCacheVerify(Unit* u, const char* name, bool kept) {
+  Sim& sim = *Sim::From(u->luaState());
+  if (BpInCategory(sim, u->blueprint, name) == kept) {
+    ++sim.catCacheChecks;
+    return;
+  }
+  Logf(LogLevel::Error, "moho64 MOHO64_CATCACHE_CHECK: unit %u (%s) %s kept %d, BpInCategory says %d (beat %u)", u->id,
+       u->blueprint ? u->blueprint->id.c_str() : "?", name, kept ? 1 : 0, kept ? 0 : 1, sim.tick());
+  fprintf(stderr, "moho64 MOHO64_CATCACHE_CHECK: unit %u %s kept %d differs from BpInCategory (beat %u)\n", u->id, name,
+          kept ? 1 : 0, sim.tick());
+  abort();
+}
+bool PatrolHelperOf(Unit* u) {
+  const bool r = u->blueprint && CB(u).patrolHelper;
+  if (CatCacheCheck()) CatCacheVerify(u, "PATROLHELPER", r);
+  return r;
+}
+bool CommandOrSacuOf(Unit* u) {
+  const bool r = u->blueprint && (CB(u).command || CB(u).sacuBehavior);
+  if (CatCacheCheck()) {
+    Sim& sim = *Sim::From(u->luaState());
+    const bool ref = BpInCategory(sim, u->blueprint, "COMMAND") || BpInCategory(sim, u->blueprint, "SACU_BEHAVIOR");
+    if (ref != r) CatCacheVerify(u, "COMMAND|SACU_BEHAVIOR", r);
+    else ++sim.catCacheChecks;
+  }
+  return r;
+}
 
 // (the weapons stage does the same for its units, WeaponsTickParallel; the entity pass also has the units made after
 // that stage in the beat: a unit made by a script in the commands or threads stage, given a target there, whose

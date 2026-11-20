@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "ai/map_analysis.h"
+#include "core/dmath.h"
 #include "core/log.h"
 #include "core/trace.h"
 #include "sim/blueprints.h"
@@ -295,8 +296,9 @@ void Characterise(UnitRating& r, float ref) {
   const float own = r.valueGroup[t];  // the group score against its own tier
   const float hi = best, lo = own;
   const float mr = r.range[t];
-  const float rangeF = std::clamp(std::pow(std::max(mr, 1.0f) / 18.0f, 0.25f), 0.7f, 1.8f);
-  const float speedF = r.move == kMoveStatic ? 0.8f : std::clamp(std::pow(std::max(r.speed, 0.1f) / 3.4f, 0.15f), 0.8f, 1.25f);
+  // (dmath's power, not the C library's powf: Windows' and Linux' differ in about 1 of 1300 arguments)
+  const float rangeF = std::clamp(dmath::Pow(std::max(mr, 1.0f) / 18.0f, 0.25f), 0.7f, 1.8f);
+  const float speedF = r.move == kMoveStatic ? 0.8f : std::clamp(dmath::Pow(std::max(r.speed, 0.1f) / 3.4f, 0.15f), 0.8f, 1.25f);
   // versatility: a quarter of what it can do against air (a surface unit) or against the ground (an aircraft whose
   // main target is air) (Chris: the Ythotha, a more versatile GC, rates above it)
   const int other = r.move == kMoveAir ? (t == kVsAir ? kVsGround : kVsAir) : kVsAir;

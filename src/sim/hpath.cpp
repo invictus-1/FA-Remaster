@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 
+#include "core/dmath.h"
 #include "core/log.h"
 #include "core/trace.h"
 #include "core/speculate.h"
@@ -174,7 +175,9 @@ float Cls(int k) {
 
 // QuantizeEdgeCost 0x92d8b0: ceil(6 ln(dist / octile)), clamped to 0..31 (above 30: 31)
 int Quantize(float d, float o) {
-  float v = static_cast<float>(0.6931471805599453 * std::log2(static_cast<double>(d) / static_cast<double>(o)) * 6.0);
+  // (fldln2 / fyl2x 0x92d8b8: the natural log, wide; dmath's, not the C library's log2, which is not the same in
+  // every library)
+  float v = static_cast<float>(dmath::Logd(static_cast<double>(d) / static_cast<double>(o)) * 6.0);
   float r = std::nearbyint(v);
   int c = static_cast<int>(r) + (r < v ? 1 : 0);
   if (c > 30) c = 31;

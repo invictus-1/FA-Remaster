@@ -1297,9 +1297,10 @@ int RunSession(const Options& o, Vfs& vfs, const std::vector<std::string>& hookD
         ++fxNames[ev.name];
         if (fxSample.empty() && ev.kind == EffectEvent::Create && ev.entity != 0xffffffff && ev.bone >= 0) {
           char fb[320];
-          std::snprintf(fb, sizeof fb, "tick %u effect %u %s %s army %d on %#x bone %d at %.2f %.2f %.2f", sim.tick(), ev.id,
-                        ev.name.c_str(), ev.blueprint.c_str(), ev.army, ev.entity, ev.bone, ev.position[0], ev.position[1],
-                        ev.position[2]);
+          std::snprintf(fb, sizeof fb, "tick %u effect %u %s %s army %d on %#x bone %d at %.2f %.2f %.2f turn %.3f %.3f %.3f %.3f",
+                        sim.tick(), ev.id, ev.name.c_str(), ev.blueprint.c_str(), ev.army, ev.entity, ev.bone, ev.position[0],
+                        ev.position[1], ev.position[2], ev.orientation[0], ev.orientation[1], ev.orientation[2],
+                        ev.orientation[3]);
           fxSample = fb;
         }
       }

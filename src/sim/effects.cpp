@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <strings.h>
+#include <unordered_map>
 
 #include "core/log.h"
 #include "core/trace.h"
@@ -161,6 +162,11 @@ void SetPosition(EffectEvent& ev, const Entity* e, int bone) {
   ev.position[0] = p.x;
   ev.position[1] = p.y;
   ev.position[2] = p.z;
+  ev.hasOrientation = true;
+  ev.orientation[0] = q.x;
+  ev.orientation[1] = q.y;
+  ev.orientation[2] = q.z;
+  ev.orientation[3] = q.w;
 }
 void SetPosition2(EffectEvent& ev, const Entity* e, int bone) {  // a beam's other end
   Vec3 p;
@@ -255,6 +261,10 @@ struct ThingLists {
   std::vector<EngineThing*> ending;                // its destroyed list (+0x10)
   std::map<std::pair<uint32_t, uint64_t>, EngineThing*> decals;  // the decal buffer's expiry queue (+0xcc0)
   std::vector<EngineThing*> manips;                // manipulators with a unit
+  // the same by their entity's handle (EffectsEndOfBeat: only the purged entities' manipulators are looked at), and
+  // the creation number up to which the manipulators were last looked at
+  std::unordered_map<uint32_t, std::vector<EngineThing*>> manipsByEntity;
+  uint64_t manipsSeenSeq = 0;
   std::vector<EngineThing*> freed;                 // unbound this beat: deleted at its end
   uint64_t nextSeq = 0;
   // FindEffect's answers by the name's text, the last one per slot (l_Factory: the blueprints never change in a
@@ -416,6 +426,7 @@ int l_Factory(lua_State* L) {
     if (Entity* e = ToObject<Entity>(L, 1)) {
       t->entity = EntityRef(e);
       tl.manips.push_back(t.get());
+      tl.manipsByEntity[t->entity].push_back(t.get());
     }
   }
   // An effect or decal whose caller drops it (a call made as a statement, e.g. FAF's tread marks, CreateSplatOnBone
@@ -870,16 +881,65 @@ void EffectsTick(Sim& sim) {
 // - then Sim::Sync's EntityDb::Purge deletes the destroyed entities, and with a unit its actor's manipulators
 //   (~Unit 0x6a714c -> ~CAniActor 0x63a930).
 // The deleted objects' Lua tables lose their object (IsDestroyed true) as each is deleted.
+// The manipulators whose entity is gone are found without asking every one (in 50k: 0.7 ms a beat, a FindEntity and
+// the object's line for each). A manipulator is made only on an entity a script holds (ToObject: registered, its Lua
+// object bound), and FindEntity of a handle turns null in one place only, the destroy drain
+// (Sim::ProcessDestroyQueue, which lists the handle: Sim::TakePurgedHandles); handles are never given twice. So of the
+// manipulators the last walk left (their entity found then), the ones whose entity is gone now are exactly those of
+// the handles purged since; the ones made since are asked themselves. They are freed in creation order (seq), the
+// order of tl.manips, as the walk of every one did. MOHO64_FXMANIP_CHECK=1 makes the old walk as well and stops on a
+// difference.
+static bool FxManipCheck() {
+  static const bool on = getenv("MOHO64_FXMANIP_CHECK") && strcmp(getenv("MOHO64_FXMANIP_CHECK"), "0");
+  return on;
+}
+static uint64_t g_fxManipChecks = 0, g_fxManipFreed = 0;
+struct FxManipCheckReport {
+  ~FxManipCheckReport() {
+    if (FxManipCheck())
+      fprintf(stderr, "moho64 MOHO64_FXMANIP_CHECK: %llu ends of beat compared with the walk of every manipulator: all equal (%llu manipulators freed by it)\n",
+              static_cast<unsigned long long>(g_fxManipChecks), static_cast<unsigned long long>(g_fxManipFreed));
+  }
+} g_fxManipCheckReport;
+
 void EffectsEndOfBeat(Sim& sim) {
   MOHO_ZONE("effects: end of beat");
+  std::vector<uint32_t> purged = sim.TakePurgedHandles();
   if (!sim.effectsState) return;
   ThingLists& tl = Lists(sim);
   for (size_t i = 0; i < tl.ending.size(); ++i) FreeThing(sim, tl, tl.ending[i]);
   tl.ending.clear();
   const uint32_t now = sim.tick();
   while (!tl.decals.empty() && tl.decals.begin()->first.first <= now) FreeThing(sim, tl, tl.decals.begin()->second);
-  for (EngineThing* t : tl.manips)
-    if (!t->freed && !sim.FindEntity(t->entity)) FreeThing(sim, tl, t);
+  {
+    std::vector<EngineThing*> gone;
+    for (uint32_t h : purged) {
+      auto it = tl.manipsByEntity.find(h);
+      if (it == tl.manipsByEntity.end()) continue;
+      for (EngineThing* t : it->second)
+        if (!t->freed && !sim.FindEntity(t->entity)) gone.push_back(t);
+    }
+    for (auto it = tl.manips.rbegin(); it != tl.manips.rend() && (*it)->seq > tl.manipsSeenSeq; ++it)
+      if (!(*it)->freed && !sim.FindEntity((*it)->entity)) gone.push_back(*it);
+    std::sort(gone.begin(), gone.end(), [](const EngineThing* a, const EngineThing* b) { return a->seq < b->seq; });
+    gone.erase(std::unique(gone.begin(), gone.end()), gone.end());
+    tl.manipsSeenSeq = tl.nextSeq;
+    if (FxManipCheck()) {
+      std::vector<EngineThing*> ref;
+      for (EngineThing* t : tl.manips)
+        if (!t->freed && !sim.FindEntity(t->entity)) ref.push_back(t);
+      if (ref != gone) {
+        Logf(LogLevel::Error, "moho64 MOHO64_FXMANIP_CHECK: %zu manipulators found gone, the walk finds %zu (beat %u)",
+             gone.size(), ref.size(), now);
+        fprintf(stderr, "moho64 MOHO64_FXMANIP_CHECK: %zu manipulators found gone, the walk finds %zu (beat %u)\n",
+                gone.size(), ref.size(), now);
+        abort();
+      }
+      ++g_fxManipChecks;
+      g_fxManipFreed += gone.size();
+    }
+    for (EngineThing* t : gone) FreeThing(sim, tl, t);
+  }
   if (tl.freed.empty()) return;
   bool effects = false, manips = false;
   for (EngineThing* t : tl.freed) {
@@ -888,7 +948,17 @@ void EffectsEndOfBeat(Sim& sim) {
   }
   auto gone = [](const EngineThing* t) { return t->freed; };
   if (effects) tl.effects.erase(std::remove_if(tl.effects.begin(), tl.effects.end(), gone), tl.effects.end());
-  if (manips) tl.manips.erase(std::remove_if(tl.manips.begin(), tl.manips.end(), gone), tl.manips.end());
+  if (manips) {
+    tl.manips.erase(std::remove_if(tl.manips.begin(), tl.manips.end(), gone), tl.manips.end());
+    for (EngineThing* t : tl.freed) {
+      if (!t->entity || t->fx != FxKind::None) continue;
+      auto it = tl.manipsByEntity.find(t->entity);
+      if (it == tl.manipsByEntity.end()) continue;
+      auto& v = it->second;
+      v.erase(std::remove(v.begin(), v.end(), t), v.end());
+      if (v.empty()) tl.manipsByEntity.erase(it);
+    }
+  }
   for (EngineThing* t : tl.freed) tl.things.erase(t->self);
   tl.freed.clear();
 }

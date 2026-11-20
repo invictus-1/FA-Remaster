@@ -62,6 +62,7 @@ struct Formation {
   int largest = 0;              // largest footprint
   std::vector<FormGroup> groups[2];  // [0] non-air, [1] air
   std::map<uint32_t, std::pair<float, float>> adjusted;  // per entity id: adjusted position cache
+  std::map<uint32_t, std::pair<float, float>> raw;       // per entity id: raw position cache (F+0x2bc), cleared with it
   struct Reservation {
     float x, z;
     int size, layer;
@@ -91,6 +92,9 @@ bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out);
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u);
 // Per tick: the formation DB update (beat step 11).
 void FormationsTick(Sim& sim);
+// The same step in parallel order, with the moves of every unit to its committed transform and back (Sim::AdvanceBeat's
+// serial block) and the formations' updates on the worker pool: the same game at any thread count.
+void FormationsTickParallel(Sim& sim);
 // Unit::UpdateInfoCache 0x6a9810 (before the unit's motion): formation fields and the speed cap.
 void UpdateInfoCache(Sim& sim, Unit* u);
 // u's current formation (Unit::GetFormation), or null.

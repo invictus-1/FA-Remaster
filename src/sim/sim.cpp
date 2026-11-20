@@ -173,7 +173,6 @@ void BeatStartSnapshot(Sim& sim, const std::vector<Unit*>& order) {
 
 namespace {
 
-const char kSimKey = 0;
 
 Sim* S(lua_State* L) { return Sim::From(L); }
 
@@ -1078,6 +1077,7 @@ Sim::Sim(Vfs* vfs, std::vector<std::string> hookDirs, std::vector<std::string> m
 
 std::unique_ptr<ScriptState> Sim::TakeRules() { return std::move(rules_); }
 
+static bool CmdOrderCheck();  // (MOHO64_CMDORDER_CHECK: Sim::CommandOrder)
 Sim::~Sim() {
   if (surfaceSpec_ && surfaceSpec_->active()) {
     const std::string line = surfaceSpec_->counts().Line("MOTION (surface contacts)");
@@ -1095,6 +1095,15 @@ Sim::~Sim() {
     Logf(LogLevel::Info, "%s", line.c_str());
   }
   wtrap::Report();  // (MOHO64_PAR_WRITETRAP's lines)
+  if (getenv("MOHO64_SWEEP_CHECK") && strcmp(getenv("MOHO64_SWEEP_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_SWEEP_CHECK: %llu sweeps freed all %llu tasks the skipped drains had found freeable; at most %zu waited unswept\n",
+            static_cast<unsigned long long>(sweepChecks), static_cast<unsigned long long>(sweepCheckedTasks), sweepWaitingPeak);
+  if (CmdOrderCheck())
+    fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: %llu command orders and re-link lists compared with the sort / scan: all equal\n",
+            static_cast<unsigned long long>(cmdOrderChecks));
+  if (getenv("MOHO64_CATCACHE_CHECK") && strcmp(getenv("MOHO64_CATCACHE_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_CATCACHE_CHECK: %llu kept category answers compared with BpInCategory: all equal\n",
+            static_cast<unsigned long long>(catCacheChecks));
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
@@ -1473,7 +1482,7 @@ bool Sim::Start(const ReplayHeader& replay) {
   state_->SetHookDirs(hookDirs_);
   if (fixes) state_->SetExtraHooks(FixesHooks());
   prof::InstallLuaHooks(L);  // (MOHO64_PROFILE_HITCH only: the collector's timer, and the debug hooks if asked)
-  lua_pushlightuserdata(L, const_cast<char*>(&kSimKey));
+  lua_pushstring(L, "moho64.sim");  // (a fixed string, not &kSimKey: an address key hashes differently each run)
   lua_pushlightuserdata(L, this);
   lua_rawset(L, LUA_REGISTRYINDEX);
   lua_setextra(L, 1, this);
@@ -2006,6 +2015,7 @@ void Sim::ProcessDestroyQueue() {
     CallMethod(L, e, "OnDestroy", 0);
     others_.erase(e->handle);
     if (e->handle < byHandle_.size()) byHandle_[e->handle] = nullptr;
+    purgedHandles_.push_back(e->handle);  // (TakePurgedHandles: EffectsEndOfBeat)
     byId_.erase(e->id);
     if (e->kind != Entity::Kind::Projectile) goneIds_[e->handle] = e->id;
     ReleaseEntityIntel(*this, e);
@@ -2147,7 +2157,33 @@ void Sim::ProcessDestroyQueue() {
         ++(kind == Entity::Kind::Projectile ? shellsFreed : kind == Entity::Kind::Prop ? propsFreed : entitiesFreed);
       }
     }
-  if (FreeDead()) SweepTasks();
+  if (FreeDead()) {
+    // The task sweep every N drains (MOHO64_SWEEP_EVERY=N, default 10; 1: every beat, as before 2026-11-18). Its frees
+    // have no effect on the game: a swept task is reached by no holder and has no Lua object, and deleting it calls
+    // no script, gives back no id, changes no run list and draws nothing (~BuildTask: UnbindLua with nothing bound,
+    // its shared data structs, plain data). A task once unreached stays unreached (nothing reads a freed task: the
+    // dead trap's proofs), so the sweep N beats later frees the same tasks, later. In 50k the every-beat sweep was
+    // 66% of the destroy + sync stage (3.3 ms a beat: the walk of every unit's task tree and every task).
+    // MOHO64_SWEEP_CHECK=1: on each skipped drain the mark alone is made and the tasks a sweep would free are kept;
+    // the next sweep must free every one of them (else it stops, naming the task, its type and who reaches it).
+    static const uint32_t every = [] {
+      const char* v = getenv("MOHO64_SWEEP_EVERY");
+      const int n = v ? atoi(v) : 10;
+      return static_cast<uint32_t>(n >= 1 ? n : 1);
+    }();
+    static const bool check = getenv("MOHO64_SWEEP_CHECK") && strcmp(getenv("MOHO64_SWEEP_CHECK"), "0");
+    if (++sweepSkips_ >= every) {
+      sweepSkips_ = 0;
+      SweepTasks();
+    } else if (check && !tasks_.empty()) {
+      const uint32_t sweep = MarkReachedTasks();
+      for (BuildTask* t : tasks_)
+        if (Freeable(t, sweep)) sweepWaiting_.push_back(t);
+      std::sort(sweepWaiting_.begin(), sweepWaiting_.end());
+      sweepWaiting_.erase(std::unique(sweepWaiting_.begin(), sweepWaiting_.end()), sweepWaiting_.end());
+      sweepWaitingPeak = std::max(sweepWaitingPeak, sweepWaiting_.size());
+    }
+  }
   if (freeProps) MotorsSweep(*this);
 }
 
@@ -2180,8 +2216,7 @@ void Sim::NoteOwned(ScriptObject* o) {
 // member of the engine that holds a task. A task that went through Own, is reached by none and has no Lua object
 // (a script task's is unbound when it ends; one that still has it is left alone, so the Lua side never changes)
 // is deleted. The proof is the trap, MOHO64_DEAD_TRAP=1: a deleted task's pages are gone.
-void Sim::SweepTasks() {
-  if (tasks_.empty()) return;
+uint32_t Sim::MarkReachedTasks() {
   const uint32_t sweep = ++taskSweep_;
   static thread_local std::vector<BuildTask*> stack;
   stack.clear();
@@ -2199,9 +2234,49 @@ void Sim::SweepTasks() {
     const int n = TaskChildren(*t, kids);
     for (int i = 0; i < n; ++i) reach(kids[i]);
   }
+  return sweep;
+}
+bool Sim::Freeable(const BuildTask* t, uint32_t sweep) const {
+  return !(t->reachedSweep == sweep || t->HasLuaObject() || t->ownedSlot >= owned_.size() || owned_[t->ownedSlot].get() != t);
+}
+void Sim::SweepTasks() {
+  if (tasks_.empty()) {
+    sweepWaiting_.clear();
+    return;
+  }
+  const uint32_t sweep = MarkReachedTasks();
+  if (!sweepWaiting_.empty()) {  // (MOHO64_SWEEP_CHECK: every task a skipped drain's mark found freeable is freed now)
+    for (BuildTask* t : sweepWaiting_) {
+      if (Freeable(t, sweep)) continue;
+      const char* why = t->reachedSweep == sweep ? "reached again" : t->HasLuaObject() ? "has a Lua object again" : "lost its slot";
+      uint32_t holder = 0;
+      if (t->reachedSweep == sweep)
+        for (Unit* u : units_) {  // (who reaches it: the unit whose task tree holds it)
+          std::vector<BuildTask*> st;
+          if (u->task) st.push_back(u->task);
+          while (!st.empty() && !holder) {
+            BuildTask* x = st.back();
+            st.pop_back();
+            if (x == t) holder = u->id;
+            BuildTask* kids[8];
+            const int n = TaskChildren(*x, kids);
+            for (int i = 0; i < n; ++i) st.push_back(kids[i]);
+          }
+          if (holder) break;
+        }
+      Logf(LogLevel::Error, "moho64 MOHO64_SWEEP_CHECK: a task unreached at an earlier drain is not freeable at beat %u: %s (type %d, order %s, unit %u; reached from unit 0x%x)",
+           tick_, why, static_cast<int>(t->type), t->order.c_str(), t->unitId, holder);
+      fprintf(stderr, "moho64 MOHO64_SWEEP_CHECK: a task unreached at an earlier drain is not freeable at beat %u: %s (type %d, order %s; reached from unit 0x%x)\n",
+              tick_, why, static_cast<int>(t->type), t->order.c_str(), holder);
+      abort();
+    }
+    ++sweepChecks;
+    sweepCheckedTasks += sweepWaiting_.size();
+    sweepWaiting_.clear();
+  }
   size_t keep = 0;
   for (BuildTask* t : tasks_) {
-    if (t->reachedSweep == sweep || t->HasLuaObject() || t->ownedSlot >= owned_.size() || owned_[t->ownedSlot].get() != t) {
+    if (!Freeable(t, sweep)) {
       tasks_[keep++] = t;
       continue;
     }
@@ -2317,13 +2392,100 @@ int Relation(const Army* a, const Army* b);  // (combat.cpp)
 }
 int Sim::ArmyRelation(const Army* a, const Army* b) { return combat::Relation(a, b); }
 
+// MOHO64_CMDORDER_CHECK=1 (a test switch; reads only): every order CommandOrder keeps and every list
+// CommandLinkedSince gives is compared with the full sort / the scan of every unit they replace; a difference stops
+// the program with the beat and the place.
+static bool CmdOrderCheck() {
+  static const bool on = getenv("MOHO64_CMDORDER_CHECK") && strcmp(getenv("MOHO64_CMDORDER_CHECK"), "0");
+  return on;
+}
+bool Sim::UnitListed(const Unit* u) const {
+  auto it = std::lower_bound(units_.begin(), units_.end(), u, [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  return it != units_.end() && *it == u;
+}
+// The units ordered by cmdSeq (ascending; each cmdSeq is given once, so the order is the one order of the keys). It
+// is no longer sorted afresh whenever a unit was re-linked (in 50k, 0.6 of the beats, ~2.8 ms a sort of 50,000
+// units by a key read from each unit): every cmdSeq given since the order was made is above every cmdSeq it holds
+// (cmdSeqNext_ only grows), so the new order is the old one without the units that changed (re-linked: the place of
+// their old cmdSeq, found by binary search in cmdOrderSeq_; taken off the lists), followed by the units given a new
+// cmdSeq that are still in units_, in cmdSeq order. The same vector as the sort's, bit for bit
+// (MOHO64_CMDORDER_CHECK compares them).
 const std::vector<Unit*>& Sim::CommandOrder() {
   if (cmdOrderDirty_) {
-    cmdOrder_ = units_;
-    std::sort(cmdOrder_.begin(), cmdOrder_.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+    const size_t n = cmdOrder_.size();
+    if (!cmdOrderKept_ || cmdChanges_.size() > n / 2) {
+      cmdOrder_ = units_;
+      std::sort(cmdOrder_.begin(), cmdOrder_.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      cmdOrderSeq_.resize(cmdOrder_.size());
+      for (size_t i = 0; i < cmdOrder_.size(); ++i) cmdOrderSeq_[i] = cmdOrder_[i]->cmdSeq;
+    } else {
+      for (const CmdChange& c : cmdChanges_) {
+        if (!c.oldSeq) continue;
+        auto it = std::lower_bound(cmdOrderSeq_.begin(), cmdOrderSeq_.end(), c.oldSeq);
+        if (it != cmdOrderSeq_.end() && *it == c.oldSeq) {
+          const size_t i = static_cast<size_t>(it - cmdOrderSeq_.begin());
+          if (cmdOrder_[i] == c.u) cmdOrder_[i] = nullptr;
+        }
+      }
+      size_t k = 0;
+      for (size_t i = 0; i < n; ++i)
+        if (cmdOrder_[i]) {
+          cmdOrder_[k] = cmdOrder_[i];
+          cmdOrderSeq_[k] = cmdOrderSeq_[i];
+          ++k;
+        }
+      cmdOrder_.resize(k);
+      cmdOrderSeq_.resize(k);
+      std::vector<Unit*> add;
+      add.reserve(cmdChanges_.size());
+      for (const CmdChange& c : cmdChanges_)
+        if (!c.removed) add.push_back(c.u);
+      std::sort(add.begin(), add.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      add.erase(std::unique(add.begin(), add.end()), add.end());
+      for (Unit* u : add)
+        if (UnitListed(u)) {
+          cmdOrder_.push_back(u);
+          cmdOrderSeq_.push_back(u->cmdSeq);
+        }
+    }
+    cmdChanges_.clear();
+    cmdOrderKept_ = true;
     cmdOrderDirty_ = false;
+    if (CmdOrderCheck()) {
+      std::vector<Unit*> ref = units_;
+      std::sort(ref.begin(), ref.end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+      if (ref != cmdOrder_) {
+        size_t i = 0;
+        while (i < ref.size() && i < cmdOrder_.size() && ref[i] == cmdOrder_[i]) ++i;
+        Logf(LogLevel::Error, "moho64 MOHO64_CMDORDER_CHECK: the kept command order differs from the sort at beat %u, place %zu (%zu / %zu units)",
+             tick_, i, cmdOrder_.size(), ref.size());
+        fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: the kept command order differs from the sort at beat %u, place %zu\n", tick_, i);
+        abort();
+      }
+      ++cmdOrderChecks;
+    }
   }
   return cmdOrder_;
+}
+void Sim::CommandLinkedSince(size_t mark, uint64_t hi, std::vector<Unit*>* out) {
+  out->clear();
+  for (size_t i = mark; i < cmdLinked_.size(); ++i) out->push_back(cmdLinked_[i]);
+  std::sort(out->begin(), out->end(), [](const Unit* a, const Unit* b) { return a->cmdSeq < b->cmdSeq; });
+  out->erase(std::unique(out->begin(), out->end()), out->end());
+  out->erase(std::remove_if(out->begin(), out->end(), [this](const Unit* u) { return !UnitListed(u); }), out->end());
+  if (CmdOrderCheck()) {
+    std::vector<Unit*> ref;
+    for (Unit* u : units_)
+      if (u->cmdSeq > hi) ref.push_back(u);
+    std::sort(ref.begin(), ref.end(), [](const Unit* x, const Unit* y) { return x->cmdSeq < y->cmdSeq; });
+    if (ref != *out) {
+      Logf(LogLevel::Error, "moho64 MOHO64_CMDORDER_CHECK: the re-linked threads differ from the scan at beat %u (%zu / %zu)",
+           tick_, out->size(), ref.size());
+      fprintf(stderr, "moho64 MOHO64_CMDORDER_CHECK: the re-linked threads differ from the scan at beat %u\n", tick_);
+      abort();
+    }
+    ++cmdOrderChecks;
+  }
 }
 const std::vector<Unit*>& Sim::MotionOrder() {
   if (motionOrderDirty_) {
@@ -2360,7 +2522,9 @@ const std::vector<Unit*>& Sim::ArmyStageOrder() {
 }
 void Sim::ResumeCommandThread(Unit* u) {
   if (u == resumeHeld) return;  // (re-linked already by its queue's clear event: see resumeHeld)
+  cmdChanges_.push_back({u->cmdSeq, u, false});
   u->cmdSeq = ++cmdSeqNext_;
+  cmdLinked_.push_back(u);
   cmdOrderDirty_ = true;
   // MOHO64_DEBUG_RESUME=<unit id> (or -2: every unit): a command thread re-linked at the end, and who did it
   static const long dbg = getenv("MOHO64_DEBUG_RESUME") ? atol(getenv("MOHO64_DEBUG_RESUME")) : -1;
@@ -2382,6 +2546,8 @@ void Sim::AddUnitToLists(Unit* u) {
   if (keepSnapshots) snapUnitsMade.push_back(u->handle);  // (the sync point's placement copy, sim/sim_snapshot.h)
   gridDirty_ = true;
   u->cmdSeq = ++cmdSeqNext_;
+  cmdChanges_.push_back({0, u, false});
+  cmdLinked_.push_back(u);
   cmdOrderDirty_ = true;
   u->entSeq = ++entSeqNext_;
   u->motSeq = u->entSeq;
@@ -2401,6 +2567,7 @@ void Sim::RemoveUnitFromLists(Unit* u) {
   }
   gridDirty_ = true;
   dirtyOrderDirty_ = true;
+  cmdChanges_.push_back({u->cmdSeq, u, true});
   cmdOrderDirty_ = true;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;
@@ -3774,7 +3941,9 @@ void Sim::Tick() {
   phases.Lap(PhaseTimer::kRecon);
   MOHO_LAP(lap, "formations");  // (the effects, then the formation DB: PhaseTimer's "formations")
   EffectsTick(*this);  // step 11: the effect manager (sim+0x8c0 vt+0x34, 0x74a1ab), before the formation DB
-  {
+  if (order == SimOrder::kParallel) {
+    FormationsTickParallel(*this);  // (the block below with the formations' updates on the pool: formation.cpp)
+  } else {
     // Step 11 (the formation DB) runs before step 13 (Entity::AdvanceCoords): motion only wrote each entity's
     // PENDING transform, so the formation update still sees every unit where it stood before this beat's
     // motion (the oracle recorder: the original's slot point at tick t = ours at t-1 with post-motion positions).

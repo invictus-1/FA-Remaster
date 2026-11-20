@@ -8,9 +8,11 @@
 #include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 
 #include "core/dmath.h"
 #include "core/log.h"
+#include "core/workers.h"
 #include "script/script_state.h"
 #include "sim/air.h"
 #include "sim/blueprints.h"
@@ -19,17 +21,22 @@
 #include "sim/entity_grid.h"
 #include "sim/landnav.h"
 #include "sim/motion.h"
+#include "sim/navigation.h"
 #include "sim/sim.h"
 #include "sim/sim_cache.h"
 #include "sim/slot_sort.h"
 #include "sim/terrain.h"
 #include "sim/units.h"
 #include "sim/vecmath.h"
+#include "sim/write_trap.h"
 
 namespace moho {
 namespace {
 
 constexpr float kInfF = std::numeric_limits<float>::infinity();
+// CanMoveAt asked the unit grid (Sim::ForUnitsInRect) in this thread's formation update: parallel order's stage
+// (FormationsTickParallel) makes a due grid before its updates and, when none of them asked it, leaves it due again
+thread_local bool tl_formUnitGrid = false;
 
 Unit* UnitOf(Sim& sim, uint32_t h) {
   Entity* e = h ? sim.FindEntity(h) : nullptr;
@@ -298,8 +305,16 @@ void AssignGroup(Formation& F, const std::vector<Unit*>& units, int k) {
   F.groups[k].push_back(std::move(G));
 }
 
-bool BoxesOverlap(const FormGroup& a, const FormGroup& b) {  // (inferred: 0x5688c0)
-  return std::fabs(a.cx - b.cx) <= (a.extX + b.extX) * 0.5f && std::fabs(a.cz - b.cz) <= (a.extZ + b.extZ) * 0.5f;
+// 0x5688c0 (read 2026-11-18; a = ecx, b = eax): the groups' extents (+0x30 / +0x34, the full slot extents) are
+// taken as HALF extents round the centres (+0x20 / +0x24): no overlap when b's low edge is above a's high edge
+// (0x568913 subss, 0x56890f addss, ja) or a's low edge above b's high edge (0x568924, 0x568928), in x and then the
+// same in z. (Ours had halved the sum, a guess: an air group then missed land groups the original's test finds.)
+bool BoxesOverlap(const FormGroup& a, const FormGroup& b) {
+  if (b.cx - b.extX > a.extX + a.cx) return false;
+  if (a.cx - a.extX > b.extX + b.cx) return false;
+  if (b.cz - b.extZ > a.extZ + a.cz) return false;
+  if (a.cz - a.extZ > b.extZ + b.cz) return false;
+  return true;
 }
 
 void Rebuild(Formation& F) {
@@ -310,6 +325,7 @@ void Rebuild(Formation& F) {
   F.groups[0].clear();
   F.groups[1].clear();
   F.adjusted.clear();
+  F.raw.clear();
   F.reservations.clear();
   std::vector<Unit*> valid;
   double fx = 0, fz = 0;
@@ -339,19 +355,24 @@ void Rebuild(Formation& F) {
       if (LayerIndex(u) == k) list.push_back(u);
     if (!list.empty()) AssignGroup(F, list, k);
   }
-  // 0x568980: air escorts of a land formation travel at the land speed
+  // 0x568980 (read 2026-11-18): air escorts of a land formation travel at the land speed. Every group of the first
+  // list (F+0x50: the land groups) against every group of the second (F+0xf8: the air groups), with no early end:
+  // on an overlap (0x5688c0, the land group in ecx) both get the larger extent of the two, at least 10 (0xdff31c),
+  // in x and in z, and the lower speed, and the air group takes the land group's centre (0x568a40..0x568a63).
   if (FormationIsForm(F) && F.type != 15)
-    for (FormGroup& a : F.groups[1])
-      for (FormGroup& l : F.groups[0])
-        if (BoxesOverlap(a, l)) {
-          float s = std::min(a.speed, l.speed);
-          a.speed = l.speed = s;
+    for (FormGroup& l : F.groups[0])
+      for (FormGroup& a : F.groups[1])
+        if (BoxesOverlap(l, a)) {
+          float hz = a.extZ > l.extZ ? a.extZ : l.extZ;
+          if (10.0f > hz) hz = 10.0f;
+          float hx = a.extX > l.extX ? a.extX : l.extX;
+          if (10.0f > hx) hx = 10.0f;
+          const float s = a.speed > l.speed ? l.speed : a.speed;
           a.cx = l.cx;
           a.cz = l.cz;
-          float hx = std::max(10.0f, std::max(a.extX, l.extX)), hz = std::max(10.0f, std::max(a.extZ, l.extZ));
           a.extX = l.extX = hx;
           a.extZ = l.extZ = hz;
-          break;
+          a.speed = l.speed = s;
         }
   F.dirty = false;
   ++F.rebuilds;
@@ -410,7 +431,19 @@ Unit* GetLeader(Formation& F, Unit* u, FormGroup* g) {
   return GroupLeader(F, *g);
 }
 
-// vt+0x20 GetRawPosition (rebuilds a changed formation first, 0x569f7d..0x569f9f)
+// vt+0x20 GetRawPosition 0x569f70 (read whole 2026-11-18; it rebuilds a changed formation first, 0x569f7d..0x569f9f).
+// A dead unit (vt+0x28, 0x569fcc) gives its own place, not kept. Else what the RAW POSITION CACHE holds for its id
+// (F+0x2bc, 0x569ff8..0x56a017). Else, without a group, its own place, not kept (0x56a020 -> 0x56a111); with one, the
+// group's slot of it, the formation's centre + the slot's offset (0x56a0b6..0x56a0d4), or its own place when it is
+// not mobile (vt+0x30, 0x56a033) or has no slot in THAT group (0x56a07c), and whichever it was goes into the cache
+// (0x56a0f6), where it stays until a rebuild or a moved centre clears it (with the adjusted positions).
+// So the first asker's group decides. The formation's update asks for a group's travel leader with that group: an
+// air group that follows a land group's leader gets the leader's slot only because the land group's update, earlier
+// in the same pass, has put it into the cache. Seen: FAF 3839 pro replay 4v4_setons_2 8833, three interceptors and
+// land units on one FormMove: the original's slots for the aircraft lie round the land leader on its way
+// ((498.42, 529.22) for 0x700003); ours, with no such cache, took the leader's own place for its slot each time and
+// put the aircraft's slots at the goal ((461.92, 547.13)).
+// (A null group in ours means "its own group", for callers whose group a rebuild has just replaced.)
 void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
   if (F.dirty) {
     Rebuild(F);
@@ -418,12 +451,23 @@ void RawPosition(Formation& F, Unit* u, FormGroup* g, float* x, float* z) {
   }
   *x = u->position.x;
   *z = u->position.z;
+  if (u->dead) return;
+  const auto c = F.raw.find(u->id);
+  if (c != F.raw.end()) {
+    *x = c->second.first;
+    *z = c->second.second;
+    return;
+  }
   if (!g) g = GroupOf(F, u);
-  if (!g || !Mobile(u)) return;
-  auto it = g->nodes.find(u->id);
-  if (it == g->nodes.end()) return;
-  *x = F.cx + it->second.offX;
-  *z = F.cz + it->second.offZ;
+  if (!g) return;
+  if (Mobile(u)) {
+    auto it = g->nodes.find(u->id);
+    if (it != g->nodes.end()) {
+      *x = F.cx + it->second.offX;
+      *z = F.cz + it->second.offZ;
+    }
+  }
+  F.raw[u->id] = {*x, *z};
 }
 
 // The test 0x721231..0x72124f: the unit's GetVelocity (entity vt+0x3c, Unit::GetVelocity 0x6a9c90: the motion's
@@ -449,6 +493,7 @@ bool CanMoveAt(Sim& sim, Unit* u, int cx, int cz) {
   // (candidates come by their centre: the margin has to cover half the longest hull, a battleship lying askew
   // reaches 15 and more from its middle)
   static const long dbgSpot = getenv("MOHO64_DEBUG_FORMSPOT") ? atol(getenv("MOHO64_DEBUG_FORMSPOT")) : -1;
+  tl_formUnitGrid = true;
   sim.ForUnitsInRect(x0 - 32, z0 - 32, x1 + 32, z1 + 32, [&](Unit* e) {
     if (dbgSpot >= 0 && static_cast<long>(u->id) == dbgSpot && e != u) {  // every unit within 2 of the box
       WorldShape ds;
@@ -702,10 +747,11 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   g.atGoal = true;
 }
 
-// vt+0x44 Update (4.1)
-void Update(Formation& F) {
+// vt+0x44 Update (4.1), after its rebuild (EnsureBuilt): reads the units, the terrain, the path and unit grids, and
+// writes this formation only (its groups' nodes, mid, at-goal flag and leader cache, its adjusted places and
+// reservations). No Lua: the formation script runs in the rebuild alone.
+void UpdateBuilt(Formation& F) {
   Sim& sim = *F.sim;
-  EnsureBuilt(F);
   if (!FormationIsForm(F) || F.units.empty()) return;
   for (int k = 0; k < 2; ++k)
     for (FormGroup& g : F.groups[k]) {
@@ -793,7 +839,7 @@ void Update(Formation& F) {
             // off in x (130.686478 for the original's 130.686493); its desired velocity then differed in the last bits
             // until 2627, where an exact 15.0 against ours's 14.999999 flipped the air damping factor
             // (CalcAirMovementDampingFactor 0x6bca10: KMove at full length, max speed / length below it).
-            const double hFx = std::atan2(static_cast<double>(F.fwd.x), static_cast<double>(F.fwd.z));
+            const double hFx = dmath::Atan2d(static_cast<double>(F.fwd.x), static_cast<double>(F.fwd.z));
             float diff = Wrap(static_cast<float>(static_cast<double>(hL) - hFx));
             float t = Dist2D(m->position.x, m->position.z, L->position.x, L->position.z) / maxR * 0.05f + 0.94f;
             a = (1 - t) * diff + n.angle * t;
@@ -819,6 +865,12 @@ void Update(Formation& F) {
       g.mid = (maxD + minD) * 0.5f;
       AtGoalCheck(F, g);
     }
+}
+
+// vt+0x44 Update (4.1)
+void Update(Formation& F) {
+  EnsureBuilt(F);
+  UpdateBuilt(F);
 }
 
 // vt+0x30 GetFormationSpeed (3.2)
@@ -850,6 +902,15 @@ float FormationSpeed(Formation& F, Unit* u, float* mult, FormGroup* g) {
 // map by the sim's address (RegistryMap).
 struct FormationState {
   std::vector<std::weak_ptr<Formation>> registry;
+  // parallel order's stage (FormationsTickParallel), kept from beat to beat: per index of the sim's units as the
+  // stage began, the unit put back on its committed transform (or null) and its pending one; the updates of a run
+  // between two rebuilds, the owners that keep them alive meanwhile, and which of them asked the unit grid
+  std::vector<Unit*> who;
+  std::vector<Vec3> movedPos;
+  std::vector<Quat> movedOri;
+  std::vector<Formation*> batch;
+  std::vector<std::shared_ptr<Formation>> hold;
+  std::vector<uint8_t> askedGrid;
 };
 
 namespace {
@@ -1067,6 +1128,7 @@ void FormationSetCentre(UnitCommand& c, float x, float z) {
   F.cx = x;
   F.cz = z;
   F.adjusted.clear();
+  F.raw.clear();
   F.reservations.clear();
 }
 
@@ -1149,6 +1211,128 @@ void FormationsTick(Sim& sim) {
     auto f = reg[i].lock();
     if (!f || f->released) continue;
     Update(*f);
+  }
+  reg.erase(std::remove_if(reg.begin(), reg.end(),
+                           [](const std::weak_ptr<Formation>& w) {
+                             auto f = w.lock();
+                             return !f || f->released;
+                           }),
+            reg.end());
+}
+
+// Parallel order's formation DB step (docs/parallel-mode.md 3.4: each formation's update on the pool). The same game
+// as Sim::AdvanceBeat's serial block (every moved unit put on its committed transform, FormationsTick, the pending
+// transforms back), at any thread count:
+// - No live formation: nothing reads a unit, so nobody is moved back and forth (the registry's clean-up only).
+// - The moves back and forth write each unit's own transform: on the pool, per index of the sim's unit list.
+// - A formation's update (UpdateBuilt) writes that formation only, and reads the units (nothing writes them in the
+//   stage), the terrain, the path grids (their pending terrain changes taken before), the entity grid and the unit
+//   grid (made before when due). So the updates of a run of formations go on the pool in any order.
+// - A rebuild (a dirty formation: AddUnit, SetScale, SetOrientation since its last one) runs the formation script,
+//   Lua: on the sim's thread, in the registry's order, and only after every update before it in that order has run
+//   (the run so far is finished first), so each script sees what the serial loop's would, and every update after it
+//   sees what the script did.
+// - The unit grid: the serial loop rebuilds a due grid at the first CanMoveAt (with the units on their committed
+//   transforms) and keeps it; here a due grid is made before a run's updates and made due again when none of them
+//   asked it, so the grid is in the same state after the stage.
+// The pool's work is skipped (the same loops on the sim's thread) with the write trap (then the updates are a trapped
+// phase: no unit may be written), MOHO64_PAR_FORMATIONS=0, a debug log of the formation code, a sim without its
+// navigation or entity grid made (their first reader makes them; navigation's reads Lua), or one thread.
+void FormationsTickParallel(Sim& sim) {
+  auto& reg = Registry(sim);
+  FormationState& st = *sim.formationState;
+  bool any = false;
+  for (const auto& w : reg) {
+    auto f = w.lock();
+    if (f && !f->released) {
+      any = true;
+      break;
+    }
+  }
+  if (any) {
+    WorkerPool& pool = sim.workers();
+    const bool checked = pool.Check().mode != ParCheck::kOff;
+    // MOHO64_PAR_FORMATIONS=0: on the sim's thread; =all: every run of updates on the pool, however small (a test)
+    static const char* parEnv = getenv("MOHO64_PAR_FORMATIONS");
+    static const bool parForm = !(parEnv && !strcmp(parEnv, "0")), parAll = parEnv && !strcmp(parEnv, "all");
+    static const bool dbgLogs =
+        getenv("MOHO64_DEBUG_ATGOAL") || getenv("MOHO64_DEBUG_FORMSPOT") || getenv("MOHO64_DEBUG_GRIDCHECK");
+    const bool onPool = (checked || (parForm && pool.Threads() > 1)) && !wtrap::On() && !dbgLogs;
+    // every unit that moved in this beat on its committed transform (Sim::AdvanceBeat's serial block)
+    const std::vector<Unit*>& all = sim.units();
+    const size_t n = all.size();
+    const uint32_t tick = sim.tick();
+    st.who.resize(n);
+    st.movedPos.resize(n);
+    st.movedOri.resize(n);
+    auto back = [&](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i) {
+        Unit* u = all[i];
+        if (u->lastPosTick == tick && !u->destroyQueued) {
+          st.who[i] = u;
+          st.movedPos[i] = u->position;
+          st.movedOri[i] = u->orientation;
+          u->position = u->lastPosition;
+          u->orientation = u->lastOrientation;
+        } else {
+          st.who[i] = nullptr;
+        }
+      }
+    };
+    if (onPool) pool.ParallelFor("formations: committed places", n, 512, back);
+    else back(0, n, 0);
+    // (an update is some microseconds: a run goes to the pool from a few formations and their units on, below that
+    // the pool's wake-up costs more than it saves (MP1 parallel order, 16 threads: 17 us busy a beat, 49 us wall);
+    // the order check takes every run)
+    constexpr size_t kPoolFormations = 4, kPoolMembers = 128;
+    size_t members = 0;
+    auto run = [&]() {
+      if (st.batch.empty()) return;
+      const EntityGrid* eg = sim.EntityGridIfMade();
+      const bool big = checked || parAll || (st.batch.size() >= kPoolFormations && members >= kPoolMembers);
+      members = 0;
+      if (onPool && big && sim.HasNavigation() && eg && (eg->ready() || !sim.map())) {
+        const bool gridDue = sim.UnitGridDue();
+        if (gridDue) sim.EnsureUnitGrid();
+        sim.navigation().ApplyTerrainChanges();
+        st.askedGrid.assign(st.batch.size(), 0);
+        pool.ParallelFor("formations", st.batch.size(), 1, [&](size_t b, size_t e, int) {
+          for (size_t k = b; k < e; ++k) {
+            tl_formUnitGrid = false;
+            UpdateBuilt(*st.batch[k]);
+            st.askedGrid[k] = tl_formUnitGrid ? 1 : 0;
+          }
+        });
+        if (gridDue && std::find(st.askedGrid.begin(), st.askedGrid.end(), 1) == st.askedGrid.end()) sim.MarkUnitsMoved();
+      } else {
+        std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the updates write no unit)
+        if (wtrap::On()) trap.emplace(sim.tick(), "formations");
+        for (Formation* f : st.batch) UpdateBuilt(*f);
+      }
+      st.batch.clear();
+      st.hold.clear();
+    };
+    for (size_t i = 0; i < reg.size(); ++i) {  // (FormationsTick's loop; a script may add formations: size each time)
+      auto f = reg[i].lock();
+      if (!f || f->released) continue;
+      if (f->dirty) {
+        run();
+        Rebuild(*f);
+      }
+      members += f->units.size();
+      st.batch.push_back(f.get());
+      st.hold.push_back(std::move(f));
+    }
+    run();
+    auto forth = [&](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i)
+        if (Unit* u = st.who[i]) {
+          u->position = st.movedPos[i];
+          u->orientation = st.movedOri[i];
+        }
+    };
+    if (onPool) pool.ParallelFor("formations: pending places", n, 512, forth);
+    else forth(0, n, 0);
   }
   reg.erase(std::remove_if(reg.begin(), reg.end(),
                            [](const std::weak_ptr<Formation>& w) {

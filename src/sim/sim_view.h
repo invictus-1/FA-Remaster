@@ -399,6 +399,13 @@ struct EffectEvent {
   // Create: where that point is when the list is taken (the entity's bone in this beat's pose; where it was at
   // the call if the entity is gone by then), or the position given (decals)
   float position[3] = {0, 0, 0};
+  // Create on an entity: how that point is turned (the entity's turn, with the bone's where one is named), taken
+  // when the place is taken; x, y, z, w like a unit's. Not set for a position given by the script. An entity turned
+  // with SetOrientation(..., true) earlier in the beat gives its new turn. (A shield's script turns a helper entity
+  // toward the hit and offsets its hit effects along that entity's own z: without the turn every hit sat at one
+  // side. Renderer's request 80, 2026-11-20.)
+  bool hasOrientation = false;
+  float orientation[4] = {0, 0, 0, 1};
   // Create with a second entity (AttachBeamEntityToEntity): where its point is, taken the same way. The far end
   // can be an entity EntityViews does not list (one without a mesh: the hubs of adjacency's links).
   bool hasPosition2 = false;

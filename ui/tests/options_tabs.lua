@@ -1,6 +1,6 @@
 -- The Options dialog with our Remastered tab (Chris, 2026-11-08; docs/ui-options-layout.md): five tab buttons narrowed
 -- to fit the panel (ui/data/hook/lua/ui/dialogs/options.lua), the chosen one's lit picture as wide, each label inside
--- its button; the Remastered tab's 58 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
+-- its button; the Remastered tab's 60 rows; the Remastered Preset setting its looks on that page (Sharpen and Shore
 -- Soak too: a slider and a toggle) and showing Custom once one of them is changed by hand, "Go to Section" scrolling to
 -- a header, Video's "Show" button choosing the Remastered tab, a hover on one of our titles showing its tip; OK saving
 -- what the preset set. In the front end:
@@ -115,7 +115,7 @@ ForkThread(function()
     local row, grid = Row('remaster_goto_section')
     local lines = nil
     if grid then _, lines = grid:GetScrollValues('Vert') end
-    check("58 rows on the page", lines, 58)
+    check("60 rows on the page", lines, 60)
     -- the two rows of 2026-11-14 (Chris's test of 11-13): Allies' Pause Marks (on: the original's way) and Head Lamp
     -- Colour (Team at first: his "is best"); the program's settings follow the console as the rows' set does
     local looks = moho64ui_Looks()
@@ -136,6 +136,18 @@ ForkThread(function()
     check("switched off: every wreck at rest", moho64ui_Looks().wreckPoses, false)
     ConExecute("remaster_wreck_poses 1")
     check("and on again", moho64ui_Looks().wreckPoses, true)
+    -- and Land Mirrored in Water (on: Chris's "Yes, default on" to the renderer; off: the earlier mirror)
+    check("Land Mirrored in Water on at first", moho64ui_Looks().strongWaterMirror, true)
+    ConExecute("remaster_land_mirror 0")
+    check("switched off: the earlier mirror", moho64ui_Looks().strongWaterMirror, false)
+    ConExecute("remaster_land_mirror 1")
+    check("and on again", moho64ui_Looks().strongWaterMirror, true)
+    -- and Vapour Contrails (Chris, 2026-11-20: "Yes add the option for contrails"; on: the look since render 74a8c0c7)
+    check("Vapour Contrails on at first", moho64ui_Looks().contrailVapour, true)
+    ConExecute("remaster_contrail_vapour 0")
+    check("switched off: the earlier bright trail", moho64ui_Looks().contrailVapour, false)
+    ConExecute("remaster_contrail_vapour 1")
+    check("and on again", moho64ui_Looks().contrailVapour, true)
     check("Go to Section first, at the top", grid and TopRow(grid), 1)
     check("it shows the first section", Item('remaster_goto_section').control:GetItem(), 1)
 
@@ -196,7 +208,7 @@ ForkThread(function()
     Choose('remaster_goto_section', 8)
     local _, _, vmin, vmax = grid:GetScrollValues('Vert')
     local picture = Index(items, function(item) return item.type == 'header' and item.title == "Picture & Camera" end)
-    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 58 and picture > vmin and picture <= vmax, true)
+    check("the last, Picture & Camera: scrolled to the end, its header in view", vmax == 60 and picture > vmin and picture <= vmax, true)
 
     -- Video: the game's own rows, then our header and the Show button, which chooses the Remastered tab
     Button(buttons, 'video'):OnClick()

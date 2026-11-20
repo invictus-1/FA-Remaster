@@ -536,6 +536,22 @@ local looks = {
         },
     },
     {
+        -- the renderer's World::ribbons.contrailVapour (render 74a8c0c7; Chris, 2026-11-20: "Yes add the option for
+        -- contrails"): on = the look since that render; off = the bright trail the remaster drew before; in no preset
+        title = "Vapour Contrails",
+        key = 'remaster_contrail_vapour',
+        tip = "On: an aircraft's contrail is pale vapour, lit by the sun or the moon like a thin cloud. Off: the earlier bright trail, as bright at night as by day.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_contrail_vapour"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         title = "Rich Ground on Remastered Maps",
         key = 'remaster_rich_ground',
         tip = "The richer ground of FA Remastered's own remastered maps. Off: their ground as plain as the original's.",
@@ -803,6 +819,22 @@ local looks = {
         },
     },
     {
+        -- ours as an option (2026-11-17): the renderer's WorldPicture::SetStrongWaterMirror (render 507b42ca; Chris to
+        -- the renderer: "Yes, default on"); off = the mirror as the remaster drew it before; set by no preset level
+        title = "Land Mirrored in Water",
+        key = 'remaster_land_mirror',
+        tip = "On: without Ray Tracing the water mirrors the land and rocks beside it strongly, as the ray-traced mirror does. Off: the earlier look, where the water mirrors mostly the sky. With Ray Tracing on it changes nothing.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_land_mirror"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- the renderer's World::waterFxMirror (its request 69, 2026-11-10; with the modern look, on maps with water)
         title = "Effects Mirrored in Water",
         key = 'remaster_water_mirror',
@@ -1005,8 +1037,8 @@ local remasterSections = {
     { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak',
-                 'remaster_water_mirror' } },
-    { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_battle_effects',
+                 'remaster_land_mirror', 'remaster_water_mirror' } },
+    { "Effects & Battle", { 'remaster_effects', 'remaster_effects_quality', 'remaster_tracers', 'remaster_contrail_vapour', 'remaster_battle_effects',
                             'remaster_scorch', 'remaster_energy_shields', 'remaster_shield_bend', 'remaster_gateway',
                             'remaster_warpin_colours' } },
     { "Units & Readability", { 'remaster_unit_detail', 'remaster_unit_glow', 'remaster_lamp_colour', 'remaster_head_lamp_colour',
@@ -1200,6 +1232,23 @@ table.insert(options.ui.items, {
 -- battle on Seton's Clutch Remastered (the default; without that map: Dusk), the evening flight over the stock map as
 -- before, or one still picture. Live: the main menu changes at once. And the battle's sound: none (the original's menu
 -- played music only, the default) or heard from afar.
+-- The automatic crash report (ours; ui/user/report.cpp AutoCrashReport; Chris, 2026-11-15: "a background thing that
+-- can be disabled in settings"). Read by the main menu's hook when the menu is made (the profile's value: nothing is
+-- sent to the program by `set`).
+table.insert(options.ui.items, {
+    title = "Crash Reports",
+    key = 'remaster_crash_reports',
+    tip = "On: when the game stopped with a fault or did not close properly (a freeze, a forced close), its next start writes a report as one zip onto your Desktop (the logs, the fault's dump with your user name hidden, the replay, your settings) and says so on the main menu. Nothing is sent anywhere: you decide whether to pass it on. Off: no report is written by itself; the console's remaster_report still writes one.",
+    type = 'toggle',
+    default = 1,
+    set = function(key, value, startup) end,
+    custom = {
+        states = {
+            { text = "<LOC _Off>", key = 0 },
+            { text = "<LOC _On>", key = 1 },
+        },
+    },
+})
 table.insert(options.ui.items, {
     title = "Menu Background",
     key = 'remaster_menu_background',

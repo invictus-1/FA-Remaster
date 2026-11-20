@@ -399,6 +399,9 @@ void RegisterCardMemoryBindings(lua_State* L);
 // The report (report.cpp, the report bundle's part (c)): the zip written into "reports" beside the preferences; its
 // file, or "" with `why`. The console's remaster_report [note] and moho64ui_Report([note]).
 std::string WriteReport(lua_State* L, const std::string& note, std::string* why);
+// The automatic crash report (report.cpp): once in a run, when a kept earlier run crashed and has no report yet, the
+// report written onto the Desktop and said on the menu's notice line; its file, or "" with `why`.
+std::string AutoCrashReport(lua_State* L, std::string* why);
 void RegisterReportBindings(lua_State* L);
 void LoadPrefs(lua_State* L, const std::string& file);
 // Take over the original game's profiles once, when our preferences file does not exist yet
@@ -678,6 +681,18 @@ struct LookSettings {
   // default: a tank's turret stays turned, a walker lies as it fell), or every wreck in its resting pose (false, as
   // the remaster drew them until then). The renderer's WorldPicture::SetWreckPoses. Console remaster_wreck_poses 0|1.
   bool wreckPoses = true;
+  // Land Mirrored in Water (the renderer's WorldPicture::SetStrongWaterMirror, render 507b42ca; Chris to the renderer,
+  // 2026-11-17: "Yes, default on"; an option by his rule that a new look keeps the earlier way): without ray tracing
+  // the water mirrors land and rocks strongly, as the ray-traced mirror does (true, the default), or as the remaster
+  // drew it until then, mostly the sky (false). With ray tracing on it changes nothing. Console
+  // remaster_land_mirror 0|1.
+  bool strongWaterMirror = true;
+  // Vapour Contrails (the renderer's World::ribbons.contrailVapour, render 74a8c0c7 [contrailvapour]; Chris, 2026-11-20:
+  // "Yes add the option for contrails"; an option by his rule that a new look keeps the earlier way): an aircraft's
+  // contrail is drawn as vapour: pale, lit by the hour's sun or moon as a thin cloud is, lighting nothing (true, the
+  // default: the look since that render), or as the remaster drew it until then: a bright trail by the tracers' rule,
+  // as bright at night as by day (false). Console remaster_contrail_vapour 0|1.
+  bool contrailVapour = true;
   // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
   // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
   // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's

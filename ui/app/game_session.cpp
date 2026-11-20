@@ -78,6 +78,7 @@ namespace {
 void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
   w.ribbons.tracers = looks.tracers;
+  w.ribbons.contrailVapour = looks.contrailVapour;  // (Vapour Contrails: vapour, or the earlier bright trail; render 74a8c0c7)
   w.terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
   w.ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
   w.shadowsOn = looks.shadows >= 1;
@@ -157,6 +158,7 @@ void PictureLooks(render::WorldPicture& p, const LookSettings& looks) {
   p.SetWrecksOnceSeen(looks.wrecksOnceSeen);
   p.SetAlliesPauseMarks(looks.alliesPauseMarks);
   p.SetWreckPoses(looks.wreckPoses);
+  p.SetStrongWaterMirror(looks.strongWaterMirror);
   p.SetMinimapMeshes(looks.minimapLod != 0);
 }
 // A game's sky on its world (GameSession::Sky): the map's edge, and a kind of weather that stays set with the values
@@ -710,6 +712,7 @@ struct GameSession::Picture : WorldSource {
     // (Allies' Pause Marks, ours: the renderer's answer to ui request 54)
     if (!lookApplied || looks.alliesPauseMarks != lookNow.alliesPauseMarks) picture.SetAlliesPauseMarks(looks.alliesPauseMarks);
     if (!lookApplied || looks.wreckPoses != lookNow.wreckPoses) picture.SetWreckPoses(looks.wreckPoses);
+    if (!lookApplied || looks.strongWaterMirror != lookNow.strongWaterMirror) picture.SetStrongWaterMirror(looks.strongWaterMirror);
     // (the minimap stamps the script's meshes while cam_DefaultMiniLOD is not 0: render 4a061d2)
     if (!lookApplied || (looks.minimapLod != 0) != (lookNow.minimapLod != 0)) picture.SetMinimapMeshes(looks.minimapLod != 0);
     // The cinematics' switches (UI_NisRenderIcons, ren_SelectBoxes, ren_Oblivion).
@@ -4251,6 +4254,9 @@ void GameSession::PushDeviceState(lua_State* L) {
   boolean("pending", deviceAsk_ != DeviceAsk::None || deviceLoseDone_);
   boolean("closing", deviceClosing_);
   str("shaderCache", shaderCache);
+  // (whether the simulation running keeps the poses units die in for their wrecks: set with the picture's other
+  // collections before the first beat; for the tests of Wreck Poses)
+  boolean("copiedPoses", sim_ && sim_->collectCopiedPoses);
 #ifdef MOHO64UI_WORLD_PICTURE
   render::WorldPicture* shown = picture_ ? &picture_->picture : windowPicture_ ? &windowPicture_->picture : nullptr;
   boolean("lost", (windowPicture_ && windowPicture_->picture.DeviceLost()) || (picture_ && picture_->picture.DeviceLost()) ||
@@ -4307,6 +4313,7 @@ void GameSession::PushDeviceState(lua_State* L) {
     lua_newtable(L);
     boolean("originalLook", w->look == render::Look::Original);
     boolean("tracers", w->ribbons.tracers);
+    boolean("contrailVapour", w->ribbons.contrailVapour);
     boolean("richGround", w->terrain.richGround);
     boolean("snowTracks", w->tracks.on);
     boolean("bloom", w->bloom);
@@ -4318,6 +4325,8 @@ void GameSession::PushDeviceState(lua_State* L) {
     boolean("starryNight", w->starryNight);
     boolean("remasteredGate", w->remasteredGate);
     boolean("waterFxMirror", w->waterFxMirror);
+    boolean("wreckPoses", w->wreckPoses);
+    boolean("strongWaterMirror", w->water.strongMirror);
     boolean("photoLook", w->photoLook.on);
     num("shadowSize", w->shadowSize);
     num("meshDetail", w->meshes.detail);

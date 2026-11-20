@@ -1199,8 +1199,19 @@ static lu_mem singlestep (lua_State *L, global_State *g, lu_mem budget, int poin
       }
     }
     case GCSsweepstring: {
+      /* The whole string table in this one step, whatever the budget. Where a string lands (its bucket) follows its
+      ** text, and some texts hold addresses (tostring of a table: "table: 000005D7816DCC00", which FAF's repr and the
+      ** AI brains' log lines make), so a step that stopped when `1 + n per bucket' reached the budget stopped at a
+      ** bucket that moved from run to run: the strings freed by a beat's end, and after it the rootgc sweep's
+      ** position and the object count (inc->nobjects, which the collector's budgets and triggers read) differed by a
+      ** few between two runs of the same game (seen: lab_20261008_073633 with MOHO64_GC=incremental, beat 71 freed
+      ** 9307-9316 objects, the count 1-3 apart at every later beat). Budgeting by buckets alone would fix where the
+      ** step stops, but not the strings a script looks up again while dead: one found in a bucket not yet swept is
+      ** revived (luaC_increvive), one whose bucket was swept is made again, and which of the two is again the
+      ** bucket's. Swept in one step, no beat ends inside the string sweep. The units are the buckets plus the strings
+      ** (the same sum in every run); budget only steers the next part. */
       lu_mem done = 0;
-      while (inc->sweepstr < g->strt.size && done < budget) {
+      while (inc->sweepstr < g->strt.size) {
         GCObject **p = &g->strt.hash[inc->sweepstr];
         lu_mem before = inc->nobjects;
         lu_mem n = 0;

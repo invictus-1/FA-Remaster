@@ -6,6 +6,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/dmath.h"
 #include "core/trace.h"
 #include "sim/entity_grid.h"
 #include "sim/sim.h"
@@ -127,7 +128,7 @@ int l_Whack(lua_State* L) {
   float nz = StrictNum(L, 4), f = StrictNum(L, 5);
   bool b = lua_toboolean(L, 6) != 0;
   if (!m->broken) {
-    m->heading = static_cast<float>(std::atan2(static_cast<double>(nx), static_cast<double>(nz)));
+    m->heading = dmath::Atan2(nx, nz);
     m->broken = b;
   }
   m->omega += f;
@@ -181,8 +182,9 @@ void UpdateFall(Sim& sim, Entity* e, Motor& m) {
     m.omega = 0;
   }
   float a = m.theta - 1.57079637f;
-  double sh = std::sin(static_cast<double>(m.heading)), ch = std::cos(static_cast<double>(m.heading));
-  double sa = std::sin(static_cast<double>(a)), ca = std::cos(static_cast<double>(a));
+  double sh, ch, sa, ca;  // (dmath's, not the C library's: the same in every build)
+  dmath::SinCos(static_cast<double>(m.heading), &sh, &ch);
+  dmath::SinCos(static_cast<double>(a), &sa, &ca);
   float vx = static_cast<float>(sh * ca), vyv = static_cast<float>(-sa), vz = static_cast<float>(ch * ca);
   const Quat& q = e->orientation;
   float ux = 2 * (q.y * q.x - q.z * q.w), uy = 1 - 2 * (q.z * q.z + q.x * q.x), uz = 2 * (q.z * q.y + q.x * q.w);

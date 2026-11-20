@@ -526,3 +526,41 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     thing it was made for, not worse against the others: KEPT. What the check changes is the record, not the code:
     a change to what a player's game does is judged on the engine it lands on, and a condition set for a landing is
     met before it, or the change waits.
+
+47. **The wing and the fleet together (2026-11-17).** 45 ended on trying its two better halves at once: the
+    anti-ship aircraft as one wing and the ships as a gathered fleet, on main's AI (46's), 16 full games against M28,
+    paired by seed with main's own set on the same engine. Score +1.4 (p 0.26), 10 seeds better, 1 the same, 5 worse;
+    the games last 31.5 minutes against 29.5; mass lost per mass killed 5.41 against 7.11 (the wing alone 5.65, the
+    fleet alone 8.60); still no win in 16. The best direction of any M28 candidate since 43's, and not beyond the
+    noise: not taken. Its Lua is the two files of 45's candidates unchanged (the wing's brain.lua, the fleet's
+    navy.lua). What is still missing by 43's ledger is the size of the navy itself (M28 has two to four times ours
+    by minute 20): the next candidate adds ships to these two, and by 46's lesson it is judged on today's engine,
+    with FAF's sets before any landing.
+
+48. **Four more navies against M28, and what they say: it is not the navy (2026-11-18).** 47 asked for the wing and
+    the fleet with more ships. Four candidates over 47's build (wf1m), each 16 full games against M28 on the same
+    engine and seeds as 45-47's sets, paired with main's (a set takes 25 minutes now):
+    *more ships by the ships seen* (44's nvy2, with 44's one anti-missile defence by the commander: wfn1m): score
+    +1.9 (p 0.18), 9 better and 7 worse; 6,160 mass of ships at minute 20 against main's 4,620 (12 of 16 seeds
+    higher), the land army 632 lower, mass lost per mass killed 7.35 (wf1m 5.41); a missile hit the commander in 5
+    games, the defence was ordered in 2.
+    *The navy from minute 3* (kNavalFrom 3: wfe1m): +4.2 (p 0.70), 8 and 8, one win. Its first naval factory is
+    ordered at the same tick as before in every seed looked at (minute 7.2 to 8.3): until the opening ends (kOpening,
+    6 minutes) an engineer takes the opening's extractors and power before it reaches the navy's rule, whatever
+    kNavalFrom says. What changed is only how many factories are wanted once the opening is over.
+    *A ship floor growing twice as fast, to 8,000* (wfg1m): +0.6 (p 0.64), 8 and 8.
+    *The first naval factory in the opening too, before its extractors, the navy from minute 4* (wfo1m): the factory
+    is ordered at minute 4.5 and at minute 10 ours has 2 factories and 560 mass of ships in all 16 games where main
+    has none (M28: 3 and 1,710); score +0.8 (p 0.53), 8 and 8, no win; our income at minute 10 is 119 against main's
+    127.
+    None passes the kept rule; none is taken. One win in 64 games.
+    *What the five sets (47's and these) say together.* Earlier ships, more ships, ships gathered, aircraft gathered:
+    each does what it was built to do, and the games do not change. The snapshots of every set show why: M28's income
+    is 161 mass against our 127 at minute 10, 250 against 188 at minute 15 and 445 against 216 at minute 20, when it
+    has about 20,000 mass of ships and 12,000 to 15,000 of land units against our 5,000 and 5,000 to 8,000. From
+    minute 15 to 20 its income nearly doubles and ours stands still, while we lose about 11,000 mass of extractors by
+    minute 20 (43's ledger: half of them to artillery never seen). An army half the size cannot be arranged into a
+    win; the next candidates belong to the economy between minutes 10 and 20 (what the extractors' upgrades wait for,
+    24 and 14; what keeps the outlying extractors, 39 to 42), judged the same way, and the navy rules wait for an
+    income that can pay for them. The candidates' Lua stays in the helpers' folders (exe_wfn1m, exe_wfe1m,
+    exe_wfg1m, exe_wfo1m); boards: `_scratch/engine/ai_20261114/fable_wfn1_board.txt`, `fable_wf48_board.txt`.
