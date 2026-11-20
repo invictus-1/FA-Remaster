@@ -2717,6 +2717,9 @@ int main(int argc, char** argv) {
     if (opt.farStep >= 0) live.SetFarStep(opt.farStep);  // (far step)
     picture.SetVulkan(opt.vulkan);
     picture.SetCardImitation(opt.noRayTracing, opt.cardMemoryMB);  // [gtx1080] (--no-ray-tracing, --card-memory)
+    // [firststart] (--shader-cache <folder> reaches the pixel interface's device too: before, a --picture run kept its
+    // shaders in the player's own folder whatever was asked, so no folder could be filled the game's way)
+    if (!opt.shaderCacheDir.empty()) picture.SetShaderCache(opt.shaderCacheDir);
     picture.SetDebug(opt.debug);  // (photomode: the validation layer for the pixel interface's device too)
     picture.SetFocusArmy(opt.focus);
     picture.SetUpscale(opt.upscale);        // (--fsr)
@@ -2764,6 +2767,19 @@ int main(int argc, char** argv) {
       if (World* pw = picture.world(); pw && opt.settings.find("photo-look") != std::string::npos) {
         pw->photoLook.on = true;  // (photofix) the interface's Photographic Look "Natural" (the eye, today's colours)
         pw->photoLook.Named("plain");
+      }
+      if (World* pw = picture.world(); pw && opt.weather != "auto") {
+        // [firststart] --weather rain|storm|snow|fog on the picture's own world too (the same numbers as the viewer's own
+        // world below; it stands while the weather is not the game's own, --weather auto), for the tour that fills a
+        // folder of compiled shaders: the weathers' shaders are made when it first rains or snows
+        const int which = opt.weather == "rain" ? 1 : opt.weather == "storm" ? 2 : opt.weather == "snow" ? 3 : opt.weather == "fog" ? 4 : 0;
+        if (which) {
+          pw->rain = which == 1 ? 0.5f : which == 2 ? 1.0f : 0.0f;
+          pw->snow = which == 3 ? 0.8f : 0.0f;
+          pw->fog = which == 4 ? 1.0f : which == 2 ? 0.25f : 0.0f;
+          pw->wet = pw->rain > 0 ? 1.0f : 0.0f;
+          pw->snowLying = pw->snow > 0 ? 1.0f : 0.0f;
+        }
       }
       if (World* pw = picture.world()) pw->effectsKeepLasting = opt.effectsKeepLasting;  // [stalelast] (the picture's own world)
       printf("render: --picture: ray tracing %s\n", picture.RayTracingSupported() ? "supported" : "not supported");

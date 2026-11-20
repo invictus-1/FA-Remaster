@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +23,8 @@
 #include <map>
 #include <set>
 #include <thread>
+
+#include "log_print.h"
 
 namespace render::gfx {
 // The interfaces have external linkage (not in the unnamed namespace below): their only implementations are in
@@ -373,8 +376,23 @@ bool Run(const std::string& source, const std::vector<std::wstring>& args, std::
     return false;
   }
   ++gCompiling;  // [firststart]
+  const auto began = std::chrono::steady_clock::now();
   const bool made = RunWith(compiler, source, args, out, error);
   --gCompiling;
+  // [firststart] (checks) MOHO64_LOG_SHADER_COMPILES: a line for each shader compiled (its entry, its kind, how long, the
+  // source's size and hash), to learn what a start still compiles although compiled shaders were shipped with the build
+  static const bool tell = getenv("MOHO64_LOG_SHADER_COMPILES") != nullptr;
+  if (tell) {
+    std::string entry, kind;
+    for (size_t i = 0; i + 1 < args.size(); ++i) {
+      std::string* into = args[i] == L"-E" ? &entry : args[i] == L"-T" ? &kind : nullptr;
+      if (into)
+        for (wchar_t c : args[i + 1]) into->push_back(static_cast<char>(c));
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+    printf("render: shader compiled: %s (%s) in %.0f ms, source of %zu bytes, hash %016llx%s\n", entry.c_str(), kind.c_str(), ms, source.size(),
+           static_cast<unsigned long long>(std::hash<std::string>{}(source)), made ? "" : " (FAILED)");
+  }
   ++(made ? gCompiled : gFailed);  // [cardlog]
   return made;
 }
