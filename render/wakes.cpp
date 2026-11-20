@@ -226,6 +226,20 @@ void Wakes::AddPath(const Vec3* places, int count, float length, float halfWidth
 void Wakes::AddPathRemade(const Vec3* places, int count, float skip, Vec3 back, float length, float halfWidth, float strength,
                           float odometer) {  // [wakes]
   if (length <= 0 || strength <= 0) return;
+  // [wakeway] (Chris's test of 18 November: the wake's arms kept one heading while the ship turned, and lay where the ship
+  // had not been) The wake is as long as the way kept behind where it begins, and no longer: before, where the way kept
+  // was shorter than the wake - a ship that had only begun to move, and for the first thirteen seconds of every wake -
+  // the rest was laid straight on the way the OLDEST piece went, so most of a young wake pointed where the ship had
+  // headed when it set out. A young wake is now a short one that grows as the ship goes, with the whole fade along it.
+  {
+    float way = 0;
+    for (int i = 0; i + 1 < count; ++i) {
+      const Vec3 d = places[i + 1] - places[i];
+      way += Length(Vec3{d.x, 0, d.z});
+    }
+    length = std::min(length, way - skip);
+    if (length < 0.25f) return;  // (none yet)
+  }
   float walked = 0, gone = 0;  // along the way from places[0]; along the wake from where it begins
   Vec3 at = count > 0 ? places[0] : Vec3{0, 0, 0}, level = Normalize(Vec3{back.x, 0, back.z});
   Vec3 sideBefore{0, 0, 0};
@@ -265,16 +279,8 @@ void Wakes::AddPathRemade(const Vec3* places, int count, float skip, Vec3 back, 
     }
     lay(a, b, way, piece);
   }
-  // where the way kept is shorter than the wake (a slow ship's, or one that has only begun to move): on straight the way
-  // the last piece went (from where the wake begins, if the way kept does not reach it), fading out to its end
-  if (gone < length - 0.02f) {
-    if (walked < skip) {
-      at = at + level * (skip - walked);
-      walked = skip;
-    }
-    const float piece = length - gone;
-    lay(at, at + level * piece, level, piece);
-  }
+  (void)at;  // ([wakeway] the way kept is the whole wake: nothing is laid past its end)
+  (void)level;
 }
 
 // [wakes] The remade wake's pipeline, made the first time it is wanted (Draw, or ahead of it: [prebuild] Prepare); nothing

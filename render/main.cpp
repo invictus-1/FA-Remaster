@@ -4473,6 +4473,16 @@ int main(int argc, char** argv) {
           live.RunTo(static_cast<uint32_t>(moment) + 2);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        // [wakeside] (MOHO64_VIEWSFX_MINIMAP=n: before every n-th frame the minimap's ground redrawn, as the game redraws it
+        // now and then while it plays: its weather's number moved first, so that the redraw is a real one. What a side
+        // picture between two frames of the game does to what the world keeps from frame to frame.)
+        if (const char* mini = getenv("MOHO64_VIEWSFX_MINIMAP"); mini && atoi(mini) > 0 && i % atoi(mini) == 0) {
+          World* mw = picture.world();
+          const float clouds = mw ? mw->cloudCover : 0;
+          if (mw) mw->cloudCover = clouds + ((i / atoi(mini)) % 2 ? 0.05f : -0.05f);
+          picture.DrawMinimap(300, 300, false);
+          if (mw) mw->cloudCover = clouds;
+        }
         const std::vector<uint32_t>& pixels = picture.Draw(camera, w, h, moment);
         const World* pw = picture.world();
         printf("render: --views-fx: frame %d, moment %.2f: %d particles alive, %d emitters, %d effects alive of %d started\n", i, moment,
