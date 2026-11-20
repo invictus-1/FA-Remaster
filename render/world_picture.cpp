@@ -37,6 +37,7 @@
 #endif
 #include <windows.h>
 #endif
+#include "gfx_vulkan_dxc.h"  // [firststart] (ShaderCountsNow)
 #include "log_print.h"  // [logsink] (the last include: its printf / fprintf macros)
 
 namespace render {
@@ -2059,6 +2060,15 @@ bool WorldPicture::RayTracingSupported() const { return impl_->device && impl_->
 //  - memory for Low textures: Medium (2), Low textures;
 //  - under that: Low (1), Low textures, the shadow map at 1024.
 // At sizes other than 1440p the pictures of the scene are taken to grow with the pixels (kPerMegapixel).
+void WorldPicture::SetShippedShaderCache(const std::string& folder) { gfx::SetShippedShaderCache(folder); }  // [firststart]
+
+void WorldPicture::ShaderWork(int* compiled, int* fromCache, int* compiling) {  // [firststart] (world_picture.h)
+  const gfx::ShaderCounts c = gfx::ShaderCountsNow();
+  if (compiled) *compiled = c.compiled;
+  if (fromCache) *fromCache = c.fromCache;
+  if (compiling) *compiling = c.compiling;
+}
+
 WorldPicture::PresetSuggestion WorldPicture::SuggestedPreset() const {
   PresetSuggestion s;
   gfx::Device* device = impl_->device.get();

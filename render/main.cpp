@@ -680,6 +680,8 @@
 //           checks of single shaders only: it does not finish the horizon's pixel shader, so a map in the modern look
 //           hangs with it. Without --fxc the viewer does not start when dxcompiler.dll is not beside it: it says which
 //           file is missing and where it must be (a dialog too, in a run a person watches) and ends with exit code 4.
+// --shipped-shaders <folder>  [firststart] a folder of compiled shaders shipped with the build: read where the shader
+//           cache (--shader-cache) has none, never written. To fill one: a run with --shader-cache <that folder>.
 // --no-ray-tracing  [gtx1080] the device made as on a card without ray tracing (DeviceDesc::noRayTracing; a GTX 1080's,
 //           the first outside machine's): RayTracing false on both backends, every look that traces rays falls back as
 //           there, and the card's report says "switched off by --no-ray-tracing" (also for --picture)
@@ -1769,6 +1771,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
       if (sscanf(v, "%dx%d", &o->width, &o->height) != 2) return false;
     } else if (a == "--frames") o->frames = atoi(v);
     else if (a == "--card-memory") o->cardMemoryMB = std::max(0, atoi(v));  // [gtx1080]
+    else if (a == "--shipped-shaders") WorldPicture::SetShippedShaderCache(v);  // [firststart]
     else if (a == "--low-latency-switch") o->lowLatencySwitch = atoi(v);
     else if (a == "--vsync-switch") o->vsyncSwitch = atoi(v);
     else if (a == "--sync-interval") o->syncInterval = atoi(v);
