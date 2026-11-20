@@ -55,6 +55,20 @@ struct FramePartScope {                // a part for the length of a scope; the 
   FramePartScope& operator=(const FramePartScope&) = delete;
   const char* before;
 };
+// THE BEATS' PART OF THE WATCH (2026-11-20, asked by the engine: "a beat that does not come back is the freeze I most
+// want a dump of", an endless loop in a task or a script). Whoever runs a beat of a simulation says so for the length
+// of the call; when one beat has run for twice the watch's time (10 s) the keeper writes
+//   moho64ui: freeze: the simulation's beat 1234 has not finished for 10 s (frames go on)
+// and has the freeze's dump written (user/freeze_dump.h), the beat's thread named and first; when the beat comes
+// back after all: "moho64ui: the simulation's beat 1234 finished after 12.3 s". In a window the beats run on a thread
+// of their own, so the frames go on while a beat hangs and the frames' watch sees nothing; without a window both see
+// it, and one dump is written. MOHO64UI_BEAT_FREEZE_TEST=<beat>:<seconds> (a test's): that beat sleeps that long.
+struct BeatScope {
+  explicit BeatScope(long long beat);
+  ~BeatScope();
+  BeatScope(const BeatScope&) = delete;
+  BeatScope& operator=(const BeatScope&) = delete;
+};
 // moho64ui_Events([n]) -> { {seconds, kind, text}, ... } (tests); remaster_events [n] is the console's way
 // (keymap.cpp).
 void RegisterEventBindings(lua_State* L);

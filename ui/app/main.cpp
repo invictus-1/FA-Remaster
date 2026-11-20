@@ -247,8 +247,9 @@ void AnswerSystemFolders(Options& o) {
 int main(int argc, char** argv) {
   // The small mode of the freeze's dump (user/freeze_dump.h): this program started by a run of itself that stands, to
   // write that run's dump from outside. Before anything else: it opens no log, reads no option, makes nothing.
-  if (argc == 4 && std::strcmp(argv[1], "--dump-of") == 0)
-    return ui::DumpOfMain(std::strtoul(argv[2], nullptr, 10), std::strtoul(argv[3], nullptr, 10));
+  if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--dump-of") == 0)
+    return ui::DumpOfMain(std::strtoul(argv[2], nullptr, 10), std::strtoul(argv[3], nullptr, 10),
+                          argc == 5 ? std::strtoul(argv[4], nullptr, 10) : 0);
   Options o;
   g_opts = &o;
   // What is wrong with an option's value, the first one found; said once all options are read (the log may be named

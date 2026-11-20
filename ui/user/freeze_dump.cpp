@@ -107,7 +107,7 @@ std::string Where(const std::vector<Module>& modules, DWORD64 pc) {
 
 }  // namespace
 
-int DumpOfMain(unsigned long process, unsigned long mainThread) {
+int DumpOfMain(unsigned long process, unsigned long mainThread, unsigned long beatThread) {
   wchar_t file[2048];
   const DWORD named = GetEnvironmentVariableW(L"MOHO64UI_DUMP_FILE", file, 2048);
   if (named == 0 || named >= 2048) return 2;
@@ -144,7 +144,10 @@ int DumpOfMain(unsigned long process, unsigned long mainThread) {
   // Every thread's frames as text beside the dump (the main loop's first, 40 of its frames; 12 of each other's, of
   // at most 64 threads): a reader of the log sees where the program stood without opening the dump.
   std::vector<Module> modules;
-  std::vector<DWORD> threads{static_cast<DWORD>(mainThread)};
+  // (a beat that stands first, then the main loop, then the others)
+  std::vector<DWORD> threads;
+  if (beatThread != 0 && beatThread != mainThread) threads.push_back(static_cast<DWORD>(beatThread));
+  threads.push_back(static_cast<DWORD>(mainThread));
   if (HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process); snap != INVALID_HANDLE_VALUE) {
     MODULEENTRY32W m{};
     m.dwSize = sizeof(m);
@@ -160,7 +163,7 @@ int DumpOfMain(unsigned long process, unsigned long mainThread) {
     THREADENTRY32 t{};
     t.dwSize = sizeof(t);
     for (BOOL more = Thread32First(snap, &t); more && threads.size() < 64; more = Thread32Next(snap, &t))
-      if (t.th32OwnerProcessID == process && t.th32ThreadID != mainThread) threads.push_back(t.th32ThreadID);
+      if (t.th32OwnerProcessID == process && t.th32ThreadID != mainThread && t.th32ThreadID != beatThread) threads.push_back(t.th32ThreadID);
     CloseHandle(snap);
   }
   const auto setOptions = Find<SymSetOptionsFn>(help, "SymSetOptions");
@@ -182,15 +185,16 @@ int DumpOfMain(unsigned long process, unsigned long mainThread) {
       }
       CONTEXT context{};
       context.ContextFlags = CONTEXT_FULL;
-      const bool isMain = id == mainThread;
-      char head[80];
-      std::snprintf(head, sizeof(head), "thread %lu%s frame ", static_cast<unsigned long>(id), isMain ? " (the main loop)" : "");
+      const bool isMain = id == mainThread, isBeat = beatThread != 0 && id == beatThread;
+      char head[120];
+      std::snprintf(head, sizeof(head), "thread %lu%s frame ", static_cast<unsigned long>(id),
+                    isMain && isBeat ? " (the main loop, in the simulation's beat)" : isMain ? " (the main loop)" : isBeat ? " (the simulation's beat)" : "");
       if (GetThreadContext(th, &context)) {
         STACKFRAME64 frame{};
         frame.AddrPC.Offset = context.Rip, frame.AddrPC.Mode = AddrModeFlat;
         frame.AddrFrame.Offset = context.Rbp, frame.AddrFrame.Mode = AddrModeFlat;
         frame.AddrStack.Offset = context.Rsp, frame.AddrStack.Mode = AddrModeFlat;
-        const int most = isMain ? 40 : 12;
+        const int most = isMain || isBeat ? 40 : 12;
         int n = 0;
         DWORD64 last = 0;
         while (n < most && symbols && walk(IMAGE_FILE_MACHINE_AMD64, proc, th, &frame, &context, nullptr, table, base, nullptr)) {
@@ -217,7 +221,8 @@ int DumpOfMain(unsigned long process, unsigned long mainThread) {
   return 0;
 }
 
-bool WriteFreezeDump(unsigned long mainThread, std::string* why, std::vector<std::string>* lines, unsigned long long* bytes) {
+bool WriteFreezeDump(unsigned long mainThread, unsigned long beatThread, std::string* why, std::vector<std::string>* lines,
+                     unsigned long long* bytes) {
   auto fail = [&](const std::string& text) {
     if (why) *why = text;
     return false;
@@ -232,7 +237,8 @@ bool WriteFreezeDump(unsigned long mainThread, std::string* why, std::vector<std
   // (the file's name by a variable, not by the command line: a folder's letters outside the system's code page
   // would not come through a program's arguments whole)
   SetEnvironmentVariableW(L"MOHO64UI_DUMP_FILE", file.wstring().c_str());
-  std::wstring command = L"\"" + std::wstring(exe) + L"\" --dump-of " + std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(mainThread);
+  std::wstring command = L"\"" + std::wstring(exe) + L"\" --dump-of " + std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(mainThread) +
+                         (beatThread != 0 ? L" " + std::to_wstring(beatThread) : std::wstring());
   STARTUPINFOW start{};
   start.cb = sizeof(start);
   PROCESS_INFORMATION made{};
@@ -265,8 +271,8 @@ bool WriteFreezeDump(unsigned long mainThread, std::string* why, std::vector<std
 #else  // not Windows: no dump (the watch's lines stay as they are)
 
 unsigned long ThisThreadNumber() { return 0; }
-int DumpOfMain(unsigned long, unsigned long) { return 1; }
-bool WriteFreezeDump(unsigned long, std::string* why, std::vector<std::string>*, unsigned long long*) {
+int DumpOfMain(unsigned long, unsigned long, unsigned long) { return 1; }
+bool WriteFreezeDump(unsigned long, unsigned long, std::string* why, std::vector<std::string>*, unsigned long long*) {
   if (why) *why = "a freeze's dump is written on Windows only";
   return false;
 }

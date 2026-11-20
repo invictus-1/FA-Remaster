@@ -2712,7 +2712,7 @@ void GameSession::RunLoadAhead(Sim* sim) {
   std::vector<ShakeEvent> shakes;
   while (sim->tick() < kAheadTicks && !a.stop.load(std::memory_order_acquire)) {
     const auto tb = Clock::now();
-    sim->Tick();
+    { const moho::ui::BeatScope watched(sim->tick() + 1); sim->Tick(); }  // (the freeze watch: user/events.h)
     const double ms = std::chrono::duration<double, std::milli>(Clock::now() - tb).count();
     if (ms > a.longestMs) a.longestMs = ms, a.longestTick = sim->tick();
     g_crashTick = sim->tick();
@@ -5426,7 +5426,7 @@ void GameSession::StartBeatOnThread() {
   worker_->Start([this, decideSounds] {
     using Clock = std::chrono::steady_clock;
     const auto ts = Clock::now();
-    sim_->Tick();
+    { const moho::ui::BeatScope watched(sim_->tick() + 1); sim_->Tick(); }  // (the freeze watch: user/events.h)
     NoteBeatTime();
     NetDigest();  // (a network game's 50th beat: its digest here, right after the beat)
     const auto tp = Clock::now();
@@ -5535,7 +5535,7 @@ void GameSession::ViewerControls(const std::string& orders) {
 
 void GameSession::TimedTick() {  // (a beat of the simulation, timed for the window's log)
   const auto ts = std::chrono::steady_clock::now();
-  sim_->Tick();
+  { const moho::ui::BeatScope watched(sim_->tick() + 1); sim_->Tick(); }  // (the freeze watch: user/events.h)
   Times().simBeats += std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
   ++Times().beats;
 }
@@ -5739,7 +5739,7 @@ void GameSession::RunFirstBeat() {
   // (A replay's first beat is its stream's first: what came before the first Advance, then it.)
   if (play_ && !play_->AtEnd()) play_->ApplyUntilAdvance(*sim_);
   if (Fingerprinting()) fp_->Beat(*sim_, 0);  // (beat 0: the state Start left)
-  sim_->Tick();
+  { const moho::ui::BeatScope watched(sim_->tick() + 1); sim_->Tick(); }  // (the freeze watch: user/events.h)
   NetDigest();
   Record(CommandWriter::AdvanceMessage(1));
   FingerprintBeat();
@@ -5761,7 +5761,7 @@ void GameSession::StartFirstBeat() {
   if (!worker_) worker_ = std::make_unique<BeatWorker>();
   firstBeatToFinish_ = true;
   worker_->Start([this] {
-    sim_->Tick();
+    { const moho::ui::BeatScope watched(sim_->tick() + 1); sim_->Tick(); }  // (the freeze watch: user/events.h)
     NetDigest();
     NotePictureBeat();
     FingerprintBeat();  // (as StartBeatOnThread)

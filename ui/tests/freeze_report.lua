@@ -14,7 +14,13 @@ local function check(what, got, want)
     end
 end
 ForkThread(function()
-    WaitFrames(200)  -- (past the frame at which the main loop sleeps)
+    if rawget(_G, "SessionIsActive") and SessionIsActive() then
+        -- (in a game, MOHO64UI_BEAT_FREEZE_TEST=30:14: past the beat that sleeps, by the game's own time)
+        while GetGameTimeSeconds() < 4 do WaitFrames(5) end
+        check("the game is past its beat 30", GetGameTimeSeconds() >= 4, true)
+    else
+        WaitFrames(200)  -- (past the frame at which the main loop sleeps)
+    end
     local file, why = moho64ui_Report("after a time without frames that passed")
     check("a report is written", type(file) == 'string' and string.sub(file, -4) == ".zip", true)
     LOG("TEST note report file: " .. tostring(file) .. (why and (" (" .. why .. ")") or ""))

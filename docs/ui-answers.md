@@ -48,6 +48,25 @@ and in which part; now it also says WHERE.
   test's sleep; the start after it: the zip holds the dump, the same size, the user's folder nowhere; a sleep of 13 s
   that passes and a report by hand; the switch off): 27 + 6 + 1 checks.
 
+**2b. The beats' part of the watch (asked by the engine the same day: "a beat that does not come back is the freeze I
+most want a dump of", an endless loop in a task or a script).** In a window the beats run on a thread of their own,
+so the frames go on while a beat hangs and the frames' watch sees nothing.
+- Whoever runs a beat says so for the length of the call (`ui::BeatScope` round every `Tick` in `game_session.cpp`
+  and `menu_flight.cpp`: three atomic stores a beat). When one beat has run for ten seconds the keeper writes
+  `warning: moho64ui: freeze: the simulation's beat 1234 has not finished for 10 s (frames go on)` and has the same
+  dump written, the beat's thread named and first in the frames (`thread N (the simulation's beat) frame 0 ...`, 40 of
+  its frames); when the beat comes back after all: `the simulation's beat 1234 finished after all, 12.3 s after it
+  began`. Where both watches see the same standing (the beats on the main loop's thread, or the main loop waiting for
+  the beat) ONE dump is written. A report's README shows these lines at a glance.
+- The engine adds a word for the beat's stage (`moho::g_beatStage`) in a later batch; it goes into the line then.
+- Tests (`suite/freeze_dump.sh`, cases "beat" and "ahead", `MOHO64UI_BEAT_FREEZE_TEST=<beat>:<seconds>`): a game
+  whose beat 30 sleeps 14 s, and the same with the first beats on the loading thread (the beat's thread is another
+  one, named and first; the main loop's after it); the beat's own frame looked up is `ui::BeatScope`, the test's
+  sleep; 46 checks with the freeze's. NOT PROVEN: the wording "frames go on", which needs a window (without one the
+  main loop waits for the loading thread, so both cases read "no frames either").
+- First real finding of the dump, in the suite's own runs: the device-lost jobs stand over 20 s on the main loop with
+  the frames in `dxcompiler.dll` (the shaders compiled again after the device is lost, on the main thread).
+
 **Found on the way, fixed 38b07a69:** the report's masking read a dump's stacks only; a copy of the environment block
 made with the wide registers leaves the block's last pieces in a thread's SAVED REGISTERS, which a dump holds too
 (the report's own test caught "WINDIR=C:" there at a landing). The masking reads the registers now.
