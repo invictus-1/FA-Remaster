@@ -200,6 +200,11 @@ struct FrameEffectEvent {
   // that has no mesh and so is in no list: the hubs of an adjacency's link)
   bool hasPosition2 = false;
   float position2[3] = {0, 0, 0};
+  // [fxturn] Create on an entity: the turn of the point it is made at (x, y, z, w; the engine's EffectEvent::orientation,
+  // its batch 184): the entity's, with the bone's where one is named, as it was when the place was taken. For a thing that
+  // is in no list of the frame (a helper entity without a mesh): Effects::Apply.
+  bool hasOrientation = false;
+  float orientation[4] = {0, 0, 0, 1};
   bool seen = true;               // Create: the army the picture is for sees that place
   std::vector<float> numbers;
   std::string text, text2;

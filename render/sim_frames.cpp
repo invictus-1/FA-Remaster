@@ -383,6 +383,8 @@ void SimFrames::Beat(const moho::Sim& sim) {
     f.bone2 = v.bone2;
     std::memcpy(f.position, v.position, sizeof f.position);
     f.hasPosition2 = v.hasPosition2;
+    f.hasOrientation = v.hasOrientation;  // [fxturn]
+    std::memcpy(f.orientation, v.orientation, sizeof f.orientation);
     std::memcpy(f.position2, v.position2, sizeof f.position2);
     f.numbers = std::move(v.numbers);
     f.text = std::move(v.text);

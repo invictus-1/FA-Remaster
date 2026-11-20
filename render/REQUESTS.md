@@ -34,6 +34,28 @@ upgrade's four settings; done 2026-10-17, ui a029a76 and the follow-up 1acb718).
 track (ground cover; answered 2026-10-17, her section 38; the atlas after the wrecks and the terrain materials). 33 is
 addressed to the interface track (a fifth lighting setting, Ground Detail; open).
 
+## 80. To the ENGINE track: the turn of the point an effect is made at (2026-11-20; Chris's test of 18 November, item 2; blocking for that item)
+
+**Who:** renderer. **Why:** Chris, 18 November: on the Mitsurugi and the Izanagi the hit-only shield's red patch shows
+on the side opposite the hit. Found (a test game: seven frigates east of a Mitsurugi that holds its fire): every hit
+is placed at the SAME side, straight along the world's +z from the shield's middle, whatever side the shots come
+from. A shield's script makes its hit effects on a helper entity that it turns toward the hit and then moves them out
+along that entity's own z (`ImpactEnt:SetOrientation(OrientFromDir(-vector), true)`, then
+`CreateEmitterAtBone(ImpactEnt, -1, army, v):OffsetEmitter(0, 0, OffsetLength)`). `EffectEvent` says where the point
+was but not how it was turned, a personal shield's helper entity has no mesh and so is in no list, and the renderer
+takes no turn: the offset goes along the world's z. So the hit sparks of EVERY shield (bubbles too) sit at one fixed
+side, and with them the place a personal shield's lattice lights up.
+
+**What:** in `EffectEvent`, for Create: the turn of the point the effect is made at, taken when its place is taken
+(the entity's turn, with the bone's where a bone is named), for example
+`bool hasOrientation = false; float orientation[4] = {0, 0, 0, 1};` as x, y, z, w like a unit's. An entity turned
+with SetOrientation(..., true) in the same beat before the call must give the new turn. Nothing else changes.
+
+**What the renderer does with it:** an emitter that stays where it was made (CreateEmitterAtBone,
+CreateEmitterAtEntity) takes that turn, so OffsetEmitter moves it in the frame of what it was made on.
+
+**Answer:** (none yet)
+
 ## 79. To the INTERFACE track (and the engine, whose core/log it may be): the renderer's lines into the game's log file (2026-11-14; Chris's first build; BLOCKING for a useful log from an outside machine)
 
 **Who:** renderer. **Why:** Chris, 2026-11-14, on the first build other people play: "any logs produced are extremely

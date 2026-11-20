@@ -3406,7 +3406,14 @@ bool World::WreckPosed(uint32_t id, const PlacedProp& prop, const WreckPose** po
   if (worn == wreckPoses_.end() || worn->second.bones.empty()) return false;
   *pose = &worn->second;
   if (worn->second.ownPlace) {  // (where its unit stood when it died, sized as the prop is)
-    Mat4 at = Mat4::FromTRS(worn->second.at, worn->second.turn, 1.0f);
+    // [wrecksunk] (Chris's test of 18 November: "Dead ships have a silhouette of how they look when normal") But no higher
+    // than the prop itself lies: a ship dies at the surface and its wreck is made on the sea's bed once it has sunk, so
+    // the place its unit died at is the surface - the wreck stood there whole and level, with its shadow on the sea,
+    // above the place it had sunk to. Where the prop lies lower than the unit died (by more than a quarter of a unit),
+    // the wreck is drawn at the prop's height, in its pose.
+    Vec3 where = worn->second.at;
+    if (prop.world.m[1][3] < where.y - 0.25f) where.y = prop.world.m[1][3];
+    Mat4 at = Mat4::FromTRS(where, worn->second.turn, 1.0f);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) {
         const float size = Length(Vec3{prop.world.m[0][k], prop.world.m[1][k], prop.world.m[2][k]});
@@ -3654,9 +3661,19 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       }
       if (!best || nearest > bestReach) continue;  // (a bubble's hit, or one far from any)
       const Quat turn{best->orientation[0], best->orientation[1], best->orientation[2], best->orientation[3]};
-      if (getenv("MOHO64_DEBUG_SHIELDHITS")) printf("render: shield hits: unit %u hit (the effect made on %u)\n", best->id, moved.entity);  // (checks)
+      const Vec3 atRest = Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]});
+      if (getenv("MOHO64_DEBUG_SHIELDHITS")) {  // (checks: the hit's place on the unit at rest; and what the simulation's own records say)
+        printf("render: shield hits: unit %u hit (the effect made on %u) at rest %.2f %.2f %.2f (the world's %.2f %.2f %.2f, the unit at %.2f %.2f %.2f)\n", best->id,
+               moved.entity, atRest.x, atRest.y, atRest.z, hit.x, hit.y, hit.z, best->position[0], best->position[1], best->position[2]);
+        for (const FrameHit& h : combat_.hits)
+          if (h.shield && h.target == best->id) {
+            const Vec3 told = Rotate(Conjugate(turn), Vec3{h.position[0], h.position[1], h.position[2]} - Vec3{best->position[0], best->position[1], best->position[2]});
+            printf("render: shield hits:   the simulation's record of beat %u: at rest %.2f %.2f %.2f, its direction %.2f %.2f %.2f, by %s\n", h.tick, told.x, told.y,
+                   told.z, h.direction[0], h.direction[1], h.direction[2], h.weapon.c_str());
+          }
+      }
       std::vector<ShieldHit>& list = shieldHits_[best->id];
-      list.push_back({Rotate(Conjugate(turn), hit - Vec3{best->position[0], best->position[1], best->position[2]}), clock_});
+      list.push_back({atRest, clock_});
       if (list.size() > 8) list.erase(list.begin());
     }
     for (auto it = shieldHits_.begin(); it != shieldHits_.end();) {
@@ -4091,8 +4108,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
       if (u.Seen() && !asRemembered) water.AddAfloat(position, orientation, model->boundsMin * model->scale, model->boundsMax * model->scale);
       // a wake, when it goes on the water: by how far it has come since the frame before
       if (haveMap_ && map.water.present && u.Seen() && std::fabs(position.y - map.water.elevation) < 0.4f) {
+        // [wakeway] What a ship's wake is laid from - how fast it goes, how far it has come, where it has been - is kept by
+        // the game's own frames alone: a side picture (the minimap's ground, redrawn now and then with the last whole beat's
+        // clock) and a further view read it and leave it, so that none of them can set a ship's clock ahead of the frames'.
+        const bool keeps = !sidePicture && !extraView;
         Moving& m = moving_[u.id];
-        const double dt = clock_ - m.clock;
+        const double dt = keeps ? clock_ - m.clock : 0;
         if (dt > 1e-4 && dt < 1.0) m.speed += (Length(position - m.place) / static_cast<float>(dt) - m.speed) * 0.2f;
         if (dt > 1e-4 && dt < 1.0) m.odometer += Length(Vec3{position.x - m.place.x, 0, position.z - m.place.z});  // [wakes]
         if (dt >= 1.0 || dt < 0) {
@@ -4117,7 +4138,7 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           const Vec3 kept = remade ? Vec3{position.x, stern.y, position.z} : stern;
           const bool spaced = !remade || m.trailCount == 0 ||
                               Length(Vec3{kept.x - m.trail[0].x, 0, kept.z - m.trail[0].z}) >= std::max(0.5f, (length + halfZ * 0.6f) * 0.1f);
-          if ((clock_ - m.trailClock > 0.33 && spaced) || m.trailCount == 0) {
+          if (keeps && ((clock_ - m.trailClock > 0.33 && spaced) || m.trailCount == 0)) {
             for (int k = std::min(m.trailCount, 11); k > 0; --k) m.trail[k] = m.trail[k - 1];
             m.trail[0] = kept;
             m.trailCount = std::min(m.trailCount + 1, 12);
@@ -4129,6 +4150,12 @@ void World::AddFrame(const Frame& frame, const std::vector<Vec3>& armyColors) {
           if (remade) wakes.AddPathRemade(places, m.trailCount + 1, halfZ * 0.6f, level, length, halfX * 0.7f, strength, m.odometer);
           else if (m.trailCount >= 2) wakes.AddPath(places, m.trailCount + 1, length, halfX * 0.7f, strength);
           else wakes.Add(stern, level, length, halfX * 0.7f, strength);
+        } else if (keeps && wakesRemade && look == Look::Modern) {
+          // [wakeway] (a ship that has stopped, or gone aground: the way it came is let go of. Kept, it was the way of the
+          // next wake too: a ship that turned where it lay and went on drew its wake along the old way, beside itself and
+          // at the old heading - Chris's test of 18 November, "the wakes imprint in a spot then disappear and/or lag behind
+          // the ship".)
+          m.trailCount = 0;
         }
       }
       // [hulls] a ship sunk a little into the lifted sea: where the waves meet its hull (the water's shader: the white water

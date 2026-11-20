@@ -2186,8 +2186,16 @@ void EndFerry(Sim& sim, Unit* T, TransportTaskData& d) {
 int TickWaitFerry(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
   if (RunChild(sim, u, t, d)) return kTaskRunning;
   if (t.waitUntil > sim.tick()) return kTaskRunning;
-  Unit* B = UnitRef(sim, d.beacon);
-  if (!B || B->dead) return kTaskDone;
+  // The beacon is a weak link (task+0x34) and the task asks only whether it is empty (0x60fcca..0x60fcda, before the
+  // states): it empties when the beacon's object is deleted at the beat's end, not when a script destroys it earlier
+  // in the beat, and a dying beacon is not asked for. Ours ended the wait for a beacon whose destruction was only
+  // queued (UnitRef) or that was dead. Seen: FAF 3840 pro replay 4v4_setons_1, beat 9094: the ferry route of army 2's
+  // transport 0xc889 goes while two engineers (0x200005, 0x20004f) ride it; their wait wakes in that same beat
+  // (asked every 9 beats since they were attached at 8860), finds the link still full, and ends at its next
+  // waking, 9103; ours ended it at 9094.
+  Entity* be = d.beacon ? sim.FindEntity(d.beacon) : nullptr;
+  Unit* B = be && be->kind == Entity::Kind::Unit ? static_cast<Unit*>(be) : nullptr;
+  if (!B) return kTaskDone;
   for (int guard = 0; guard < 4; ++guard) {
     switch (t.state) {
       case 0: {  // walk to a free spot beside the beacon (off its skirt)

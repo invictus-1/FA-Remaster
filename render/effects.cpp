@@ -641,7 +641,14 @@ void Effects::Apply(const FrameEffectEvent& event, const Frame& frame) {
     if (said.insert(f + " " + event.blueprint + " " + on).second)
       printf("render: fxown: %s %s on %s -> %s\n", f.c_str(), event.blueprint.c_str(), on.c_str(), e.blueprint.c_str());
   }
-  AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation);  // (the orientation, when the entity is still there)
+  // [fxturn] (Chris's test of 18 November: a hit-only shield's patch on the side away from the hit) The turn of the point it
+  // is made at: the thing's in the frame where it is listed; else as the engine says it (FrameEffectEvent::orientation).
+  // Before, an emitter made on a thing that is in no list had no turn at all, and OffsetEmitter moved it along the WORLD's
+  // axes: a personal shield's script makes its hit sparks on a helper entity without a mesh, turned toward the hit, and
+  // moves them out along that entity's z - so the sparks, and the place the shield's lattice lights up, which is read from
+  // them, sat straight along the world's z from the shield's middle whatever side the shot came from.
+  if (!AttachPoint(frame, e.entity, e.bone, &e.position, &e.orientation) && event.hasOrientation)
+    e.orientation = Quat{event.orientation[0], event.orientation[1], event.orientation[2], event.orientation[3]};
   e.position = V(event.position);
   const double at = static_cast<double>(event.tick) * 0.1;
   if (f == "CreateAttachedEmitter" || f == "CreateEmitterOnEntity" || f == "CreateEmitterAtBone" || f == "CreateEmitterAtEntity") {
