@@ -684,11 +684,19 @@ class Sim {
   // these instead of every unit of the pass. combatCutoff_: entSeqNext_ when the pass's order was taken (the units
   // made after it are not in that order and wait for the next pass, as before).
   std::vector<Unit*> combatPending_;
+  // (2026-11-20: the weapons stage's walk of the units without combat data: every unit added to the lists since the
+  // last walk, whatever the order; one taken off the lists leaves it. TakeCombatPendingW hands it over and empties it.)
+  std::vector<Unit*> combatPendingW_;
+  std::vector<Unit*> TakeCombatPendingW() { return std::move(combatPendingW_); }
   uint64_t combatCutoff_ = 0;
   // (a unit noted for the sum: into econAdders_, or, inside phase D's turns on the worker pool, into its worker's own
   // list (econAddersW_), joined to econAdders_ after the phase; the sum sorts them by creation serial either way)
   void NoteEconAdder(Unit* u);
   std::vector<std::vector<std::pair<uint64_t, Unit*>>> econAddersW_;
+  // (phase D on the pool, 2026-11-20: the first unit each turn notes, by the turn's place; joined in the turns' order,
+  // the worker lists after them. MOHO64_ECONSUM_CHECK=1: every note in the worker lists as well, compared)
+  std::vector<std::pair<uint64_t, Unit*>> econAddSlot_;
+  std::vector<std::vector<std::pair<uint64_t, Unit*>>> econAddersCheckW_;
   uint32_t deferKey_ = 0, deferSeq_ = 0;
   void DeferTurn(uint32_t key) {
     deferKey_ = key;
@@ -846,6 +854,9 @@ class Sim {
   uint64_t firesSeen = 0, projectilesMade = 0, impactsSeen = 0;
   uint64_t cmdOrderChecks = 0;  // (MOHO64_CMDORDER_CHECK: the orders and lists compared)
   uint64_t catCacheChecks = 0;  // (MOHO64_CATCACHE_CHECK: the kept category answers compared)
+  uint64_t unitGridChecks = 0;  // (MOHO64_UNITGRID_CHECK: the unit grids compared with the one loop's)
+  uint64_t econSumChecks = 0, econSumSorts = 0;  // (MOHO64_ECONSUM_CHECK: the joins compared; the sums that sorted)
+  uint64_t cbWalkChecks = 0;  // (MOHO64_CBWALK_CHECK: the walks compared)
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
@@ -957,6 +968,8 @@ class Sim {
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;
   void RebuildUnitGrid();
+  std::vector<uint32_t> gridCellOf_;     // (RebuildUnitGrid on the pool: each unit's cell, ~0u for none, by its place)
+  std::vector<const Army*> gridArmyOf_;  // (and its army)
   std::vector<std::vector<Prop*>> propGrid_;
   bool propGridDirty_ = true;
   void RebuildPropGrid();

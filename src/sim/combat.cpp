@@ -2422,7 +2422,36 @@ void WeaponsStageDebug(Sim& sim) {
 // turns' order; then W2, every unit's threads one after another as before, the acquire threads W1 ran left out.
 static bool AcquireOnPool(const UnitWeapon* w) { return w->bp && w->bp->targetType != 1; }
 static void WeaponsTickParallel(Sim& sim, const std::vector<Unit*>& units) {
-  for (Unit* u : units) (void)CB(u);  // (a unit's combat data, made at its first read: before the pool reads it)
+  // (a unit's combat data, made at its first read: before the pool reads it.) It was made by a walk of every unit
+  // of the stage (50k: 0.9 ms a beat, and after the first beat no unit lacked it; 2026-11-20). u->combat is written by
+  // CB alone and never reset, and CB of a unit that has it reads only; every unit of the lists was in the last walk's
+  // units or has been added since (Sim::combatPendingW_: AddUnitToLists, left on removal). So the units without combat
+  // data are the pending ones without it, made in the walk's order (by army, then creation: the stage's order).
+  // MOHO64_CBWALK_CHECK=1 makes the walk of every unit's list beside and compares.
+  {
+    std::vector<Unit*> pend = sim.TakeCombatPendingW();
+    std::vector<Unit*> lack;
+    for (Unit* u : pend)
+      if (!u->combat) lack.push_back(u);
+    std::sort(lack.begin(), lack.end(), [](const Unit* a, const Unit* b) {
+      const uint32_t aa = a->id >> 20, ab = b->id >> 20;
+      return aa != ab ? aa < ab : a->entSeq < b->entSeq;
+    });
+    static const bool check = getenv("MOHO64_CBWALK_CHECK") && strcmp(getenv("MOHO64_CBWALK_CHECK"), "0");
+    if (check) {
+      std::vector<Unit*> ref;
+      for (Unit* u : units)
+        if (!u->combat) ref.push_back(u);
+      if (ref != lack) {
+        Logf(LogLevel::Error, "moho64 MOHO64_CBWALK_CHECK: the units without combat data differ from the walk's at "
+             "beat %u (%zu / %zu)", sim.tick(), lack.size(), ref.size());
+        fprintf(stderr, "moho64 MOHO64_CBWALK_CHECK: the units without combat data differ at beat %u\n", sim.tick());
+        abort();
+      }
+      ++sim.cbWalkChecks;
+    }
+    for (Unit* u : lack) (void)CB(u);
+  }
   sim.EnsureUnitGrid();
   {
     std::optional<wtrap::Phase> trap;  // (MOHO64_PAR_WRITETRAP: the turns)
@@ -2467,6 +2496,7 @@ static void WeaponsTickParallel(Sim& sim, const std::vector<Unit*>& units) {
 
 void WeaponsTickUnits(Sim& sim, const std::vector<Unit*>& units) {
   if (sim.order == SimOrder::kParallel) return WeaponsTickParallel(sim, units);
+  (void)sim.TakeCombatPendingW();  // (the original's order reads its units as it meets them: no walk, no list kept)
   for (size_t i = 0; i < units.size(); ++i) {
     Unit* u = units[i];
     if (u->destroyQueued || u->combatGone) continue;

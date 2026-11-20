@@ -1104,6 +1104,17 @@ Sim::~Sim() {
   if (getenv("MOHO64_CATCACHE_CHECK") && strcmp(getenv("MOHO64_CATCACHE_CHECK"), "0"))
     fprintf(stderr, "moho64 MOHO64_CATCACHE_CHECK: %llu kept category answers compared with BpInCategory: all equal\n",
             static_cast<unsigned long long>(catCacheChecks));
+  if (getenv("MOHO64_UNITGRID_CHECK") && strcmp(getenv("MOHO64_UNITGRID_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_UNITGRID_CHECK: %llu unit grids compared with the one loop's: all equal\n",
+            static_cast<unsigned long long>(unitGridChecks));
+  if (getenv("MOHO64_ECONSUM_CHECK") && strcmp(getenv("MOHO64_ECONSUM_CHECK"), "0"))
+    fprintf(stderr,
+            "moho64 MOHO64_ECONSUM_CHECK: %llu joins of phase D's adders compared with the worker lists': all equal; "
+            "%llu sums sorted\n",
+            static_cast<unsigned long long>(econSumChecks), static_cast<unsigned long long>(econSumSorts));
+  if (getenv("MOHO64_CBWALK_CHECK") && strcmp(getenv("MOHO64_CBWALK_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_CBWALK_CHECK: %llu walks compared with the walk of every unit: all equal\n",
+            static_cast<unsigned long long>(cbWalkChecks));
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
@@ -1166,11 +1177,26 @@ float Sim::BpUniform(float base, float range) {
 namespace {
 thread_local Sim::DeferSink* tl_deferSink = nullptr;  // (the worker's own list while a phase's turn runs on the pool)
 thread_local std::vector<std::pair<uint64_t, Unit*>>* tl_econAdders = nullptr;  // (phase D on the pool: the worker's own adders)
+thread_local std::pair<uint64_t, Unit*>* tl_econSlot = nullptr;  // (phase D on the pool: the turn's own place)
+thread_local std::vector<std::pair<uint64_t, Unit*>>* tl_econCheck = nullptr;  // (MOHO64_ECONSUM_CHECK)
+bool EconSumCheck() {
+  static const bool on = getenv("MOHO64_ECONSUM_CHECK") && strcmp(getenv("MOHO64_ECONSUM_CHECK"), "0");
+  return on;
+}
 }
 
 void Sim::NoteEconAdder(Unit* u) {
-  if (std::vector<std::pair<uint64_t, Unit*>>* v = tl_econAdders) v->emplace_back(u->entSeq, u);
-  else econAdders_.emplace_back(u->entSeq, u);
+  if (std::vector<std::pair<uint64_t, Unit*>>* v = tl_econAdders) {
+    // (2026-11-20, phase D on the pool: the turn's first note into its place, so that the join is in the turns' order,
+    // which is the order of creation but for the units sent to the pass's end; a further note in the same turn into
+    // the worker's list, joined after them. The sum sorts by creation serial when the list is not in order, as before:
+    // the keys are unique, so its order is the one order of the keys whatever order the join gives.)
+    if (std::pair<uint64_t, Unit*>* s = tl_econSlot; s && !s->second) *s = {u->entSeq, u};
+    else v->emplace_back(u->entSeq, u);
+    if (tl_econCheck) tl_econCheck->emplace_back(u->entSeq, u);
+    return;
+  }
+  econAdders_.emplace_back(u->entSeq, u);
 }
 
 void Sim::RunTurns(const char* stage, size_t n, const std::function<void(size_t)>& turn) {
@@ -1245,8 +1271,10 @@ void Sim::SumUnitEconomy() {
   // sorted only when it is not. A unit is noted once a beat, so the keys are unique: the order is that of the earlier
   // sort of every unit by entSeq, exactly; the sort no longer reads the units, 2026-11-13.)
   auto byKey = [](const std::pair<uint64_t, Unit*>& a, const std::pair<uint64_t, Unit*>& b) { return a.first < b.first; };
-  if (!std::is_sorted(econAdders_.begin(), econAdders_.end(), byKey))
+  if (!std::is_sorted(econAdders_.begin(), econAdders_.end(), byKey)) {
     std::sort(econAdders_.begin(), econAdders_.end(), byKey);
+    ++econSumSorts;
+  }
   for (const auto& [seq, u] : econAdders_) {
     if (!u->army || u->econAddTick != tick_) continue;
     ArmyEconomy& e = u->army->econ;
@@ -2376,16 +2404,69 @@ void Sim::RebuildUnitGrid() {
   } else {
     for (auto& c : grid_) c.clear();
   }
-  for (Unit* u : units_) {
-    if (u->destroyQueued) continue;
+  auto cellOf = [this](const Unit* u) {
     int cx = std::clamp(static_cast<int>(u->position.x) >> 4, 0, gridW_ - 1);
     int cz = std::clamp(static_cast<int>(u->position.z) >> 4, 0, gridH_ - 1);
-    grid_[static_cast<size_t>(cz) * gridW_ + cx].push_back(UnitGridEntry{u, u->army, 0});
+    return static_cast<uint32_t>(cz) * static_cast<uint32_t>(gridW_) + static_cast<uint32_t>(cx);
+  };
+  // (2026-11-20: with the worker pool, each unit's cell and army are read on the pool into gridCellOf_ / gridArmyOf_
+  // by its place in units_, and the lists are filled from them on this thread in units_ order: the same entries in the
+  // same order as the one loop's, which read every unit here (50k: 1.5 ms a beat, the navigators' first EnsureUnitGrid
+  // every beat). A turn reads its own unit only and writes its own two slots. Not from inside a pool task (a lazy
+  // rebuild there) and not for a few units: the one loop. MOHO64_UNITGRID_CHECK=1 makes the one loop's grid beside
+  // and compares every cell.)
+  static const bool parGrid = !(getenv("MOHO64_PAR_UNITGRID") && !strcmp(getenv("MOHO64_PAR_UNITGRID"), "0"));
+  const size_t n = units_.size();
+  if (parGrid && n >= 4096 && (workers_->Threads() > 1 || workers_->Check().mode != ParCheck::kOff) &&
+      !InParallelTask()) {
+    gridCellOf_.resize(n);
+    gridArmyOf_.resize(n);
+    workers_->ParallelFor("unit grid", n, 1024, [&](size_t b, size_t e, int) {
+      for (size_t i = b; i < e; ++i) {
+        const Unit* u = units_[i];
+        gridCellOf_[i] = u->destroyQueued ? ~0u : cellOf(u);
+        gridArmyOf_[i] = u->army;
+      }
+    });
+    for (size_t i = 0; i < n; ++i)
+      if (gridCellOf_[i] != ~0u) grid_[gridCellOf_[i]].push_back(UnitGridEntry{units_[i], gridArmyOf_[i], 0});
+  } else {
+    for (Unit* u : units_) {
+      if (u->destroyQueued) continue;
+      grid_[cellOf(u)].push_back(UnitGridEntry{u, u->army, 0});
+    }
   }
   for (auto& c : grid_)  // each entry's run of one army (UnitGridEntry::runEnd)
     for (size_t i = c.size(); i-- > 0;)
       c[i].runEnd = i + 1 < c.size() && c[i + 1].army == c[i].army ? c[i + 1].runEnd : static_cast<uint32_t>(i + 1);
   gridDirty_ = false;
+  static const bool check = getenv("MOHO64_UNITGRID_CHECK") && strcmp(getenv("MOHO64_UNITGRID_CHECK"), "0");
+  if (check) {  // (the one loop's grid, made beside, cell by cell, entry by entry)
+    std::vector<std::vector<UnitGridEntry>> ref(grid_.size());
+    for (Unit* u : units_) {
+      if (u->destroyQueued) continue;
+      int cx = std::clamp(static_cast<int>(u->position.x) >> 4, 0, gridW_ - 1);
+      int cz = std::clamp(static_cast<int>(u->position.z) >> 4, 0, gridH_ - 1);
+      ref[static_cast<size_t>(cz) * gridW_ + cx].push_back(UnitGridEntry{u, u->army, 0});
+    }
+    for (auto& c : ref)
+      for (size_t i = c.size(); i-- > 0;)
+        c[i].runEnd = i + 1 < c.size() && c[i + 1].army == c[i].army ? c[i + 1].runEnd : static_cast<uint32_t>(i + 1);
+    for (size_t k = 0; k < grid_.size(); ++k) {
+      bool same = ref[k].size() == grid_[k].size();
+      for (size_t i = 0; same && i < ref[k].size(); ++i)
+        same = ref[k][i].u == grid_[k][i].u && ref[k][i].army == grid_[k][i].army &&
+               ref[k][i].runEnd == grid_[k][i].runEnd;
+      if (!same) {
+        Logf(LogLevel::Error, "moho64 MOHO64_UNITGRID_CHECK: cell %zu differs from the one loop's at beat %u "
+             "(%zu / %zu)",
+             k, tick_, grid_[k].size(), ref[k].size());
+        fprintf(stderr, "moho64 MOHO64_UNITGRID_CHECK: cell %zu differs from the one loop's at beat %u\n", k, tick_);
+        abort();
+      }
+    }
+    ++unitGridChecks;
+  }
 }
 namespace combat {
 int Relation(const Army* a, const Army* b);  // (combat.cpp)
@@ -2559,11 +2640,16 @@ void Sim::AddUnitToLists(Unit* u) {
   if (u->army) InsertById(u->army->units, u);
   if (entityPassOpen_) madeInEntityPass_.push_back(u);
   if (order == SimOrder::kParallel) combatPending_.push_back(u);  // (the next combat data prefill)
+  combatPendingW_.push_back(u);  // (the next weapons stage's walk: combat.cpp WeaponsTickParallel)
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   if (order == SimOrder::kParallel && !combatPending_.empty()) {
     auto it = std::find(combatPending_.begin(), combatPending_.end(), u);
     if (it != combatPending_.end()) combatPending_.erase(it);
+  }
+  if (!combatPendingW_.empty()) {
+    auto it = std::find(combatPendingW_.begin(), combatPendingW_.end(), u);
+    if (it != combatPendingW_.end()) combatPendingW_.erase(it);
   }
   gridDirty_ = true;
   dirtyOrderDirty_ = true;
@@ -3756,24 +3842,56 @@ void Sim::Tick() {
       if (dPool) {
         const size_t nw = static_cast<size_t>(workers().Threads());
         if (econAddersW_.size() < nw) econAddersW_.resize(nw);
+        const bool econCheck = EconSumCheck();
+        if (econCheck && econAddersCheckW_.size() < nw) econAddersCheckW_.resize(nw);
+        econAddSlot_.assign(all.size(), std::pair<uint64_t, Unit*>{0, nullptr});
         workers().ParallelFor("entity pass D", all.size(), checked ? 1 : 16, [&](size_t b, size_t e, int w) {
           DeferSink& sink = deferSinks_[static_cast<size_t>(w)];
           tl_deferSink = &sink;
           tl_econAdders = &econAddersW_[static_cast<size_t>(w)];
+          tl_econCheck = econCheck ? &econAddersCheckW_[static_cast<size_t>(w)] : nullptr;
           for (size_t k = b; k < e; ++k) {
             const uint32_t i = all[k];
             wtrap::Turn trapTurn(motionOrder[i]);
             sink.key = i;
             sink.seq = 0;
+            tl_econSlot = &econAddSlot_[k];
             econTurn(i);
           }
           tl_deferSink = nullptr;
           tl_econAdders = nullptr;
+          tl_econSlot = nullptr;
+          tl_econCheck = nullptr;
         });
         MergeDeferSinks();
+        // (2026-11-20: the turns' notes in the turns' order, then what a turn noted beyond its first. Before, the
+        // worker lists one after another: out of order at more than one thread, so the sum sorted ~50,000 pairs every
+        // beat in 50k, 0.7 ms)
+        const size_t from = econAdders_.size();
+        for (const std::pair<uint64_t, Unit*>& s : econAddSlot_)
+          if (s.second) econAdders_.push_back(s);
         for (std::vector<std::pair<uint64_t, Unit*>>& v : econAddersW_) {
           econAdders_.insert(econAdders_.end(), v.begin(), v.end());
           v.clear();
+        }
+        if (econCheck) {  // (the same notes as the worker lists of every note, the old way's join)
+          std::vector<std::pair<uint64_t, Unit*>> got(econAdders_.begin() + static_cast<std::ptrdiff_t>(from),
+                                                      econAdders_.end());
+          std::vector<std::pair<uint64_t, Unit*>> ref;
+          for (std::vector<std::pair<uint64_t, Unit*>>& v : econAddersCheckW_) {
+            ref.insert(ref.end(), v.begin(), v.end());
+            v.clear();
+          }
+          std::sort(got.begin(), got.end());
+          std::sort(ref.begin(), ref.end());
+          if (got != ref) {
+            Logf(LogLevel::Error, "moho64 MOHO64_ECONSUM_CHECK: phase D's adders differ from the worker lists' "
+                 "at beat %u "
+                 "(%zu / %zu)", tick_, got.size(), ref.size());
+            fprintf(stderr, "moho64 MOHO64_ECONSUM_CHECK: phase D's adders differ at beat %u\n", tick_);
+            abort();
+          }
+          ++econSumChecks;
         }
       } else {
         for (size_t k = 0; k < all.size(); ++k) {
