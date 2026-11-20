@@ -423,3 +423,21 @@ recommended", puts the three into the dialog as picking them there would (a sett
 control; one on the other tab into the dialog's working set, the preset with the looks its level sets). The player
 still presses Apply or OK; Cancel drops it. The reason in the renderer's words goes into the log once. Without a
 picture of the world on the interface's thread there is no suggestion and no line.
+
+## "Vapour Contrails" (built 2026-11-20; Chris: "Yes add the option for contrails")
+
+A toggle in the Remastered tab's section Effects & Battle, after Shell Tracers (`remaster_contrail_vapour`, console the
+same; ON by default; set by no preset level). The tab has 60 rows with it.
+
+On is the look since render 74a8c0c7 ([contrailvapour]): an aircraft's contrail is vapour: pale, lit by the hour's sun
+or moon and the sky as a thin cloud is, in the clouds' shadow where they shade it, lighting nothing. Off is how the
+remaster drew it before: the game's contrail trail taken by the tracers' rule, white hot with an orange end, as bright
+at one in the night as at noon. The renderer's switch is `World::ribbons.contrailVapour`; the interface sets it in
+`WorldLooks` from `LookSettings::contrailVapour`, so it follows a change in the middle of a game and a world made anew.
+An option because of Chris's rule that a new look keeps the earlier way as a choice
+(memory `supcomlab-looks-are-player-options`).
+
+Tests: `ui/tests/options_tabs.lua` (on at first, switched by the console as the row's `set` does), `device_lost.lua`
+(switched off it reaches the world's own switch, also on a world made anew after the device is lost), `keys.lua` (the
+console's name among those beginning `remaster_c`), `lobby.lua` (the rows' count). What a contrail then looks like is
+the renderer's own proof.

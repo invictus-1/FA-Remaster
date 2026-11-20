@@ -3,6 +3,13 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## Chris, 2026-11-20: "Yes add the option for contrails" (the renderer's [contrailvapour], render 74a8c0c7)
+
+The row "Vapour Contrails" is in Options > Remastered > Effects & Battle, after Shell Tracers: `remaster_contrail_vapour`,
+On by default (the look since that render: a contrail as pale vapour lit by the sun or the moon), Off the earlier
+bright trail; it sets `World::ribbons.contrailVapour` in `WorldLooks`, in a running game too. In no preset. The
+detail and the tests: docs/ui-options-layout.md, "Vapour Contrails". Nothing is asked of the renderer.
+
 ## renderer, request 79 (render/REQUESTS.md): the renderer's lines into the game's log; the interface's part (1) (2026-11-14)
 
 - (1) BUILT: `main.cpp` installs `WorldPicture::SetLogSink` right after the log is opened, before the shader compiler's
