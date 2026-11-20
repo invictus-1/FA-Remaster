@@ -2572,7 +2572,14 @@ void World::Begin(const Camera& cam, int width, int height, float time, double c
     decals.AddMark(t, {d.x, y, d.z}, d.sizeX, d.sizeZ, 0);
   }
   // (0xAARRGGBB to the debug drawing's 0xAABBGGRR)
-  auto swapped = [](uint32_t c) { return (c & 0xff00ff00u) | ((c >> 16) & 0xff) | ((c & 0xff) << 16); };
+  // ([ghostnight] the interface's guide lines and rings are of one strength, plain by day; in the night's picture, which
+  // is shown many times brighter, a ghost's outline burned with a wide halo: the night's dimming of glowing things, as
+  // the range rings' (ranges.cpp))
+  const float lineNight = look == Look::Modern ? std::clamp(lights.night, 0.0f, 1.0f) : 1.0f;
+  auto swapped = [lineNight](uint32_t c) {
+    auto dim = [lineNight](uint32_t v) { return static_cast<uint32_t>(static_cast<float>(v & 0xffu) * lineNight + 0.5f); };
+    return (c & 0xff000000u) | (dim(c) << 16) | (dim(c >> 8) << 8) | dim(c >> 16);
+  };
   const Vec3 lift{0, 0.15f, 0};
   for (const Line& l : lines) {
     if (l.width > 1.25f && guidePull > 0) {  // [glitches] over the ground cover, with a dark edge
