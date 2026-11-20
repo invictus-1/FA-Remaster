@@ -163,6 +163,7 @@ bool noWorld = false;             // --no-world: a launched game gets no picture
 // shares). A test that loses the graphics device on purpose (moho64ui_RecoverDevice("lose")) must give one: the
 // renderer's first such test wrote a short pipelines file over the player's.
 std::string shaderCache;
+std::string shippedShaders;  // (--shipped-shaders: the folder of compiled shaders that came with the build; "" = beside the program)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
 long long session_seed = -1;      // --seed N: the random seed of a launched game (default: from the clock)
@@ -299,6 +300,7 @@ int main(int argc, char** argv) {
     else if (a == "--session") sessionIn = next();
     else if (a == "--no-world") noWorld = true;
     else if (a == "--shader-cache") shaderCache = next();
+    else if (a == "--shipped-shaders") shippedShaders = next();
     else if (a == "--no-sound") noSound = true;
     else if (a == "--fullscreen") fullScreen = windowed = modeGiven = true;
     else if (a == "--second-window") secondWindowArg = next();
@@ -410,6 +412,23 @@ int main(int argc, char** argv) {
   // (at a crash, after the crash's own lines and before the dump: a line the renderer was half-way through printing
   // on the crashing thread goes into the log too; the engine's batch 168 for the renderer's request 79)
   CrashSetBeforeReport(render::LogFlush);
+  // The compiled shaders that came with the build (ui/REQUESTS.md 58, render 250bd4fd; Chris, 2026-11-20: "Yeah ask
+  // the renderer about the first start"): a first start with no shaders stored compiled 411 of them inside its first
+  // frames, 192 s to a moving picture; with this folder none, 18.5 s (the renderer's numbers). The folder
+  // "shaders_shipped" beside the program (an installer lays it down), or --shipped-shaders; read where the player's
+  // own cache has none, never written. Once, before the first picture opens. And the freeze watch learns to ask
+  // whether shaders are being compiled (user/events.h), so a first start at work is not taken for a program that hangs.
+  {
+    std::string folder = shippedShaders;
+    if (folder.empty()) {
+      const std::string beside = hostfs::ProgramFolder() + "/shaders_shipped";
+      std::error_code ec;
+      if (std::filesystem::is_directory(std::filesystem::path(std::u8string(beside.begin(), beside.end())), ec)) folder = beside;
+    }
+    if (!folder.empty()) render::WorldPicture::SetShippedShaderCache(folder);
+    Logf(LogLevel::Info, "moho64ui: compiled shaders shipped with the build: %s", folder.empty() ? "none (no folder shaders_shipped beside the program)" : folder.c_str());
+    ui::SetShaderWorkProbe([](int* compiled, int* fromCache, int* compiling) { render::WorldPicture::ShaderWork(compiled, fromCache, compiling); });
+  }
   // MOHO64UI_CRASH_TEST=1 (a check, as the engine's --crash-test): half a line printed the renderer's way, then a fault
   // on purpose: the log must hold the crash's lines and, after them, that half line (the lab's suite/crash_test.sh).
   // MOHO64UI_CRASH_TEST=log: the same fault taken WHILE THE LOG'S LOCK IS HELD (the engine's LogTestFaultUnderLock, its

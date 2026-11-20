@@ -125,6 +125,40 @@ function RemasterShowReportLink(parent)
     return true
 end
 
+-- "Preparing graphics" on the main menu (ui/REQUESTS.md 58, 2026-11-20): while the renderer compiles shaders (a first
+-- start after an install or a new build: the menu's live background comes late and the picture may stand), a line
+-- above "Report a Problem" says so with the count so far; it goes four seconds after the last shader.
+-- What is shown, for the tests: line (the control, false when none), text (as shown, "" when hidden).
+RemasterMenuShaders = { line = false, text = "", last = 0, quiet = 0 }
+
+function RemasterShowShaderWork(parent)
+    local work = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
+    if not work or not parent then return false end
+    local m = RemasterMenuShaders
+    local busy = work.compiling > 0 or work.compiled ~= m.last
+    m.last = work.compiled
+    if busy then m.quiet = 0 else m.quiet = m.quiet + 1 end
+    if m.quiet >= 2 then  -- (two looks of two seconds without a shader: done)
+        if m.line and not IsDestroyed(m.line) then m.line:Hide() end
+        m.text = ""
+        return false
+    end
+    if work.compiled == 0 and work.compiling == 0 then return false end
+    if not m.line or IsDestroyed(m.line) then
+        m.line = RemasterMenuUIUtil.CreateText(parent, "", 14, RemasterMenuUIUtil.bodyFont)
+        m.line:SetColor('FFE8C048')
+        m.line:SetDropShadow(true)
+        m.line:DisableHitTest()
+        m.line.Depth:Set(function() return parent.Depth() + 400 end)
+        RemasterMenuLayout.AtLeftIn(m.line, parent, 20)
+        RemasterMenuLayout.AtBottomIn(m.line, parent, 66)
+    end
+    m.text = "Preparing graphics (once after an install or a new build): " .. work.compiled .. " shaders so far"
+    m.line:SetText(m.text)
+    m.line:Show()
+    return true
+end
+
 -- The menu's own screen group is a local of the game's CreateUI: it is caught as CreateUI makes it, so the box is
 -- the menu's child and goes with it.
 local RemasterMenuCreateUI = CreateUI
@@ -159,6 +193,7 @@ function CreateUI(...)
                 if count > 0 and (not box or IsDestroyed(box) or count ~= RemasterMenuNotice.count) then
                     pcall(RemasterShowNotices, group)
                 end
+                pcall(RemasterShowShaderWork, group)
             end
         end)
     end

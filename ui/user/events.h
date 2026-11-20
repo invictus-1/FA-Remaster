@@ -69,6 +69,15 @@ struct BeatScope {
   BeatScope(const BeatScope&) = delete;
   BeatScope& operator=(const BeatScope&) = delete;
 };
+// THE SHADERS' PART OF THE WATCH (2026-11-20; ui/REQUESTS.md 58, the renderer's WorldPicture::ShaderWork): a first
+// start with no compiled shaders stored holds frames for a minute and more while they are compiled. The host gives
+// the watch a way to ask the renderer (this file knows nothing of it: the program without the world's picture has
+// none); while shaders are being compiled the watch's lines say so
+//   moho64ui: no frame for 5 s, since second 12.3 of the run (the main loop is in: ...); shaders are being compiled: 14 since the frame began, 1 at work
+// and NO dump is written: the program works, it does not hang. A dump comes at a later look when nothing was compiled
+// since the look before. MOHO64UI_SHADER_WORK_TEST=1 (a test's): the watch is told a compile is at work always.
+// moho64ui_ShaderWork() -> { compiled, fromCache, compiling } | nil (the menu's line, the tests).
+void SetShaderWorkProbe(void (*probe)(int* compiled, int* fromCache, int* compiling));
 // moho64ui_Events([n]) -> { {seconds, kind, text}, ... } (tests); remaster_events [n] is the console's way
 // (keymap.cpp).
 void RegisterEventBindings(lua_State* L);

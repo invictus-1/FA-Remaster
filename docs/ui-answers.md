@@ -67,6 +67,28 @@ so the frames go on while a beat hangs and the frames' watch sees nothing.
 - First real finding of the dump, in the suite's own runs: the device-lost jobs stand over 20 s on the main loop with
   the frames in `dxcompiler.dll` (the shaders compiled again after the device is lost, on the main thread).
 
+**2c. A first start at work is not a freeze (ui/REQUESTS.md 58; the renderer's [firststart], render 250bd4fd).** The
+dump's first finding was the first start with no compiled shaders stored: a minute and more without a frame while
+DXC compiles inside the first frames (the renderer measured 192 s to a moving picture against 23 s with a filled
+cache, and 18.5 s with the compiled shaders shipped).
+- `--shipped-shaders <folder>`, else the folder `shaders_shipped` beside the program when there is one, is handed to
+  `WorldPicture::SetShippedShaderCache` once at the start (read where the player's own cache has none, never
+  written); the log says which, or "none". The folder's content is the renderer's (his "shader tour"); an installer
+  lays it down.
+- The freeze watch asks `WorldPicture::ShaderWork` (through `ui::SetShaderWorkProbe`, so that the program without the
+  world's picture needs nothing of it): while shaders are being compiled its lines end "; shaders are being compiled:
+  14 since the frame began, 1 at work" and NO dump is written; a dump comes at a later look that finds nothing compiled
+  since the look before. A run ended by the player inside such a time is reported at the next start as "The game was
+  closed while it was compiling shaders the last time it ran (a first start after an install or a new build can stand
+  for minutes, once)", not as a freeze; the report is written all the same.
+- The main menu shows "Preparing graphics (once after an install or a new build): N shaders so far" above "Report a
+  Problem" while the count moves (`moho64ui_ShaderWork()`), and takes it away four seconds after the last one.
+  NOT BUILT: the same line on a game's loading screen (the picture stands inside the long frames, so a line there
+  would only show between them; the renderer's next step moves that work behind the loading screen).
+- Tests: `suite/freeze_dump.sh`, case "shaders" (`MOHO64UI_SHADER_WORK_TEST=1`: the watch's lines, no dump, the next
+  start's sentence, the menu's line): 48 file checks + 8. With real shaders it is the renderer's proof and Chris's
+  next start after a new build.
+
 **Found on the way, fixed 38b07a69:** the report's masking read a dump's stacks only; a copy of the environment block
 made with the wide registers leaves the block's last pieces in a thread's SAVED REGISTERS, which a dump holds too
 (the report's own test caught "WINDIR=C:" there at a landing). The masking reads the registers now.

@@ -835,7 +835,11 @@ std::string AutoCrashReport(lua_State* L, std::string* why) {
         // (the freeze watch saw it stand: said as what it was)
         identity = "not closed " + stamp(before);
         what = "a freeze";
-        sentence = "The game froze the last time it ran and was closed.";
+        // (it stood in shaders being compiled when it was ended, the watch's own word: said as that, the report all the same)
+        const size_t lastStall = text.rfind("moho64ui: no frame for ");
+        const bool compiling = lastStall != std::string::npos && text.find("; shaders are being compiled: ", lastStall) != std::string::npos;
+        sentence = compiling ? "The game was closed while it was compiling shaders the last time it ran (a first start after an install or a new build can stand for minutes, once)."
+                             : "The game froze the last time it ran and was closed.";
       } else if (!faulted) {
         identity = "not closed " + stamp(before);
         what = "a run that did not close in order";
