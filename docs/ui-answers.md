@@ -58,7 +58,9 @@ so the frames go on while a beat hangs and the frames' watch sees nothing.
   its frames); when the beat comes back after all: `the simulation's beat 1234 finished after all, 12.3 s after it
   began`. Where both watches see the same standing (the beats on the main loop's thread, or the main loop waiting for
   the beat) ONE dump is written. A report's README shows these lines at a glance.
-- The engine adds a word for the beat's stage (`moho::g_beatStage`) in a later batch; it goes into the line then.
+- The line names the stage of the beat that began last (the engine's `moho::g_beatStage`, `core/trace.h`, his batch
+  187): `... has not finished for 10 s (frames go on; the stage that began last: weapons)`; while a game loads, his
+  "load: ..." names.
 - Tests (`suite/freeze_dump.sh`, cases "beat" and "ahead", `MOHO64UI_BEAT_FREEZE_TEST=<beat>:<seconds>`): a game
   whose beat 30 sleeps 14 s, and the same with the first beats on the loading thread (the beat's thread is another
   one, named and first; the main loop's after it); the beat's own frame looked up is `ui::BeatScope`, the test's

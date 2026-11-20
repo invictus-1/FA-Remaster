@@ -58,7 +58,7 @@ struct FramePartScope {                // a part for the length of a scope; the 
 // THE BEATS' PART OF THE WATCH (2026-11-20, asked by the engine: "a beat that does not come back is the freeze I most
 // want a dump of", an endless loop in a task or a script). Whoever runs a beat of a simulation says so for the length
 // of the call; when one beat has run for twice the watch's time (10 s) the keeper writes
-//   moho64ui: freeze: the simulation's beat 1234 has not finished for 10 s (frames go on)
+//   moho64ui: freeze: the simulation's beat 1234 has not finished for 10 s (frames go on; the stage that began last: weapons)
 // and has the freeze's dump written (user/freeze_dump.h), the beat's thread named and first; when the beat comes
 // back after all: "moho64ui: the simulation's beat 1234 finished after 12.3 s". In a window the beats run on a thread
 // of their own, so the frames go on while a beat hangs and the frames' watch sees nothing; without a window both see
