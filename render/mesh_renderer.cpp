@@ -1325,7 +1325,14 @@ float4 PS(VOut i, bool front : SV_IsFrontFace) : SV_Target {
     }
     // ([ghostfaint] Chris, 2026-11-06: a queued building's ghost "should be more transparent": 0.22 + 0.5 at the edge before)
     // ([ghostfaint] its outline softer: a bright rim on thin edges shimmered from frame to frame, Chris's re-test 2026-11-06)
-    return float4(tint * (sunOn * 0.9 + edge * 0.35), saturate(0.12 + 0.15 * edge));
+    // ([ghostnight] its own light, of one strength: faint by day as asked, but in the night's picture, which is shown many
+    // times brighter, a queued building's ghost stood as a solid bright green block (measured 2026-11-20: by day 1.3
+    // times the grass beside it in the picture, at dusk 4.3, at night 6.5). It is a mark of the interface's, not a thing
+    // that glows, so it is to look the same at every hour: the WHOLE of what the night's picture is brightened by is
+    // taken off it (falling.w is that to the power 0.65, the dimming glowing things get: World's lights.night), where
+    // the veil above keeps a share of its glow)
+    float ghostNight = look > 0.5 && falling.w > 0 ? pow(falling.w, 1 / 0.65) : 1;
+    return float4(tint * ((sunOn * 0.9 + edge * 0.35) * ghostNight), saturate(0.12 + 0.15 * edge));
   }
   // [machinery] a belt's strip of the texture slid along its axis, wrapped within it
   [branch] if (i.belt >= 0) {
