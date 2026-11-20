@@ -5,7 +5,7 @@
 -- (RemasterAutoCrash): it does not ask the host itself before that is read, as the option is the menu's to honour.
 -- The lab's runner (suite/report.sh) makes the crashes and reads the zips.
 -- `-- /expect report` (a crash), `-- /expect unclean` (a run that did not close in order), `-- /expect froze`
--- (a run that stood without a frame when it was ended), `-- /expect none`
+-- (a run that stood without a frame when it was ended), `-- /expect compiling` (it stood in shaders being compiled), `-- /expect none`
 -- (nothing to report) or `-- /expect off` (the option is off).
 --   moho64ui --own ui/data --init <init.lua> --prefs <a copy> --stage frontend --no-world --lua ui/tests/auto_report.lua
 --            --frames 300 --log <folder>/moho64ui_<date>.log -- /expect report
@@ -35,7 +35,20 @@ ForkThread(function()
     local said = has(notices, "The game stopped with a fault the last time it ran. A report for it is ")
     local saidNotClosed = has(notices, "The game did not close properly the last time it ran (a freeze, a forced close, or the PC going off). A report for it is ")
     local saidFroze = has(notices, "The game froze the last time it ran and was closed. A report for it is ")
-    if expect == "froze" then
+    local saidCompiling = has(notices, "The game was closed while it was compiling shaders the last time it ran (a first start after an install or a new build can stand for minutes, once). A report for it is ")
+    if expect == "compiling" then
+        -- the run before stood in shaders being compiled when it was ended (the watch's own word in its log)
+        check("the menu asked the host", did.asked, true)
+        check("and a report's zip was written", type(did.file) == 'string' and string.sub(did.file, -4) == ".zip", true)
+        check("the notice line says the game was closed while it compiled shaders", saidCompiling, true)
+        check("and not that it froze", saidFroze, false)
+        -- (and the menu's own line for shaders at work: this run's watch is told a compile is at work, MOHO64UI_SHADER_WORK_TEST)
+        local work = moho64ui_ShaderWork()
+        check("the host says a compile is at work", work and work.compiling, 1)
+        WaitSeconds(3)
+        check("the menu's line says graphics are being prepared", main.RemasterMenuShaders.text, "Preparing graphics (once after an install or a new build): 0 shaders so far")
+        check("and its control is up", main.RemasterMenuShaders.line and not IsDestroyed(main.RemasterMenuShaders.line) and not main.RemasterMenuShaders.line:IsHidden(), true)
+    elseif expect == "froze" then
         -- the run before stood without a frame when it was ended (the freeze watch's lines in its log)
         check("the menu asked the host", did.asked, true)
         check("and a report's zip was written", type(did.file) == 'string' and string.find(did.file, "remaster_report_", 1, true) ~= nil and string.sub(did.file, -4) == ".zip", true)

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include "core/log.h"
@@ -159,6 +160,21 @@ void WatchBeats() {
   DumpFreeze(now - at / 1e9);
 }
 
+// What the shader compiler has done and whether it is at work now (events.h: the shaders' part). False: no way to ask.
+std::atomic<void (*)(int*, int*, int*)> g_shaderProbe{nullptr};
+bool ShaderWork(int* compiled, int* fromCache, int* compiling) {
+  *compiled = *fromCache = *compiling = 0;
+  static const bool test = [] {
+    const char* v = std::getenv("MOHO64UI_SHADER_WORK_TEST");
+    return v && v[0] == '1';
+  }();
+  if (test) return *compiling = 1, true;
+  auto probe = g_shaderProbe.load();
+  if (!probe) return false;
+  probe(compiled, fromCache, compiling);
+  return true;
+}
+
 // One look of the watch (the keeper's thread only).
 void WatchFrames() {
   static const double limit = FreezeSeconds();
@@ -166,6 +182,8 @@ void WatchFrames() {
   static double nextSay = 0;
   static int said = 0;
   static bool dumped = false;  // (this time without frames has its dump)
+  static int shadersBefore = 0;  // (shaders compiled when frames last went by)
+  static int shadersAtLook = 0;  // (and at the watch's last line of this standing)
   const long long at = g_frameAt.load();
   const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
   if (stalledAt != 0 && at != stalledAt) {  // (it went on: the next frame began, or the loop was left)
@@ -179,19 +197,33 @@ void WatchFrames() {
   if (at == 0) return;
   const double gap = now - at / 1e9;
   const char* part = g_framePart.load();
+  int compiled = 0, fromCache = 0, compiling = 0;
+  const bool asked = ShaderWork(&compiled, &fromCache, &compiling);
+  if (gap < 0.5) shadersBefore = compiled;
+  // ("; shaders are being compiled: ..." when the compiler worked since `since`, for a line's end; "" otherwise)
+  auto shaders = [&](int since) -> std::string {
+    if (!asked || (compiling == 0 && compiled == since)) return "";
+    return "; shaders are being compiled: " + std::to_string(compiled - shadersBefore) + " since the frame began, " + std::to_string(compiling) + " at work";
+  };
   if (stalledAt == 0 && gap >= limit) {
     stalledAt = at, nextSay = limit * 2, dumped = false;
+    const std::string work = shaders(shadersBefore);
+    shadersAtLook = compiled;
     if (++said <= kStallsSaid) {
-      Logf(LogLevel::Info, "moho64ui: no frame for %.0f s, since second %.1f of the run (the main loop is in: %s)", limit, at / 1e9, part ? part : "?");
+      Logf(LogLevel::Info, "moho64ui: no frame for %.0f s, since second %.1f of the run (the main loop is in: %s)%s", limit, at / 1e9, part ? part : "?", work.c_str());
       LogFlush();
     }
   } else if (stalledAt != 0 && gap >= nextSay) {
+    const std::string work = shaders(shadersAtLook);
+    shadersAtLook = compiled;
     if (said <= kStallsSaid) {
-      Logf(LogLevel::Info, "moho64ui: still no frame after %.0f s (the main loop is in: %s)", gap, part ? part : "?");
+      Logf(LogLevel::Info, "moho64ui: still no frame after %.0f s (the main loop is in: %s)%s", gap, part ? part : "?", work.c_str());
       LogFlush();
     }
     nextSay *= 2;
-    if (!dumped) dumped = true, DumpFreeze(gap);  // (at twice the watch's time: 10 s)
+    // (at twice the watch's time, 10 s; while shaders are being compiled the program works: no dump, and one at a
+    // later look that finds nothing compiled since the look before)
+    if (!dumped && work.empty()) dumped = true, DumpFreeze(gap);
   }
 }
 }  // namespace
@@ -280,6 +312,23 @@ bool& EventsFromKey() {
   return fromKey;
 }
 
-void RegisterEventBindings(lua_State* L) { SetGlobal(L, "moho64ui_Events", l_Events); }
+void SetShaderWorkProbe(void (*probe)(int*, int*, int*)) { g_shaderProbe.store(probe); }
+
+namespace {
+int l_ShaderWork(lua_State* L) {
+  int compiled = 0, fromCache = 0, compiling = 0;
+  if (!ShaderWork(&compiled, &fromCache, &compiling)) return lua_pushnil(L), 1;
+  lua_newtable(L);
+  lua_pushstring(L, "compiled"), lua_pushnumber(L, compiled), lua_settable(L, -3);
+  lua_pushstring(L, "fromCache"), lua_pushnumber(L, fromCache), lua_settable(L, -3);
+  lua_pushstring(L, "compiling"), lua_pushnumber(L, compiling), lua_settable(L, -3);
+  return 1;
+}
+}  // namespace
+
+void RegisterEventBindings(lua_State* L) {
+  SetGlobal(L, "moho64ui_Events", l_Events);
+  SetGlobal(L, "moho64ui_ShaderWork", l_ShaderWork);
+}
 
 }  // namespace moho::ui

@@ -65,6 +65,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `SECOND_CAPTURE` | test | head 1's picture as the second window shows it, saved (`<file.png>`) | tests/dualhead.lua's runs |
 | `SECOND_HEAD` | test | `1`: the second head counts as shown | suite (the screens jobs) |
 | `SECOND_WINDOW` | test | `WxH`: a framed second window on the first screen (as `--second-window`) | - |
+| `SHADER_WORK_TEST` | test | `1`: the freeze watch is told a shader compile is at work always (the shaders' part of the watch, `user/events.h`: its lines say so and no dump is written) | freeze_dump (its case "shaders") |
 | `SHOW_ONLY_DURING_BEATS` | old way | frames during a beat only show the picture: no interface, input or camera | - |
 | `SOUND` | old way | `waveout` / `waveout-small`: the old wave output (the small buffers crackle: to compare) | - |
 | `SOUND_CAPTURE` | test | what the sound device plays, written to a file | - |
