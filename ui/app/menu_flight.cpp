@@ -15,6 +15,7 @@
 #include "sim/session.h"
 #include "sim/sim.h"
 #include "sim/sim_view.h"
+#include "user/events.h"
 #include "sim/terrain.h"
 #include "sound/sound_system.h"
 
@@ -295,7 +296,7 @@ void MenuFlight::StartBeat() {
   beatToFinish_ = true;
   worker_->Start([this] {
     const auto t0 = std::chrono::steady_clock::now();
-    sim_->Tick();
+    { const moho::ui::BeatScope watched(sim_->tick() + 1); sim_->Tick(); }  // (the freeze watch: user/events.h)
     if (onBeat) onBeat(*sim_);
     beatSeconds_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   });

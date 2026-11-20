@@ -21,6 +21,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `BACKDROP_AT` | test | where along its path the front end's background camera starts (a number) | - |
 | `BACKDROP_HOLD` | test | that camera stands still (pictures that can be compared) | - |
 | `BEATS_HERE` | old way | a window's game runs its beats on the window's thread, not on a thread of their own | - (the measurements of October) |
+| `BEAT_FREEZE_TEST` | test | `<beat>:<seconds>`: that beat of the simulation sleeps that long before it runs, for the beats' part of the freeze watch (`user/events.h`: "freeze: the simulation's beat N has not finished for 10 s", the dump) | freeze_dump (its case "beat") |
 | `BEAT_LOG` | look | each beat's times, our maxSP, and each wait of the interface on a running beat with the function that waited | measuring scripts |
 | `BINDING_PROFILE` | look | every engine function the scripts call is timed (calls and time) | - |
 | `CARD_IMITATION` | test | `<MB>`: every picture of the session imitates a smaller card (the renderer's `SetCardImitation(true, MB)`: no ray tracing, that much card memory; 8192 a GTX 1080's kind) | memory_strip.sh (suite job memory_strip) |

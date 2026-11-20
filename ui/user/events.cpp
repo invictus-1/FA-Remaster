@@ -90,6 +90,10 @@ std::thread g_keeper;
 std::atomic<long long> g_frameAt{0};
 std::atomic<const char*> g_framePart{"?"};
 std::atomic<unsigned long> g_frameThread{0};  // (the main loop's thread, for the freeze's dump: user/freeze_dump.h)
+// (the beats' part: the running beat's beginning in nanoseconds since g_start, 0 while none runs; its number; its thread)
+std::atomic<long long> g_beatAt{0};
+std::atomic<long long> g_beatNumber{0};
+std::atomic<unsigned long> g_beatThread{0};
 constexpr int kStallsSaid = 20;
 constexpr int kFreezeDumps = 3;  // (a run's freeze dumps at most: each is written over the one before)
 
@@ -97,20 +101,30 @@ constexpr int kFreezeDumps = 3;  // (a run's freeze dumps at most: each is writt
 // second run of this program writes it from outside, and its frames come into the log (the keeper's thread only).
 void DumpFreeze(double gap) {
   static int dumps = 0;
+  static double lastAt = -1e9;
   if (FreezeDumpFile().empty() || dumps >= kFreezeDumps) return;
   if (const char* off = std::getenv("MOHO64UI_FREEZE_DUMP"); off && off[0] == '0') return;
+  // (the frames' watch and the beats' watch see the same standing within a moment of each other where the beats run
+  // on the main loop's thread, or the main loop waits for the beat: one dump for it)
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
+  if (now - lastAt < 5.0) return;
+  lastAt = now;
   ++dumps;
+  // (a beat that runs for five seconds already is named in the dump, its thread first)
+  const long long beatAt = g_beatAt.load();
+  const unsigned long beatThread = beatAt != 0 && now - beatAt / 1e9 >= 5.0 ? g_beatThread.load() : 0;
   std::string why;
   std::vector<std::string> lines;
   unsigned long long bytes = 0;
   const auto began = std::chrono::steady_clock::now();
-  const bool written = WriteFreezeDump(g_frameThread.load(), &why, &lines, &bytes);
+  const bool written = WriteFreezeDump(g_frameThread.load(), beatThread, &why, &lines, &bytes);
   const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
   if (!written) {
     Logf(LogLevel::Warning, "moho64ui: freeze: no dump of the standing program (%s)", why.c_str());
   } else {
     Logf(LogLevel::Info, "moho64ui: freeze: dump written to %s (%llu bytes, in %.1f s, after %.0f s without a frame; the frames below are places in the image, a crash's kind)",
          FreezeDumpFile().c_str(), bytes, took, gap);
+    (void)gap;
     for (const std::string& line : lines) Logf(LogLevel::Info, "moho64ui: freeze: %s", line.c_str());
   }
   LogFlush();
@@ -120,6 +134,29 @@ double FreezeSeconds() {
   const char* v = std::getenv("MOHO64UI_FREEZE_SECONDS");
   const double s = v ? std::atof(v) : 0;
   return s >= 0.5 ? s : 5.0;
+}
+
+// One look of the beats' part of the watch (the keeper's thread only).
+void WatchBeats() {
+  static const double limit = FreezeSeconds() * 2;
+  static long long saidAt = 0;      // (the beat that was said to stand: its beginning; 0: none)
+  static long long saidNumber = 0;
+  static int said = 0;
+  const long long at = g_beatAt.load();
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
+  if (saidAt != 0 && at != saidAt) {  // (it came back)
+    Logf(LogLevel::Info, "moho64ui: the simulation's beat %lld finished after all, %.1f s after it began", saidNumber, now - saidAt / 1e9);
+    LogFlush();
+    saidAt = 0;
+  }
+  if (at == 0 || saidAt != 0 || now - at / 1e9 < limit || said >= kStallsSaid) return;
+  saidAt = at, saidNumber = g_beatNumber.load(), ++said;
+  const long long frameAt = g_frameAt.load();
+  const bool framesGo = frameAt != 0 && now - frameAt / 1e9 < 1.0;
+  Logf(LogLevel::Warning, "moho64ui: freeze: the simulation's beat %lld has not finished for %.0f s (%s)", saidNumber, now - at / 1e9,
+       framesGo ? "frames go on" : "no frames either");
+  LogFlush();
+  DumpFreeze(now - at / 1e9);
 }
 
 // One look of the watch (the keeper's thread only).
@@ -180,6 +217,26 @@ void NoteFrame() {
   }
 }
 
+BeatScope::BeatScope(long long beat) {
+  const long long at = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();
+  g_beatNumber.store(beat, std::memory_order_relaxed);
+  g_beatThread.store(ThisThreadNumber(), std::memory_order_relaxed);
+  g_beatAt.store(at > 0 ? at : 1);
+  // (MOHO64UI_BEAT_FREEZE_TEST=<beat>:<seconds>: that beat sleeps so long before it runs, for the watch's test)
+  struct Test {
+    long long beat = -1;
+    double seconds = 0;
+    Test() {
+      if (const char* v = std::getenv("MOHO64UI_BEAT_FREEZE_TEST"))
+        if (const char* colon = std::strchr(v, ':')) beat = std::atoll(v), seconds = std::atof(colon + 1);
+    }
+  };
+  static const Test test;
+  if (test.beat >= 0 && beat == test.beat) std::this_thread::sleep_for(std::chrono::duration<double>(test.seconds));
+}
+
+BeatScope::~BeatScope() { g_beatAt.store(0); }
+
 void NoteFramePart(const char* part) { g_framePart.store(part); }
 const char* FramePart() { return g_framePart.load(); }
 void EndFrames() { g_frameAt.store(0); }
@@ -190,6 +247,7 @@ void StartLogKeeper() {
     int ticks = 0;
     while (g_keeping.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      WatchBeats();  // (first: where both see the same standing, the line that names the beat comes before the dump)
       WatchFrames();
       if (++ticks >= 10) ticks = 0, LogFlush();
     }

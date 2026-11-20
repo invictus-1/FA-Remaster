@@ -573,7 +573,9 @@ std::string Glance(const std::string& log, const std::string& part, bool running
     else if (begins(line, "info: moho64ui: event ") && kindOf(line) == "console") keepLast(commands, line.substr(16), 5);
     else if (begins(line, "info: moho64ui: event ")) keepLast(events, line.substr(16), 20);
     else if (begins(line, "info: moho64ui: no frame for ") || begins(line, "info: moho64ui: still no frame after ") ||
-             begins(line, "info: moho64ui: frames again") || begins(line, "info: moho64ui: the main loop went on"))
+             begins(line, "info: moho64ui: frames again") || begins(line, "info: moho64ui: the main loop went on") ||
+             begins(line, "warning: moho64ui: freeze: the simulation's beat ") || begins(line, "info: moho64ui: the simulation's beat ") ||
+             begins(line, "info: moho64ui: freeze: dump written "))
       keepLast(stalls, line.substr(16), 8);
     else if (begins(line, "error: ") || begins(line, "warning: ")) keepLast(bad, line, 10);
     else if (line.find("moho64ui: long frame ") != std::string::npos || line.find("moho64ui: a long frame: ") != std::string::npos)
