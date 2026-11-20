@@ -162,6 +162,11 @@ void SetPosition(EffectEvent& ev, const Entity* e, int bone) {
   ev.position[0] = p.x;
   ev.position[1] = p.y;
   ev.position[2] = p.z;
+  ev.hasOrientation = true;
+  ev.orientation[0] = q.x;
+  ev.orientation[1] = q.y;
+  ev.orientation[2] = q.z;
+  ev.orientation[3] = q.w;
 }
 void SetPosition2(EffectEvent& ev, const Entity* e, int bone) {  // a beam's other end
   Vec3 p;

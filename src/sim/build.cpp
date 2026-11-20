@@ -626,6 +626,17 @@ bool InBuildRange(const Unit* builder, const BlueprintInfo& targetBp, const Vec3
 }
 
 bool CanMove(const Unit* u) { return u->motion.bp && u->motion.bp->mobile() && !u->immobile; }
+// Mobile by its blueprint, whatever the script's SetImmobile says: what the original's engineer tasks ask before
+// they start their walk, where they ask at all. Read 2026-11-20: CUnitMobileBuildTask's state 0 asks IUnit::IsMobile
+// (vt+0x30 = 0x6a4a10: the unit has a motion) at 0x5f74ec..0x5f74f8 and nothing of the Immobile state; CUnitRepairTask's
+// state 0 asks only its own no-move byte (+0x98, 0x5f95f3) before the range, PrepareMove 0x62b780 (0x5f97aa) and
+// NewMoveTask 0x6190a0 (0x5f9829); CUnitCaptureTask's state 0 asks the gap against 5 (0x604606) and the AIR byte
+// (0x604650), then 0x6046fe / 0x60477d; CUnitSacrificeTask goes from the target's place (0x5fb739) to 0x5fb790 /
+// 0x5fb809 with no question of the unit; CUnitReclaimTask the same (batch 182). So a unit that is Immobile for now (an
+// engineer falling from its transport) is given the walk and starts it when it may move; ours skipped the walk
+// (CanMove) and the task then failed on the range. (A unit not mobile by its blueprint gets no walk: ours has no
+// navigator for one.)
+bool MobileByBp(const Unit* u) { return u->motion.bp && u->motion.bp->mobile(); }
 
 void MoveToward(Sim& sim, Unit* u, const Vec3& goal) {
   std::vector<Vec3> path;
@@ -1487,7 +1498,7 @@ int TickMobileBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         t.subFrom = sim.tick() + 1;
         return kTaskRunning;
       }
-      if (CanMove(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
+      if (MobileByBp(u)) {  // 0x5f7440 state 0: move when it does not fit, is out of range or stands on the site
         // the site rect (task+0xd8) is the blueprint's SKIRT rect at the site (GetSkirtRect 0x51ec50: the
         // footprint only where SkirtSize is 0), and the builder's own rect is its skirt rect too (0x6a7600)
         const FRect sr = SkirtRect(*t.bp, GetUnitBpData(L, *t.bp), t.site.x, t.site.z);
@@ -2662,7 +2673,8 @@ int TickRepair(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
           }
         }
         t.state = 1;
-        if (!t.noMove && CanMove(u) && (!UnitFitsAt(sim, u, u->position.x, u->position.z) || RepairGap(u, R) > mbd)) {
+        if (!t.noMove && MobileByBp(u) &&
+            (!UnitFitsAt(sim, u, u->position.x, u->position.z) || RepairGap(u, R) > mbd)) {
           float excl[4];
           SkirtRect(R, excl);
           excl[0] -= 1.0f;
@@ -2953,7 +2965,7 @@ int CaptureStep(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   switch (t.state) {
     case 0:  // within 5: stay; otherwise a move to a free spot beside the target
       t.state = 1;
-      if (gap > 5.0f && CanMove(u)) {
+      if (gap > 5.0f && MobileByBp(u)) {
         // 0x604663..0x6046be: the rect kept free is the target's skirt (Unit::GetSkirtRect 0x6a7600) only when the
         // task's CAiTarget holds a unit (vt+0x10); a target held through the army's recon blip (a player's order:
         // the interface only knows blips) gives the empty rect, so the spot may lie beside the target's footprint.
@@ -3158,7 +3170,7 @@ int TickSacrifice(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
         }
       }
       t.state = 1;
-      if (CanMove(u)) {
+      if (MobileByBp(u)) {
         const NamedFootprint& uf = Fp(u);
         float excl[4] = {0, 0, 0, 0};
         SkirtRect(G, excl);
