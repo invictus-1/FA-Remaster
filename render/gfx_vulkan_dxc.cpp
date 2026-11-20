@@ -369,18 +369,16 @@ void WriteWhole(const std::string& path, const void* data, size_t size) {
 // (`missing`: DXC itself is not there).
 bool RunWith(DxcCompiler3* compiler, const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out,
              std::string* error);
-bool Run(const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out, std::string* error, bool* missing) {
-  DxcCompiler3* compiler = Compiler(error);
-  if (!compiler) {
-    if (missing) *missing = true;
-    return false;
-  }
-  ++gCompiling;  // [firststart]
+// [firststart] RunWith, counted as a compile running now (ShaderCounts::compiling) and told where asked: every compile
+// goes through here, those made ahead at the opening on several threads too (Prewarm).
+// (checks) MOHO64_LOG_SHADER_COMPILES: a line for each shader compiled (its entry, its kind, how long, the source's size
+// and hash), to learn what a start still compiles although compiled shaders were shipped with the build
+bool RunCounted(DxcCompiler3* compiler, const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out,
+                std::string* error) {
+  ++gCompiling;
   const auto began = std::chrono::steady_clock::now();
   const bool made = RunWith(compiler, source, args, out, error);
   --gCompiling;
-  // [firststart] (checks) MOHO64_LOG_SHADER_COMPILES: a line for each shader compiled (its entry, its kind, how long, the
-  // source's size and hash), to learn what a start still compiles although compiled shaders were shipped with the build
   static const bool tell = getenv("MOHO64_LOG_SHADER_COMPILES") != nullptr;
   if (tell) {
     std::string entry, kind;
@@ -393,6 +391,15 @@ bool Run(const std::string& source, const std::vector<std::wstring>& args, std::
     printf("render: shader compiled: %s (%s) in %.0f ms, source of %zu bytes, hash %016llx%s\n", entry.c_str(), kind.c_str(), ms, source.size(),
            static_cast<unsigned long long>(std::hash<std::string>{}(source)), made ? "" : " (FAILED)");
   }
+  return made;
+}
+bool Run(const std::string& source, const std::vector<std::wstring>& args, std::vector<uint8_t>* out, std::string* error, bool* missing) {
+  DxcCompiler3* compiler = Compiler(error);
+  if (!compiler) {
+    if (missing) *missing = true;
+    return false;
+  }
+  const bool made = RunCounted(compiler, source, args, out, error);  // ([firststart])
   ++(made ? gCompiled : gFailed);  // [cardlog]
   return made;
 }
@@ -505,7 +512,7 @@ void Prewarm(const std::vector<ShaderJob>& jobs, const std::string& cacheDir, bo
     for (size_t i; (i = next.fetch_add(1)) < work.size();) {
       const Work& w = work[i];
       out.clear();
-      if (!RunWith(compiler, w.job->source, w.args, &out, &error)) continue;  // (compiled again by its pipeline: counted there)
+      if (!RunCounted(compiler, w.job->source, w.args, &out, &error)) continue;  // (compiled again by its pipeline: counted there)
       ++gCompiled;  // [cardlog]
       if (spirv) WriteWhole(w.file, out.data(), out.size() / 4 * 4);
       else if (IsSigned(out)) WriteWhole(w.file, out.data(), out.size());
