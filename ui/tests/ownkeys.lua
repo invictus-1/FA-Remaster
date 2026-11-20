@@ -22,6 +22,7 @@ local own = {
     { key = 'Ctrl-Alt-F12', action = 'remaster_photo' },
     { key = 'Alt-P', action = 'remaster_photo_mode' },
     { key = 'Ctrl-Shift-P', action = 'remaster_palette' },
+    { key = 'Ctrl-F1', action = 'remaster_report_ask' },
     { key = 'Ctrl-T', action = 'remaster_timeline' },
     { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },
     { key = 'Y', action = 'remaster_radial_ping' },

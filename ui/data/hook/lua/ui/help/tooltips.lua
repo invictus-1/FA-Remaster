@@ -1,3 +1,8 @@
+-- FA Remastered: "Report a Problem" in the game's menu (ui/data/hook/lua/ui/game/tabs.lua; Chris 2026-11-20)
+Tooltips['esc_remaster_report'] = {
+    title = 'Report a Problem',
+    description = 'Asks for one line of what happened and writes a report file onto your Desktop: the log, the game so far, your settings and a description of your PC. Nothing is sent anywhere.',
+}
 -- FA Remastered: the Options dialog's Tab Defaults button (ui/data/hook/lua/ui/dialogs/options.lua; Chris 2026-11-13)
 Tooltips['options_tab_defaults'] = {
     title = 'Tab Defaults',

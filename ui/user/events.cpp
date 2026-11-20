@@ -13,6 +13,7 @@
 #include "core/log.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
+#include "user/freeze_dump.h"
 
 namespace moho::ui {
 namespace {
@@ -88,7 +89,32 @@ std::thread g_keeper;
 // (the freeze watch, events.h) the last frame's beginning in nanoseconds since g_start, 0 while no main loop runs
 std::atomic<long long> g_frameAt{0};
 std::atomic<const char*> g_framePart{"?"};
+std::atomic<unsigned long> g_frameThread{0};  // (the main loop's thread, for the freeze's dump: user/freeze_dump.h)
 constexpr int kStallsSaid = 20;
+constexpr int kFreezeDumps = 3;  // (a run's freeze dumps at most: each is written over the one before)
+
+// The dump of the standing program (user/freeze_dump.h), once the main loop has stood for twice the watch's time: a
+// second run of this program writes it from outside, and its frames come into the log (the keeper's thread only).
+void DumpFreeze(double gap) {
+  static int dumps = 0;
+  if (FreezeDumpFile().empty() || dumps >= kFreezeDumps) return;
+  if (const char* off = std::getenv("MOHO64UI_FREEZE_DUMP"); off && off[0] == '0') return;
+  ++dumps;
+  std::string why;
+  std::vector<std::string> lines;
+  unsigned long long bytes = 0;
+  const auto began = std::chrono::steady_clock::now();
+  const bool written = WriteFreezeDump(g_frameThread.load(), &why, &lines, &bytes);
+  const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+  if (!written) {
+    Logf(LogLevel::Warning, "moho64ui: freeze: no dump of the standing program (%s)", why.c_str());
+  } else {
+    Logf(LogLevel::Info, "moho64ui: freeze: dump written to %s (%llu bytes, in %.1f s, after %.0f s without a frame; the frames below are places in the image, a crash's kind)",
+         FreezeDumpFile().c_str(), bytes, took, gap);
+    for (const std::string& line : lines) Logf(LogLevel::Info, "moho64ui: freeze: %s", line.c_str());
+  }
+  LogFlush();
+}
 
 double FreezeSeconds() {
   const char* v = std::getenv("MOHO64UI_FREEZE_SECONDS");
@@ -102,6 +128,7 @@ void WatchFrames() {
   static long long stalledAt = 0;  // (the frame the main loop stands in, once that was said; 0: none)
   static double nextSay = 0;
   static int said = 0;
+  static bool dumped = false;  // (this time without frames has its dump)
   const long long at = g_frameAt.load();
   const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
   if (stalledAt != 0 && at != stalledAt) {  // (it went on: the next frame began, or the loop was left)
@@ -116,7 +143,7 @@ void WatchFrames() {
   const double gap = now - at / 1e9;
   const char* part = g_framePart.load();
   if (stalledAt == 0 && gap >= limit) {
-    stalledAt = at, nextSay = limit * 2;
+    stalledAt = at, nextSay = limit * 2, dumped = false;
     if (++said <= kStallsSaid) {
       Logf(LogLevel::Info, "moho64ui: no frame for %.0f s, since second %.1f of the run (the main loop is in: %s)", limit, at / 1e9, part ? part : "?");
       LogFlush();
@@ -127,6 +154,7 @@ void WatchFrames() {
       LogFlush();
     }
     nextSay *= 2;
+    if (!dumped) dumped = true, DumpFreeze(gap);  // (at twice the watch's time: 10 s)
   }
 }
 }  // namespace
@@ -134,6 +162,7 @@ void WatchFrames() {
 void NoteFrame() {
   const long long at = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();
   g_frameAt.store(at > 0 ? at : 1);
+  if (g_frameThread.load(std::memory_order_relaxed) == 0) g_frameThread.store(ThisThreadNumber());
   // (MOHO64UI_FREEZE_TEST=<frame>:<seconds>: the main loop sleeps at that frame, for the watch's test)
   struct Test {
     int frame = -1;

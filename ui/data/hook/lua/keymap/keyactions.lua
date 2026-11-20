@@ -27,6 +27,12 @@ keyActions['remaster_palette'] = {
     action = 'remaster_palette',
     category = 'ui',
 }
+-- "Report a Problem", the report by hand (/moho64ui/lua/report.lua; Chris, 2026-11-20): one line of what happened,
+-- then the report's zip onto the Desktop. In the front end and in a game.
+keyActions['remaster_report_ask'] = {
+    action = 'UI_Lua import("/moho64ui/lua/report.lua").Ask()',
+    category = 'ui',
+}
 -- The replay timeline, shown or hidden (ui/user/replay_timeline.cpp, its bar /moho64ui/lua/timeline.lua): the
 -- replay's length, its moments and jumps to any point; only while a replay plays.
 keyActions['remaster_timeline'] = {

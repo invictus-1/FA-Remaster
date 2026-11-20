@@ -33,6 +33,7 @@ before a change, to measure the change again (no suite job runs it unless the la
 | `FLIGHT_HAZE` | test | the menu flight's share of the haze (0..2; 0.4 unless given), for pictures side by side | - |
 | `FLIGHT_REOPEN` | old way | the menu's map is always opened again after a game, never kept | - (the measure's other half) |
 | `FORCE_MAXSP` | test | a local game's maxSP as if it had been measured | suite (spmaxsp) |
+| `FREEZE_DUMP` | old way | `0`: no dump of the program when its main loop has stood for ten seconds, only the freeze watch's lines as before 2026-11-20 (`user/freeze_dump.h`; the dump's own run, `moho64ui --dump-of <process> <thread>`, is given its file in `MOHO64UI_DUMP_FILE`, which the program sets itself and no one else should) | freeze_dump (its case "off") |
 | `FREEZE_SECONDS` | test | `<s>`: the freeze watch's time without a frame before the log says so (unset: 5; `user/events.h`) | none (kept for a test) |
 | `FREEZE_TEST` | test | `<frame>:<seconds>`: the main loop sleeps that long at that frame, for the freeze watch's test (the log's "no frame for 5 s" lines, a freeze's report) | report |
 | `FULL_REDRAW` | old way | the whole interface is drawn every frame, not only where it changed | - |

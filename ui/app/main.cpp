@@ -57,6 +57,7 @@
 #include "sound/sound_system.h"
 #include "user/bindings.h"
 #include "user/events.h"
+#include "user/freeze_dump.h"
 #include "user/keymap.h"
 #include "user/notices.h"
 #include "user/retest.h"
@@ -244,6 +245,10 @@ void AnswerSystemFolders(Options& o) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // The small mode of the freeze's dump (user/freeze_dump.h): this program started by a run of itself that stands, to
+  // write that run's dump from outside. Before anything else: it opens no log, reads no option, makes nothing.
+  if (argc == 4 && std::strcmp(argv[1], "--dump-of") == 0)
+    return ui::DumpOfMain(std::strtoul(argv[2], nullptr, 10), std::strtoul(argv[3], nullptr, 10));
   Options o;
   g_opts = &o;
   // What is wrong with an option's value, the first one found; said once all options are read (the log may be named
@@ -397,6 +402,9 @@ int main(int argc, char** argv) {
   // (a fault also leaves a small memory dump beside the log, and with a window one message that names both files for
   // the player to send: the engine's CrashSetReport. A run without a window shows no message: a test must not wait.)
   if (!logName.empty()) CrashSetReport(logName.c_str(), dumpName.c_str(), windowed);
+  // (and a freeze leaves one too, written from outside by a second run of this program once the main loop has stood
+  // for ten seconds: <the crash dump's name without .dmp>.freeze.dmp, user/freeze_dump.h)
+  if (dumpName.size() > 4) ui::SetFreezeDumpFile(dumpName.substr(0, dumpName.size() - 4) + ".freeze.dmp");
 #ifdef MOHO64UI_WORLD_PICTURE
   // (at a crash, after the crash's own lines and before the dump: a line the renderer was half-way through printing
   // on the crashing thread goes into the log too; the engine's batch 168 for the renderer's request 79)

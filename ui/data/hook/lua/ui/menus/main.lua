@@ -91,6 +91,40 @@ function RemasterAutoCrashReport()
     return file, why
 end
 
+-- "Report a Problem" on the main menu (Chris's debugger, 2026-11-20: the report by hand, /moho64ui/lua/report.lua): a
+-- small line in the menu's bottom left corner, above the bar of the legal text, with the key it is bound to. Grey,
+-- white under the mouse; a click asks for one line of what happened and writes the report's zip onto the Desktop.
+-- What is shown, for the tests: link (the control, false when none), text (as shown).
+RemasterMenuReport = { link = false, text = "" }
+
+function RemasterShowReportLink(parent)
+    if not rawget(_G, 'moho64ui_Report') or not parent then return false end
+    if RemasterMenuReport.link and not IsDestroyed(RemasterMenuReport.link) then RemasterMenuReport.link:Destroy() end
+    local Report = import("/moho64ui/lua/report.lua")
+    local ok, key = pcall(Report.KeyText)
+    local text = "Report a Problem" .. ((ok and key) and ("  (" .. key .. ")") or "")
+    local link = RemasterMenuUIUtil.CreateText(parent, text, 14, RemasterMenuUIUtil.bodyFont)
+    link:SetColor('FFA0A8B0')
+    link:SetDropShadow(true)
+    link.Depth:Set(function() return parent.Depth() + 400 end)
+    RemasterMenuLayout.AtLeftIn(link, parent, 20)
+    RemasterMenuLayout.AtBottomIn(link, parent, 44)
+    link:EnableHitTest()
+    link.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            self:SetColor('FFFFFFFF')
+        elseif event.Type == 'MouseExit' then
+            self:SetColor('FFA0A8B0')
+        elseif event.Type == 'ButtonPress' then
+            Report.Ask()
+            return true
+        end
+        return false
+    end
+    RemasterMenuReport.link, RemasterMenuReport.text = link, text
+    return true
+end
+
 -- The menu's own screen group is a local of the game's CreateUI: it is caught as CreateUI makes it, so the box is
 -- the menu's child and goes with it.
 local RemasterMenuCreateUI = CreateUI
@@ -109,6 +143,9 @@ function CreateUI(...)
     -- (another main menu script may name its group otherwise: the box is then the head's own child)
     local shown, why = pcall(RemasterShowNotices, group or GetFrame(0))
     if not shown then WARN("FA Remastered: the menu's notice line: " .. tostring(why)) end
+    -- (only as the menu's own child, so that it goes with the menu)
+    local linked, whyNoLink = pcall(RemasterShowReportLink, group)
+    if not linked then WARN("FA Remastered: the menu's Report a Problem line: " .. tostring(whyNoLink)) end
     -- (a notice that comes while the menu is up, as when the graphics device was lost and the background could not
     -- be restored, is shown within two seconds too, with those already there)
     if group then

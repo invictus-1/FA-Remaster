@@ -10,11 +10,14 @@
 //                      among the kept logs when the run before did not crash): the environment's values, the user's and the PC's names,
 //                      the user's name in paths masked with '_' (same length:
 //                      the dump stays readable; Chris, 2026-11-15, on what a dump carries: "Yes, masked")
+//   dump_freeze_before.dmp, dump_freeze_now.dmp  the dump of the run before, or of this run, as it stood without a frame
+//                      (user/freeze_dump.h, 2026-11-20), masked the same way
 //   LastGame.SCFAReplay  the game being played or last played, as far as it is written (its own format, untouched)
 //   game.prefs         the preferences file
 // In the text files the user's own folder (C:\Users\<name>, in any case and with either slash) is written
 // "<user folder>": a report may be passed around. Nothing is sent anywhere: the file stays on the PC until the player
-// passes it on. moho64ui_Report([note]) -> the zip's file | nil, why (the same, for a script; the test uses it).
+// passes it on. moho64ui_Report([note [, onDesktop]]) -> the zip's file | nil, why (the same, for a script; with
+// onDesktop the zip goes onto the Desktop: the report by hand, /moho64ui/lua/report.lua, 2026-11-20).
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -634,6 +637,32 @@ void AddCrashedRun(ZipWriter& zip, const std::filesystem::path& log, const std::
   Logf(LogLevel::Info, "moho64ui: the report: a crash dump put in (%s), masked in %zu + %zu place(s)", which.c_str(), environment, masked);
 }
 
+// The freeze dump beside a log (user/freeze_dump.h: written by a second run of the program when the main loop had
+// stood for ten seconds), "" when there is none: named as the crash's with ".freeze.dmp" for ".dmp".
+std::filesystem::path FreezeDumpOf(const std::filesystem::path& log) {
+  std::error_code ec;
+  std::string stem = TextOf(log);
+  const std::string whole = stem + ".freeze.dmp";
+  if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".log") == 0) stem.resize(stem.size() - 4);
+  for (const std::string& candidate : {whole, stem + ".freeze.dmp"})
+    if (std::filesystem::is_regular_file(PathOf(candidate), ec)) return PathOf(candidate);
+  return {};
+}
+
+// A freeze's dump into the zip as <part>, masked as a crash's; the README's lines
+void AddFreezeDump(ZipWriter& zip, const std::filesystem::path& dumpFile, const std::string& part, const std::string& which, std::string* inside) {
+  std::string dump;
+  if (dumpFile.empty() || !ReadWhole(dumpFile, &dump)) return;
+  const size_t environment = MaskEnvironment(dump);
+  const size_t masked = MaskUserNameInPaths(dump);
+  zip.Add(part, dump);
+  *inside += "- " + part + ": the dump of " + which + " as it STOOD WITHOUT A FRAME (written from outside by a second run of\n"
+             "  the program after ten seconds without one; the file is of " + FileTime(dumpFile) + "): every thread's stack and\n"
+             "  registers, as a crash dump, masked the same way (" + std::to_string(environment) + " + " + std::to_string(masked) +
+             " place(s)). That run's log names each thread's\n  frames under 'freeze: dump written' (places in the image, a crash's kind).\n";
+  Logf(LogLevel::Info, "moho64ui: the report: a freeze dump put in (%s), masked in %zu + %zu place(s)", which.c_str(), environment, masked);
+}
+
 std::string Stamp(const char* form) {
   std::time_t now = std::time(nullptr);
   std::tm t = {};
@@ -859,7 +888,10 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
   std::string inside;
   std::string glance, glanceNow;  // (the logs at a glance, for the README: the earlier runs' first, this run's last)
   std::string text;
+  const char* const freezeDumped = "moho64ui: freeze: dump written to ";  // (events.cpp's line)
+  bool dumpedNow = false;
   if (!log.empty() && ReadWhole(PathOf(log), &text)) {
+    dumpedNow = text.find(freezeDumped) != std::string::npos;
     text = ShortenUserFolder(text);
     glanceNow = Glance(text, "log_now.txt", true);
     zip.Add("log_now.txt", text);
@@ -889,13 +921,17 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
       else
         AddCrashedRun(zip, crashed, DumpOf(crashed), "log_crash.txt", "dump_crash.dmp", "the last run that crashed", &inside, true, &glance);
     }
+    // A freeze's dump: the run before's (it stood and was ended), and this run's own (it stood and went on).
+    if (!before.empty()) AddFreezeDump(zip, FreezeDumpOf(before), "dump_freeze_before.dmp", "the run before this one", &inside);
+    if (dumpedNow) AddFreezeDump(zip, FreezeDumpOf(PathOf(log)), "dump_freeze_now.dmp", "this run", &inside);
   } else if (!log.empty()) {
     // A log named by a launcher: the run before is <name>_prev<.ext>, a crash's dump <log>.dmp beside this log.
     const std::filesystem::path now = PathOf(log);
     const std::filesystem::path before = now.parent_path() / PathOf(Name(now.stem()) + "_prev" + Name(now.extension()));
-    bool beforeCrashed = false;
+    bool beforeCrashed = false, dumpedBefore = false;
     if (ReadWhole(before, &text)) {
       beforeCrashed = text.find("error: crash: ") != std::string::npos;
+      dumpedBefore = text.find(freezeDumped) != std::string::npos;
       text = ShortenUserFolder(text);
       glance += Glance(text, "log_before.txt");
       zip.Add("log_before.txt", text);
@@ -913,6 +949,10 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
         AddCrashedRun(zip, before, dump, "log_crash.txt", "dump_crash.dmp",
                       "an earlier run that crashed (the dump's file is of " + when + "; that run's log is no longer kept)", &inside, false, &glance);
     }
+    // A freeze's dump lies beside this log under one name, written over at each freeze: this run's when this run's
+    // log says it wrote one, else the run before's when that log says so (an older one is no run's in the zip: left).
+    if (dumpedNow) AddFreezeDump(zip, FreezeDumpOf(now), "dump_freeze_now.dmp", "this run", &inside);
+    else if (dumpedBefore) AddFreezeDump(zip, FreezeDumpOf(now), "dump_freeze_before.dmp", "the run before this one", &inside);
   }
   const std::string replay = cfg.currentReplay ? cfg.currentReplay() : std::string();
   if (!replay.empty() && ReadWhole(PathOf(replay), &text)) {
@@ -928,7 +968,8 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
   }
   std::string readme = std::string("FA Remastered: a report (") +
                        (!byItself.empty() ? "written by itself at the start after " + byItself + ": the option Crash Reports, Options > Interface"
-                                          : std::string("the console's remaster_report")) +
+                                          : into.empty() ? std::string("the console's remaster_report")
+                                                         : std::string("made by hand: Report a Problem, in the game's menu, on the main menu or by its key")) +
                        "), written " + Stamp("%Y-%m-%d %H:%M:%S") + ".\nOur build: commit " + std::string(kBuildCommit) + ".\n";
   readme += !note.empty() ? "The player's note: " + note + "\n"
             : !byItself.empty() ? std::string("The player's note: none (the console's remaster_report <a note> writes a report with one).\n")
@@ -952,10 +993,19 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
   return TextOf(file);
 }
 
+// moho64ui_Report([note [, onDesktop]]) -> the zip's file | nil, why. With `onDesktop` true the zip goes onto the
+// Desktop as the automatic reports do (the report by hand: /moho64ui/lua/report.lua, Chris 2026-11-20), into the
+// reports folder where there is no Desktop; else into the reports folder (the console's remaster_report).
 int l_Report(lua_State* L) {
   const char* note = lua_isstring(L, 1) ? lua_tostring(L, 1) : "";
   std::string why;
-  const std::string file = WriteReport(L, note ? note : "", &why);
+  std::string file;
+  if (lua_toboolean(L, 2)) {
+    std::filesystem::path desktop = DesktopFolder();
+    file = WriteReportInto(L, note ? note : "", desktop, "", &why);
+  } else {
+    file = WriteReport(L, note ? note : "", &why);
+  }
   if (file.empty()) {
     lua_pushnil(L);
     lua_pushstring(L, why.c_str());

@@ -3,6 +3,55 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
+
+Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's
+record, the preferences, a crash's dump masked).
+
+**1. "Report a Problem", a report by hand** (for what is no crash and no freeze: something looked or played wrong).
+- Three ways in: the key Ctrl-F1 (key action `remaster_report_ask`, free in FAF's three presets; it can be bound
+  elsewhere), the row "Report a Problem" in the game's menu (before the rows that leave the game, in all four kinds of
+  the menu: a game one plays, a replay, a network game, FAF's), and a line bottom left on the main menu that names the
+  key.
+- It asks one line, "what happened?" (300 characters, may stay empty; Escape, Cancel or a click beside it writes
+  nothing), then writes the report's zip ONTO THE DESKTOP (the reports folder where the system names no Desktop) and a
+  box says where. Nothing is sent anywhere.
+- The note in the zip's README is the line typed and, in a game, `[asked at game time m:ss]`: the moment the question
+  came up, not the moment of Enter, so that whoever replays the game's record knows where to look.
+- Made of FAF's own controls (its input dialog and QuickDialog); `ui/data/lua/report.lua` (Ask, Write, KeyText),
+  hooks `lua/ui/game/tabs.lua` (new) and `lua/ui/menus/main.lua`, `moho64ui_Report(note, onDesktop)`.
+- Two things read on the way: FAF's popup takes its escape handler off the stack twice when Escape closes it (once is
+  taken here), and Escape typed into a line goes to the line, not to the escape handlers (it cancels here).
+- Tests: `ui/tests/report_ask.lua` (a game: the row in the menu as built, the click, the line typed, the zip, the time
+  of the asking, the key, Escape, the game's own Escape after it, an empty line; the front end: the line, a click, a
+  report with no game) and the lab's `suite/report_ask.sh`, which reads the zips (33 + 13 + 17 checks).
+
+**2. A dump of the program when it FREEZES.** The freeze watch (18 November) said in the log THAT the main loop stood
+and in which part; now it also says WHERE.
+- When the main loop has stood for ten seconds (twice the watch's time), the log keeper's thread starts this same
+  program once more in a small mode, `moho64ui --dump-of <process> <main thread>`, which writes from OUTSIDE a small
+  memory dump of the standing run (the engine's crash dump's kind, 0x1000: every thread's stack and registers, no heap)
+  beside the log (`<log>.freeze.dmp`), and every thread's frames as places in the image. The keeper writes those
+  frames into the log: `moho64ui: freeze: thread 1234 (the main loop) frame 3 +0x72df4e` (what
+  `llvm-symbolizer --obj=moho64ui.exe --relative-address` takes, as a crash's frames).
+- From outside, because a program that stands may stand with a lock held that a dump written by itself would wait for.
+  No second program runs while the game runs: it is started at the freeze and ends when the dump is written (0.5 to
+  0.6 s measured, 60 to 65 KB for a main menu). Once a time without frames, at most three a run. The small mode dumps
+  only a run of this same program file.
+- The next start's automatic report takes the dump in as `dump_freeze_before.dmp`, a report made later in the same
+  run (the freeze passed) as `dump_freeze_now.dmp`, both masked as a crash's dump.
+- `MOHO64UI_FREEZE_DUMP=0` is the way before (the watch's lines only). Windows only; elsewhere the lines stay.
+- `ui/user/freeze_dump.h/.cpp`, the keeper's part in `ui/user/events.cpp`, the mode's entry at the top of `main`.
+  Nothing of the engine's `core/crash.cpp` is changed or copied.
+- Tests: the lab's `suite/freeze_dump.sh` (a menu that sleeps for good and is ended by force: the dump, its text, the
+  frames in the log, and the main loop's own frame looked up with the build's .pdb is `moho::ui::NoteFrame`, the
+  test's sleep; the start after it: the zip holds the dump, the same size, the user's folder nowhere; a sleep of 13 s
+  that passes and a report by hand; the switch off): 27 + 6 + 1 checks.
+
+**Found on the way, fixed 38b07a69:** the report's masking read a dump's stacks only; a copy of the environment block
+made with the wide registers leaves the block's last pieces in a thread's SAVED REGISTERS, which a dump holds too
+(the report's own test caught "WINDIR=C:" there at a landing). The masking reads the registers now.
+
 ## Chris, 2026-11-20: "Yes add the option for contrails" (the renderer's [contrailvapour], render 74a8c0c7)
 
 The row "Vapour Contrails" is in Options > Remastered > Effects & Battle, after Shell Tracers: `remaster_contrail_vapour`,

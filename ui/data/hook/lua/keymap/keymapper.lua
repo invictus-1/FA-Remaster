@@ -16,6 +16,7 @@ RemasterOwnKeys = {
     { key = 'Ctrl-Alt-F12', action = 'remaster_photo' },
     { key = 'Alt-P', action = 'remaster_photo_mode' },
     { key = 'Ctrl-Shift-P', action = 'remaster_palette' },  -- (the command palette; Chris: Ctrl-K stays Self-Destruct)
+    { key = 'Ctrl-F1', action = 'remaster_report_ask' },  -- (Report a Problem; F1 is FAF's key bindings, Ctrl-Alt-F1 its notify customiser, Ctrl-F1 free in its three presets)
     { key = 'Ctrl-T', action = 'remaster_timeline' },  -- (the replay timeline, shown or hidden; only while a replay plays)
     { key = 'Ctrl-Alt-V', action = 'remaster_follow_cam' },  -- (the follow camera; the hotbuild and alternative maps' debug key there)
     { key = 'Y', action = 'remaster_radial_ping' },  -- (the radial ping menu; Chris may pick another)
