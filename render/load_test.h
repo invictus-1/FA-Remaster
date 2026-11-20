@@ -35,6 +35,13 @@ struct LoadTestSetup {
   uint32_t seed = 0;
   bool prepareSession = false;
   bool loadDay = false;       // [session] --load-day: with --load-day-after, the day given to its warm frames (SetLoadDayAndWeather)
+  // [firststart] --shader-cache <folder>: where the picture's device keeps its compiled shaders ("": the player's own), so
+  // that the shaders the interface's way of opening a map makes (no map first, maps opened behind) can fill a folder
+  std::string shaderCache;
+  // [firststart] --fsr3, --fsr <share>: the temporal upscaler and the share drawn, as the interface's game has them on by
+  // default (their shaders are their own for every kind of surface)
+  bool temporalUpscale = false;
+  float upscale = 1;
   bool dayAfterSwap = false;  // [session] --load-day-after: --time-of-day given to <map> only after its swap (the interface's way today)
 };
 

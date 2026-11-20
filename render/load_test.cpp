@@ -47,6 +47,9 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
 
   WorldPicture picture;
   picture.SetVulkan(s.vulkan);
+  if (!s.shaderCache.empty()) picture.SetShaderCache(s.shaderCache);  // [firststart]
+  picture.SetUpscale(s.upscale);  // [firststart] (--fsr)
+  picture.SetTemporalUpscale(s.temporalUpscale);  // (--fsr3)
   picture.UseWindow(window->Handle());
   picture.SetVsync(s.vsync);
   picture.SetLoadBudget(s.budgetMs);

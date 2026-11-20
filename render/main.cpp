@@ -2575,6 +2575,9 @@ int main(int argc, char** argv) {
   // --sim: the simulation itself plays the replay, on its own thread; it starts loading at once
   if (!opt.loadTest.empty()) {  // [bgload] --load-test
     LoadTestSetup t;
+    t.shaderCache = opt.shaderCacheDir;  // [firststart]
+    t.temporalUpscale = opt.fsr3;
+    t.upscale = opt.upscale;
     t.mapA = opt.map;
     t.mapB = opt.loadTest;
     t.width = opt.width;
