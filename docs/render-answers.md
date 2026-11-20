@@ -33,6 +33,18 @@ still costs with the folder (the card's driver makes its own part of each pipeli
 `MapReady` will include it. And the player's cache folder is never cleaned (3.96 GB on one PC after six weeks of
 builds): entries no build has read for some weeks will be removed.
 
+**The folder's content, first made 2026-11-20 (render 1e890cc1):** 764 shaders for each backend: 34 MB of DXIL for
+Direct3D 12, 104 MB of SPIR-V for Vulkan. Filled by 41 runs per backend, half a minute each, with the shader cache
+pointed at the folder: the game's picture on a sea battle and a land game with all bundles on, none, no ray tracing, each
+bundle alone off and alone on, by day, night, rain, storm, snow and fog, with FSR 1, FSR 3, frame generation, autumn
+and a card without ray tracing; then the viewer's own picture on four maps. New shaders came only with the first run
+(399), snow lying (23), ray tracing off (40), FSR 3 (192), autumn (3) and the viewer's own picture (106); every other
+switch, hour and weather found all it needed. The driver's own pipeline files of the run are left out (they belong to
+one card). Checked on a scene the runs never drew (another recording, a rainy dusk, 2560x1440), an empty player cache,
+the folder shipped: 0 shaders compiled. A folder goes stale with each change of shader text: what it misses is
+compiled as before, so it is refilled for each build that goes out. `MOHO64_LOG_SHADER_COMPILES=1` prints a line for
+each shader a start still compiles (entry, kind, time, the source's size and hash).
+
 **What the ui does:** calls `SetShippedShaderCache(<the program's folder>/shaders_shipped)` once at start (its option
 `--shipped-shaders`), and lets its freeze watch read `ShaderWork`.
 
