@@ -3406,7 +3406,14 @@ bool World::WreckPosed(uint32_t id, const PlacedProp& prop, const WreckPose** po
   if (worn == wreckPoses_.end() || worn->second.bones.empty()) return false;
   *pose = &worn->second;
   if (worn->second.ownPlace) {  // (where its unit stood when it died, sized as the prop is)
-    Mat4 at = Mat4::FromTRS(worn->second.at, worn->second.turn, 1.0f);
+    // [wrecksunk] (Chris's test of 18 November: "Dead ships have a silhouette of how they look when normal") But no higher
+    // than the prop itself lies: a ship dies at the surface and its wreck is made on the sea's bed once it has sunk, so
+    // the place its unit died at is the surface - the wreck stood there whole and level, with its shadow on the sea,
+    // above the place it had sunk to. Where the prop lies lower than the unit died (by more than a quarter of a unit),
+    // the wreck is drawn at the prop's height, in its pose.
+    Vec3 where = worn->second.at;
+    if (prop.world.m[1][3] < where.y - 0.25f) where.y = prop.world.m[1][3];
+    Mat4 at = Mat4::FromTRS(where, worn->second.turn, 1.0f);
     for (int row = 0; row < 3; ++row)
       for (int k = 0; k < 3; ++k) {
         const float size = Length(Vec3{prop.world.m[0][k], prop.world.m[1][k], prop.world.m[2][k]});
