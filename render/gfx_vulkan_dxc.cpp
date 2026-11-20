@@ -100,6 +100,7 @@ std::wstring DxcBeside() {
 unsigned long gDxcLoadError = 0;
 // [cardlog] (ShaderCountsNow) shaders compiled, refused, and read back from a cache; and whether DXC is loaded
 std::atomic<int> gCompiled{0}, gFailed{0}, gFromCache{0};
+std::atomic<int> gCompiling{0};  // [firststart] (compiles running now)
 std::atomic<bool> gDxcLoaded{false};
 
 // DXC's DxcCreateInstance, the library loaded the first time it is asked for (null: not there).
@@ -294,6 +295,31 @@ std::string CacheFile(const std::string& cacheDir, const char* version, const st
   return cacheDir + "/" + name;
 }
 
+bool ReadWhole(const std::string& path, std::vector<uint8_t>* out);
+// [firststart] (gfx_vulkan_dxc.h) the shipped folder; a cached shader read from the player's cache, else from there under
+// the same name; whether one of the two has it
+std::string gShipped;
+std::string ShippedName(const std::string& cached) {
+  if (gShipped.empty() || cached.empty()) return {};
+  const size_t slash = cached.find_last_of("/\\");
+  return gShipped + "/" + (slash == std::string::npos ? cached : cached.substr(slash + 1));
+}
+bool ReadCached(const std::string& cached, std::vector<uint8_t>* out) {
+  if (ReadWhole(cached, out)) return true;
+  const std::string shipped = ShippedName(cached);
+  return !shipped.empty() && ReadWhole(shipped, out);
+}
+bool CachedThere(const std::string& cached) {
+  for (const std::string& path : {cached, ShippedName(cached)}) {
+    if (path.empty()) continue;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+      fclose(f);
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ReadWhole(const std::string& path, std::vector<uint8_t>* out) {
   FILE* f = fopen(path.c_str(), "rb");
   if (!f) return false;
@@ -346,7 +372,9 @@ bool Run(const std::string& source, const std::vector<std::wstring>& args, std::
     if (missing) *missing = true;
     return false;
   }
+  ++gCompiling;  // [firststart]
   const bool made = RunWith(compiler, source, args, out, error);
+  --gCompiling;
   ++(made ? gCompiled : gFailed);  // [cardlog]
   return made;
 }
@@ -397,7 +425,7 @@ bool CompileSpirv(const std::string& source, const char* entry, const char* stag
     std::memcpy(w.data(), bytes.data(), w.size() * 4);
     return w;
   };
-  if (!cached.empty() && ReadWhole(cached, &bytes) && Reflect(words(), out)) return ++gFromCache, true;  // ([cardlog])
+  if (!cached.empty() && ReadCached(cached, &bytes) && Reflect(words(), out)) return ++gFromCache, true;  // ([cardlog]; [firststart])
   *out = SpirvShader{};
   if (!Run(source, args, &bytes, error, nullptr)) return false;
   if (!Reflect(words(), out)) {
@@ -445,10 +473,7 @@ void Prewarm(const std::vector<ShaderJob>& jobs, const std::string& cacheDir, bo
            {}};
     w.file = CacheFile(cacheDir, spirv ? "dxc-spirv/2" : "dxc-dxil/1", j.source, w.args, spirv ? "spv" : "dxil");
     if (w.file.empty() || !seen.insert(w.file).second) continue;
-    if (FILE* f = fopen(w.file.c_str(), "rb")) {  // (kept already)
-      fclose(f);
-      continue;
-    }
+    if (CachedThere(w.file)) continue;  // (kept already, or shipped: [firststart])
     work.push_back(std::move(w));
   }
   if (work.empty()) return;
@@ -521,7 +546,7 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
                  std::string* error, bool* missing) {
   const std::vector<std::wstring> args = DxilArguments(source, entry, stage);
   const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, args, "dxil");
-  if (!cached.empty() && ReadWhole(cached, out) && IsSigned(*out)) return ++gFromCache, true;  // ([cardlog])
+  if (!cached.empty() && ReadCached(cached, out) && IsSigned(*out)) return ++gFromCache, true;  // ([cardlog]; [firststart])
   if (!Run(source, args, out, error, missing)) return false;
   if (!IsSigned(*out)) {
     if (error) *error = "DXC's shaders come out unsigned (an older DXC needs its dxil.dll beside the program)";
@@ -533,11 +558,14 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
 }
 
 // [cardlog] (gfx_vulkan_dxc.h)
+void SetShippedShaderCache(const std::string& folder) { gShipped = folder; }  // [firststart] (gfx_vulkan_dxc.h)
+
 ShaderCounts ShaderCountsNow() {
   ShaderCounts c;
   c.compiled = gCompiled.load();
   c.failed = gFailed.load();
   c.fromCache = gFromCache.load();
+  c.compiling = gCompiling.load();  // [firststart]
   return c;
 }
 
@@ -580,7 +608,7 @@ void PrewarmDxil(const std::vector<ShaderJob>& jobs, const std::string& cacheDir
 
 bool CachedDxil(const std::string& source, const char* entry, const char* stage, const std::string& cacheDir, std::vector<uint8_t>* out) {  // [snowhitch]
   const std::string cached = CacheFile(cacheDir, "dxc-dxil/1", source, DxilArguments(source, entry, stage), "dxil");
-  if (cached.empty() || !ReadWhole(cached, out) || !IsSigned(*out)) return false;
+  if (cached.empty() || !ReadCached(cached, out) || !IsSigned(*out)) return false;  // ([firststart])
   ++gFromCache;  // [cardlog]
   return true;
 }
@@ -589,7 +617,7 @@ bool CachedSpirv(const std::string& source, const char* entry, const char* stage
   const std::vector<std::wstring> args = Arguments(entry, stage, source.find("RayQuery") != std::string::npos);
   const std::string cached = CacheFile(cacheDir, "dxc-spirv/2", source, args, "spv");
   std::vector<uint8_t> bytes;
-  if (cached.empty() || !ReadWhole(cached, &bytes)) return false;
+  if (cached.empty() || !ReadCached(cached, &bytes)) return false;  // ([firststart])
   std::vector<uint32_t> words(bytes.size() / 4);
   std::memcpy(words.data(), bytes.data(), words.size() * 4);
   *out = SpirvShader{};

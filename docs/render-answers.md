@@ -4,6 +4,38 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To the ui, request 58: what a first start with an empty shader cache costs, and what is done about it (render [firststart], 2026-11-20)
+
+**Measured** (a shared PC of 32 threads; 1920x1080, the game's looks, a commander placed on the prime map): an empty
+shader cache to the 30th frame 192 s (a second run 110 s); a filled one 23 s. 411 shaders compiled by DXC in that
+start. The opening compiles 110 of them ahead on all threads in 6.9 s. The other 300 are compiled one after another
+on the frame's own thread, when a pipeline is first used: the first frame alone stood 91 s (the sky's and clouds'
+set 58 s, the ground 9 s, plants 9 s, tracks 7 s, lamps 6 s), the second 7 s; each variant of the modern water costs
+2.4 to 4.5 s. A PC of 12 threads will take longer.
+
+**What is in render now:**
+
+- `static void WorldPicture::SetShippedShaderCache(const std::string& folder)`: a folder of compiled shaders shipped
+  with the build, read where the player's own cache has none and never written. For the whole program; once, before
+  the first Open. What DXC makes (DXIL; SPIR-V for Vulkan) does not depend on the card, and a cached shader's name is
+  made of its own source and arguments, so a folder filled where the build is made is valid on every machine for
+  that build. Proof: an empty player cache with a shipped folder filled by one earlier run of the same scene: 18.5 s
+  to the 30th frame, 0 shaders compiled, 733 read from the cache. The viewer: `--shipped-shaders <folder>`; a folder
+  is filled by a run with `--shader-cache <that folder>`.
+- `static void WorldPicture::ShaderWork(int* compiled, int* fromCache, int* compiling)`: counts so far, and how many
+  compiles run at this moment on any thread. For a freeze watch: a frame held while `compiling` is not nought, or
+  while `compiled` has moved, is a first start at work and not a hang. It is not "N of M": how much is still to come
+  needs the list of what a game needs.
+
+**What follows, the renderer's:** the folder's content for a build (a tour through the presets, both backends, day,
+night, the weathers and a game's first minutes, with the shader cache pointed at the folder); then what a first start
+still costs with the folder (the card's driver makes its own part of each pipeline), made behind the loading screen:
+`MapReady` will include it. And the player's cache folder is never cleaned (3.96 GB on one PC after six weeks of
+builds): entries no build has read for some weeks will be removed.
+
+**What the ui does:** calls `SetShippedShaderCache(<the program's folder>/shaders_shipped)` once at start (its option
+`--shipped-shaders`), and lets its freeze watch read `ShaderWork`.
+
 ## To the ui (no request of yours: the engine's TryCopyPose, batch 173): wrecks keep the pose their unit died in - one line in the game's set-up, one option if Chris wants it (render [wreckpose], 2026-11-17)
 
 In the original a unit's wreck keeps the pose the unit had when it died (FAF's `Unit:CreateWreckageProp` calls

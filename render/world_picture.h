@@ -490,6 +490,17 @@ class WorldPicture {
     std::string reason;
   };
   PresetSuggestion SuggestedPreset() const;
+  // [firststart] (the interface's request 58; Chris, 2026-11-20: a first start with an empty shader cache stands for a
+  // minute and more while shaders are compiled inside the first frames) What the shader compiler has done in this program
+  // and whether it is at work NOW: `compiled` shaders compiled so far, `fromCache` read back from the cache instead,
+  // `compiling` how many compiles run at this moment. Static, cheap, from any thread, with or without a picture open:
+  // for a host's watch that must tell a frame held by a first start's compiling (the numbers move, or `compiling` is
+  // not nought) from a program that hangs. It says nothing of how much is still to come: that needs the list of what a
+  // game needs, which comes with the shaders shipped compiled (docs/render-answers.md, the answer to that request).
+  static void ShaderWork(int* compiled, int* fromCache, int* compiling);
+  // [firststart] A folder of compiled shaders shipped with the build (gfx_vulkan_dxc.h, SetShippedShaderCache): read
+  // where the player's own cache has none, never written. For the whole program; before the first Open. "": none.
+  static void SetShippedShaderCache(const std::string& folder);
   // [vram] (the interface's request 57: the Options' "graphics memory" strip; Chris, 2026-11-14) An estimate of the card's
   // memory a set of settings takes, by part, without a picture or a map, and the card's own figures now.
   // CardMemoryChoice: plain values a caller fills (the defaults: the case measured, Chris's full looks at 2560x1440 without
