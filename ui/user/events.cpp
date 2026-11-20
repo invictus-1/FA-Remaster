@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "core/log.h"
+#include "core/trace.h"
 #include "script/script_state.h"
 #include "user/bindings.h"
 #include "user/freeze_dump.h"
@@ -154,8 +155,10 @@ void WatchBeats() {
   saidAt = at, saidNumber = g_beatNumber.load(), ++said;
   const long long frameAt = g_frameAt.load();
   const bool framesGo = frameAt != 0 && now - frameAt / 1e9 < 1.0;
-  Logf(LogLevel::Warning, "moho64ui: freeze: the simulation's beat %lld has not finished for %.0f s (%s)", saidNumber, now - at / 1e9,
-       framesGo ? "frames go on" : "no frames either");
+  // (the stage of the beat that began last: the engine's word, core/trace.h g_beatStage, its batch 187; "" before any)
+  const char* stage = g_beatStage.load(std::memory_order_relaxed);
+  Logf(LogLevel::Warning, "moho64ui: freeze: the simulation's beat %lld has not finished for %.0f s (%s; the stage that began last: %s)", saidNumber,
+       now - at / 1e9, framesGo ? "frames go on" : "no frames either", stage && *stage ? stage : "none yet");
   LogFlush();
   DumpFreeze(now - at / 1e9);
 }
