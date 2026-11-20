@@ -2886,6 +2886,41 @@ Proof, yours: the estimate against the measured late-game figure for each preset
 margin. Mine: a suite job (the strip's text and bar for fixed choices; the warning and its advice with
 SetCardImitation at 4 and 8 GB; that the advice's differences are the estimate's own).
 
+### 58. The first start with an empty shader cache: what it costs on a player's PC, and behind the loading screen (2026-11-20, Chris: "Yeah ask the renderer about the first start"; not blocking)
+
+**ANSWERED BY MESSAGE THE SAME HOUR (renderer, 2026-11-20 13:4x; his written answer goes into docs/render-answers.md, "To the ui, request 58"): measured, the cause found, a plan in three parts, two calls built on his side (waiting for his regression run and the engine's merge). OPEN ON MY SIDE: wire `WorldPicture::SetShippedShaderCache` and `WorldPicture::ShaderWork` when they are on main.**
+
+Who: ui. Why: the freeze's dump of today (ui/user/freeze_dump.h, main 2e964003) tripped in my full suite only in the
+runs that start with a cache folder of their own, empty (the device-lost jobs): the main loop stood WITHOUT A FRAME for
+86.9 s (dl_game), 97.3 s (dl_fail), 91.0 s (dl_lose) and 12.0 s on the menu (dl_front), the watch's part "the
+interface's frame", the main thread's frames all in dxcompiler.dll (the PC shared with three suite programs and the
+engine's runs). A new player's first game is this case: a window that stands for a minute or more, Windows calling it
+"not responding", and if he closes it the next start says "the game froze". Chris's own PC never shows it (his cache
+is filled). It matters for the first build for other people (his brother's Ryzen 5 3600).
+
+Asked: (a) the world's shaders made before the game's screen, on the renderer's threads while the loading screen
+draws, or at install time; (b) if a compile on the frame's thread stays, a call the interface can ask so that it can
+say "Preparing graphics, first start only" and count the time as expected, not as a freeze; (c) the number for a quiet
+PC: empty cache to first frame.
+
+His answer in short (his message; the numbers are his): empty cache to the 30th frame 192 s here (a second run
+110 s), filled 23 s; 411 shaders by DXC, frame 1 alone 91 s; 110 shaders are compiled ahead on all threads in 6.9 s,
+the other 300 one after another on the frame's own thread at a pipeline's first use (the modern water's variants 2.4
+to 4.5 s each, the sky and clouds' set 58 s of frame 1, ground 9 s, plants 9 s, tracks 7 s, lamps 6 s); he expects two
+to four minutes on a Ryzen 5 3600. His plan: (1) ship the compiled shaders with the build (DXIL / SPIR-V do not depend
+on the card, the cache's key is the shader's source): `static WorldPicture::SetShippedShaderCache(folder)`, once for
+the whole program before the first Open, read where the player's cache has none, never written; proven: an empty
+player cache with a shipped folder, 18.5 s to the 30th frame, 0 compiled, 733 read; the folder's content is his
+"shader tour" (1,000 to 2,000 files for Direct3D, some tens of MB); (2) what is still made at a first start goes
+behind the loading screen: MapReady will include it; (3) `static WorldPicture::ShaderWork(int* compiled, int*
+fromCache, int* compiling)` for the freeze watch (a frame held while compiling is not nought, or while compiled moved,
+is a first start at work). Also his: a clean-up of the cache (Chris's holds 34,693 + 16,335 shaders, 3.96 GB).
+
+My answers to his two questions: the loading screen (and the menu) keeps drawing between BeginMap and MapReady (his
+share inside my frames, the warm frames, the swap at MapReady), so part 2 is his alone; the shipped folder is
+`<the folder of moho64ui.exe>/shaders_shipped`, handed to him by the call, `--shipped-shaders <folder>` for tests;
+the installer lays the same folder down when it exists.
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
