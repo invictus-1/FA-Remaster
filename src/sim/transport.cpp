@@ -1332,6 +1332,24 @@ void LandingMove(Sim& sim, Unit* t, Vec3 p, bool newTask = true) {
   if (newTask) AirSetFirstGoal(sim, t, p);
 }
 
+// A transport's new move task links command c (CUnitMoveTask ctor 0x6180e0: its listener node at the tail of the
+// command's list, 0x61827f..0x6182ac): its entry goes to the end of c.moveLinks (an older entry of the same unit is
+// of a move that has ended). Before, RetargetUnloadMoves took the transports that hold c in their queues, by id: the
+// guard of a ferrying transport (CUnitFerryTask ctor B, its route the guarded one's commands) holds no such command
+// and was never re-goaled, and the others were re-goaled by id, not in the order they linked. Seen: 4v4_setons_1 (FAF
+// 3840) 12229, the player drags the drop point of army 5's ferry: the transports 0x500151, 0x50014c (both holding
+// the Ferry) and 0x500152 (guarding) linked their landing moves at 11848, 11935 and 12010; the original's new spots
+// (911.5, 597), (904.5, 605), (904.5, 597) are theirs in that order; ours gave 0x50014c the first, 0x500151 the
+// second and left 0x500152 on its old spot.
+void LinkMoveListener(UnitCommand* c, Unit* u, const std::shared_ptr<TransportTaskData>& d) {
+  if (!c || !d) return;
+  const uint32_t ref = EntityRef(u);
+  auto& L = c->moveLinks;
+  L.erase(std::remove_if(L.begin(), L.end(), [ref](const UnitCommand::MoveLink& m) { return m.unitRef == ref; }),
+          L.end());
+  L.push_back({ref, std::weak_ptr<void>(d)});
+}
+
 enum { kLoad = 1, kCall = 2, kUnload = 3 };
 
 // --- the transport's load (CUnitLoadUnits 0x624b70 / 0x625950) ---------------------------------
@@ -1796,6 +1814,11 @@ int TickUnload(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         if (!O.isAirStaging && T->motion.bp && T->motion.bp->mobile()) {
           if (CanFly(T)) {
             LandingMove(sim, T, d.goal);
+            if (auto gc = d.goalCmd.lock()) {
+              LinkMoveListener(gc.get(), T, t.tdata);
+            } else if (!T->commands.empty()) {
+              LinkMoveListener(T->commands.front().get(), T, t.tdata);
+            }
           } else {
             TaskMoveToward(sim, T, d.goal);
           }
@@ -2108,6 +2131,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         }
         FlyTo(sim, T, d, CmdPos(sim, *c), 0);
         d.legCmd = R[d.route];  // (the leg's move task links this point: RetargetUnloadMoves)
+        LinkMoveListener(R[d.route].get(), T, t.tdata);
         ++d.route;
         return kTaskRunning;
       }
@@ -2148,6 +2172,7 @@ int TickFerry(Sim& sim, Unit* T, BuildTask& t, TransportTaskData& d) {
         }
         FlyTo(sim, T, d, CmdPos(sim, *c), 0);
         d.legCmd = R[d.route];  // (the leg's move task links this point: RetargetUnloadMoves)
+        LinkMoveListener(R[d.route].get(), T, t.tdata);
         return kTaskRunning;
       }
       case 4: {  // home: land there unless someone is waiting
@@ -3997,6 +4022,10 @@ bool RefusesLoadOrder(Sim& sim, Unit* u, const Entity* target) {
   return !LoadCaseAccepts(sim, sim.L(), u, T);
 }
 
+const BuildTask* PodWorkTask(const BuildTask* t) {
+  return t && t->tdata && t->tdata->kind == kPod ? t->tdata->work : nullptr;
+}
+
 bool TransportTaskAsleepOnMove(const BuildTask* t) {
   for (int depth = 0; t && t->tdata && depth < 8; ++depth) {
     const TransportTaskData& d = *t->tdata;
@@ -4204,45 +4233,50 @@ void RetargetUnloadMoves(Sim& sim, UnitCommand& c) {
   // while it flies in to unload there: the original's motion target is the new point's cell (178.5, 706) from 4810;
   // ours kept the old (266.5, 621). (Which command the child is given is inferred from that: the unload task's ctor
   // was not read for the ferry case.)
-  if (c.type == CommandType::Ferry) {
-    std::vector<Unit*> holders(c.units.begin(), c.units.end());
-    std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
-    for (Unit* u : holders) {
+  // The move tasks that link c, in the order they linked (UnitCommand::moveLinks; the broadcast 0x6e94a0 calls the
+  // oldest first). A copy: the walk must not see links made during it.
+  static const bool dbg = getenv("MOHO64_DEBUG_RETARGET") != nullptr;
+  const std::vector<UnitCommand::MoveLink> links = c.moveLinks;
+  const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  for (const UnitCommand::MoveLink& m : links) {
+    Unit* u = UnitRef(sim, m.unitRef);
+    auto dp = std::static_pointer_cast<TransportTaskData>(m.data.lock());
+    if (!u || !dp || !Alive(u) || !CanFly(u) || !u->motion.hasGoal) continue;
+    TransportTaskData& d = *dp;
+    const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+    if (c.type == CommandType::Ferry) {
       // The ferry task's own legs (states 1 and 3) are NewMoveTask(goal, 0, R[i], 0) (0x60ee5d..0x60ee66,
-      // 0x60f1bd..0x60f1f1, read): the move task links that route point's command, and its listener 0x618c40 gives the
-      // navigator the dragged point's cell at once (no PrepareMove: not a landing move; the stored layer). Seen: 6v6_2
-      // (FAF 3840) 6658, army 8's player drags the home Ferry point 0x0800001d of transport 0x800013 to (125.73,
-      // 414.41) while it flies back to it (state 3): the original's motion target is (126, 414) from 6659; ours kept
-      // the old cell (129, 419).
-      if (Alive(u) && u->task && u->task->tdata && u->task->tdata->kind == kFerry && !u->task->tdata->child &&
-          u->task->tdata->childMove && CanFly(u) && u->motion.hasGoal && u->task->tdata->legCmd.lock().get() == &c) {
-        const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
-        const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+      // 0x60f1bd..0x60f1f1, read): the move task links that route point's command, and its listener 0x618c40 gives
+      // the navigator the dragged point's cell at once (no PrepareMove: not a landing move; the stored layer). Seen:
+      // 6v6_2 (FAF 3840) 6658, army 8's player drags the home Ferry point 0x0800001d of transport 0x800013 to
+      // (125.73, 414.41) while it flies back to it (state 3): the original's motion target is (126, 414) from 6659;
+      // ours kept the old cell (129, 419).
+      if (d.kind == kFerry) {
+        if (d.child || !d.childMove || d.legCmd.lock().get() != &c) continue;
+        if (dbg)
+          Logf(LogLevel::Info, "retarget %u ferry %x leg unit %x to %.3f %.3f", sim.tick(), c.id, u->id, p.x, p.z);
         AirSetGoal(sim, u, p, sim.tick(), 0);
         AirTakeGoalNow(sim, u);
         continue;
       }
-      if (!Alive(u) || !u->task || !u->task->tdata || u->task->tdata->kind != kFerry || !u->task->tdata->child) continue;
-      BuildTask& ch = *u->task->tdata->child;
-      if (!ch.tdata || ch.tdata->kind != kUnload || ch.state != 3 || !ch.tdata->moving || !CanFly(u) || !u->motion.hasGoal)
-        continue;
-      if (ch.tdata->goalCmd.lock().get() != &c) continue;
-      const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
-      const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+      // A ferry's unload child (TickFerry state 2) makes the landing move with the route point it unloads at as its
+      // command (+0x80, not the queue's head), so a drag of THAT Ferry point re-goals the landing. Seen: 4v4_4 (FAF
+      // 3840) 4809, army 7's player drags the far Ferry point 0x0700001f of transport 0x700020 (queue: 0x1c by the
+      // beacon, 0x1f) while it flies in to unload there: the original's motion target is the new point's cell
+      // (178.5, 706) from 4810; ours kept the old (266.5, 621). (Which command the child is given is inferred from
+      // that: the unload task's ctor was not read for the ferry case.)
+      if (d.kind != kUnload || !d.moving || d.goalCmd.lock().get() != &c) continue;
+      if (dbg)
+        Logf(LogLevel::Info, "retarget %u ferry %x unload unit %x to %.3f %.3f", sim.tick(), c.id, u->id, p.x, p.z);
       LandingMove(sim, u, p, false);
       AirTakeGoalNow(sim, u);
+      continue;
     }
-    return;
-  }
-  if (c.type != CommandType::TransportUnloadUnits && c.type != CommandType::TransportUnloadSpecificUnits) return;
-  std::vector<Unit*> holders(c.units.begin(), c.units.end());
-  std::sort(holders.begin(), holders.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
-  for (Unit* u : holders) {
-    if (!Alive(u) || u->commands.empty() || u->commands.front().get() != &c || !u->task || !u->task->tdata) continue;
-    TransportTaskData& d = *u->task->tdata;
-    if (d.kind != kUnload || u->task->state != 3 || !d.moving || !CanFly(u) || !u->motion.hasGoal) continue;
-    const Entity* target = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
-    const Vec3 p = c.hasPos ? c.pos : (target ? target->position : u->position);
+    if (c.type != CommandType::TransportUnloadUnits && c.type != CommandType::TransportUnloadSpecificUnits) return;
+    if (u->commands.empty() || u->commands.front().get() != &c || !u->task || u->task->tdata.get() != dp.get())
+      continue;
+    if (d.kind != kUnload || u->task->state != 3 || !d.moving) continue;
+    if (dbg) Logf(LogLevel::Info, "retarget %u unload %x unit %x to %.3f %.3f", sim.tick(), c.id, u->id, p.x, p.z);
     LandingMove(sim, u, p, false);
     // (the listener's SetGoal 0x618d74 -> the air navigator's SetGoal 0x5a4c60 -> SetMotionTarget 0x5a4a90 ->
     // CUnitMotion::SetTarget 0x6b85e0, at once: the new target, MovingUp / MovingDown cleared, so the beat's record
