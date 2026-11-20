@@ -93,18 +93,30 @@ class LayerScope {
 // A Lap's stages, timed for the overlay: Next ends the open stage's time (if any) and starts the next. The stage's
 // name is also this thread's place for a crash's lines (core/crash.h CrashPlace::stage) until the next stage, and
 // the place before the Lap comes back when it goes (a Lap inside another's stage).
+// The simulation's stage as any thread may read it (the interface's freeze watch names it when a beat does not come
+// back: "the simulation's beat N has not finished ..."): the name of the Sim layer's stage that began last, a string
+// literal or "" before the first; written at every stage's start, read whenever (relaxed: a word for a log line).
+// g_crashPlace.stage is the same word for the thread itself.
+}  // namespace moho::trace
+namespace moho {
+inline std::atomic<const char*> g_beatStage{""};
+}
+namespace moho::trace {
+
 class LayerStages {
  public:
   explicit LayerStages(Layer layer) : layer_(layer), prevStage_(g_crashPlace.stage) {}
   ~LayerStages() {
     End();
     g_crashPlace.stage = prevStage_;
+    if (layer_ == Layer::Sim) g_beatStage.store(prevStage_ ? prevStage_ : "", std::memory_order_relaxed);
   }
   LayerStages(const LayerStages&) = delete;
   LayerStages& operator=(const LayerStages&) = delete;
   void Next(const char* name) {
     End();
     g_crashPlace.stage = name;
+    if (layer_ == Layer::Sim) g_beatStage.store(name, std::memory_order_relaxed);
     if (!LayersOn()) return;
     slot_ = LayerSlot(layer_, name);
     t0_ = LayerNow();

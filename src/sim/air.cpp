@@ -538,8 +538,15 @@ void UpdateSpeedThrough(Sim& sim, Unit* u) {
            !InCategory(sim, u, "EXPERIMENTAL"))
     v = true;
   else if (cur && State(u, US("AssistMoving"))) v = false;  // (state 22, 0x6aca87)
-  // 0x6aca91..0x6acac2: a formation follower (a leader link, unit+0x584, to another unit) on a move-like head: off
-  else if (cur && IsMoveLikeType(cur->type) && u->formLeader && u->formLeader != EntityRef(u)) v = false;
+  // 0x6aca91..0x6acac2: a formation follower (a leader link, unit+0x584, to another unit) on a move-like head: off.
+  // The link is a weak pointer (0x6acaa0..0x6acaad: empty, or its object at -4): it is empty once the leader's object
+  // is deleted, though UpdateInfoCache 0x6a9810 (its only writer) has not run since. Ours kept the handle. Seen: 6v6_2
+  // (FAF 3840) 11464, army 11's spy plane 0xb00094 guards army 7's engineer 0x700073 (killed 11460, gone 11463) in
+  // a guard formation that engineer led; the guard ends in the command stage and the head becomes a Move with a Move
+  // behind it: the original's speed-through is 1, ours 0 (the dead leader's handle still set).
+  else if (cur && IsMoveLikeType(cur->type) && u->formLeader && sim.FindEntity(u->formLeader) &&
+           u->formLeader != EntityRef(u))
+    v = false;
   // 0x6acac4..0x6acaef: a next order, not coordinated (IsCoordinating 0x5f24e0), and both move-like (0x552c10)
   else v = cur && next && !IsCoordinating(*next) && IsMoveLikeType(cur->type) && IsMoveLikeType(next->type);
   if (!air) {

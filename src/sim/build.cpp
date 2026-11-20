@@ -773,6 +773,22 @@ bool UnderUnitCap(const Army* a, const UnitBpData& d) {
   return !a || a->ignoreUnitCap || a->unitCost + d.capCost <= a->unitCap;
 }
 
+// Unit::CanStartBuilding 0x62d780 (read; its one caller is CFactoryBuildTask::Execute state 0, 0x5fa821, with the
+// blueprint's +0x4e8 / +0x4ec, BuildCostEnergy / BuildCostMass): the army's economy (army vt+0x24 = army+0x1f4, the
+// object ArmyProcessEconomy 0x771b50 fills: +0x18 / +0x1c the stored energy / mass, +0x20 / +0x24 the last beat's
+// income, copied from +0x8 / +0xc at 0x772012..0x772026). With both stores above 0.001 (0xdff0ac) the factory may
+// start; otherwise not when the unit costs energy and the energy income is below 0.001, nor when it costs mass and
+// the mass income is.
+bool CanStartBuilding(const Unit* u, const UnitBpData& d) {
+  if (!u || !u->army) return false;
+  const ArmyEconomy& e = u->army->econ;
+  const float c = 0.001f;
+  if (e.stored[kEnergy] > c && e.stored[kMass] > c) return true;
+  if (d.buildCostEnergy > 0.0f && c > e.incomeStat[kEnergy]) return false;
+  if (d.buildCostMass > 0.0f && c > e.incomeStat[kMass]) return false;
+  return true;
+}
+
 }  // namespace
 
 void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) { MoveTaskWalk(sim, u, goal); }
@@ -1685,6 +1701,11 @@ int TickFactoryBuild(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     case 0: {
       if (!t.bp || !UnitCanBuild(u, *t.bp)) return kTaskFailed;
       const UnitBpData& d = GetUnitBpData(L, *t.bp);
+      // 0x5fa805..0x5fa847: Unit::CanStartBuilding false -> return 1, asked again next beat (no unit, the factory stays
+      // Building). Ours had no such test. Seen: 1v1_5 (FAF 3840), army 0's commander dies at 15759 with the units its
+      // factories 0x65, 0x38 and 0xb are building; its energy is stored 0 with income 0 from 15762: the original's
+      // factories start nothing until the game ends (15869); ours made 0x6, 0xe and 0x10 at 15769.
+      if (!CanStartBuilding(u, d)) return wait(1);
       if (!UnderUnitCap(u->army, d)) {
         if (++t.tries > 10) return kTaskFailed;
         return wait(1);
