@@ -67,6 +67,76 @@ void ReadScmBones(const std::string& file, std::vector<ModelBone>* bones) {
   }
 }
 
+// [restinverse] (the engine track's reading, 2026-11-20; Chris's tests of 13 and 18 November: Total Mayhem's Totem and Rhyolite
+// drove lying on their side) The original skins a vertex with ITS FILE'S inverse rest matrix of the vertex's bone (the 16
+// floats at the bone's start, a row vector times the matrix), then the bone's pose. ReadScmBones composes the rest pose from
+// the bones' positions and rotations, and the skinning here takes that pose's inverse: the same thing in every file whose
+// two say the same, which is every stock unit's. Some mods' files do not: those two tanks are stored Z-up with an identity
+// root rotation and a root inverse of a quarter turn about x, so by the composed rest they lie as stored and by the file's
+// inverse they stand. So: where a bone's stored inverse, followed by its composed rest, is not the identity (by more than a
+// thousandth of a model unit over ten units), every vertex on that bone is moved through the two (place, normal, tangent and
+// binormal), in a copy of the file. After that the composed rest is right for it, and everything read from the vertices
+// (the bounds, the bones' boxes, the hit shape, the ray scene) stands with it. Bones that agree are not touched: a file
+// that agrees with itself is used as it is, byte for byte. Returns the file to read: `file`, or `stood` when it was made.
+const std::string& StandScm(const std::string& file, std::string* stood) {
+  if (file.size() < 48 || file.compare(0, 4, "MODL") != 0) return file;
+  int32_t h[11];
+  std::memcpy(h, file.data() + 4, sizeof h);
+  const int64_t boneOffset = h[1], total = h[10], vertexOffset = h[3], vertexCount = h[5];
+  if (boneOffset < 48 || total <= 0 || total > 256 || boneOffset + total * 108 > static_cast<int64_t>(file.size()) || vertexOffset < 0 ||
+      vertexCount <= 0 || vertexOffset + vertexCount * 68 > static_cast<int64_t>(file.size()))
+    return file;
+  std::vector<ModelBone> rest;
+  ReadScmBones(file, &rest);
+  if (rest.size() != static_cast<size_t>(total)) return file;
+  // each bone's map: a stored place times the file's inverse (into the bone's own frame), then the composed rest (out again)
+  struct Map {
+    float m[16];
+    bool off = false;
+  };
+  std::vector<Map> maps(static_cast<size_t>(total));
+  const auto into = [](const float* m, Vec3 v, bool place) {  // (a row vector times the matrix; a direction without its last row)
+    return Vec3{v.x * m[0] + v.y * m[4] + v.z * m[8] + (place ? m[12] : 0), v.x * m[1] + v.y * m[5] + v.z * m[9] + (place ? m[13] : 0),
+                v.x * m[2] + v.y * m[6] + v.z * m[10] + (place ? m[14] : 0)};
+  };
+  int off = 0;
+  float worst = 0;
+  std::string first;
+  for (int64_t i = 0; i < total; ++i) {
+    Map& map = maps[static_cast<size_t>(i)];
+    std::memcpy(map.m, file.data() + boneOffset + i * 108, sizeof map.m);
+    const ModelBone& b = rest[static_cast<size_t>(i)];
+    for (const Vec3 p : {Vec3{0, 0, 0}, Vec3{10, 0, 0}, Vec3{0, 10, 0}, Vec3{0, 0, 10}}) {
+      const Vec3 q = b.position + Rotate(b.rotation, into(map.m, p, true));
+      if (!(Length(q - p) <= 1e-3f)) map.off = true;  // (a matrix of no numbers is off too)
+      worst = std::max(worst, Length(q - p));
+    }
+    if (map.off && off++ == 0) first = b.name;
+  }
+  if (off == 0) return file;
+  *stood = file;
+  int64_t moved = 0;
+  for (int64_t i = 0; i < vertexCount; ++i) {
+    char* v = stood->data() + vertexOffset + i * 68;
+    const size_t bone = static_cast<uint8_t>(v[64]);
+    if (bone >= maps.size() || !maps[bone].off) continue;
+    const ModelBone& b = rest[bone];
+    float f[12];  // (the place, the normal, the tangent, the binormal)
+    std::memcpy(f, v, sizeof f);
+    for (int k = 0; k < 4; ++k) {
+      const Vec3 own = into(maps[bone].m, Vec3{f[k * 3], f[k * 3 + 1], f[k * 3 + 2]}, k == 0);
+      const Vec3 out = k == 0 ? b.position + Rotate(b.rotation, own) : Rotate(b.rotation, own);
+      f[k * 3] = out.x, f[k * 3 + 1] = out.y, f[k * 3 + 2] = out.z;
+    }
+    std::memcpy(v, f, sizeof f);
+    ++moved;
+  }
+  printf("render: a mesh's stored inverse rest disagrees with its bones' composed rest on %d of %d bones (the first: %s): %lld of its %lld "
+         "vertices taken through the file's inverse, as the original skins them (off by up to %.3f)\n", off, static_cast<int>(total), first.c_str(),
+         static_cast<long long>(moved), static_cast<long long>(vertexCount), worst);
+  return *stood;
+}
+
 // [machinery] A remastered factory's parts (machinery.h): its finest level's own bones that the skeleton has not (by name)
 // appended to the skeleton, their parents by name, so that every level's vertices on them keep them (LoadScm matches its
 // file's bones to the skeleton's by name; those it does not find fall to the first). Bones already there are left.
@@ -251,14 +321,19 @@ struct ScmAhead {
 namespace {
 
 // `ahead` ([spikes]): the buffers prepared into it, not made (on any thread; Build finishes them, TakeScm)
-bool LoadScm(gfx::Device* device, const std::string& file, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
+bool LoadScm(gfx::Device* device, const std::string& given, const std::vector<ModelBone>& skeleton, ModelLod* lod, Vec3* boundsMin,
              Vec3* boundsMax, std::string* error, std::vector<Model::BoneBox>* boneBoxes = nullptr,
              std::shared_ptr<const HitShape>* hitShape = nullptr, int64_t hitShapeMost = 0, bool trees = false,
-             std::vector<Vec3>* paintSpots = nullptr, ScmAhead* ahead = nullptr, float* deckHeight = nullptr) {
+             std::vector<Vec3>* paintSpots = nullptr, ScmAhead* ahead = nullptr, float* deckHeight = nullptr, bool fileInverse = true) {
   auto fail = [&](const char* what) {
     *error = what;
     return false;
   };
+  // [restinverse] (a file whose stored inverse rest and composed rest disagree: read as the original skins it. Not a
+  // remastered mesh, `fileInverse` false: those are made for this renderer, which has always gone by the composed rest,
+  // and their makers checked them so; some of them carry a stored inverse that is off on a few bones.)
+  std::string stood;
+  const std::string& file = fileInverse ? StandScm(given, &stood) : given;
   if (file.size() < 48 || file.compare(0, 4, "MODL") != 0) return fail("not an .scm file");
   int32_t h[11];
   std::memcpy(h, file.data() + 4, sizeof h);
@@ -561,7 +636,8 @@ const Model* ModelCache::DebrisChunks(const std::string& blueprintId, const std:
   ModelLod lod;
   lod.serial = NextLodSerial();
   std::string error;
-  if (m->bones.empty() || !LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes)) {
+  if (m->bones.empty() || !LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes, nullptr, 0, false, nullptr,
+                                   nullptr, nullptr, false)) {  // ([restinverse] a remastered unit's: by the composed rest)
     fprintf(stderr, "render: %s: %s\n", meshPath.c_str(), m->bones.empty() ? "no bones (one a chunk is needed)" : error.c_str());
     return nullptr;
   }
@@ -628,7 +704,8 @@ const Model* ModelCache::DebrisHull(const std::string& blueprintId, const std::s
   ModelLod lod;
   lod.serial = NextLodSerial();
   std::string error;
-  if (!LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes)) {
+  if (!LoadScm(device_, *file, m->bones, &lod, &m->boundsMin, &m->boundsMax, &error, &m->boneBoxes, nullptr, 0, false, nullptr, nullptr, nullptr,
+               false)) {  // ([restinverse] a remastered unit's: by the composed rest)
     fprintf(stderr, "render: %s: %s\n", meshPath.c_str(), error.c_str());
     return nullptr;
   }
@@ -1449,7 +1526,8 @@ void ModelCache::MeshesWork(const MeshJob& job) {
     } else {
       scm->ok = LoadScm(device_, *file, bones, &scm->lod, first ? &scm->boundsMin : nullptr, first ? &scm->boundsMax : nullptr, &scm->error,
                         first ? &scm->boneBoxes : nullptr, shape ? &scm->hitShape : nullptr, most, sways, spots ? &scm->paintSpots : nullptr,
-                        scm.get(), first && unit ? &scm->deckHeight : nullptr);
+                        scm.get(), first && unit ? &scm->deckHeight : nullptr,
+                        s.mesh.compare(0, 9, "/preview/") != 0);  // ([restinverse] not a remastered mesh)
     }
     if (scm->ok && shape && scm->hitShape) shaped = true;
     const bool stop = i == 0 && !scm->ok;  // (Build makes nothing more of a model whose finest level failed)
@@ -1907,7 +1985,8 @@ void ModelCache::Build(Model* m, const std::string& what, const std::string& bas
       there = mesh.has_value();
       loaded = mesh && LoadScm(device_, *mesh, m->bones, &lod, first ? &m->boundsMin : nullptr, first ? &m->boundsMax : nullptr, &error,
                                first ? &m->boneBoxes : nullptr, shape, most, sways, unit && first ? &m->paintSpots : nullptr, nullptr,
-                               unit && first ? &m->deckHeight : nullptr);  // ([hull sit] a unit's deck)
+                               unit && first ? &m->deckHeight : nullptr,  // ([hull sit] a unit's deck)
+                               s.mesh.compare(0, 9, "/preview/") != 0);  // ([restinverse] not a remastered mesh)
     }
     if (!loaded) {
       // a missing coarser level is common: the finer ones then stand in
