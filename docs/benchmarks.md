@@ -118,6 +118,46 @@ The benchmarks:
 - M28 logs four script errors at the start: `IsM28AIPersonality` fails on the two civilian armies, which have no AI
   personality. The errors are M28's, and M28 carries on.
 
+## Batch 188: the unit grid, the economy's sum and the combat-data walk (2026-11-20, 2e964003 against itself + B123)
+
+A helper's study of where the single-core time of a parallel-order beat goes now (16 threads; its measuring patch is
+not in main; `_scratch/engine/keep_20261120/mc3/mc3_STUDY.md`) named these three, per unit per beat whatever the
+orders are. Each is exact by construction and has a check switch (`MOHO64_UNITGRID_CHECK`, `MOHO64_ECONSUM_CHECK`,
+`MOHO64_CBWALK_CHECK`); the proofs are in batch 188's commit.
+
+Timed directly at the three spots (the study's laps on a clean 2e964003 and on 2e964003 + the batch; their
+fingerprints are unchanged by the laps), 16 threads, pairs back to back, three pairs each. ON A BUSY MACHINE (a
+gate, three helpers and the interface's suite beside it, and by a slip of the helper's a twin of every run on the
+same CPUs): the changes are large and the same in every pair, the absolute ms are too high (a quiet machine gave
+about two thirds of such figures this morning), and the whole beat counts for nothing here.
+
+| Spot, ms a beat | 50,000 units before | after | B3-16k before | after |
+|---|---|---|---|---|
+| the unit grid rebuilt (RebuildUnitGrid) | 1.62 | 0.93 | 0.40 | 0.33 |
+| the economy's sum (SumUnitEconomy; its sort gone) | 1.94 | 1.01 | 0.41 | 0.17 |
+| the combat-data walk | 0.96 | 0.008 | 0.25 | 0.001 |
+| phase D's join (new work) | 0.086 | 0.100 | 0.022 | 0.031 |
+| together | 4.61 | 2.05 | 1.08 | 0.53 |
+
+About 2.6 ms a beat less on 50,000 units and 0.55 ms on B3-16k as measured here. A whole-beat before / after pair
+of the stage tables' kind was taken too and says nothing (the same exe's beat moved by -16 to +23 % between pairs).
+OWED: a quiet-machine pair of bdf7f631 against d3655945 at the next quiet window, for the whole beat and the
+headline.
+
+What the same study found and what was done with it:
+
+- NOT TAKEN: a skip of sleeping patrol tasks in the commands stage (sound, proven with its own check; it measured
+  3.39 -> 1.84 ms of the commands stage on 50,000 units). B3-16k and the 50,000-unit battle are two armies on one
+  IssueAggressiveMove each, so 41,000 of 50,000 units sleep in a patrol-type task; in real games such turns are 2 to
+  52 a beat (the four-AI game, MP2, a 6v6 pro replay late), and the whole commands stage costs 0.2 to 0.7 ms a beat
+  there. It would have improved these tables and no game. FROM NOW ON a proposed gain is judged on a real game too
+  (B1, MP2, a late pro replay), not on B3-16k and 50k alone.
+- The largest single-core piece left is the walk over every unit's weapons after the acquire turns (4.3 ms a beat on
+  50,000 units busy, for 11 shots a beat): not skippable exactly, because scripts and shots write other units'
+  weapons within the walk.
+- Smaller candidates written up and not built: the entity pass's index vectors, phase D's shared-writes loop, the
+  army / motion order sorts, the on-path and attached-layer walks (0.4 to 0.8 ms each on 50,000 units, busy).
+
 ## The quiet-machine before / after of batches 176 to 182 (2026-11-20, main 2c538a21 against 3e7ce074)
 
 Chris's quiet window of 20 November (10:10-10:38, PC clock): no game, viewer, interface program, bake or build of any
