@@ -141,8 +141,22 @@ about two thirds of such figures this morning), and the whole beat counts for no
 
 About 2.6 ms a beat less on 50,000 units and 0.55 ms on B3-16k as measured here. A whole-beat before / after pair
 of the stage tables' kind was taken too and says nothing (the same exe's beat moved by -16 to +23 % between pairs).
-OWED: a quiet-machine pair of bdf7f631 against d3655945 at the next quiet window, for the whole beat and the
-headline.
+ON A QUIET MACHINE the same evening (2026-11-20, 19:00-19:20, the quiet window after the oracle probes; d3655945
+against bdf7f631, `timing4.sh` as every table here, three back-to-back pairs, every 16-thread pair faster; tables in
+`_scratch/engine/keep_20261120/probeprep2/quiet_20261120b`):
+
+| workload | config | before (d3655945) | after (bdf7f631) | change | pairs faster |
+|---|---|---|---|---|---|
+| B3-16k | P16 | 13.28 / 15.18 / 14.17 = 14.21 | 12.88 / 13.47 / 13.66 = 13.34 | **-6.1%** | 3 of 3 |
+| 50k | P16 | 39.99 / 42.80 / 40.59 = 41.13 | 38.66 / 40.51 / 38.63 = 39.27 | **-4.5%** | 3 of 3 |
+| B3-16k | O1 | 29.80 | 29.23 | -1.9% | 3 of 3 |
+| 50k | O1 | 81.95 | 81.02 | -1.1% | 1 of 3 |
+
+By stage at 16 threads (B3-16k / 50k): weapons -18% / -14% (the combat-data walk), the entity pass -9.5% / -4.9% (the
+economy's sum), navigators + paths -2.5% / -6.7% (the unit grid). The original's order on one thread is unchanged
+within the noise, as it should be: the three changes are pool paths. The session as a whole ran slower than the
+morning's (50k at 41 ms against 35.5 for nearly the same engine; 220 GB of files were being deleted on the same
+drive during it): once more, figures of two sessions are not set against each other.
 
 What the same study found and what was done with it:
 
