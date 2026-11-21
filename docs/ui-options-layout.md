@@ -441,3 +441,20 @@ Tests: `ui/tests/options_tabs.lua` (on at first, switched by the console as the 
 (switched off it reaches the world's own switch, also on a world made anew after the device is lost), `keys.lua` (the
 console's name among those beginning `remaster_c`), `lobby.lua` (the rows' count). What a contrail then looks like is
 the renderer's own proof.
+
+## "Shadows of Trees Outside the Map" (built 2026-11-21; the renderer's [surshadow], render ffc7877c)
+
+A toggle in the Remastered tab's section Sky & Light, after Soft Shadows (`remaster_outside_shadows`, console the same;
+ON by default; set by no preset level). The tab has 61 rows with it.
+
+On is the look since that render: the trees that stand on the land outside the map cast real shadows, as the map's
+own do (it shows only with shadows on, the modern look and the surround's detail). Off is the picture as before: no
+shadows out there. The renderer's switch is `World::surroundTreeShadows`; the interface sets it in `WorldLooks` from
+`LookSettings::outsideShadows`, so it follows a change in the middle of a game and a world made anew. His measure:
+0.12 ms of the card a frame at 2560x1440 with the thickest wood outside filling the picture, nothing otherwise; so one
+switch, no levels. An option because of Chris's rule that a new look keeps the earlier way as a choice (memory
+`supcomlab-looks-are-player-options`).
+
+Tests: `ui/tests/options_tabs.lua` (on at first, switched by the console as the row's `set` does), `device_lost.lua`
+(switched off it reaches the world's own switch, also on a world made anew), `lobby.lua` (the rows' count). What the
+shadows look like is the renderer's own proof.
