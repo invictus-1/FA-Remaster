@@ -693,6 +693,11 @@ struct LookSettings {
   // default: the look since that render), or as the remaster drew it until then: a bright trail by the tracers' rule,
   // as bright at night as by day (false). Console remaster_contrail_vapour 0|1.
   bool contrailVapour = true;
+  // Shadows of Trees Outside the Map (the renderer's World::surroundTreeShadows, render ffc7877c [surshadow],
+  // 2026-11-21): the trees that stand on the land outside the map cast real shadows (true: the look since that
+  // render; needs shadows, the modern look and the surround's detail), or none as before (false). In no preset;
+  // 0.12 ms of the card a frame at most (the renderer's measure). Console remaster_outside_shadows 0|1.
+  bool outsideShadows = true;
   // Head Lamp Colour (the renderer's request 78, Chris's test of 2026-11-13 on the redone units' head lamps: "option
   // for either or follow the color of your team color is best"; World::headLampColour): 0 White (as the units' files
   // have them: a flashlight's warm white), 1 Faction (the faction's own colour: the UEF's blue), 2 Team (the army's

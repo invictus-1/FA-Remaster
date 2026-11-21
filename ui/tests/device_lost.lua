@@ -309,7 +309,7 @@ ForkThread(function()
         local looks = moho64ui_Looks()
         local wrong = {}
         for _, k in { "originalLook", "tracers", "snowTracks", "bloom", "waterRipples", "battleEffects", "energyShields", "lampsTeamColour",
-                      "stormCells", "starryNight", "remasteredGate", "waterFxMirror", "wreckPoses", "strongWaterMirror", "contrailVapour" } do
+                      "stormCells", "starryNight", "remasteredGate", "waterFxMirror", "wreckPoses", "strongWaterMirror", "contrailVapour", "outsideShadows" } do
             if world[k] ~= looks[k] then table.insert(wrong, k .. " " .. tostring(world[k]) .. "/" .. tostring(looks[k])) end
         end
         if (world.photoLook and 1 or 0) ~= (looks.photoLook ~= 0 and 1 or 0) then table.insert(wrong, "photoLook " .. tostring(world.photoLook) .. "/" .. tostring(looks.photoLook)) end
@@ -339,6 +339,7 @@ ForkThread(function()
     ConExecute("remaster_wreck_poses 0")
     ConExecute("remaster_land_mirror 0")
     ConExecute("remaster_contrail_vapour 0")  -- (2026-11-20)
+    ConExecute("remaster_outside_shadows 0")  -- (2026-11-21)
     WaitFrames(2)
     draw()
     WaitFrames(2)
@@ -351,6 +352,7 @@ ForkThread(function()
     check("Wreck Poses and Land Mirrored in Water, switched off, reached the world's own switches",
         tostring(world0 and world0.wreckPoses) .. " " .. tostring(world0 and world0.strongWaterMirror), "false false")
     check("and Vapour Contrails, switched off, the world's own (World::ribbons.contrailVapour)", tostring(world0 and world0.contrailVapour), "false")
+    check("and Shadows of Trees Outside the Map, switched off, the world's own (World::surroundTreeShadows)", tostring(world0 and world0.outsideShadows), "false")
     check("the simulation keeps the poses units die in (asked for with the picture, before the first beat)", state().copiedPoses, true)
     check("before: the world has the player's looks", looksOnWorld(world0 or {}), "")
     check("before: the map's edge as the game's (no frame of machinery, the land beyond)",

@@ -321,7 +321,7 @@ const std::vector<const char*>& ConsoleNames() {
         "remaster_sea_sparkle", "remaster_unit_detail", "remaster_cloud_layout", "remaster_storm_clouds", "remaster_night_sky",
         "remaster_menu_background", "remaster_menu_sound", "remaster_haze_mist", "remaster_warpin_colours",
         "remaster_water_mirror", "remaster_wrecks_once_seen", "remaster_allies_pause_marks", "remaster_head_lamp_colour",
-        "remaster_wreck_poses", "remaster_land_mirror", "remaster_contrail_vapour"};
+        "remaster_wreck_poses", "remaster_land_mirror", "remaster_contrail_vapour", "remaster_outside_shadows"};
     std::sort(all.begin(), all.end(), ConNameLess);
     return all;
   }();
@@ -418,6 +418,9 @@ int l_LooksForTests(lua_State* L) {
   lua_rawset(L, -3);
   lua_pushstring(L, "contrailVapour");
   lua_pushboolean(L, looks.contrailVapour);
+  lua_rawset(L, -3);
+  lua_pushstring(L, "outsideShadows");
+  lua_pushboolean(L, looks.outsideShadows);
   lua_rawset(L, -3);
   lua_pushstring(L, "headLampColour");  // (0 White, 1 Faction, 2 Team)
   lua_pushnumber(L, looks.headLampColour);
@@ -1582,6 +1585,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
         key == "REMASTER_STEALTH_VEIL" || key == "REMASTER_SEA_SPARKLE" || key == "REMASTER_UNIT_DETAIL" ||
         key == "REMASTER_STORM_CLOUDS" || key == "REMASTER_WRECKS_ONCE_SEEN" || key == "REMASTER_ALLIES_PAUSE_MARKS" ||
         key == "REMASTER_WRECK_POSES" || key == "REMASTER_LAND_MIRROR" || key == "REMASTER_CONTRAIL_VAPOUR" ||
+        key == "REMASTER_OUTSIDE_SHADOWS" ||
         key == "REMASTER_NIGHT_SKY") {  // (the renderer's switches: 0 off, 1 on)
       bool& on = key == "REMASTER_ATMOSPHERE"         ? looks.atmosphere
                  : key == "REMASTER_SOFT_SHADOWS"     ? looks.softShadows
@@ -1611,6 +1615,7 @@ void RunConsoleCommand(lua_State* L, const std::string& text) {
                  : key == "REMASTER_WRECK_POSES"      ? looks.wreckPoses
                  : key == "REMASTER_LAND_MIRROR"      ? looks.strongWaterMirror
                  : key == "REMASTER_CONTRAIL_VAPOUR"  ? looks.contrailVapour
+                 : key == "REMASTER_OUTSIDE_SHADOWS"  ? looks.outsideShadows
                                                       : looks.weatherEffects;
       if (!value.empty()) on = value[0] == '1' || Upper(value).rfind("ON", 0) == 0 || Upper(value).rfind("TRUE", 0) == 0;
       return;

@@ -392,6 +392,23 @@ local looks = {
         },
     },
     {
+        -- the renderer's World::surroundTreeShadows (render ffc7877c [surshadow], 2026-11-21): the trees on the land
+        -- outside the map cast real shadows; off = no shadows there, the picture as before. In no preset (Chris's
+        -- rule: a new look keeps the earlier way as a choice). It shows only with shadows on and the modern look.
+        title = "Shadows of Trees Outside the Map",
+        key = 'remaster_outside_shadows',
+        tip = "On: the trees that stand on the land outside the map cast shadows, as the ones on the map do. Off: no shadows out there, as before. Needs shadows on and the Remastered look.",
+        type = 'toggle',
+        default = 1,
+        set = Look("remaster_outside_shadows"),
+        custom = {
+            states = {
+                { text = "<LOC _Off>", key = 0 },
+                { text = "<LOC _On>", key = 1 },
+            },
+        },
+    },
+    {
         -- bounce light and reflections (the reflections from the next map loaded). Only where the graphics
         -- card can ray trace: elsewhere one state, greyed out (the dialog reads the states when it opens; the
         -- renderer says after its first picture whether the card can)
@@ -1033,7 +1050,7 @@ local remasterSections = {
     { "Display & Performance", { 'remaster_frame_rate', 'remaster_low_latency', 'remaster_graphics_api', 'remaster_upscale',
                                  'remaster_temporal_upscale', 'remaster_frame_generation' } },
     { "Sky & Light", { 'remaster_atmosphere', 'remaster_cloud_layout', 'remaster_storm_clouds', 'remaster_night_sky',
-                       'remaster_haze_mist', 'remaster_soft_shadows', 'remaster_ray_tracing' } },
+                       'remaster_haze_mist', 'remaster_soft_shadows', 'remaster_outside_shadows', 'remaster_ray_tracing' } },
     { "Ground & Weather", { 'remaster_rich_ground', 'remaster_ground_detail', 'remaster_snow_tracks',
                             'remaster_weather_effects', 'remaster_season' } },
     { "Water", { 'remaster_water_ripples', 'remaster_ocean_glitter', 'remaster_sea_sparkle', 'remaster_shore_soak',

@@ -79,6 +79,7 @@ void WorldLooks(render::World& w, const LookSettings& looks, bool photoLook) {
   w.look = looks.originalLook ? render::Look::Original : render::Look::Modern;  // (the player's "Look")
   w.ribbons.tracers = looks.tracers;
   w.ribbons.contrailVapour = looks.contrailVapour;  // (Vapour Contrails: vapour, or the earlier bright trail; render 74a8c0c7)
+  w.surroundTreeShadows = looks.outsideShadows;  // (Shadows of Trees Outside the Map; render ffc7877c)
   w.terrain.richGround = looks.richGround && looks.fidelity >= 1;  // (Fidelity Low: plain ground)
   w.ao.strength = looks.fidelity >= 1 ? 1.0f : 0.0f;
   w.shadowsOn = looks.shadows >= 1;
@@ -4314,6 +4315,7 @@ void GameSession::PushDeviceState(lua_State* L) {
     boolean("originalLook", w->look == render::Look::Original);
     boolean("tracers", w->ribbons.tracers);
     boolean("contrailVapour", w->ribbons.contrailVapour);
+    boolean("outsideShadows", w->surroundTreeShadows);
     boolean("richGround", w->terrain.richGround);
     boolean("snowTracks", w->tracks.on);
     boolean("bloom", w->bloom);

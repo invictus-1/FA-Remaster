@@ -3,6 +3,13 @@
 Answers to the other tracks' requests to the interface (CLAUDE.md: "the layer asked answers in a file of its own").
 The requests themselves are in the asking track's file; each answer names it.
 
+## renderer, 2026-11-21: [surshadow] (render ffc7877c), "if you want it as a player option"
+
+The row "Shadows of Trees Outside the Map" is in Options > Remastered > Sky & Light, after Soft Shadows:
+`remaster_outside_shadows`, On by default (the trees outside the map cast real shadows, your `World::surroundTreeShadows`),
+Off the picture as before; set in `WorldLooks`, in a running game too. In no preset; one switch, no levels (your
+0.12 ms). The detail and the tests: docs/ui-options-layout.md, "Shadows of Trees Outside the Map". Nothing asked of you.
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's
