@@ -19,6 +19,9 @@ void SteeringStop(UnitMotion& m);
 // toward `tgt` (CAiPathSpline::Generate 0x5b2ff0 for modes 0/1/2; Update 0x5b26c0, braking to a
 // stop, for modes 3/4). fresh: from the unit's position and velocity; else from the last point.
 void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode);
+// UpdatePath with the no-target vector and a mode of 0 / 1: the record cleared and the spline object made when there
+// is none (empty: no batch).
+void UpdatePathNoTarget(Unit* u);
 // Unit::IsAtPosition 0x62cc40: the footprint-origin cells of the unit and of q are equal.
 bool AtPosition(const Unit* u, const Vec3& q);
 // A box primitive against an oriented query box with BoxBox 0x474830's own arithmetic (touching counts).

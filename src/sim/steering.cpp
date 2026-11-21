@@ -1222,9 +1222,17 @@ void ProcessSplineMovement(Sim& sim, Unit* u) {
     // ACU 0xa00000 lets go of the hold at 3345 when its enhancement has ended and its BuildMobile goal is set; the
     // original's UpdatePath gets (NaN, NaN, NaN) and makes nothing (no Generate), the ACU stands until 3346; ours made a
     // batch toward the waypoint it held before the hold and stepped 0.017.
-    if (m.steerValid && (u->unitStates.Has(US("Moving")) > 0 || u->unitStates.Has(US("Patrolling")) > 0 ||
-                         u->unitStates.Has(US("Attacking")) > 0)) {
-      UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+    // But UpdatePath makes the spline object first (0x5d369a), batch or not, and the prediction 0x5d3740 follows
+    // (0x5d2e3f) either way. Ours did neither without a target: with no spline object, a SetWaypoints(0, 0) later in
+    // the beat made no brake spline and the unit coasted. Seen (oracle probe P8, 4v4_1 adrastea, FAF 3840): army 0's
+    // Salem 0x2ad (urs0201) walks ashore Immobile through 12031, rolling at 0.25 a beat with no spline; the release at
+    // 12033 leaves an empty spline, the stream's Move replaces its Attack in that beat's command stage (AbortMove ->
+    // SetWaypoints(0, 0)) and the original brakes along its hull (CAiPathSpline::Update mode 3, points handed out at
+    // 12033, 12034, 12035); ours coasted to 12036 and was 0.005 short at 12035.
+    if (u->unitStates.Has(US("Moving")) > 0 || u->unitStates.Has(US("Patrolling")) > 0 ||
+        u->unitStates.Has(US("Attacking")) > 0) {
+      if (m.steerValid) UpdatePath(sim, u, m.steerTarget, true, GetVal(m));
+      else UpdatePathNoTarget(u);
       CheckCollisions(sim, u);
     }
     m.heldLatch = false;

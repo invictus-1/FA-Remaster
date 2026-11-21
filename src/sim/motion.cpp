@@ -1501,14 +1501,38 @@ void SteeringClearWaypoints(Sim& sim, Unit* u) {
   }
 }
 
+// CAiSteeringImpl::UpdatePath 0x5d3680 makes the steering's spline object (st+0x80) before anything else when it has
+// none (0x5d3691..0x5d36c2: operator new 0x278, the CAiPathSpline ctor 0x5b2550), and only then asks for the unit
+// (dead, vt+0x28; vt+0x34; destroy queued, vt+0x2c) and, for modes other than 3 / 4, for the target (the no-target
+// vector, 0x5d36fb..0x5d370a): a call that makes no batch still leaves an empty spline object behind, and a
+// SetWaypoints(0, 0) after it (which brakes only when st+0x80 is set, 0x5d2ae3) makes a brake spline. Ours made the
+// object only with a batch.
+static void NewEmptySpline(UnitMotion& m) {
+  m.spline.clear();
+  ++m.splineVersion;
+  m.splineIdx = 0;
+  m.hasSpline = true;
+  m.splineMode = 0;
+}
+
 void UpdatePath(Sim& sim, Unit* u, const Vec3& tgt, bool fresh, int mode) {
   UnitMotion& m = u->motion;
   m.colType = 0;
   m.colUnit = 0;
   m.colTick = 0xffffffffu;
+  const bool had = m.hasSpline;
+  if (!had) NewEmptySpline(m);
   if (u->dead || u->destroyQueued || !m.bp) return;
   if (mode == 3 || mode == 4) BrakeSpline(sim, u, mode);
-  else Generate(sim, u, tgt, mode, fresh);
+  else Generate(sim, u, tgt, mode, fresh || !had);  // (a new object continues nothing, as before)
+}
+
+void UpdatePathNoTarget(Unit* u) {
+  UnitMotion& m = u->motion;
+  m.colType = 0;  // (the record reset 0x596560 at 0x5d368c)
+  m.colUnit = 0;
+  m.colTick = 0xffffffffu;
+  if (!m.hasSpline) NewEmptySpline(m);
 }
 
 bool AtPosition(const Unit* u, const Vec3& q) {
