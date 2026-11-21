@@ -1690,7 +1690,11 @@ struct FxEntities::Impl {
     if (half >= 3.1405928f) delta = WrapPi(target - now);
     else delta = center + std::clamp(WrapPi(target - center), -half, half) - now;
     now = WrapPi(now + (std::fabs(delta) > slew ? std::copysign(slew, delta) : delta));
-    return std::fabs(WrapPi(now - target)) > w.tolerance ? 1 : 0;
+    // ([fxstand] a weapon with FiringTolerance 0 - the Cybran mobile heavy artillery - never came on target here: its
+    // turret settles on the angle to the last digit but one, and "more than nought off" stayed true for ever, so it
+    // never fired in the stand (visuals, 2026-11-20). The engine's own turret reaches exact nought by the original's
+    // arithmetic, digit for digit; the stand's is its own, so it allows a hair: a hundred-thousandth of a radian)
+    return std::fabs(WrapPi(now - target)) > std::max(w.tolerance, 1e-5f) ? 1 : 0;
   }
   bool Track(Ent& e, Manip& c, const Weap& w, Vec3 goal, bool raw) {
     int bits = 0;

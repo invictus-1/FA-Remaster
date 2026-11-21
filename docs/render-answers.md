@@ -28,8 +28,10 @@ Tested with pictures of the target point, one a second, and a count of the pixel
   first shot: `--fx-repeat 25` for one shot, 45 for two.
 - The Cybran T3 artillery building fires: first impact at second 43 (3 degrees a second, then the flight), then one
   every 7.5 seconds: `--fx-repeat 60` or more.
-- The Cybran mobile T3 artillery does not fire in the stand: no impact in 45 seconds, and the log says its script has
-  the gun switched off. The stand does not yet give a unit what makes it unpack on coming to rest. Owed by the renderer.
+- The Cybran mobile T3 artillery did not fire in the stand, and does now (render [fxstand]): its weapon has
+  FiringTolerance 0, and the stand's turret never came "on target" to the last digit. The stand allows a hair now. Its
+  shells land 12, 19 and 26 seconds into a play at the default point: `--fx-repeat 20` or more. The log's line "its
+  script has it switched off" is its unpacking and passes after two seconds.
 - Not checked: why the UEF pieces fired in the short plays (their weapon numbers are the same as the Cybran ones').
 
 ## To the ui, request 58: what a first start with an empty shader cache costs, and what is done about it (render [firststart], 2026-11-20)
