@@ -105,6 +105,9 @@ class MeshRenderer {
   // `apartLod`: its level of detail is chosen as if it stood that many times as far (1: as the map's own).
   void ListGroupApart(uint32_t group) { groupsApart_.push_back(group); }
   float apartPixels = 1, apartLod = 1;
+  // [surshadow] The groups listed apart in the shadow passes too (the sun's maps, the lamps'): by the same tests, with
+  // the shadows' own smallest size. Off: in no shadow map, as before.
+  bool apartShadows = false;
   // [gpuscenery] Where the world lists a group among the others, always in the same order (World: its square's number):
   // the card draws a level's props of all groups in that order, as the processor's list has them (cardScenery).
   void SetGroupOrder(uint32_t group, uint32_t order) {

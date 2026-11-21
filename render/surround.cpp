@@ -36,7 +36,8 @@ cbuffer Surround : register(b1) {
   float4 surMap;      // x, y 1 / the map's size; z, w the map's size
   float4 surCanopy;   // rgb the far forest's canopy (as stored); w how much of it is drawn
   float4 surTrees;    // x, y from how far past the edge to how far the scenery's single trees thin out to none (y 0: none
-                      // stand); z the map's specular (as the ground's roughness counts it)
+                      // stand); z the map's specular (as the ground's roughness counts it); w [surshadow] how much of the
+                      // sun's own shadow maps the ground takes (0: none)
   float4 surSight;    // x, y from how far from the eye to how far the scenery's trees are left out (y 0: none are)
   float4 surPictures2; // x the second masks' samples per world unit, y 1 / its samples across (x 0: none); z [edgehand] 1 = the
                       // map's own pictures are read on past the edge mirrored (the earlier hand-over), 0: held at the edge's;
@@ -426,6 +427,17 @@ float4 PS(VOut i) : SV_Target {
   roughness = lerp(roughness, matter.y, matter.z);
   float creases = lerp(1, matter.x, matter.z) * lerp(0.75 + 0.25 * saturate(base.y), 1, own);
   float lit = i.lit;
+  // [surshadow] the shadows of the trees and rocks that stand on it, from the sun's own shadow maps (the scenery is
+  // drawn into them: MeshRenderer::apartShadows); `cast`: how much of them the place has (none past the last map)
+  float cast = 0;
+  [branch] if (surTrees.w > 0) {
+    float3 s;
+    int held = CascadeOf(i.world, base, 0, s);
+    [branch] if (held >= 0) {
+      cast = surTrees.w;
+      if (lit > 0.01) lit *= lerp(1, CascadeFaded(i.world, base, held, s, CascadeShadow(s, held)), cast);
+    }
+  }
 #ifdef SURROUND_SNOW
   float woodCover = 0, woodCrowns = 0;  // [snowsur] (the forest over the place, and how much of the pixel is the painted canopy's crowns)
 #endif
@@ -469,7 +481,8 @@ float4 PS(VOut i) : SV_Target {
     N = normalize(lerp(N, base, crowns));
     lit *= lerp(1, 0.5 + 0.8 * sunny, crowns);
     // (between the crowns, and under the scenery's single trees: their shade on the floor, in patches)
-    lit *= 1 - 0.42 * cover * (1 - crowns) * (0.6 + 0.8 * crown);
+    // ([surshadow] where the single trees cast their own shadows, half of this painted shade is left out)
+    lit *= 1 - 0.42 * cover * (1 - crowns) * (0.6 + 0.8 * crown) * (1 - 0.5 * single * cast);
     creases *= 1 - 0.15 * cover * (1 - crowns);
 #ifdef SURROUND_SNOW
     woodCover = cover;
@@ -1248,6 +1261,7 @@ void Surround::Draw(const View& view) {
     c.trees[0] = treesFrom;
     c.trees[1] = treesTo > treesFrom ? treesTo : 0.0f;
     c.trees[2] = tiles.specular;
+    c.trees[3] = castShadows;  // [surshadow]
     c.sight[0] = sightFrom;
     c.sight[1] = c.trees[1] > 0 && sightTo > sightFrom ? sightTo : 0.0f;
     c.pictures2[0] = masks2Texture_ ? static_cast<float>(masks2Samples_ - 1) / side : 0.0f;

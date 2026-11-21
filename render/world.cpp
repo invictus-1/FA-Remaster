@@ -2668,6 +2668,7 @@ void World::ReadSurroundScenery() {
   std::unordered_map<std::string, const Model*> kindModels;
   std::unordered_map<uint64_t, uint32_t> cellOf;  // (a square's number among surroundCells_, by its column and row)
   int inside = 0, unread = 0, trees = 0;
+  std::vector<int> treesIn;  // [surshadow] (checks: the trees in each square, MOHO64_DEBUG_SURROUND_TREES)
   float farthestTree = 0;
   for (const MapProp& p : list) {
     if (p.position.x >= 0 && p.position.x <= w && p.position.z >= 0 && p.position.z <= h) {
@@ -2706,8 +2707,20 @@ void World::ReadSurroundScenery() {
     const float tall = (model->boundsMax.y - model->boundsMin.y) * Length(Vec3{placed.world.m[0][1], placed.world.m[1][1], placed.world.m[2][1]});
     if (!model->lods.empty() && model->lods[0].sway > 0 && tall >= 1.0f) {
       ++trees;
+      if (treesIn.size() < surroundCells_.size()) treesIn.resize(surroundCells_.size(), 0);  // [surshadow] (checks)
+      ++treesIn[found->second];
       const float dx = std::max({-p.position.x, p.position.x - w, 0.0f}), dz = std::max({-p.position.z, p.position.z - h, 0.0f});
       farthestTree = std::max(farthestTree, std::sqrt(dx * dx + dz * dz));
+    }
+  }
+  if (getenv("MOHO64_DEBUG_SURROUND_TREES")) {  // [surshadow] (checks: the squares where its trees stand thickest, to aim a camera at)
+    std::vector<size_t> order(treesIn.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return treesIn[a] > treesIn[b]; });
+    for (size_t k = 0; k < std::min<size_t>(order.size(), 6); ++k) {
+      const SurroundCell& cell = surroundCells_[order[k]];
+      printf("render: the surround's trees: %d in the square round %.0f, %.0f (ground about %.1f)\n", treesIn[order[k]], (cell.lo.x + cell.hi.x) * 0.5f,
+             (cell.lo.z + cell.hi.z) * 0.5f, cell.lo.y);
     }
   }
   surround.LetGoAsCame();
@@ -5134,6 +5147,11 @@ void World::Render() {
     meshes.underSnow.wind[1] = terrain.snowWind[1];
     meshes.underSnow.tune[0] = terrain.snowTune[1];
     meshes.underSnow.tune[1] = terrain.snowTune[3];
+  }
+  {  // [surshadow] (the surround's scenery in the shadow maps, and its ground reading the sun's)
+    const bool cast = shadowed && surroundTreeShadows && look == Look::Modern && surround.On() && surround.Detailed() && !surroundCells_.empty();
+    meshes.apartShadows = cast;
+    surround.castShadows = cast ? 1.0f : 0.0f;
   }
   // the sun's shadow maps first, then the scene into its own picture, then that onto the window
   Stage("sun shadows");
