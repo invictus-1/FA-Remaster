@@ -957,7 +957,7 @@ void VolumeBlasts::Constants(const Slot& s, const View& view, float* out) const 
   put(k.lowB, s.lowB, 0);
   put(k.sizeB, s.sizeB, 0);
   put(k.lightCells, Vec3{static_cast<float>((q.nx + 1) / 2), static_cast<float>((q.ny + 1) / 2), static_cast<float>((q.nz + 1) / 2)},
-      view.constants.falling[3] > 0 ? view.constants.falling[3] : 1.0f);
+      view.constants.falling[3] > 0 ? std::pow(view.constants.falling[3], nightPower) : 1.0f);  // ([volnight])
   k.extra[0] = 0;  // (Draw sets the camera's near distance)
   k.extra[1] = 1 / std::max(view.constants.smokeShadow[2], 1e-3f);
   k.extra[3] = b.radius;

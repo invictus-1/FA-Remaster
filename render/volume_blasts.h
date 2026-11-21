@@ -124,6 +124,13 @@ class VolumeBlasts {
   float detail = 0.45f;        // how much a finer noise frays the volumes' edges and shades their folds (0: none)
   float detailSize = 1.5f;     // that noise repeats every this many of a blast's radii
   float glowUnit = 14.0f;      // how bright a file's glow of 1 is (linear light; the sun at noon lights white about 1.4)
+  // [volnight] How much of the night's brightening is taken off a volume's OWN glow: the power the night's dimming of
+  // glowing effects (Lights::night, the eye's gain to the power 0.65) is raised to. 1: that dimming as it is (before:
+  // a big death's ball stood pure white for 3.5 s at night against half a second by day, measured 2026-11-21 on the
+  // Monkeylord's and the Megalith's: the picture's gain at night is many times the day's and the dimming took off only
+  // part of it). 1 / 0.65: the whole gain, so the ball looks at night as it does by day. The light it THROWS on the
+  // world (AddLights) keeps the plain dimming: a blast at night lights the land round it more than by day, as it should.
+  float nightPower = 1.0f / 0.65f;
   float ringSpeed = 20.0f;     // how fast a nuke's ring first runs out through the clouds (world units a second; it slows)
 
   // --- numbers, of the last frame ---
