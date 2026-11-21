@@ -4,6 +4,18 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 151: three artillery pieces that do not fire in the --fx-fire stand (2026-11-20, a first answer)
+
+The stand's own line in the log says why for two of them ("render: --fx-fire: MainGun: ... - but the point is 24.0 away,
+outside its range 25..90"): the Cybran mobile T3 artillery and the T2 artillery building are aimed at a point inside
+their minimum range. The stand picks its default point from the blueprint file's MinRadius and MaxRadius, and the weapon
+as the game runs it has other numbers. Until the stand takes the running weapon's range: give the point with
+`--fx-to x,z` at a distance inside the range the log prints. The mobile piece has a second reason: its script keeps the
+gun switched off until the unit has stopped and deployed, and the stand does not send a unit the event of coming to
+rest; it cannot fire there yet. The T3 artillery building has its target and no complaint; why no shell shows within
+twelve seconds is not looked at yet. Owed by the renderer: the default point from the running weapon's range, the
+stop-and-deploy event, a look at the third.
+
 ## To the ui, request 58: what a first start with an empty shader cache costs, and what is done about it (render [firststart], 2026-11-20)
 
 **Measured** (a shared PC of 32 threads; 1920x1080, the game's looks, a commander placed on the prime map): an empty

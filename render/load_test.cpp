@@ -202,6 +202,13 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       ls.seed = s.seed;
       ls.maps = s.maps;
       live = std::make_unique<LiveSim>();
+      {  // (a second game in one run - the session's map given as both maps: the first game's simulation is gone and was
+         // let go; without this the new one's models were asked of the dead one, and the new one was never held. Found
+         // 2026-11-20, a crash in the engine's view of a simulation that no longer was; the engine read the frames)
+        std::lock_guard<std::mutex> lock(simLock);
+        simStarted = nullptr;
+        simReleased = false;
+      }
       std::string why;
       if (!live->Open(ls, &why)) {
         fprintf(stderr, "render: --load-test: the session: %s\n", why.c_str());

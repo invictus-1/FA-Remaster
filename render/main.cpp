@@ -2767,6 +2767,17 @@ int main(int argc, char** argv) {
         pw->lampShadows = true;
         pw->shadowSize = 4096;
       }
+      // [firststart] two more of the interface's states on the picture's world, for the tour that fills a folder of compiled
+      // shaders: original-look (its Remastered Preset at level 0: the player's Look "Original") and fidelity-low (its
+      // Video tab at Low: plain ground, no ambient shadowing, no shadows, no bloom), as its game sets them (WorldLooks)
+      if (World* pw = picture.world(); pw && opt.settings.find("original-look") != std::string::npos) pw->look = Look::Original;
+      if (World* pw = picture.world(); pw && opt.settings.find("fidelity-low") != std::string::npos) {
+        pw->terrain.richGround = false;
+        pw->ao.strength = 0;
+        pw->shadowsOn = pw->lampShadows = false;
+        pw->shadowSize = 1024;
+        pw->bloom = false;
+      }
       if (World* pw = picture.world(); pw && opt.settings.find("photo-look") != std::string::npos) {
         pw->photoLook.on = true;  // (photofix) the interface's Photographic Look "Natural" (the eye, today's colours)
         pw->photoLook.Named("plain");
