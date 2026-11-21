@@ -2759,6 +2759,24 @@ int l_IssueTarget(lua_State* L) {
   return 1;
 }
 
+// IssueSiloBuildTactical 0x6f3fb0 / IssueSiloBuildNuke 0x6f4110 (Lua's): exactly one argument (0x6f3fe3), the units
+// (func_GetUnitList 0x6eee40), and for each one with a silo builder (unit+0x558) that builder's add-one (vt+0x20 with
+// the kind, 0x6f404a: CAiSiloBuildImpl::SiloAddBuild) at once; no command is made or queued, nothing is returned
+// (0x6f4084). Ours issued a BuildSiloTactical order that the dispatcher took to the silo only at the unit's next turn,
+// so the missile was started a beat late. Seen: FAF 3840 pro replay 6v6_2, 11779: a script gives army 0's anti-nuke
+// xsb4302 0x6b IssueSiloBuildTactical: the original's queue stays empty and it is SiloBuildingAmmo at 11780; ours
+// held the order through 11779 and began a beat later.
+template <int Kind>
+int l_IssueSilo(lua_State* L) {
+  if (const int n = lua_gettop(L); n != 1)
+    return luaL_error(L, "%s\n  expected %d args, but got %d", Kind ? "IssueSiloBuildNuke" : "IssueSiloBuildTactical", 1,
+                      n);
+  Sim& sim = *S(L);
+  for (Unit* u : UnitsArg(L, 1))
+    if (u && HasSiloBuilder(sim, u)) SiloQueueAmmo(sim, u, Kind);
+  return 0;
+}
+
 // Issue<Type>(units [, ...]) without a position (blueprint ids, counts, script tables...)
 template <CommandType T>
 int l_IssueOther(lua_State* L) {
@@ -3466,8 +3484,8 @@ void RegisterCommandBindings(lua_State* L) {
   SetGlobal(L, "IssueBuildFactory", l_IssueBuildFactory);
   SetGlobal(L, "IssueUpgrade", l_IssueOther<CommandType::Upgrade>);
   SetGlobal(L, "IssueScript", l_IssueScript);
-  SetGlobal(L, "IssueSiloBuildTactical", l_IssueOther<CommandType::BuildSiloTactical>);
-  SetGlobal(L, "IssueSiloBuildNuke", l_IssueOther<CommandType::BuildSiloNuke>);
+  SetGlobal(L, "IssueSiloBuildTactical", l_IssueSilo<0>);
+  SetGlobal(L, "IssueSiloBuildNuke", l_IssueSilo<1>);
   SetGlobal(L, "IssueDive", l_IssueOther<CommandType::Dive>);
   SetGlobal(L, "IssueKillSelf", l_IssueOther<CommandType::KillSelf>);
   SetGlobal(L, "IssueDestroySelf", l_IssueOther<CommandType::DestroySelf>);

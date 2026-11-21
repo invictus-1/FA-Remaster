@@ -1993,7 +1993,18 @@ void MotionTick(Sim& sim, Unit* u) {
   // ballistic state included. Seen: MP1 17803, army 6's unfinished sub 0x60004c let go by the Tempest's external
   // factory with DetachAll(bone) falls (state 2, the Air layer) but stays where it was; ours dropped it onto the water
   // in the same beat.
-  if (m.ballistic && u->beingBuilt) {
+  // The test is the first thing MotionTick does and covers every unit being built, ballistic or not: 0x6b9d26
+  // IsBeingBuilt -> a unit not on the Sub layer (u+0x120 != 4, 0x6b9d2e) returns at once (0x6ba1ca); one on the Sub
+  // layer gets the
+  // vertical event 1 (m+0x80 = 1 and OnMotionVertEventChange, 0x6b9d3b..0x6b9d69) and returns. So no SnapToGround for
+  // the CUnitMotion ctor's m+0x90 while the unit is built: a land unit an engineer starts stays at the height of its
+  // site (COORDS_ToWorldPos, the centre's ground), its corners are not averaged. Ours ran the land calc and snapped it
+  // in its first beat. Seen: FAF 3840 pro replay 6v6_2, 11583: army 2's Galactic Colossus 0x200010 started at (199.5,
+  // 447.5) on a slope by a factory's flattened pad: the original's stands at the site's 63.3945 while it is built,
+  // ours at the corners' mean, 63.3926.
+  if (u->beingBuilt) {
+    if (u->layer == "Sub") SetVertEvent(sim, u, 1);
+    m.lastMove = {};
     m.noMoveTo = true;
     return;
   }
