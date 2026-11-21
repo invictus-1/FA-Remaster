@@ -299,6 +299,11 @@
 // --status-lights old|<share>  [statuslights] the game's signal lamps (a factory's red blinker while its army's store runs
 //           low, its green and yellow) as bright as before (old: 2.5 times their texture, as every particle that adds its
 //           light), or that share of it (0.4 unless given: as the original draws them; Particles::statusLights)
+// --volume-glow <unit>  [volnight] how bright a volume explosion's glow of 1 is (14 unless given: VolumeBlasts::glowUnit;
+//           sunlit white is about 1.4), for looks at a hot phase that shows fire instead of a white ball
+// --volume-night old|<power>  [volnight] the volume explosions' own glow at night: old: the plain night dimming of glowing
+//           effects (a big death's ball white for seconds at night); else the power that dimming is raised to (1 / 0.65
+//           unless given: the ball as by day; VolumeBlasts::nightPower)
 // --dust-night old|<share>  [dustnight] the ground's dust (kicked up by treads and feet, thrown up by shells) lit by the
 //           night's air light in full, as before (old), or by that share of it (0.3 unless given; Particles::dustNight)
 // --hover-exhaust old|<share>  [hoverglow] the Cybran gunships' hover exhaust as bright as before (old: 2.5 times its
@@ -1231,6 +1236,8 @@ struct Options {
   float statusLights = -1;              // --status-lights ([statuslights]; -1: its own; old: 1)
   float hoverExhaust = -1;              // --hover-exhaust ([hoverglow]; -1: its own; old: 1)
   float dustNight = -1;                 // --dust-night ([dustnight]; -1: its own; old: 1)
+  float volumeNight = -1;               // --volume-night ([volnight]; -1: its own; old: 1)
+  float volumeGlow = -1;                // --volume-glow ([volnight]; -1: its own)
   bool lampsNearFirst = true;           // --lamp-budget ([lampbudget])
   bool mergeFlux = true;                // --merge-bright ([mergeflux])
   float energyHex = -1;                 // --energy-hex s ([litshell]; -1: its own)
@@ -1908,6 +1915,8 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--energy-glint") o->energyGlint = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [shellglint]
     else if (a == "--building-glow") o->buildingGlow = std::string(v) == "old" ? -2.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [buildingglow]
     else if (a == "--status-lights") o->statusLights = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [statuslights]
+    else if (a == "--volume-glow") o->volumeGlow = std::max(0.0f, static_cast<float>(atof(v)));  // [volnight]
+    else if (a == "--volume-night") o->volumeNight = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [volnight]
     else if (a == "--dust-night") o->dustNight = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [dustnight]
     else if (a == "--hover-exhaust") o->hoverExhaust = std::string(v) == "old" ? 1.0f : std::max(0.0f, static_cast<float>(atof(v)));  // [hoverglow]
     else if (a == "--lamp-colour") o->lampsTeamColour = std::string(v) != "faction";  // [lampcolour]
@@ -3066,6 +3075,8 @@ int main(int argc, char** argv) {
   if (opt.statusLights >= 0) world.particles.statusLights = opt.statusLights;  // [statuslights]
   if (opt.hoverExhaust >= 0) world.particles.hoverExhaust = opt.hoverExhaust;  // [hoverglow]
   if (opt.dustNight >= 0) world.particles.dustNight = opt.dustNight;  // [dustnight]
+  if (opt.volumeNight >= 0) world.volumes.nightPower = opt.volumeNight;  // [volnight]
+  if (opt.volumeGlow >= 0) world.volumes.glowUnit = opt.volumeGlow;  // [volnight]
   world.lampsNearFirst = opt.lampsNearFirst;  // [lampbudget]
   world.lights.mergeFlux = opt.mergeFlux;     // [mergeflux]
   if (opt.energyShieldHealth >= 0) world.energy.healthUnknown = opt.energyShieldHealth;
