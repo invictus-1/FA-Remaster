@@ -19,8 +19,13 @@
 -- A state's cost is each of the three OVER the same with nothing selected. The budgets are three times and more what
 -- was measured on the day this was written (2026-11-12: docs/ui-benchmarks.md has the numbers, and every run's log):
 -- they catch a cost that has grown by its order, not a slow afternoon.
--- Units made by the game's cheat callback. Run it as the suite's job `scale` does (a launched game with
--- CheatsEnabled = "true", session_ai_cheats.lua, --no-world, --frames 4000).
+-- Units made by the game's cheat callback, EACH BY A CALL OF ITS OWN in a block 2.5 apart (since 2026-11-21: FAF's
+-- CheatSpawnUnit makes a call's whole count on ONE point, and until then the 5,000 tanks stood stacked there: every
+-- unit's collision search met every other one, 25 million box tests a beat, so the job measured that pile, beats of
+-- 25 s and 17 s among them, and not a big game: the engine's study of 2026-11-20). Run it as the suite's job `scale`
+-- does: a launched game with CheatsEnabled = "true" in the simulation order a new game gets
+-- (session_ai_cheats_parallel.lua: RemasterSimOrder = "parallel"; the session without it runs the original's order),
+-- --no-world, --frames 4000.
 local COUNT = 5000
 local MOVERS = 1000  -- (the tanks given the move order for the Shift state: a move order for all 5,000 is the
                      -- simulation's own minute, one beat of 50 s here on 2026-11-12, and not what this measures)
@@ -90,9 +95,20 @@ ForkThread(function()
     local spot = {p[1] + 40, p[2], p[3] + 40}
     local before = beat()
     local simBefore = simNow
-    SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = spot, bpId = "uel0201", count = COUNT, yaw = 0}})
-    WaitSeconds(8)
-    local tanks = made("uel0201", "LAND")
+    -- (a block of 71 by 71, 2.5 apart, 250 calls a frame)
+    local side = math.ceil(math.sqrt(COUNT))
+    for i = 0, COUNT - 1 do
+        local x, z = spot[1] + math.mod(i, side) * 2.5, spot[3] + math.floor(i / side) * 2.5
+        SimCallback({Func = "CheatSpawnUnit", Args = {army = GetFocusArmy(), pos = {x, spot[2], z}, bpId = "uel0201", count = 1, yaw = 0}})
+        if math.mod(i + 1, 250) == 0 then WaitFrames(1) end
+    end
+    local tanks = {}
+    for wait = 1, 30 do  -- (until they are all there, 30 s at most)
+        WaitSeconds(1)
+        tanks = made("uel0201", "LAND")
+        if table.getn(tanks) >= COUNT then break end
+    end
+    WaitSeconds(3)
     check(COUNT .. " tanks are made", table.getn(tanks), COUNT)
     if table.getn(tanks) ~= COUNT then
         LOG("TEST done: " .. failed .. " failed")
@@ -177,7 +193,8 @@ ForkThread(function()
     local movers = {}
     for i = 1, MOVERS do movers[i] = tanks[i] end
     SelectUnits(movers)
-    local at = view:Project({spot[1] + 60, spot[2], spot[3]})
+    -- (a point beside the block, not in it: a right click on one of the own tanks is a Guard order)
+    local at = view:Project({spot[1] - 20, spot[2], spot[3] - 20})
     moho64ui_MouseMove(at.x, at.y)
     WaitFrames(6)
     moho64ui_MouseButton("Right", true, at.x, at.y)
