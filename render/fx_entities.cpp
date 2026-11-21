@@ -1321,7 +1321,19 @@ struct FxEntities::Impl {
   float Surface(float x, float z) const { return water ? std::max(Ground(x, z), waterLevel) : Ground(x, z); }
   // A uniform number 0..1 from the stand's own seed, one run of them for each side (the fall's tumble).
   float Uniform(int side) {
-    uint32_t& s = sideSeeds.emplace(side, seed).first->second;
+    // ([fxstand] a side's run starts from the seed STIRRED, not from the seed itself: this generator's first numbers after
+    // a small seed are tiny (seed 1: 0.0000225), and the first normal draw made of them is four sigma out. So the FIRST
+    // shot of every play of a weapon with FiringRandomness left its barrel that far off: the Cybran T2 artillery's first
+    // shell 12 degrees low, into the ground 8 to 13 units ahead of the gun, in every film (visuals, 2026-11-21). The same
+    // stir for every side, so the two sides of a side by side still scatter alike.)
+    auto stirred = [](uint32_t v) {
+      uint64_t z = static_cast<uint64_t>(v) + 0x9e3779b97f4a7c15ull;
+      z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+      z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+      z ^= z >> 31;
+      return static_cast<uint32_t>(z % 2147483646ull) + 1;  // (1 .. 2147483646: what the generator takes)
+    };
+    uint32_t& s = sideSeeds.emplace(side, stirred(seed)).first->second;
     s = static_cast<uint32_t>((static_cast<uint64_t>(s) * 48271u) % 2147483647u);
     return static_cast<float>(s) / 2147483647.0f;
   }
