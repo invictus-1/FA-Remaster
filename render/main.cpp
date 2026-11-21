@@ -864,7 +864,9 @@
 //           (World::surroundShoreLap, 0.15; 0: all of it, the hard white ribbon as before);
 //           --surround-blockout: its ground as the first look had it, in the map's colours by height and slope
 //           (World::surroundBlockOut); --no-surround-scenery: without its scenery, its forest as one canopy up to the
-//           map's edge (World::surroundScenery); --surround-scenery-pixels <n>: how many times the smallest size on
+//           map's edge (World::surroundScenery); --no-surround-tree-shadows: [surshadow] that scenery in no shadow map and
+//           its ground not reading the sun's, as before (World::surroundTreeShadows);
+//           --surround-scenery-pixels <n>: how many times the smallest size on
 //           screen of the map's own props a piece of that scenery must have to be drawn (World::surroundSceneryPixels);
 //           --surround-scenery-lod <n>: its levels of detail chosen as if it stood n times as far (World::surroundSceneryLod);
 //           --surround-scenery-reach <from>,<to>: from how far from the eye it is thinned to how far none of it is drawn
@@ -1379,6 +1381,7 @@ struct Options {
   float surroundGrain = -1;             // --surround-grain [surgrain] (-1: the world's own)
   float surroundShoreLap = -1;          // --surround-shore-lap [surshore] (-1: the world's own)
   bool surroundScenery = true;          // --no-surround-scenery
+  bool surroundTreeShadows = true;      // --no-surround-tree-shadows ([surshadow])
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
   float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
   float surroundSceneryReach[2] = {-1, -1};  // --surround-scenery-reach (-1: World's own)
@@ -1727,6 +1730,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--surround-edge-mirror") o->surroundEdgeMirror = true;  // [edgehand]
     else if (a == "--no-surround-ahead") o->surroundAhead = false;         // [surahead]
     else if (a == "--no-surround-scenery") o->surroundScenery = false;
+    else if (a == "--no-surround-tree-shadows") o->surroundTreeShadows = false;  // [surshadow]
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -3228,6 +3232,7 @@ int main(int argc, char** argv) {
   if (opt.surroundGrain >= 0) world.surroundGrain = opt.surroundGrain;  // [surgrain]
   if (opt.surroundShoreLap >= 0) world.surroundShoreLap = opt.surroundShoreLap;  // [surshore]
   world.surroundScenery = opt.surroundScenery;
+  world.surroundTreeShadows = opt.surroundTreeShadows;  // [surshadow]
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
   if (opt.surroundEdgeBand >= 0) world.surroundEdgeBand = opt.surroundEdgeBand;  // [edgeband]

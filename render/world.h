@@ -515,6 +515,10 @@ class World {
   // False (viewer --no-surround-ahead): read the first time it is wanted, as before.
   bool surroundAhead = true;
   bool surroundScenery = true;
+  // [surshadow] The surround's scenery casts shadows: its trees and rocks are drawn into the sun's own shadow maps (and
+  // the lamps'), and the surround's ground reads the sun's maps. Off: no shadow from it, its woods' shade the painted
+  // one alone, as before (viewer --no-surround-tree-shadows). Needs the shadows on, the modern look and the detail look.
+  bool surroundTreeShadows = true;
   float surroundSceneryPixels = 2.0f;
   // (and its levels of detail chosen as if it stood this many times as far: viewer --surround-scenery-lod)
   // ([scenlod] 2 from 2026-11-11, 1.5 before: at the game's camera and low over an edge the picture is not visibly poorer,

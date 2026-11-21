@@ -2231,10 +2231,12 @@ void MeshRenderer::Draw(const View& view, gfx::Texture environment, bool shadowP
       cut(groupCulls.data(), groupEntries.data(), groupCulls.size(), smallest);
     }
   // (surround) the groups listed apart: the scene's passes only, by the processor's tests (the card has none of them)
-  if (part != 2 && !shadowPass)
+  // ([surshadow] and the shadow passes where apartShadows says so: a group a nearer map holds whole is passed over)
+  if (part != 2 && (!shadowPass || apartShadows))
     for (uint32_t g : groupsApart_) {
       Group& group = groups_[g];
       if (group.culls.empty() || !view.BoxVisible(group.lo, group.hi)) continue;
+      if (shadowPass && view.CoveredByNearer((group.lo + group.hi) * 0.5f, Length(group.hi - group.lo) * 0.5f)) continue;
       cut(group.culls.data(), group.entries.data(), group.culls.size(), smallest * std::max(apartPixels, 0.0f), std::max(apartLod, 0.1f));
     }
   cut(culls_.data(), entries_.data(), culls_.size(), smallest);

@@ -142,6 +142,9 @@ class Surround {
   const std::string& Decor() const { return decor_; }
   // From how far past the map's edge to how far the scenery's trees thin out, where the json says ("decor_trees");
   // false where it does not (the world then takes it from where the trees stand).
+  // [surshadow] How much of the sun's own shadow maps the ground takes (0: none of them, as before; World::
+  // surroundTreeShadows): the shadows of the scenery that stands on it, and of what stands by the map's edge.
+  float castShadows = 0;
   bool TreesGiven(float* from, float* to) const {
     if (treesGiven_[1] <= treesGiven_[0]) return false;
     *from = treesGiven_[0];
