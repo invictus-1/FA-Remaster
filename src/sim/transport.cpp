@@ -411,12 +411,35 @@ bool AssignSlot(Sim& sim, TransportObj& T, Unit* cu, int requested) {
 // with "TransportDamage" (StorageSlots > 0), whose OnKilled destroys it in the same beat. Ours left it out (only
 // the transport's own attaches), the external factory's KillUnitBeingBuilt killed it normally and its death thread
 // removed it three beats later.
+// (2026-11-21) It walked every unit of the sim for each call: 5.6 us a call at 3,000 units, 0.14 ms a beat of a late
+// four-AI game through Unit:GetCargo alone. The units whose parentId is the transport's are all in the sim's list of
+// the listed units that hang on something (Sim::AttachedUnits: exactly the units of units_ with a parentId, kept by
+// the only writers of either); taken from there and put in id order (units_'s), and tested then one by one in that
+// order as the walk tested them, they are the walk's list. MOHO64_CARGO_CHECK=1 makes the walk beside and compares.
 std::vector<Unit*> LoadedUnits(Sim& sim, const Unit* tu) {
   std::vector<Unit*> out;
   uint32_t ref = EntityRef(tu);
-  for (Unit* u : sim.units())
-    if (!u->destroyQueued && u->parentId == ref && !InCat(sim, u, "UPGRADE") && !State(u, US("Refueling")))
-      out.push_back(u);
+  for (Unit* u : sim.AttachedUnits())
+    if (!u->destroyQueued && u->parentId == ref) out.push_back(u);
+  std::sort(out.begin(), out.end(), [](const Unit* a, const Unit* b) { return a->id < b->id; });
+  out.erase(std::remove_if(out.begin(), out.end(),
+                           [&](Unit* u) { return InCat(sim, u, "UPGRADE") || State(u, US("Refueling")); }),
+            out.end());
+  static const bool check = getenv("MOHO64_CARGO_CHECK") && strcmp(getenv("MOHO64_CARGO_CHECK"), "0");
+  if (check) {
+    std::vector<Unit*> walk;
+    for (Unit* u : sim.units())
+      if (!u->destroyQueued && u->parentId == ref && !InCat(sim, u, "UPGRADE") && !State(u, US("Refueling")))
+        walk.push_back(u);
+    if (walk != out) {
+      Logf(LogLevel::Error, "moho64 MOHO64_CARGO_CHECK: the loaded units of 0x%x differ from the walk's at beat %u (%zu / %zu)",
+           tu->id, sim.tick(), out.size(), walk.size());
+      fprintf(stderr, "moho64 MOHO64_CARGO_CHECK: the loaded units of 0x%x differ from the walk's at beat %u\n", tu->id,
+              sim.tick());
+      abort();
+    }
+    ++sim.cargoChecks;
+  }
   return out;
 }
 
@@ -574,7 +597,7 @@ void ClearWaitingFormation(TransportObj& T) {  // vt+0x98: the formation deleted
 
 void AttachUnit(Sim& sim, Unit* child, Unit* parent, int parentBone, int childBone) {
   if (child->parentId != EntityRef(parent)) child->attachSeq = sim.NextAttachSeq();  // (the views' child order)
-  child->parentId = EntityRef(parent);
+  sim.SetParentId(child, EntityRef(parent));
   child->attachOffset = {};
   child->parentBone = parentBone;
   child->ownBone = childBone;
@@ -608,7 +631,7 @@ void CatchUpCargo(Sim& sim, Unit* child) {
 void DetachUnitFrom(Sim& sim, Unit* child, bool skipBallistic) {
   if (!child->parentId) return;
   CatchUpCargo(sim, child);
-  child->parentId = 0;
+  sim.SetParentId(child, 0);
   child->attachFull = false;
   SetState(child, US("Attached"), false);
   child->transportedBy = 0;
@@ -1065,7 +1088,7 @@ bool TransportHasCargo(const Unit* u) {
 // free motion, everything else starts to fall, both on the Air layer. Unit state Attached stays: nothing told the
 // unit of a detach (seen in the original's records).
 void AttachParentGone(Sim& sim, Unit* u) {
-  u->parentId = 0;
+  sim.SetParentId(u, 0);
   // (all of it is the motion's, and a unit still being built has no motion step: MotionTick 0x6b9d10 returns at
   // 0x6b9d2c / 0x6ba1ca for IsBeingBuilt, vt+0x34. Seen: MP1 12891, 13052, 13082, army 4's engineers 0x40012e,
   // 0x400043 and 0x40011f, killed while being built and sunk on FAF's sinker: when the shell is gone at the sea floor
@@ -1212,7 +1235,7 @@ void AttachedUnitsTick(Sim& sim) {
       Entity* p = sim.FindEntity(u->parentId);
       if (!p || p->destroyQueued) {
         if (u->attachFull && pass == 0) {  // orphaned cargo starts to fall
-          u->parentId = 0;
+          sim.SetParentId(u, 0);
           u->attachFull = false;
           SetState(u, US("Attached"), false);
           u->transportedBy = 0;

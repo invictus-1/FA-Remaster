@@ -512,6 +512,12 @@ class Sim {
   const std::map<uint32_t, Entity*>& otherEntities() const { return others_; }
   // Live units of all armies, by entity id (kept up to date on creation and destruction).
   const std::vector<Unit*>& units() const { return units_; }
+  // The listed units (units_) whose parentId is not 0, in no order (2026-11-21): kept by SetParentId, AddUnitToLists
+  // and RemoveUnitFromLists, the only writers of parentId and of units_. A unit's parentId is set by SetParentId only
+  // (Unit::parentId's type has no other write).
+  const std::vector<Unit*>& AttachedUnits() const { return attached_; }
+  void SetParentId(Unit* u, uint32_t ref);
+  uint64_t cargoChecks = 0;  // (MOHO64_CARGO_CHECK: LoadedUnits compared with the walk of every unit)
   // How many entities QueueDestroy has queued so far (it only counts up). Destroy is the only way an entity
   // leaves the world, and destroyQueued is never cleared, so while this number stands no entity has become
   // destroy-queued or gone (prop_motor.cpp MotorsTick).
@@ -549,6 +555,16 @@ class Sim {
   // The dirty-entity list sim+0xa5c, oldest link first (the order of AdvanceBeat's AdvanceCoords walk, 0x74a239), and
   // the move of a unit to its newest end (Entity::SetHealth 0x679a3c).
   const std::vector<Unit*>& DirtyOrder();
+  // The motion, army-stage and dirty orders are kept instead of sorted again (2026-11-21; the same orders: see
+  // KeepOrder in sim.cpp): for each, the key each unit had when it was last made (motSeq, entSeq, dirtySeq), the
+  // counter's value then (every key given since is above it), and the units taken off the lists since (never read:
+  // one may be freed). kept false: the next one sorts afresh.
+  struct KeptOrder {
+    std::vector<uint64_t> keys;
+    std::vector<Unit*> removed;
+    uint64_t high = 0;
+    bool kept = false;
+  };
   void MarkDirty(Unit* u);
   void ResumeCommandThread(Unit* u);
   // A queue clear's event re-links the unit's thread BEFORE its tasks are torn down (IAiCommandDispatchImpl::OnEvent
@@ -857,6 +873,7 @@ class Sim {
   uint64_t unitGridChecks = 0;  // (MOHO64_UNITGRID_CHECK: the unit grids compared with the one loop's)
   uint64_t econSumChecks = 0, econSumSorts = 0;  // (MOHO64_ECONSUM_CHECK: the joins compared; the sums that sorted)
   uint64_t cbWalkChecks = 0;  // (MOHO64_CBWALK_CHECK: the walks compared)
+  uint64_t orderKeepChecks = 0, orderKeepSorts = 0;  // (MOHO64_ORDERKEEP_CHECK: the orders compared; the full sorts)
   int unitsCreated = 0;
   mutable std::shared_ptr<void> caches[kSimCacheSlots];  // sim/sim_cache.h: each SimCache site's container
   // MOHO64_DEBUG_OWNED (sim.cpp): what owned_ holds, by class, live and dead; `when` names the moment. Reads only.
@@ -926,6 +943,9 @@ class Sim {
   std::vector<Entity*> byHandle_;
   std::vector<uint32_t> purgedHandles_;  // (TakePurgedHandles)
   std::vector<Unit*> units_;
+  std::vector<Unit*> attached_;  // (AttachedUnits; Unit::inAttached: in it)
+  void AttachedAdd(Unit* u);
+  void AttachedErase(Unit* u);
   std::vector<std::string> pendingSync_;
   std::vector<std::string> prints_;  // print's lines until TakePrints (the original's sim+0xa18)
   mutable std::vector<int> cheaters_;  // sim+0x8e8: the sources that met CheatsEnabled since the last Sync
@@ -964,6 +984,9 @@ class Sim {
   std::vector<Unit*> dirtyOrder_;
   uint64_t dirtySeqNext_ = 0;
   bool dirtyOrderDirty_ = true;
+  KeptOrder motionKept_, armyKept_, dirtyKept_;  // (KeptOrder: the orders kept instead of sorted again)
+  // MOHO64_ORDERKEEP_CHECK: a kept order against the sort of units_ by less; stops at the first difference
+  void CheckKeptOrder(const char* what, const std::vector<Unit*>& order, bool (*less)(const Unit*, const Unit*));
   std::vector<std::vector<UnitGridEntry>> grid_;
   int gridW_ = 0, gridH_ = 0;
   bool gridDirty_ = true;

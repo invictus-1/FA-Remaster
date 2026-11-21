@@ -1115,6 +1115,13 @@ Sim::~Sim() {
   if (getenv("MOHO64_CBWALK_CHECK") && strcmp(getenv("MOHO64_CBWALK_CHECK"), "0"))
     fprintf(stderr, "moho64 MOHO64_CBWALK_CHECK: %llu walks compared with the walk of every unit: all equal\n",
             static_cast<unsigned long long>(cbWalkChecks));
+  if (getenv("MOHO64_ORDERKEEP_CHECK") && strcmp(getenv("MOHO64_ORDERKEEP_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_ORDERKEEP_CHECK: %llu kept motion / army / dirty orders compared with the sort: all "
+            "equal; %llu made by a full sort\n",
+            static_cast<unsigned long long>(orderKeepChecks), static_cast<unsigned long long>(orderKeepSorts));
+  if (getenv("MOHO64_CARGO_CHECK") && strcmp(getenv("MOHO64_CARGO_CHECK"), "0"))
+    fprintf(stderr, "moho64 MOHO64_CARGO_CHECK: %llu loaded-unit lists compared with the walk of every unit: all equal\n",
+            static_cast<unsigned long long>(cargoChecks));
   for (const auto& [m, n] : immediateInPhase_)
     Logf(LogLevel::Info, "moho64: parallel order: %s called at once inside the entity pass's phases x%llu (not deferred)",
          m.c_str(), static_cast<unsigned long long>(n));
@@ -2568,20 +2575,84 @@ void Sim::CommandLinkedSince(size_t mark, uint64_t hi, std::vector<Unit*>* out) 
     ++cmdOrderChecks;
   }
 }
+namespace {
+bool OrderKeepCheck() {
+  static const bool on = getenv("MOHO64_ORDERKEEP_CHECK") && strcmp(getenv("MOHO64_ORDERKEEP_CHECK"), "0");
+  return on;
+}
+// The motion, army-stage and dirty orders (2026-11-21). Each was made by copying units_ and sorting it whenever a unit
+// was made, taken off the lists or given a new key (in a real game nearly every beat: in the four-AI game B1 late,
+// the motion and army sorts were 0.4 % of a 16-thread beat's samples; the dirty order's, which the original's order
+// sorts after any health change, 1.4 % of a pro 6v6's beat in that order). Each key is unique and drawn from one
+// counter that only grows (motSeq and entSeq from entSeqNext_, dirtySeq from dirtySeqNext_: AddUnitToLists, the pass's
+// end's re-key, MarkDirty), and the army order's other part (the army in the id's top bits) is set once, at the
+// unit's making. So every key given since the order was last made is above every key it holds (`high`, the counter
+// then), and the sorted order is the old one without the units taken off the lists or given a new key, merged with
+// the units of units_ whose key is above `high`, sorted: keys unique, one sorted order of them, the same vector as the
+// sort's (MOHO64_ORDERKEEP_CHECK compares them). A unit taken off the lists is not read (it may be freed by then): it
+// is found in the list of those taken off since (RemoveUnitFromLists), by its pointer, before its key is read.
+template <class Key, class Less>
+void KeepOrder(std::vector<Unit*>& order, Sim::KeptOrder& k, const std::vector<Unit*>& units, uint64_t counter,
+               Key key, Less less, uint64_t* sorts) {
+  if (!k.kept || k.removed.size() > order.size() / 2) {
+    order = units;
+    std::sort(order.begin(), order.end(), less);
+    ++*sorts;
+  } else {
+    std::sort(k.removed.begin(), k.removed.end());
+    size_t n = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+      Unit* u = order[i];
+      if (std::binary_search(k.removed.begin(), k.removed.end(), u)) continue;  // (off the lists: not read)
+      if (key(u) != k.keys[i]) continue;  // (a new key since: it comes back with the units above `high`)
+      order[n++] = u;
+    }
+    order.resize(n);
+    static thread_local std::vector<Unit*> fresh, merged;
+    fresh.clear();
+    for (Unit* u : units)
+      if (key(u) > k.high) fresh.push_back(u);
+    std::sort(fresh.begin(), fresh.end(), less);
+    merged.resize(order.size() + fresh.size());
+    std::merge(order.begin(), order.end(), fresh.begin(), fresh.end(), merged.begin(), less);
+    order.swap(merged);
+  }
+  k.keys.resize(order.size());
+  for (size_t i = 0; i < order.size(); ++i) k.keys[i] = key(order[i]);
+  k.removed.clear();
+  k.high = counter;
+  k.kept = true;
+}
+}  // namespace
+void Sim::CheckKeptOrder(const char* what, const std::vector<Unit*>& order, bool (*less)(const Unit*, const Unit*)) {
+  std::vector<Unit*> ref = units_;
+  std::sort(ref.begin(), ref.end(), less);
+  if (ref != order) {
+    size_t i = 0;
+    while (i < ref.size() && i < order.size() && ref[i] == order[i]) ++i;
+    Logf(LogLevel::Error, "moho64 MOHO64_ORDERKEEP_CHECK: the kept %s order differs from the sort at beat %u, place %zu (%zu / %zu units)",
+         what, tick_, i, order.size(), ref.size());
+    fprintf(stderr, "moho64 MOHO64_ORDERKEEP_CHECK: the kept %s order differs from the sort at beat %u, place %zu\n", what, tick_, i);
+    abort();
+  }
+  ++orderKeepChecks;
+}
 const std::vector<Unit*>& Sim::MotionOrder() {
   if (motionOrderDirty_) {
-    motionOrder_ = units_;
-    std::sort(motionOrder_.begin(), motionOrder_.end(), [](const Unit* a, const Unit* b) { return a->motSeq < b->motSeq; });
+    auto less = [](const Unit* a, const Unit* b) { return a->motSeq < b->motSeq; };
+    KeepOrder(motionOrder_, motionKept_, units_, entSeqNext_, [](const Unit* u) { return u->motSeq; }, less, &orderKeepSorts);
     motionOrderDirty_ = false;
+    if (OrderKeepCheck()) CheckKeptOrder("motion", motionOrder_, less);
   }
   return motionOrder_;
 }
 const std::vector<Unit*>& Sim::DirtyOrder() {
   if (dirtyOrderDirty_) {
     MOHO_ZONE("advancecoords: dirty order sort");
-    dirtyOrder_ = units_;
-    std::sort(dirtyOrder_.begin(), dirtyOrder_.end(), [](const Unit* a, const Unit* b) { return a->dirtySeq < b->dirtySeq; });
+    auto less = [](const Unit* a, const Unit* b) { return a->dirtySeq < b->dirtySeq; };
+    KeepOrder(dirtyOrder_, dirtyKept_, units_, dirtySeqNext_, [](const Unit* u) { return u->dirtySeq; }, less, &orderKeepSorts);
     dirtyOrderDirty_ = false;
+    if (OrderKeepCheck()) CheckKeptOrder("dirty", dirtyOrder_, less);
   }
   return dirtyOrder_;
 }
@@ -2591,13 +2662,15 @@ void Sim::MarkDirty(Unit* u) {
 }
 const std::vector<Unit*>& Sim::ArmyStageOrder() {
   if (armyOrderDirty_) {
-    armyOrder_ = units_;
-    // (an entity id holds its army above bit 20, so id order already goes army by army)
-    std::sort(armyOrder_.begin(), armyOrder_.end(), [](const Unit* a, const Unit* b) {
+    // (an entity id holds its army above bit 20, so id order already goes army by army; kept as MotionOrder is: the
+    // key that changes is entSeq, given once; a unit's id is set at its making)
+    auto less = [](const Unit* a, const Unit* b) {
       const uint32_t aa = a->id >> 20, ab = b->id >> 20;
       return aa != ab ? aa < ab : a->entSeq < b->entSeq;
-    });
+    };
+    KeepOrder(armyOrder_, armyKept_, units_, entSeqNext_, [](const Unit* u) { return u->entSeq; }, less, &orderKeepSorts);
     armyOrderDirty_ = false;
+    if (OrderKeepCheck()) CheckKeptOrder("army", armyOrder_, less);
   }
   return armyOrder_;
 }
@@ -2637,10 +2710,32 @@ void Sim::AddUnitToLists(Unit* u) {
   u->dirtySeq = ++dirtySeqNext_;
   dirtyOrderDirty_ = true;
   InsertById(units_, u);
+  u->inUnitLists = true;
+  if (u->parentId && !u->inAttached) AttachedAdd(u);
   if (u->army) InsertById(u->army->units, u);
   if (entityPassOpen_) madeInEntityPass_.push_back(u);
   if (order == SimOrder::kParallel) combatPending_.push_back(u);  // (the next combat data prefill)
   combatPendingW_.push_back(u);  // (the next weapons stage's walk: combat.cpp WeaponsTickParallel)
+}
+// The listed units that hang on something (AttachedUnits, 2026-11-21): a unit is in attached_ exactly while it is
+// in units_ and its parentId is not 0. The three places that change either (AddUnitToLists, RemoveUnitFromLists,
+// SetParentId) keep it so; the order inside is not used (LoadedUnits sorts what it takes by id, units_'s order). A
+// removal finds the unit in the list (a few hundred at most) and writes no other unit: SetParentId runs in the entity
+// pass's A2 (AttachParentGone), under the write trap.
+void Sim::AttachedAdd(Unit* u) {
+  u->inAttached = true;
+  attached_.push_back(u);
+}
+void Sim::AttachedErase(Unit* u) {
+  attached_.erase(std::find(attached_.begin(), attached_.end(), u));
+  u->inAttached = false;
+}
+void Sim::SetParentId(Unit* u, uint32_t ref) {
+  const uint32_t old = u->parentId.v_;
+  u->parentId.v_ = ref;
+  if (!u->inUnitLists || !old == !ref) return;
+  if (ref) AttachedAdd(u);
+  else AttachedErase(u);
 }
 void Sim::RemoveUnitFromLists(Unit* u) {
   if (order == SimOrder::kParallel && !combatPending_.empty()) {
@@ -2657,7 +2752,20 @@ void Sim::RemoveUnitFromLists(Unit* u) {
   cmdOrderDirty_ = true;
   motionOrderDirty_ = true;
   armyOrderDirty_ = true;
+  // (the kept orders drop it at their next making without reading it; a list longer than the units makes the next one
+  // sort afresh instead, so that an order rarely asked for holds no long list)
+  for (KeptOrder* k : {&motionKept_, &armyKept_, &dirtyKept_}) {
+    if (!k->kept) continue;
+    if (k->removed.size() > units_.size()) {
+      k->kept = false;
+      k->removed.clear();
+    } else {
+      k->removed.push_back(u);
+    }
+  }
   EraseById(units_, u);
+  u->inUnitLists = false;
+  if (u->inAttached) AttachedErase(u);
   if (u->army) EraseById(u->army->units, u);
 }
 
@@ -3533,7 +3641,7 @@ void Sim::Tick() {
       if (dbgAtt >= 0 && static_cast<long>(u->id) == dbgAtt)
         Logf(LogLevel::Info, "attached %u unit %u (made %llu%s) parent ref %u: %s%s, full %d, layer %s, dead %d, pos %.9g %.9g %.9g",
              tick_, u->id, static_cast<unsigned long long>(u->entSeq), u->destroyQueued ? ", destroy queued" : "",
-             u->parentId, !u->parentId ? "none" : attachParent ? "there" : "gone",
+             static_cast<uint32_t>(u->parentId), !u->parentId ? "none" : attachParent ? "there" : "gone",
              attachParent && attachParent->destroyQueued ? " (destroy queued)" : "", u->attachFull ? 1 : 0,
              u->layer.c_str(), u->dead ? 1 : 0, u->position.x, u->position.y, u->position.z);
     }

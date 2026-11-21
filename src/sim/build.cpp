@@ -4925,7 +4925,7 @@ int l_AttachBoneTo(lua_State* L) {
   if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 4))) return 0;
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)
-  u->parentId = EntityRef(parent);
+  S(L)->SetParentId(u, EntityRef(parent));
   u->attachOffset = {};  // (a new attach info: no relative offset until SetParentOffset)
   u->ownBone = BoneIndex(L, u, 2);
   u->parentBone = BoneIndex(L, parent, 4);
@@ -4961,7 +4961,7 @@ int l_AttachTo(lua_State* L) {  // entity:AttachTo(parent, bone)
   if (!u && parent && AttachPlainEntity(*S(L), ToObject<Entity>(L, 1), parent, BoneIndex(L, parent, 3))) return 0;
   if (!u || !parent) return 0;
   if (u->parentId != EntityRef(parent)) u->attachSeq = S(L)->NextAttachSeq();  // (the views' child order)
-  u->parentId = EntityRef(parent);
+  S(L)->SetParentId(u, EntityRef(parent));
   u->attachOffset = {};  // (a new attach info: no relative offset until SetParentOffset)
   // Entity:AttachTo 0x68be10 is AttachBoneTo with the entity's own bone 0 (0x68bf14: push 0), not -1: the unit is
   // placed so that ITS bone 0 lies on the parent's bone. Seen: an aircraft a carrier builds while it sails
@@ -4994,7 +4994,7 @@ void Detach(Sim& sim, Unit* u) {
     if (u->motion.air) AirSetTargetNow(sim, u, t, 0);
     else u->motion.motionTarget = t;  // (the same SetTarget for a land, hover or naval unit's motion)
   }
-  u->parentId = 0;
+  sim.SetParentId(u, 0);
   u->unitStates.Erase(US("Attached"));
   // NotifyDetached's motion+0x90 asks for a snap only where the motion step reads it: CalcMoveLand (0x6c31b7) and
   // CalcMoveHover. CalcMoveWater 0x6c3480 (any other layer, no hover) sets the unit on the water only when it moved,

@@ -534,7 +534,7 @@ void Fingerprint::WriteDetail(const Sim& sim, uint32_t beat, const std::string& 
                  u->maxHealth, u->fractionComplete, u->workProgress, u->layer.c_str(),
                  states.empty() ? "-" : states.c_str(),
                  Fs({u->motion.vel.x, u->motion.vel.y, u->motion.vel.z}).c_str(), u->focusId, u->guardedId,
-                 u->parentId, u->transportedBy, u->dead ? " dead" : "", u->destroyQueued ? " destroying" : "",
+                 static_cast<uint32_t>(u->parentId), u->transportedBy, u->dead ? " dead" : "", u->destroyQueued ? " destroying" : "",
                  u->beingBuilt ? " beingbuilt" : "", u->commands.size(), cmds.c_str(), u->factoryCommands.size(),
                  rally.c_str(), weapons.c_str());
     // (the rest of what HashUnit hashes, so that a beat that differs in one of them shows it)

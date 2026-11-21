@@ -146,6 +146,22 @@ consteval int US(std::string_view s) {
   if (i == 0) throw "not an EUnitState name";
   return i;
 }
+// Unit::parentId (2026-11-21): the entity a unit hangs on, read as a number everywhere, written only by
+// Sim::SetParentId, which keeps the sim's list of the listed units that hang on something (Sim::AttachedUnits:
+// LoadedUnits takes a transport's cargo from it instead of walking every unit). Copy and assignment are deleted, so
+// no other write compiles.
+class ParentIdField {
+ public:
+  ParentIdField() = default;
+  ParentIdField(const ParentIdField&) = delete;
+  ParentIdField& operator=(const ParentIdField&) = delete;
+  operator uint32_t() const { return v_; }
+
+ private:
+  friend class Sim;
+  uint32_t v_ = 0;
+};
+
 class UnitStateSet {
  public:
   using Names = std::set<std::string, std::less<>>;
@@ -329,7 +345,9 @@ class Unit : public Entity {
   // Factories: commands for the units they build (rally point, patrols): Issue* of move-like
   // commands to a factory land here; a finished unit takes them over.
   std::deque<std::shared_ptr<UnitCommand>> factoryCommands;
-  uint32_t parentId = 0;           // attached to (AttachBoneTo / AttachTo)
+  ParentIdField parentId;          // attached to (AttachBoneTo / AttachTo); written by Sim::SetParentId only
+  bool inAttached = false;         // in Sim::AttachedUnits
+  bool inUnitLists = false;        // between Sim::AddUnitToLists and RemoveUnitFromLists
   uint64_t attachSeq = 0;          // when it took that parent (Sim::NextAttachSeq); only the views read it
   uint32_t scriptBits = 0;         // u+0x498: the toggle buttons' state (sim/script_bits.cpp)
   int64_t toggleCaps = -1;         // u+0x48c: live toggle caps (-1 = not yet read from the blueprint)
