@@ -4,17 +4,33 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
-## To visuals, section 151: three artillery pieces that do not fire in the --fx-fire stand (2026-11-20, a first answer)
+## To visuals: how a remaster alias of a stock emitter is read, and for which faction (2026-11-20)
 
-The stand's own line in the log says why for two of them ("render: --fx-fire: MainGun: ... - but the point is 24.0 away,
-outside its range 25..90"): the Cybran mobile T3 artillery and the T2 artillery building are aimed at a point inside
-their minimum range. The stand picks its default point from the blueprint file's MinRadius and MaxRadius, and the weapon
-as the game runs it has other numbers. Until the stand takes the running weapon's range: give the point with
-`--fx-to x,z` at a distance inside the range the log prints. The mobile piece has a second reason: its script keeps the
-gun switched off until the unit has stopped and deployed, and the stand does not send a unit the event of coming to
-rest; it cannot fire there yet. The T3 artillery building has its target and no complaint; why no shell shows within
-twelve seconds is not looked at yet. Owed by the renderer: the default point from the running weapon's range, the
-stop-and-deploy event, a look at the third.
+The engine's list (`src/sim/effect_aliases.cpp`) gives each use of the stock fire `small_test_fire.bp` a path of its own,
+`/effects/emitters/remaster/<name>_emit.bp`, and has no faction in it: whichever unit plays that use gets the alias. The
+renderer reads an alias for a thing of a faction in this order, the first that exists: the unit's own
+(`effects/emitters/by_unit/<unit>/<alias name>`, then `by_unit/<unit>/small_test_fire.bp`); the faction's
+(`effects/emitters/remaster/<faction>/<alias name>`, so a `remaster/cybran/` copy is read for a Cybran unit as a
+`remaster/uef/` one is for a UEF unit); all factions' (`effects/emitters/remaster/<alias name>`); and where none of
+those exists, the stock file it stands for by the usual rule (`effects/emitters/<faction>/small_test_fire.bp`, then the
+shared one). The faction is that of the unit or shot the effect is made on; a fire made at a bare point has none and
+reads from the third step on.
+
+## To visuals, section 151: three artillery pieces that do not fire in the --fx-fire stand (2026-11-20; the first answer of that day corrected)
+
+Tested with pictures of the target point, one a second, and a count of the pixels that changed:
+
+- The stand's default point is right. Without `--fx-to` it lies inside the running weapon's range for all three (40,
+  53 and 153 away). The first answer blamed the default; that was wrong. The runs that failed had the point given at 24
+  and 26 away, inside the minimum range, which the stand's own log line says ("... outside its range 25..90").
+- The Cybran T2 artillery building fires: its first shell lands 17 seconds after the play begins (its turret turns at
+  6 degrees a second, a quarter turn is 15 seconds; it fires once in 20 seconds). A play of 12 seconds ends before the
+  first shot: `--fx-repeat 25` for one shot, 45 for two.
+- The Cybran T3 artillery building fires: first impact at second 43 (3 degrees a second, then the flight), then one
+  every 7.5 seconds: `--fx-repeat 60` or more.
+- The Cybran mobile T3 artillery does not fire in the stand: no impact in 45 seconds, and the log says its script has
+  the gun switched off. The stand does not yet give a unit what makes it unpack on coming to rest. Owed by the renderer.
+- Not checked: why the UEF pieces fired in the short plays (their weapon numbers are the same as the Cybran ones').
 
 ## To the ui, request 58: what a first start with an empty shader cache costs, and what is done about it (render [firststart], 2026-11-20)
 
