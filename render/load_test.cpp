@@ -231,7 +231,20 @@ int LoadTest(const moho::Vfs& vfs, const LoadTestSetup& s) {
       return simStarted == nullptr;
     };
     const Clock::time_point begun = Clock::now();
-    if (!picture.BeginMap(map)) {
+    // [firststart] battle-effects among a map's looks (--settings, --load-game-looks): the interface's world switches of
+    // that name (its Battle Effects, Energy Shields, Water Ripples, High shadows: its game_session.cpp, WorldLooks) given
+    // BEFORE the map opens, as its game gives them (BeginMap's `before`). A map opened with them has surface shaders of its
+    // own (found 2026-11-20: the interface's game compiled 30 shaders no run of the viewer had made; a dump of the
+    // sources showed the one line they differed by, the blasts' define, set when the map opens)
+    std::function<void(World&)> worldBefore;
+    if ((mapLooks ? *mapLooks : s.settings).find("battle-effects") != std::string::npos)
+      worldBefore = [](World& w) {
+        w.blastWaves = w.blastDust = w.blastDebris = w.rockHits = w.litSmoke = w.smokeShadows = w.heatShimmer = w.unitScars = true;
+        w.hotMetal = w.movementDust = w.volumeExplosions = w.realExhausts = w.remasteredBuild = w.energyShields = w.waterRipples = true;
+        w.lampShadows = true;
+        w.shadowSize = 4096;
+      };
+    if (!picture.BeginMap(map, worldBefore)) {
       fprintf(stderr, "render: --load-test: BeginMap(%s) refused\n", map.c_str());
       return 1;
     }
