@@ -380,6 +380,20 @@ bool RunCounted(DxcCompiler3* compiler, const std::string& source, const std::ve
   const bool made = RunWith(compiler, source, args, out, error);
   --gCompiling;
   static const bool tell = getenv("MOHO64_LOG_SHADER_COMPILES") != nullptr;
+  // (checks) MOHO64_DUMP_SHADER_SOURCES=<folder>: each compiled shader's source written there as <hash>.hlsl (the hash
+  // the line above prints), so that two programs' sources of one kind can be laid side by side: which switch makes
+  // the variant one of them compiles and the other never does
+  static const char* const dump = getenv("MOHO64_DUMP_SHADER_SOURCES");
+  if (dump && *dump) {
+    char name[40];
+    snprintf(name, sizeof name, "/%016llx.hlsl", static_cast<unsigned long long>(std::hash<std::string>{}(source)));
+    const std::string file = std::string(dump) + name;
+    if (FILE* there = fopen(file.c_str(), "rb")) fclose(there);
+    else if (FILE* f = fopen(file.c_str(), "wb")) {
+      fwrite(source.data(), 1, source.size(), f);
+      fclose(f);
+    }
+  }
   if (tell) {
     std::string entry, kind;
     for (size_t i = 0; i + 1 < args.size(); ++i) {
