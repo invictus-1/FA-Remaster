@@ -5757,8 +5757,19 @@ int l_coll_Enable(lua_State* L) {
   lua_settop(L, 1);
   return 1;
 }
+// CCollisionManipulator:Disable 0x638380: the manipulator is switched off (+0x84 = 0, 0x63848e) AND every watched
+// bone's state bit is cleared (0x638497..0x6384aa: word +6 &= ~1 for each watch entry; the one bit is "at the base"
+// for the plain check and "under the terrain" for the terrain check), so the next Enable reports every bone that
+// stands at the base anew. Enable 0x638250 only sets +0x84. Ours kept the bits across Disable / Enable. Seen (oracle
+// probe P7, 2026-11-20): FAF 3840 pro replay 2v2_3, army 3's Monkeylord 0x300085 sets out at 14436 (FAF's walker
+// enables its detector with the walk): the original calls OnAnimCollision for THREE feet in that beat, Left_Footfall_02
+// at (453.22, 286.96), Right_Footfall_01 and Right_Footfall_03, and the first kills army 2's Rhino 0x200133 standing
+// 0.8 away (ExperimentalFootfall, 1500); ours called the two right feet only, the left one having stood at the base
+// since its last step at 14397, and the Rhino lived.
 int l_coll_Disable(lua_State* L) {
-  CheckCollider(L)->enabled = false;
+  CollisionManipulator* c = CheckCollider(L);
+  c->enabled = false;
+  for (auto& w : c->watch) w.atBase = w.under = false;
   lua_settop(L, 1);
   return 1;
 }
