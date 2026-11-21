@@ -123,7 +123,11 @@ class VolumeBlasts {
   int steps = 48;              // the most steps a pixel marches through a volume
   float detail = 0.45f;        // how much a finer noise frays the volumes' edges and shades their folds (0: none)
   float detailSize = 1.5f;     // that noise repeats every this many of a blast's radii
-  float glowUnit = 14.0f;      // how bright a file's glow of 1 is (linear light; the sun at noon lights white about 1.4)
+  // How bright a file's glow of 1 is (linear light; the sun at noon lights white about 1.4). [volsoft] 5, from 14
+  // (Chris, 2026-11-21, on a picture of both: "softer works"): at 14 everything above half a blast's heat came out
+  // pure white, so a big death's first half second was a flat white ball (the Monkeylord's: 21,000 pure-white pixels
+  // of 360,000 from near); at 5 the hot phase is a cream-yellow ball that keeps its fire's colour and form.
+  float glowUnit = 5.0f;
   // [volnight] How much of the night's brightening is taken off a volume's OWN glow: the power the night's dimming of
   // glowing effects (Lights::night, the eye's gain to the power 0.65) is raised to. 1: that dimming as it is (before:
   // a big death's ball stood pure white for 3.5 s at night against half a second by day, measured 2026-11-21 on the

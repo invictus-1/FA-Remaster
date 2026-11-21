@@ -1022,6 +1022,7 @@ bool D3D12Device::Init(const DeviceDesc& desc, std::string* error) {
       }
     }
     if (!dir.empty() && (CreateDirectoryA(dir.c_str(), nullptr) || GetLastError() == ERROR_ALREADY_EXISTS)) shaderCache_ = dir;
+    TidyShaderCache(shaderCache_, desc.shaderCache.empty());  // [cacheclean] (the player's own folder alone)
   }
   width_ = std::max(1, desc.width);
   height_ = std::max(1, desc.height);

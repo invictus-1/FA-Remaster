@@ -1407,6 +1407,7 @@ bool VulkanDevice::Init(const DeviceDesc& desc, std::string* error) {
     struct stat st{};
     if (!dir.empty() && (mkdir(dir.c_str(), 0755) == 0 || (stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)))) shaderCache_ = dir;
 #endif
+    TidyShaderCache(shaderCache_, desc.shaderCache.empty());  // [cacheclean] (the player's own folder alone)
   }
 
   // the instance: the window system's surface; on macOS MoltenVK, which a loader lists only when asked

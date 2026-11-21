@@ -64,6 +64,15 @@ ShaderCounts ShaderCountsNow();
 // cached shader's name is made of its own source and arguments, so a cache filled where the build was made is valid on
 // every machine for that build. "": none. Set once, before a device is made (not while shaders are compiled).
 void SetShippedShaderCache(const std::string& folder);
+// [cacheclean] (Chris, 2026-11-21: "for shader cache yes") The player's shader cache only grew: every build's shaders
+// stayed for ever (3.96 GB on one PC after six weeks of builds). Now a cached shader that is read has its file's date
+// set to today (once a day at most), and this removes the compiled shaders (.dxil, .spv, .cso) that no start has read
+// for `days` days: on a thread of its own, once in a program's life for a folder. Nothing is removed before the folder
+// has been watched that long (the file tidy.stamp in it says since when), so a cache filled before this rule is not
+// emptied by its first start. The driver's own pipeline files stay. For the player's own folder; a device does it for
+// the default folder alone, never for one a host or a test names, and never for the shipped folder.
+// (checks) MOHO64_TIDY_SHADER_CACHE=<days>: every folder a device is given is tidied, with that many days.
+void TidyShaderCache(const std::string& folder, bool playersOwn, int days = 30);
 // [cardlog] Where DXC is taken from (Windows: the full path beside the program; elsewhere the library's name) and whether it is
 // loaded now (it is loaded at the first shader, or by DxcLoad).
 std::string DxcPlace(bool* loaded);

@@ -299,8 +299,8 @@
 // --status-lights old|<share>  [statuslights] the game's signal lamps (a factory's red blinker while its army's store runs
 //           low, its green and yellow) as bright as before (old: 2.5 times their texture, as every particle that adds its
 //           light), or that share of it (0.4 unless given: as the original draws them; Particles::statusLights)
-// --volume-glow <unit>  [volnight] how bright a volume explosion's glow of 1 is (14 unless given: VolumeBlasts::glowUnit;
-//           sunlit white is about 1.4), for looks at a hot phase that shows fire instead of a white ball
+// --volume-glow <unit>  [volnight] how bright a volume explosion's glow of 1 is (VolumeBlasts::glowUnit; sunlit white is
+//           about 1.4). [volsoft] 5 unless given; 14: the way before (a big death's first half second a white ball)
 // --volume-night old|<power>  [volnight] the volume explosions' own glow at night: old: the plain night dimming of glowing
 //           effects (a big death's ball white for seconds at night); else the power that dimming is raised to (1 / 0.65
 //           unless given: the ball as by day; VolumeBlasts::nightPower)

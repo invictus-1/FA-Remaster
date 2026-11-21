@@ -19,8 +19,10 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <filesystem>
 #include <functional>  // [snowhitch] (std::hash)
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 
@@ -307,8 +309,16 @@ std::string ShippedName(const std::string& cached) {
   const size_t slash = cached.find_last_of("/\\");
   return gShipped + "/" + (slash == std::string::npos ? cached : cached.substr(slash + 1));
 }
+// [cacheclean] a cached shader that is read is dated today (once a day at most): TidyShaderCache goes by that date
+void DateRead(const std::string& cached) {
+  std::error_code ec;
+  const std::filesystem::path p(cached);
+  const auto now = std::filesystem::file_time_type::clock::now();
+  const auto was = std::filesystem::last_write_time(p, ec);
+  if (!ec && now - was > std::chrono::hours(24)) std::filesystem::last_write_time(p, now, ec);
+}
 bool ReadCached(const std::string& cached, std::vector<uint8_t>* out) {
-  if (ReadWhole(cached, out)) return true;
+  if (ReadWhole(cached, out)) return DateRead(cached), true;
   const std::string shipped = ShippedName(cached);
   return !shipped.empty() && ReadWhole(shipped, out);
 }
@@ -598,6 +608,52 @@ bool CompileDxil(const std::string& source, const char* entry, const char* stage
 
 // [cardlog] (gfx_vulkan_dxc.h)
 void SetShippedShaderCache(const std::string& folder) { gShipped = folder; }  // [firststart] (gfx_vulkan_dxc.h)
+
+void TidyShaderCache(const std::string& folder, bool playersOwn, int days) {  // [cacheclean] (gfx_vulkan_dxc.h)
+  if (folder.empty()) return;
+  if (const char* forced = getenv("MOHO64_TIDY_SHADER_CACHE")) days = std::max(0, atoi(forced));
+  else if (!playersOwn) return;
+  static std::mutex lock;
+  static std::set<std::string> done;
+  {
+    std::lock_guard<std::mutex> hold(lock);
+    if (!done.insert(folder).second) return;  // (once in a program's life)
+  }
+  std::thread([folder, days] {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto now = fs::file_time_type::clock::now();
+    const auto limit = std::chrono::hours(24) * days;
+    const fs::path stamp = fs::path(folder) / "tidy.stamp";
+    if (!fs::exists(stamp, ec)) {  // (watched from today: nothing is old enough to judge yet)
+      if (FILE* f = fopen(stamp.string().c_str(), "wb")) fclose(f);
+      printf("render: shader cache: watched from today; compiled shaders that no start reads for %d days are removed after that\n", days);
+      return;
+    }
+    if (now - fs::last_write_time(stamp, ec) < limit || ec) return;
+    int removed = 0, kept = 0;
+    uintmax_t bytes = 0;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+      std::error_code one;
+      if (!it->is_regular_file(one)) continue;
+      const std::string ext = it->path().extension().string();
+      if (ext != ".dxil" && ext != ".spv" && ext != ".cso") continue;  // (the driver's pipelines and the stamp stay)
+      const auto read = fs::last_write_time(it->path(), one);
+      if (one || now - read < limit) {
+        ++kept;
+        continue;
+      }
+      const uintmax_t size = it->file_size(one);
+      if (fs::remove(it->path(), one) && !one) {  // (one that is open just now stays: the next start takes it)
+        ++removed;
+        bytes += one ? 0 : size;
+      } else ++kept;
+    }
+    if (removed)
+      printf("render: shader cache: %d compiled shaders that no start had read for %d days removed (%.1f MB); %d kept\n", removed, days,
+             static_cast<double>(bytes) / (1024.0 * 1024.0), kept);
+  }).detach();
+}
 
 ShaderCounts ShaderCountsNow() {
   ShaderCounts c;
