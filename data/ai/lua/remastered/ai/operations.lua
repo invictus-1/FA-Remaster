@@ -130,6 +130,12 @@ local function Front(R)
         theirs = theirs + e + S.enemyAirGround[z] + S.enemyNavalGround[z]
         if z ~= R.startZone and S.ownEconomyMass[z] > 0 then table.insert(ownEconomy, z) end
         local present = S.enemyLandCount[z] + S.enemyStructureCount[z]
+        -- (R2, 2026-11-20: the last tick an enemy that shoots ground was known in the zone itself - land, structures,
+        -- aircraft or ships with a rating against ground there; brain.lua RebuildUnsafe)
+        if e + S.enemyAirGround[z] + S.enemyNavalGround[z] > 0 then
+            R.groundSeen = R.groundSeen or {}
+            R.groundSeen[z] = R.tick
+        end
         if present > 0 then
             R.enemyAt[z] = true
             R.enemySeen[z] = R.tick

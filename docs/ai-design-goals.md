@@ -564,3 +564,54 @@ the duels showed. The duels are 1v1 on SETONS_R against FAF's adaptive AI and M2
     24 and 14; what keeps the outlying extractors, 39 to 42), judged the same way, and the navy rules wait for an
     income that can pay for them. The candidates' Lua stays in the helpers' folders (exe_wfn1m, exe_wfe1m,
     exe_wfg1m, exe_wfo1m); boards: `_scratch/engine/ai_20261114/fable_wfn1_board.txt`, `fable_wf48_board.txt`.
+49. **Where the income goes, and four answers; one is kept (helper aieco, 2026-11-20; read by the engine chat).** A
+    ledger of both economies each minute over 16 full games against M28 on main 42438fcc (the snapshot is read-only sim
+    Lua in the bench's orders file, each game proven identical by fingerprint with and without it). At minute 20 our
+    income is 188 mass a second against 437. Of the gap, about 140 is extractors held: at minute 10 we own as many as
+    M28 (45), then lose about 20 by minute 20, nearly all T2, to artillery, ships and aircraft, and rebuild 3, while
+    14 points on our own side stand free (2 home, 3 near, 9 far) and none on M28's; M28 loses 360 mass of extractors
+    in 14 games. About 86 is mass storage beside extractors (M28 about a hundred storages, 27 % over the extractors'
+    blueprint output at 20; ours none: our rule asked for a mass bar over 80 %, which it never is after minute 9). At
+    minute 10 the gap is reclaim (33). Power: 2,395 energy a second against 7,024 at 20; about 100 T1 generators, 0 to
+    3 T2. Engineers: 50 (a cap) against 140 to 150. A probe of why free points stay free: near the base 70 % of the
+    samples were "unsafe" (an enemy seen within a minute in the zone or a land neighbour); far out 64 % were promised
+    to an engineer walking minutes from the base. (A first reading that 12 % of our spending never reached a unit was
+    the sampler's own error: entity ids are reused after deaths. Per-unit memory is keyed by the unit since.)
+    Four candidates, each 16 full games against M28 paired by seed with that base:
+    *mass storage beside finished T2 / T3 extractors* (S): worse, score -2.6 (p 0.009), 3 better and 12 worse; it built
+    4 to 17 storages a game and only after minute 15, because it waited while any T1 extractor could still upgrade.
+    *A nearer builder takes over a promised point from minute 10* (R1): not kept, -1.8 (p 0.12); 2 to 48 takeovers a
+    game, the free far points unchanged (9 against 10), extractor mass lost up 2.2k (p 0.063).
+    *T1 builders assist T2 / T3 generators instead of building T1 ones* (E): not kept; energy at minute 15 lower in 13
+    of 16 games (-162, p 0.003): with about five T2 engineers, busy elsewhere, the larger generators still arrive only
+    at minutes 18 to 20. A form that could work puts T2 engineers on power first.
+    *A lost extractor near the base is rebuilt unless an enemy that shoots ground is in that same zone now* (R2:
+    RebuildUnsafe in brain.lua, R.groundSeen in operations.lua; the home ring, 60 of the start, holds back 100 ticks,
+    the near ring, to 200 on our side, 300; neighbours do not count; other points as before): KEPT. Against M28 income
+    at minute 15 +9.9 (12 of 15 seeds higher, p 0.038), the land army at 15 +402 (p 0.048), energy at 20 +667
+    (p 0.025), 8 extractors rebuilt a game for 3.5, engineers lost not higher (-295, p 0.23); score +5.0 (p 0.44), of
+    which nearly all is one early win (seed 15015, the seed of the one earlier win). Against FAF's veteran AI 15 wins
+    of 16 for 14, +6.2 (p 0.26), 10 better and 5 worse; against FAF's rush AI 14 of 16 for 16 (one game not ended, one
+    lost), -2.0 (p 0.75), 8 and 8, income at 20 +20 (p 0.054). By the kept rule (better beyond the noise on its aim
+    against M28, not worse beyond it elsewhere) it landed as batch 190 (2026-11-21). What the four say together: more
+    building does not help while the ground is not held; the raids decide. Boards and tables:
+    `_scratch/engine/keep_20261120/aieco`.
+50. **What players do, by position (helper proled, 2026-11-21; Chris: "even though its team it should give you a good
+    idea of what a ai should do in specific positions like naval, air, land").** The same ledger for the 142 players
+    of the 22 high-level replays' first 18 minutes, read out of our own engine's replay of each (a read-only probe in
+    an orders file; all 22 games identical by fingerprint with and without it; a probe must never call GetPosition:
+    the one shared vector per entity it rewrites is held by the game's scripts). Roles on Seton's Clutch by slot, 24
+    players: the far corners air (6 of 6), the two pond slots a side navy (12 of 12), the front land (5 of 6).
+    The gaps to our AI, largest first: extractor upgrades (a Seton's half has 32 T2 of 54 extractors at minute 10 and
+    42 of 50 at 15; ours 5 of 45 and 24 of 40; M28 too keeps 40 T1 at 15, which is why goal 49's ledger did not show
+    it); storage beside the extractors (27 to 46 a slot by minute 15, a quarter to a third of the extractors' output;
+    1v1 players build almost none); reclaim (1v1 players 32 to 45 mass a second in minutes 10 to 17, ours 13); power
+    (a half has 9 T2 and 2 T3 generators at 15, ours 82 T1); engineers (a half 186 T1, 34 T2, 6 T3 at 15; ours 45 and
+    5); air (an air factory before 6:00 for most, at 2:05 to 2:40 for many; 1v1 players 1.4k of aircraft by minute 10,
+    ours 0.04k); lost extractors rebuilt (1v1 players 5 of 9 by 15, ours 0 of 6 before R2); one job a slot. The
+    openings, exact to the beat: a land factory first for 122 of 142; by 5:00 a player has started 13 to 17
+    extractors, 12 to 14 power generators, about 19 engineers and a hydrocarbon plant; the commander's first
+    enhancement is the gun, at 6 to 9 minutes in land roles and 11 to 13 in 1v1. Candidates from it, in work: the
+    extractor upgrades on the players' curve, engineers by income with reclaim, storage in bulk after the upgrades.
+    The study: `_scratch/engine/proled/PROLEDGER.md` (ledger.csv has every player and minute, openings.md the build
+    orders).

@@ -97,6 +97,9 @@ local kNavalAirShare = 1.5                    -- anti-ship aircraft kept per mas
 local kNavalAirFactory = 1500                 -- one air factory more per this much enemy ship mass there
 local kNavalPendingTicks = 600                -- a naval factory ordered counts as under way this long before it starts
 local kMassNear = 120                         -- world units: a free mass point this near an engineer comes before reclaim
+-- (R2, 2026-11-20) rebuilding a lost extractor near the base (RebuildUnsafe): the rings by distance from the start and how
+-- long an enemy that shoots ground, known in the point's own zone, holds the rebuild back
+local kRebuild = { home = 60, homeTicks = 100, near = 200, nearTicks = 300 }
 -- (2026-11-04, the early army) THE PROS' CURVE. The scoreboard against 1v1 pro replays (procurve.py, the army-stats
 -- sampler): our army 0 at minute 5 against the pros' ~800 mass and M28's 174, and 0-675 at minute 10 against the
 -- pros' 4,230 and M28's 4,025 - the window where M28 took the last free mass points and began its raids - while our
@@ -342,12 +345,45 @@ AIBrain = Class(StandardBrain) {
             local dx, dz = p.x - q[1], p.z - q[3]
             local d = dx * dx + dz * dz
             local t = (not bestD or d < bestD) and claims[p.key]
-            if (not bestD or d < bestD) and not self:Unsafe(p.zone) and not (t and R.tick - t < kClaimTicks) and
+            if (not bestD or d < bestD) and not self:RebuildUnsafe(p) and not (t and R.tick - t < kClaimTicks) and
                 self:CanBuildStructureAt(bp, Pos(p.x, p.z)) then
                 best, bestD = p, d
             end
         end
         return best
+    end,
+
+    -- (R2, 2026-11-20, helper aieco's probe of the base's 16 M28 games: from minute 10, 70% of the samples of free mass
+    -- points in our home ring (<= 60 of the start) and near ring (60-200) were Unsafe - an enemy seen within
+    -- kEngineerAvoid in the zone or a land neighbour - so a lost T1 extractor (36 mass, back in about 20 s) stayed
+    -- unbuilt for the whole raid. For REBUILDING a point where an extractor of ours stood (R.mexHad), home and near:
+    -- unsafe only while an enemy that shoots ground was known in that same zone within kRebuild.homeTicks /
+    -- kRebuild.nearTicks (R.groundSeen, operations.lua); neighbours do not count. Other points, the far ring and the
+    -- enemy's side: Unsafe as before.)
+    RebuildUnsafe = function(self, p)
+        local R = self.Remaster
+        if not (R.mexHad and R.mexHad[string.format('%.0f:%.0f', p.x, p.z)]) then return self:Unsafe(p.zone) end
+        local dx, dz = p.x - R.startX, p.z - R.startZ
+        local d = math.sqrt(dx * dx + dz * dz)
+        if not R.rebuildEnemyStarts then  -- (the enemies' starts, once: the near ring is our side of the map only)
+            R.rebuildEnemyStarts = {}
+            for i, b in ipairs(ArmyBrains) do
+                if i ~= R.army and IsEnemy(R.army, i) and not ArmyIsCivilian(i) then
+                    local ax, az = b:GetArmyStartPos()
+                    table.insert(R.rebuildEnemyStarts, { ax, az })
+                end
+            end
+        end
+        local nearer = true
+        for _, e in ipairs(R.rebuildEnemyStarts) do
+            if math.sqrt((p.x - e[1]) * (p.x - e[1]) + (p.z - e[2]) * (p.z - e[2])) < d then nearer = false end
+        end
+        local hold
+        if d <= kRebuild.home then hold = kRebuild.homeTicks
+        elseif d <= kRebuild.near and nearer then hold = kRebuild.nearTicks
+        else return self:Unsafe(p.zone) end
+        local t = R.groundSeen and R.groundSeen[p.zone]
+        return t ~= nil and R.tick - t < hold
     end,
 
     -- A zone an engineer should not walk into (phase 7): the enemy is known there now, or was seen there or in a land
@@ -1511,8 +1547,13 @@ AIBrain = Class(StandardBrain) {
             end
         end
         -- upgrades in progress, extractors first (what idle builders assist)
+        R.mexHad = R.mexHad or {}  -- (R2: the points where a finished extractor of ours has stood, RebuildUnsafe)
         for kind, cat in ipairs({ categories.MASSEXTRACTION, categories.FACTORY }) do
             for _, u in ipairs(self:GetListOfUnits(cat * categories.STRUCTURE, false)) do
+                if kind == 1 and not u.Dead and u:GetFractionComplete() >= 1 then
+                    local q = u:GetPosition()
+                    R.mexHad[string.format('%.0f:%.0f', q[1], q[3])] = true
+                end
                 if not u.Dead and u:IsUnitState('Upgrading') then
                     table.insert(ctx.upgrading, u)
                     if kind == 2 and EntityCategoryContains(categories.AIR, u) then ctx.airUpgrading = true end
