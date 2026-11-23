@@ -290,7 +290,20 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   // destroy queue (ProjectilesTick). Seen: m_uefnav2 (weapons range) 176, BattlePack's wel0416 fires its first
   // DragoniteMissiles (DestroyOnWater, ZigZag) from a muzzle 1.8 below the water: the original makes no zig-zag draws
   // for it at 176; ours stepped it (UpdateTracking: three FRand), the first draw apart.
-  if (p->trackTarget && !HasTarget(*this, target)) {
+  // (0x69bb61 asks CAiTarget::HasTarget 0x5e2a10, as UpdateTracking does each step: for a target held through its recon
+  // blip the CAiTarget's entity is the blip, so the target lasts while the blip does, after its unit is gone; ours'
+  // combat HasTarget asks the unit. UpdateTracking below already takes the blip; the ctor did not. Seen (oracle probe
+  // P16, FAF 3840 pro replay 6v6_4): army 1's Seraphim torpedoes (sanheavycavitationtorpedo01) on the blip 0x3040004e
+  // of urb1103 0x400043 (dead 9954, gone after) split at 9960-9965 into sanheavycavitationtorpedo04 children with
+  // that target: the original's twelve live and step (three zig-zag FRand each at 9969 for the first three); ours
+  // destroyed each in its ctor, and beat 9969 was nine draws short.)
+  bool hasTarget = HasTarget(*this, target);
+  if (!hasTarget && target.type == 1 && target.viaBlip && !target.fakeId && target.blipId &&
+      !(target.entityId && FindEntity(target.entityId))) {
+    const Entity* b = FindEntity(target.blipId);
+    hasTarget = b && !b->destroyQueued && b->kind == Entity::Kind::Blip;  // (as UpdateTracking's BlipOfTarget)
+  }
+  if (p->trackTarget && !hasTarget) {
     QueueDestroy(p);
     p->noMotionTask = true;
     return p;
@@ -1271,6 +1284,18 @@ int l_GetCurrentTargetPosition(lua_State* L) {
       PushVec(L, BlipPointUnitGone(*S(L), blip));  // (0x6a1797: GetTargetPosGun, centre flag clear)
       return 1;
     }
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    PushVec(L, Vec3{nan, nan, nan});
+    return 1;
+  }
+  // A target that is a jammer's FAKE blip: the CAiTarget's entity is the fake itself, and once the fake is gone its weak
+  // link is empty, so cfunc_ProjectileGetCurrentTargetPositionL 0x6a1700 -> GetTargetPosGun 0x5e2a90 (0x5e2ac5..0x5e2aca:
+  // no entity -> 0x5e2ba3) gives the invalid vector (NaN, 0x10a99a4, as Moho::Invalid<>), not the last target position.
+  // Seen (oracle probe P17, FAF 3840 pro replay 2v2_5): army 2's Cybran torpedo 270532828 (cantorpedonanite02) on a fake
+  // of army 1's 0x1000a2, the fake gone at 10587: its MovementThread's VDist2 is NaN, "> 8" fails and the thread sets
+  // MaxZigZag and ZigZagFrequency to 0 before the shell's step (probe: Z 0 F 0 at its 10587 entry, no zig-zag draws);
+  // ours gave the last target place 34.6 away, the torpedo zig-zagged (three FRand) and the stream parted at 1056521.
+  if (p->target.type == 1 && p->target.fakeId && !S(L)->FindEntity(p->target.fakeId)) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     PushVec(L, Vec3{nan, nan, nan});
     return 1;
