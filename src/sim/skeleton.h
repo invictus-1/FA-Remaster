@@ -48,6 +48,8 @@ class Skeleton {
   int Count() const { return static_cast<int>(bones_.size()); }
   // Bone index by name (case-insensitive), or -1.
   int Find(const std::string& name) const;
+  // Bone index by the exact name (CAniSkel::FindBoneIndex 0x54a7b0: a binary search with a byte-exact compare), or -1.
+  int FindExact(const std::string& name) const;
 
  private:
   std::vector<Bone> bones_;

@@ -324,7 +324,12 @@ int l_PlayAnim(lua_State* L) {  // (anim [, looping]) -> SetAnimationResource 0x
   a->time = 0;
   a->watch.clear();
   if (h.ok && a->entity && a->entity->skeleton)
-    for (const std::string& n : h.names) a->watch.push_back(a->entity->skeleton->Find(n));
+    // (0x63fc61: CAniSkel::FindBoneIndex 0x54a7b0, a byte-exact compare: an animation bone named 'torso' does not
+    // drive the mesh's 'Torso'. Seen (oracle probes P5H2 / P5H3, FAF 3840 pro replay 4v4_2): the Seraphim commander
+    // 0x700000 (xsl0001) folding into its transport 0x700077 at 9617..9623 with XSL0001_afold.sca, whose bones 1
+    // 'torso' and 3 'Torso' both found the mesh's bone 3 'Torso' in ours: the original's bone 3 keeps its rest place
+    // (0, 0.0438, 0) and only turns; ours moved it to (0, 1.838, -0.13) and the attach put the commander 1.8 lower.)
+    for (const std::string& n : h.names) a->watch.push_back(a->entity->skeleton->FindExact(n));
   // (0x63fc6a: every bone of the animation goes through AddWatchBone 0x63b6d0, which takes the manipulator out
   // of the actor's list and puts it back behind the others of its precedence)
   if (h.ok && !h.names.empty()) a->seq = Sim::From(L)->NextManipSeq();

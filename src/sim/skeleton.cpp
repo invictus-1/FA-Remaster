@@ -168,6 +168,12 @@ int Skeleton::Find(const std::string& name) const {
   return it == byName_.end() ? -1 : it->second;
 }
 
+int Skeleton::FindExact(const std::string& name) const {
+  for (size_t i = 0; i < bones_.size(); ++i)
+    if (bones_[i].name == name) return static_cast<int>(i);
+  return -1;
+}
+
 const Skeleton* SkeletonCache::Get(const std::string& meshFile) {
   std::string key = Lower(meshFile);
   auto it = cache_.find(key);

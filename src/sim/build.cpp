@@ -1934,7 +1934,12 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
   if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
-  if (tu && tu->unitStates.Has(US("NoReclaim"))) return kTaskFailed;
+  // 0x61f0a8..0x61f0ec: NoReclaim ends the task only for a target that is a unit BEING BUILT (Entity vt+0x2c, then
+  // IsUnitState(0x28)); a finished unit a repairer marked NoReclaim (CUnitRepairTask's state 3) is reclaimed on.
+  // Seen (oracle probe P5B3, FAF 3840 pro replay 6v6_1): at 9154 army 1's Hives 0x100071 / 0x100006 start reclaiming
+  // the finished 0x100073, which a repairer marks NoReclaim at 9155: the original's tasks go on (BeingReclaimed, its
+  // health falling, queues of 2); ours failed them at 9155 and went to the next order (0x100031, queues of 1).
+  if (tu && tu->beingBuilt && tu->unitStates.Has(US("NoReclaim"))) return kTaskFailed;
   if (!oldForm) return TickPropReclaim(sim, L, u, t);
   // range: like building, with the target's size
   auto inRange = [&]() {
