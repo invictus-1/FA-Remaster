@@ -1600,7 +1600,11 @@ void EndLoad(Sim& sim, Unit* T, TransportTaskData& d) {
   Callback(sim, T, "OnStopTransportLoading");
   GroundFreeRect(sim, T);  // 0x624cfb..0x624cfe: FreeOgridRect 0x6ab760 on the transport, whatever rect it holds
   SetState(T, US("TransportLoading"), false);
-  SetState(T, US("HoldingPattern"), false);
+  // (HoldingPattern stays: the dtor 0x624cc0 clears only TransportLoading (0x624d0c, unit+0x4a0 &= ~0x100); the state is
+  // written only by the load's own TaskTick state 0 (set 0x625a21, cleared 0x625ab0). Seen: FAF 3840 pro replay 4v4_2,
+  // army 7's transport 0x700077 (xsa0104) on a TransportReverseLoadUnits: its load task ends at 9547 while it holds;
+  // the original's record of 9547 still has HoldingPattern (TransportLoading off), cleared by the next load's state 0
+  // at 9548; ours dropped both at 9547.)
   if (!T->transport) return;
   ClearWaitingFormation(*T->transport);  // dtor 0x624cc0: TransportClearWaitingFormation (vt+0x98)
   if (!d.success) {
@@ -2471,7 +2475,21 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
         // 0x5657f0 (IsValid_Vector3f): no component is NaN (isnan 0xa83f03 three times); an infinity passes (READ,
         // order audit D2.5; before: std::isfinite)
         if (std::isnan(bone.x) || std::isnan(bone.y) || std::isnan(bone.z)) return kTaskDone;
-        AirSetGoal(sim, u, bone, sim.tick(), 1, false);
+        // The walk to the bone is a NewMoveTask (0x621c38, its goal the bone's cell with the landing layer, +0x20 = 1 at
+        // 0x621c31), so the CUnitMoveTask ctor's rally override applies (MoveTaskOverrideGoal): an aircraft whose only
+        // order is its factory's rally order flies to that order's point instead, still to land there, and the cell
+        // there is reserved. Seen: FAF 3840 pro replay 1v1_4, army 1's bomber 0x1000b1 (xsa0103) on its factory's
+        // AggressiveMove (134.6, 739.2) is sent to the staging platform 0x1001c2 at 10510: at 10516 the original's air
+        // target is (135, 735) with landing layer 1 (Refueling on); ours flew to the bone (375.9, 265.5).
+        Vec3 rally;
+        int rr[4];
+        if (MoveTaskOverrideGoal(sim, u, &rally, rr)) {
+          AirSetGoal(sim, u, rally, sim.tick(), 1, false);
+          GroundReserveRect(sim, u, rr);
+          u->moveTaskReserved = true;
+        } else {
+          AirSetGoal(sim, u, bone, sim.tick(), 1, false);
+        }
         d.childMove = true;  // the move task sets Moving
         SetState(u, US("Moving"), true);
         AirSpeedThroughEvent(sim, u);
@@ -2538,6 +2556,9 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
 
 void EndRefuel(Sim& sim, Unit* u, TransportTaskData& d) {
   EndChild(sim, u, d);
+  // (a walk still under way goes with the task: its CUnitMoveTask dtor frees the rect an overridden walk reserved,
+  // 0x618886..0x618891)
+  if (d.childMove) EndMoveTaskReservation(u);
   u->navIgnoreFormation = false;  // dtor 0x6210cd..0x6210e1: IgnoreFormation(false) (order audit D2.2)
   SetState(u, US("ForceSpeedThrough"), false);
   SetState(u, US("Refueling"), false);

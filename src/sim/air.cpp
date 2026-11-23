@@ -2379,7 +2379,14 @@ void AirAbort(Sim& sim, Unit* u) {
   if (a.pending && sim.tick() >= a.pendingTick && u->fractionComplete >= 1.0f) TakePendingGoal(sim, u);
   a.pending = false;
   a.destEntity = 0;
-  Vec3 p = PredictAhead(sim, u, 1.0f);
+  // CAiNavigatorAir::AbortMove 0x5a4f00 takes the point from Unit::PredictAheadBomb 0x62cd40 (0x5a4f2f), the function a
+  // bomber asks of its target: the unit's GetPosition (vt+0x14, 0x62cd84) and GetVelocity (vt+0x3c, 0x62cdd3), its
+  // committed transform and last committed displacement, whoever asks. So an abort made inside the entity pass after
+  // the unit's own step (a script run by another entity's turn) starts from where the unit began the beat. Seen: FAF
+  // 3840 pro replay 4v4_2, army 3's air scout 0x300063 guarding the commander 0x300000: at 9619 a shell's impact on the
+  // commander's shield runs shield.lua's IssueClearCommands on it (after the scout's step); the original's air target
+  // is one second ahead of its place of 9618 (y 38.329), ours was from its place of 9619 (y 38.026).
+  Vec3 p = PredictAhead(sim, u, 1.0f, true);
   Stop(sim, u, &p);
   a.steering = false;
   a.fullSpeed = false;

@@ -793,6 +793,34 @@ bool CanStartBuilding(const Unit* u, const UnitBpData& d) {
 
 void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal) { MoveTaskWalk(sim, u, goal); }
 
+// The same override (CUnitMoveTask ctor 0x6180e0: the test 0x618a00, then 0x618344..0x61862c) for a task that hands
+// its NewMoveTask a goal of its own, as MoveTaskWalk's: false when the ctor keeps the goal it was given; else the
+// footprint cell's centre at the head command's rounded target after PrepareMove, and that cell's rect (which the
+// ctor reserves, 0x61862c, after its SetGoal 0x6185f3). The ctor's goal keeps the given goal's last word (+0x20,
+// 0x6185dc..0x6185e7: the landing layer), so a landing walk overridden still lands.
+bool MoveTaskOverrideGoal(Sim& sim, Unit* u, Vec3* out, int rect[4]) {
+  if (u->unitStates.Has(US("TransportLoading")) || u->unitStates.Has(US("Teleporting")) ||
+      u->unitStates.Has(US("Guarding")) || u->commands.size() != 1 || !u->commands.front() ||
+      !u->commands.front()->factoryIssued || !u->motion.bp)
+    return false;
+  const UnitCommand& c = *u->commands.front();
+  const Entity* te = c.targetId ? sim.FindEntity(c.targetId) : nullptr;
+  const Vec3 tp = te ? te->position : c.pos;
+  Vec3 p{static_cast<float>(RoundEven(tp.x)), tp.y, static_cast<float>(RoundEven(tp.z))};
+  if (vm::BitsZero(p)) return false;  // (0x6184ce: a zero position keeps the goal it was given)
+  const float none[4] = {0, 0, 0, 0};
+  if (u->motion.bp->motionType == kMotionAir) AirPrepareMove(sim, u, &p);
+  else GroundPrepareMove(sim, u, &p, none, 0);
+  const NamedFootprint& fp = Footprint(*u->blueprint);
+  const int x0 = RoundEven(p.x - fp.sizeX * 0.5f), z0 = RoundEven(p.z - fp.sizeZ * 0.5f);
+  *out = Vec3{x0 + fp.sizeX * 0.5f, p.y, z0 + fp.sizeZ * 0.5f};
+  rect[0] = x0;
+  rect[1] = z0;
+  rect[2] = x0 + fp.sizeX;
+  rect[3] = z0 + fp.sizeZ;
+  return true;
+}
+
 // ---- tasks ---------------------------------------------------------------------------------------
 
 namespace {
@@ -3708,6 +3736,14 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
       if (g.hasUnit && G && U->bpData && U->bpData->hasBuilder && Cat(sim, U, "RECLAIM") &&
           G->unitStates.Has(US("Reclaiming")) && G->focusId && sim.FindEntity(G->focusId)) {
         GuardAbort(U);
+        // CUnitGuardTask::IssueReclaimTaskForEntity 0x613a10 (from 0x614729) builds the reclaim task's CAiTarget with
+        // CAiTarget::UpdateTarget 0x5d55b0 (0x613a2c): type 1, the entity, then PickTargetPoint 0x5e28f0 (0x5d5618):
+        // one Unit::PickTargetPoint draw (0x6aaf94) for a unit with AI.TargetBones, none for a prop; then
+        // IssueReclaimTask 0x61ef60 with it. Seen: FAF 3840 pro replay 4v4_2, army 2's guard of the commander 0x200000,
+        // which reclaims its own TMD 0x200027 (uab4201) from 9543: the guard's reclaim of it opens the original's draws
+        // of 9544 (0x6aaf94 before the beat's first Lua draw); ours drew nothing, and the build drones 0x106 / 0x10a,
+        // circling by the draws, parted at 9544.
+        TargetPointDraw(sim, sim.FindEntity(G->focusId));
         child = NewChild(sim, CommandType::Reclaim, "Reclaim");
         child->goalId = G->focusId;
         ReclaimTaskAbortMove(U);  // (the reclaim task's ctor: a second AbortMove, as in the original)

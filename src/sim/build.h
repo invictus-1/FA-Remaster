@@ -123,6 +123,7 @@ bool TaskCanMove(const Unit* u);
 void TaskMoveToward(Sim& sim, Unit* u, const Vec3& goal);
 // A task's walk made by NewMoveTask 0x6190a0 (CUnitMoveTask ctor 0x6180e0 with its rally override; build.cpp MoveTaskWalk).
 void TaskMoveTaskWalk(Sim& sim, Unit* u, const Vec3& goal);
+bool MoveTaskOverrideGoal(Sim& sim, Unit* u, Vec3* out, int rect[4]);  // (the move task ctor's rally override)
 // CUnitReclaimTask's command listener 0x620160: the target of the command it listens to changed.
 void ReclaimTaskCommandEvent(Sim& sim, Unit* u, BuildTask& c, const UnitCommand& cmd);
 void RepairTaskCommandEvent(Sim& sim, Unit* h, BuildTask& ch, const UnitCommand& c);
