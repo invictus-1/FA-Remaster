@@ -69,10 +69,16 @@ float FpMax(const Unit* u) {
   return static_cast<float>(std::max(f.sizeX, f.sizeZ));
 }
 float Mass(const MotionBlueprint& b) { return b.averageDensity * b.sizeZ * b.sizeY * b.sizeX; }
-// Units that have a land steering (CAiSteeringImpl): mobile, not aircraft.
+// Units that have a land steering (CAiSteeringImpl): mobile, not aircraft. A unit that falls (the motion's state 2,
+// ballistic) keeps its steering: CAiSteeringImpl::OnTick 0x5d32b0 has no test of the motion's state, so the spline goes
+// on handing out a point a beat while CalcMoveBallistic (MotionTick 0x6ba078) moves the unit and leaves the points
+// alone; on landing the unit takes the point due then. Seen (oracle probe P13, FAF 3840 pro replay setons_1): army 6's
+// Aeon T3 engineer 0x600024 (ual0309), let go in the air at 13367, gets its batch toward (914.5, 211.5) at 13370 while it
+// falls and is handed points 3, 4 and 5 at 13373-13375; it lands at 13374 and at 13375 moves onto point 5 (a step of
+// 0.69). Ours left the steering out while the unit fell and made the batch from where it landed, at 13375.
 bool HasSteering(const Unit* u) {
   const MotionBlueprint* b = u->motion.bp;
-  return b && b->mobile() && b->motionType != kMotionAir && !u->motion.ballistic;
+  return b && b->mobile() && b->motionType != kMotionAir;
 }
 UnitCommand* Current(const Unit* u) { return u->commands.empty() ? nullptr : u->commands.front().get(); }
 
@@ -666,8 +672,19 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
   } else {
     sim.entityGrid().GatherBox(box.c.x - hx, box.c.z - hz, box.c.x + hx, box.c.z + hz, 1, &cand);
   }
+  // CollectEntitiesInBox 0x721dc0 hands every entity's primitive the same CollisionInfo (esp+0xc), cleared once before
+  // the loop (0x721e5c..0x721e89: normal and depth +0x14 zero) and copied into the result for each entity whose test
+  // passes (0x721f2e..0x721f62). A box primitive (0x4ff260) writes normal and depth when it meets; a sphere (0x4fe860)
+  // writes the normal when IntrBox3Sphere3::Test 0xa41560 passes but the depth only when Find 0xa43420 (zero velocities)
+  // succeeds, which it does only for a sphere centre inside the box (0xa435a9..0x4fe976: depth = r - 0); a sphere that
+  // overlaps a face, an edge or a corner leaves the depth the last test wrote (0xa438e8 / 0xa421e0: "already
+  // intersecting" gives al = 0), 0 when none did. The unit itself is in the list too (no test of self in 0x721dc0; its
+  // own primitive meets its box) and writes the depth in its turn; DoCollisionsFor passes it over (UnitIgnores 0x62eea0).
+  // Ours took the sphere's overlap as its depth. Seen: FAF 3840 pro replay 4v4_1 adrastea 12804, army 5's ual0111
+  // 0x500056 brushing the corner of 0x500076's collision sphere (overlap 0.079), the first entity of its list: the
+  // original's depth is 0 there, no push (it is pushed at 12806); ours pushed it at once.
+  float infoDepth = 0.0f;
   auto visit = [&](Unit* e) {
-    if (e == u) return;
     if (log) {
       log->Derived(&ReadShape, e, sizeof(ShapeRead));
       log->Raw(e->dead);
@@ -693,10 +710,20 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
       meets = BoxBoxSat(o, box, &n, &depth);
       if (!meets) depth = 0;
       g_satDebug = false;
+      if (meets) infoDepth = depth;
     } else if (s.type == ShapeType::Sphere) {
       depth = ObbSphereDepth(box, s.c, s.r);
       meets = depth >= 0;
+      if (meets) {
+        // (Find's inside test 0xa435a9..0xa435d5: |(centre - box centre) . axis| <= extent on all three axes)
+        const Vec3 d = Sub(s.c, box.c);
+        const float hs[3] = {box.h.x, box.h.y, box.h.z};
+        bool inside = true;
+        for (int i = 0; i < 3; ++i) inside = inside && !(hs[i] < std::fabs(Dot(d, box.ax[i])));
+        if (inside) infoDepth = s.r;
+      }
     }
+    if (e == u) return;
     // every entity whose primitive meets the box goes into the motion's contact list (0x6b9260: the whole result of
     // CollectEntitiesInBox, touching and edge-to-edge included), the raised-platform search's candidates
     if (meets) out->contacts.push_back(EntityRef(e));
@@ -708,7 +735,7 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
            "half %.3f %.3f %.3f r %.3f) depth %.5f",
            sim.tick(), u->id, box.c.x, box.c.y, box.c.z, box.ax[2].x, box.ax[2].z, box.h.x, box.h.y, box.h.z, e->id,
            static_cast<int>(s.type), s.c.x, s.c.y, s.c.z, s.ax[2].x, s.ax[2].z, s.half.x, s.half.y, s.half.z, s.r, depth);
-    if (depth > 0) out->hits.push_back({e, depth});
+    if (meets && infoDepth > 0) out->hits.push_back({e, infoDepth});
   };
   for (Entity* e : cand) {
     if (!e) continue;
@@ -718,7 +745,10 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
       if (log) log->Derived(&ReadShape, e, sizeof(ShapeRead));  // (a prop: PropHitTest reads its primitive)
       Vec3 n;
       float d = 0;
-      if (PropHitTest(e, box, amn, amx, &n, &d)) out->hits.push_back({nullptr, d, e, n});
+      if (PropHitTest(e, box, amn, amx, &n, &d)) {
+        infoDepth = d;
+        out->hits.push_back({nullptr, d, e, n});
+      }
     }
   }
 }
@@ -884,7 +914,14 @@ void PredictWith(Sim& sim, Unit* X, Unit* Y, const SplineView& sx, const SplineV
       prevX = pX;
     }
     if (WillCollide(Y, X, vY, pY, pX, vX, sameForm)) {
-      float dPrev = my.colUnit ? Dist2(pY, my.colPos) : 9999.0f;
+      // 0x597bd5..0x597c2b: the meeting on record counts only while the record's weak link (+0) still holds its unit
+      // (0x57d540); a unit that is gone has cleared the link, and the record's place, left by a reaction that kept the
+      // link (SetCol 0x5d3b40 writes the type and the side-step only), is then 9999 away. Ours asked whether the handle
+      // was set. Seen (oracle probe P14, FAF 3840 pro replay 4v4_1 adrastea): army 0's engineer 0x100 (url0105)
+      // guarding factory 0x3f keeps a record from 12188 whose unit has died; at 12570 0x105's new batch meets it three
+      // beats on: the original puts that on record (due 12573, resolved to a side-step: points from 12573); ours
+      // measured against the dead unit's place, 0.11 from the engineer, passed it over and the engineer stood.
+      float dPrev = sim.FindEntity(my.colUnit) ? Dist2(pY, my.colPos) : 9999.0f;
       if (Dist2(pY, pX) < dPrev) {
         my.colType = 1;
         my.colPos = pX;

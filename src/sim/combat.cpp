@@ -6160,12 +6160,20 @@ void PurgeShooters(Sim& sim, Entity* e) {
                     e->shooters.end());
 }
 
-// CUnitMotion::CalcMoveCommon 0x6c1e9b (a unit without a spline point this tick): the first weapon that has a
-// target and is SlavedToBody (CAiAttackerImpl::HasSlavedTarget 0x5d72b0) makes the unit turn its body. With an arc
-// below 180 the turn starts when the target is more than SlavedToBodyArcRange degrees off the bow and stops inside
-// half of it (motion+0x91); in between the unit keeps facing where it faces. *dir = the direction to face.
-// False: no such weapon, the formation's facing applies.
-bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
+// CUnitMotion::CalcMoveCommon 0x6c1e69..0x6c20de, its first part, once a beat and before the move (with a spline point
+// or without): the first weapon that has a target and is SlavedToBody (CAiAttackerImpl::HasSlavedTarget 0x5d72b0) makes
+// the unit turn its body. With an arc below 180 the turn starts when the target is more than SlavedToBodyArcRange
+// degrees off the bow and stops inside half of it (motion+0x91); in between the unit keeps facing where it faces.
+// *T = the face POINT (esp+0x10): the target's place, or the unit's place plus its hull's forward axis; what the move
+// turns toward is that point less the transform's place where the move has put it (TurnInfo 0x6990e0).
+// False: no such weapon (the face point stays the zero vector 0xf3d21c), the formation's facing applies.
+// The latch is judged here only, from the place the unit has before it moves (vt+0x14) and the committed hull (u+0xa4,
+// 0x6c1f67): ours asked again in the hover's point turn after the unit had moved onto its point, and the angle to a
+// target two units away moved by six degrees with that. Seen (oracle probe P15, FAF 3840 pro replay 4v4_5 eonnacia):
+// army 1's Aeon hover tank 0x10009a (ual0201, arc 10) drives its last point at 7892 with the target 4.4 degrees off the
+// bow: the original's latch stays 0 (probe: 0 at 7893 and 7894), it coasts at 7893 without a turn and turns 11.5 degrees
+// at 7894 when the target is 17 degrees off; ours latched at 7892 (10.3 degrees from the moved place) and turned at 7893.
+bool SlavedFacePoint(Sim& sim, Unit* u, Vec3* T) {
   UnitMotion& m = u->motion;
   UnitWeapon* w = nullptr;
   for (UnitWeapon* x : u->weapons)
@@ -6188,34 +6196,10 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
   // following the turret of a turning battleship one beat late.)
   Vec3 tp = TargetPosBeatStart(sim, w->target);
   if (IsNaN(tp)) return false;
-  if (const float aa = CB(u).attackAngle; aa > 0) {
-    // AI.AttackAngle (ubp+0x4d0; 0x6c2350): the unit shows the target its side. The direction to the target is
-    // turned about the up axis by the angle, away from the side the target is on, so the target ends up
-    // AttackAngle degrees off the bow (a Battlecruiser's broadside: 60).
-    Vec3 n = Norm(Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z});
-    const Quat& q = u->orientation;
-    const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
-    const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
-    // 0x6c2483: the turn is a quaternion about the up axis (0x570750: the half angle's cosine, the axis times its
-    // sine) and the direction is turned by it through its matrix (0x452d40). A plain sine and cosine of the whole
-    // angle land a float step beside that, which the rounding below turns into a millionth of a radian.
-    const float hs = dmath::Sin(ang * 0.5f), hc = dmath::Cos(ang * 0.5f);
-    // 0x6c24b5: what the motion is handed is a POINT, the unit's place + that unit vector, and TurnInfo 0x6990e0
-    // takes the place off again. Beside a coordinate of a few hundred a unit vector keeps only its first five
-    // digits, so the direction the hull turns to is up to 1e-5 rad off the exact one, and the 0.9999 test that
-    // starts the next turn falls a beat earlier or later with it.
-    const Vec3 r = RotateM(Quat{0.0f * hs, 1.0f * hs, 0.0f * hs, hc}, n);
-    const Vec3 T{r.x + u->position.x, r.y + u->position.y, r.z + u->position.z};
-    *dir = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
-    static const long dbgAa = getenv("MOHO64_DEBUG_SLAVED") ? atol(getenv("MOHO64_DEBUG_SLAVED")) : -1;
-    if (dbgAa >= 0 && static_cast<long>(u->id) == dbgAa) {
-      const Entity* te = TargetEntity(sim, w->target);
-      Logf(LogLevel::Info,
-           "attack angle %u unit %u target %u bone %d held %d: point %.9g %.9g %.9g | n %.9g %.9g %.9g | side %.9g ang "
-           "%.9g | r %.9g %.9g %.9g | dir %.9g %.9g %.9g | q %.9g %.9g",
-           sim.tick(), u->id, te ? te->id : 0, w->target.aimBone, te && te->shapeHeld ? 1 : 0, tp.x, tp.y, tp.z, n.x,
-           n.y, n.z, n.z * fx - fz * n.x, ang, r.x, r.y, r.z, dir->x, dir->y, dir->z, q.y, q.w);
-    }
+  if (CB(u).attackAngle > 0) {
+    // AI.AttackAngle (ubp+0x4d0 > 0, 0x6c1efa..0x6c1f0d): the face point is the target's (0x6c1ff6), the latch is not
+    // touched; the turn by the angle is made in the no-point branch only (SlavedAttackAnglePoint)
+    *T = tp;
     return true;
   }
   const float arc = w->bp->slavedToBodyArcRange;
@@ -6233,10 +6217,46 @@ bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir) {
     Logf(LogLevel::Info, "slaved %u unit %u arc %.3f rel %.5f deg turning %d -> %d target %.4f %.4f heading %.4f deg",
          sim.tick(), u->id, arc, rel * 57.29578f, was ? 1 : 0, m.slavedTurning ? 1 : 0, tp.x, tp.z,
          UnitHeading(u) * 57.29578f);
-  if (m.slavedTurning || (m.bp && m.bp->motionType == kMotionHover && m.pointNow))
-    *dir = Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z};
-  else
-    *dir = Forward(u->orientation);
+  // (0x6c1fd9..0x6c1fec: latched, or a hover unit (MotionType 7) handed a point: the target; else 0x6c2029..0x6c20d6:
+  // the place plus the forward axis of the committed hull u+0xa4, as a point)
+  if (m.slavedTurning || (m.bp && m.bp->motionType == kMotionHover && m.pointNow)) {
+    *T = tp;
+  } else {
+    const Vec3 f = Forward(u->orientation);
+    *T = Vec3{f.x + u->position.x, f.y + u->position.y, f.z + u->position.z};
+  }
+  return true;
+}
+
+// CalcMoveCommon's no-point branch with AI.AttackAngle > 0 (0x6c2332..0x6c24d5): the unit shows the target its side.
+// The direction to the face point T is turned about the up axis by the angle, away from the side the target is on, so
+// the target ends up AttackAngle degrees off the bow (a Battlecruiser's broadside: 60). T becomes the place plus the
+// turned direction. False (T unchanged): no attack angle.
+bool SlavedAttackAnglePoint(Sim& sim, Unit* u, Vec3* T) {
+  const float aa = CB(u).attackAngle;
+  if (!(aa > 0)) return false;
+  const Vec3 tp = *T;
+  Vec3 n = Norm(Vec3{tp.x - u->position.x, tp.y - u->position.y, tp.z - u->position.z});
+  const Quat& q = u->orientation;
+  const float fx = (q.w * q.y + q.z * q.x) * 2.0f, fz = 1.0f - (q.y * q.y + q.x * q.x) * 2.0f;
+  const float ang = (n.z * fx - fz * n.x > 0.0f) ? aa * 0.017453292f : aa * -0.017453292f;
+  // 0x6c2483: the turn is a quaternion about the up axis (0x570750: the half angle's cosine, the axis times its
+  // sine) and the direction is turned by it through its matrix (0x452d40). A plain sine and cosine of the whole
+  // angle land a float step beside that, which the rounding below turns into a millionth of a radian.
+  const float hs = dmath::Sin(ang * 0.5f), hc = dmath::Cos(ang * 0.5f);
+  // 0x6c24b5: what the motion is handed is a POINT, the unit's place + that unit vector, and TurnInfo 0x6990e0
+  // takes the place off again. Beside a coordinate of a few hundred a unit vector keeps only its first five
+  // digits, so the direction the hull turns to is up to 1e-5 rad off the exact one, and the 0.9999 test that
+  // starts the next turn falls a beat earlier or later with it.
+  const Vec3 r = RotateM(Quat{0.0f * hs, 1.0f * hs, 0.0f * hs, hc}, n);
+  *T = Vec3{r.x + u->position.x, r.y + u->position.y, r.z + u->position.z};
+  static const long dbgAa = getenv("MOHO64_DEBUG_SLAVED") ? atol(getenv("MOHO64_DEBUG_SLAVED")) : -1;
+  if (dbgAa >= 0 && static_cast<long>(u->id) == dbgAa)
+    Logf(LogLevel::Info,
+         "attack angle %u unit %u: point %.9g %.9g %.9g | n %.9g %.9g %.9g | side %.9g ang %.9g | r %.9g %.9g %.9g | "
+         "T %.9g %.9g %.9g | q %.9g %.9g",
+         sim.tick(), u->id, tp.x, tp.y, tp.z, n.x, n.y, n.z, n.z * fx - fz * n.x, ang, r.x, r.y, r.z, T->x, T->y, T->z,
+         q.y, q.w);
   return true;
 }
 

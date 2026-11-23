@@ -45,10 +45,12 @@ int TargetPointBone(Sim& sim, Entity* e);  // the same draw, as the bone of the 
 struct AiTarget;
 int ShotEvent(Sim& sim, int impactType, const AiTarget& target, const Entity* hit, bool shell);
 void WeaponImpactEvent(Sim& sim, class UnitWeapon* w, int event);
-// The direction a standing unit turns its body to for a weapon slaved to the body (false: none).
-bool SlavedFaceVector(Sim& sim, Unit* u, Vec3* dir);
+// CalcMoveCommon's face point for a weapon slaved to the body, made once a beat before the move (false: none), and
+// the no-point branch's AI.AttackAngle turn of it (false: no attack angle, the point unchanged).
+bool SlavedFacePoint(Sim& sim, Unit* u, Vec3* T);
+bool SlavedAttackAnglePoint(Sim& sim, Unit* u, Vec3* T);
 // Every unit's combat data (its blueprint's, read in Lua at the unit's first need) made now, serially, for a stage
-// whose turns run on the worker pool and may read it (parallel order's entity pass: SlavedFaceVector's AI.AttackAngle)
+// whose turns run on the worker pool and may read it (parallel order's entity pass: SlavedFacePoint's AI.AttackAngle)
 void MakeCombatData(const std::vector<Unit*>& units);
 
 // Weapon blueprint values the engine reads (RUnitBlueprintWeapon), cached per blueprint table.

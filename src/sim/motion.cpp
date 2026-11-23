@@ -1649,11 +1649,17 @@ static bool RotateTowardExe(float th, float cx, float cz, float wx, float wz, fl
 // CalcMoveCommon's no-spline branch (formations.md 12): an idle unit of a form formation turns on the
 // spot to the formation's forward vector (Unit::GetFormationVector), TurnInfo 0x6990e0 / RotateToward
 // 0x6992c0, in the negated-z frame. Returns true when it turned.
-bool ArrivalTurn(Sim& sim, Unit* u) {
+// slaved / T: the face point CalcMoveCommon made before the move (SlavedFacePoint).
+bool ArrivalTurn(Sim& sim, Unit* u, bool slaved, Vec3 T) {
   UnitMotion& m = u->motion;
   // a weapon slaved to the body comes first (0x6c1e9b); only without one the formation's forward (0x6c25ca)
   Vec3 fv{};
-  if (!SlavedFaceVector(sim, u, &fv)) {
+  // (0x6c2325: the face point against the zero vector, memcmp 0x4f0a50)
+  if (slaved && !vm::BitsZero(T)) {
+    // AI.AttackAngle (0x6c2332..0x6c24d5), then TurnInfo 0x6990e0 takes the place off the point (0x6c24e8)
+    SlavedAttackAnglePoint(sim, u, &T);
+    fv = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
+  } else {
     if (LandNavActive(u)) return false;  // the navigator is not idle (0x6c25d4)
     if (u->form && FormationIsForm(*u->form) && !u->unitStates.Has(US("TransportLoading")) &&
         !u->unitStates.Has(US("Refueling")) && !combat::HasTarget(sim, u->desiredTarget))
@@ -1662,8 +1668,8 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
     if (vm::BitsZero(fv)) fv = m.faceDir;  // (0x6c2607: the motion's own facing)
     if (vm::BitsZero(fv)) return false;
     // T = pos + fv (0x6c2620), and TurnInfo takes the place off again: the vector as the float sum left it
-    const Vec3 T{u->position.x + fv.x, u->position.y + fv.y, u->position.z + fv.z};
-    fv = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
+    const Vec3 Tf{u->position.x + fv.x, u->position.y + fv.y, u->position.z + fv.z};
+    fv = Vec3{Tf.x - u->position.x, Tf.y - u->position.y, Tf.z - u->position.z};
   }
   if (fv.x == 0 && fv.y == 0 && fv.z == 0) return false;
   const MotionBlueprint& b = *m.bp;
@@ -1704,11 +1710,15 @@ bool ArrivalTurn(Sim& sim, Unit* u) {
 // toward a face point: its slaved weapon's target when it has one (0x6c1fe2: with a point it faces the target
 // whatever the arc says), else the point plus the point's direction. So a hover tank drives backwards or sideways
 // with its gun on the enemy. There is no 0.9999 test here. Sets the hull (m.bx / m.bz and the orientation).
-void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ) {
+void HoverPointTurn(Sim& sim, Unit* u, float dirX, float dirZ, bool slaved, const Vec3& T) {
   UnitMotion& m = u->motion;
   const MotionBlueprint& b = *m.bp;
   Vec3 fv{};
-  if (!SlavedFaceVector(sim, u, &fv)) {
+  // (0x6c21d9: the face point made before the move, against the zero vector; TurnInfo 0x6990e0 at 0x6c222a takes off
+  // the transform's place, which 0x6c21bb has just set to the point's. No AI.AttackAngle turn on this path.)
+  if (slaved && !vm::BitsZero(T)) {
+    fv = Vec3{T.x - u->position.x, 0, T.z - u->position.z};
+  } else {
     // 0x6c21eb: without a slaved target the face POINT is the point's place plus its direction (addss), and
     // TurnInfo 0x6990e0 takes the place off again (0x699143: T - the transform's position, which 0x6c21bb has just
     // set to the point's): the direction as the float sum left it, a unit vector beside a coordinate of a few
@@ -2117,15 +2127,13 @@ void MotionTick(Sim& sim, Unit* u) {
     // on beats without a point, so a latch set while standing survived a whole move. (Seen: an Atlantis that had
     // started a turn at beat 134, then moved off, stopped at 344 with its target inside the arc but outside half
     // of it: the original stood, ours went on turning.) What the direction is used for stays where it was.
-    {
-      Vec3 slavedDir{};
-      SlavedFaceVector(sim, u, &slavedDir);
-    }
+    Vec3 faceT{};
+    const bool faceSlaved = SlavedFacePoint(sim, u, &faceT);
     if (held) {
       m.pointNow = false;
       const Quat q0 = u->orientation;
       const float bx0 = m.bx, bz0 = m.bz, fx0 = m.fx, fz0 = m.fz;
-      const bool turned = ArrivalTurn(sim, u);
+      const bool turned = ArrivalTurn(sim, u, faceSlaved, faceT);
       common = turned || !(kStopSq > (m.vel.y * m.vel.y + m.vel.z * m.vel.z) + m.vel.x * m.vel.x);  // (0x6c27a8..)
       Coast(u, turned);
       u->position = start;
@@ -2177,7 +2185,7 @@ void MotionTick(Sim& sim, Unit* u) {
       m.fz = q.fz;
       if (b.motionType == kMotionHover) {
         // (a hover unit's hull turns toward its weapon's target or the point's direction: HoverPointTurn)
-        HoverPointTurn(sim, u, brakePoint ? m.brakeDir.x : q.fx, brakePoint ? m.brakeDir.z : q.fz);
+        HoverPointTurn(sim, u, brakePoint ? m.brakeDir.x : q.fx, brakePoint ? m.brakeDir.z : q.fz, faceSlaved, faceT);
       } else {
         if (brakePoint) u->orientation = LookQuat(m.brakeDir.x, m.brakeDir.y, m.brakeDir.z);
         else u->orientation = LookQuat(q.bx, 0.0f, q.bz);
@@ -2202,7 +2210,7 @@ void MotionTick(Sim& sim, Unit* u) {
       // re-ordered every other beat turned 9 degrees in the one beat it had no spline, and one pushed aside by a
       // passing tank turned after its target on the third beat of the push. The formation's forward vector is only
       // taken while the navigator is idle, which ArrivalTurn tests itself.)
-      bool turned = ArrivalTurn(sim, u);  // (also while it coasts to a stop)
+      bool turned = ArrivalTurn(sim, u, faceSlaved, faceT);  // (also while it coasts to a stop)
       common = turned || !(kStopSq > (m.vel.y * m.vel.y + m.vel.z * m.vel.z) + m.vel.x * m.vel.x);  // (0x6c27a8..)
       moved = Coast(u, turned);
       if (turned) {
