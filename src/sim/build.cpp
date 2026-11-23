@@ -2383,8 +2383,21 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
     // collision centre 672.4985, 182.528): the original's air target is (676, 183), from the cell (671, 182);
     // ours took the origin's cell (672, 182) and PrepareMove's ring gave (677, 183).
     Vec3 p = c->pos;
-    if (!FormationGoal(sim, *c, U, &p)) p = CommandPosGun(sim, *c);
     const NamedFootprint& fp = Fp(U);
+    if (!FormationGoal(sim, *c, U, &p) && !CommandPosGunValid(sim, *c, &p)) {
+      // An invalid target place (the order's entity gone, its blip too): GetTargetPosGun's NaN goes through
+      // GetPosition's fistp (0x6e8aa5 / 0x6e8acc: the integer indefinite 0x80000000) into the cell's 16-bit words
+      // (0x6e8ad0..0x6e8ad8): the cell (0, 0), and COORDS_ToWorldPos 0x50b0f0 (0x612441) makes its footprint centre
+      // at the height of the ground, or of the water unless the footprint may stand on the seabed. Seen (oracle probe
+      // PG1, FAF 3840 pro replay eonnacia): at 9980 army 6's aircraft 0x60006a guards a blip that is gone: the
+      // original's follow asks PrepareMove for (1, 44.17, 1) and flies to the corner (5, 45.53, 5); ours kept the
+      // order's old point (227, 34.25, 521).
+      const float x = fp.sizeX * 0.5f, z = fp.sizeZ * 0.5f;
+      const TerrainMap* map = sim.map();
+      float y = map ? map->TerrainHeight(x, z) : 0.0f;
+      if (map && map->hasWater && map->waterElevation > y && !(fp.caps & kLayerSeabed)) y = map->waterElevation;
+      return Vec3{x, y, z};
+    }
     int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
     return Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};

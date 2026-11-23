@@ -431,6 +431,9 @@ void AnimatorStep(Sim& sim, Unit* u, ScriptObject* a);
 void AnimatorsUpdate(Sim& sim, Unit* u);
 // CUnitCommand::GetPosition 0x6e8a30's point without a formation (the target point of a unit target)
 Vec3 CommandPosGun(Sim& sim, const UnitCommand& c);
+// The same, false where GetTargetPosGun 0x5e2a90 gives the invalid vector (an entity target whose entity is gone: the
+// static NaN at 0x10c7aa4); CommandPosGun answers the order's own point there.
+bool CommandPosGunValid(Sim& sim, const UnitCommand& c, Vec3* out);
 void AnimTick(Sim& sim);
 // Sim::ProcessDestroyQueue, before the purged entities are deleted (Sim::FreeDead): an animator on a purged entity
 // that is no unit lets go of it and ends, as the next AnimTick would have ended it (by reading the entity).

@@ -3806,7 +3806,12 @@ bool WithinWeaponRange(Sim& sim, UnitWeapon* w, const AiTarget& t) {
 // CAiTarget (cmd+0x11c) with the centre flag clear (bl = 0, 0x6e8a6a). For a unit target that is its target point:
 // the bone of the command's AI.TargetBones pick, or (no pick) its collision centre (bone -1); a ground target's point.
 Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
-  if (!c.targetId) return c.pos;
+  Vec3 p;
+  return CommandPosGunValid(sim, c, &p) ? p : c.pos;
+}
+bool CommandPosGunValid(Sim& sim, const UnitCommand& c, Vec3* out) {
+  *out = c.pos;
+  if (!c.targetId) return true;
   Entity* e = sim.FindEntity(c.targetId);
   if (!e) {
     // A player's order holds the army's recon BLIP (cmd+0x11c), which outlives its unit: with the unit gone,
@@ -3821,9 +3826,11 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
         a.type = 1;
         a.entityId = c.targetBlipRef;
         const Vec3 p = combat::TargetPos(sim, a, false);
-        return std::isnan(p.x) ? c.pos : p;
+        if (std::isnan(p.x)) return false;
+        *out = p;
+        return true;
       }
-    return c.pos;
+    return false;
   }
   AiTarget a;
   a.type = 1;
@@ -3841,7 +3848,9 @@ Vec3 CommandPosGun(Sim& sim, const UnitCommand& c) {
       a.aimBone = TargetBoneOf(e, cb.targetBones[static_cast<size_t>(c.targetPoint)]);
   }
   const Vec3 p = combat::TargetPos(sim, a, false);
-  return std::isnan(p.x) ? c.pos : p;
+  if (std::isnan(p.x)) return false;
+  *out = p;
+  return true;
 }
 
 // The guard task's enemy (GetBestEnemy 0x612af0): the primary weapon's best enemy among the unit's blips

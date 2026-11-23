@@ -365,6 +365,27 @@ const Entity* BlipOfTarget(Sim& sim, const AiTarget& t) {
 }
 
 // UpdateTracking 0x69c8f0
+// UpdateTracking's zig-zag draw (0x69cc56..0x69cd71): with MaxZigZag Z > 0 and ZigZagFrequency F > 0 (the script's
+// override +0x36c / +0x370 when not below 0, else the blueprint's +0x24c / +0x250), once the beat has reached +0x354:
+// three FRand(-Z, Z) (0x69ccf7, 0x69cd16, 0x69cd35) into the offset +0x358..+0x360, the next beat at tick + F x 10.
+static void ZigZagDraw(Sim& sim, Projectile* p, float Z, float F) {
+  if (!(Z > 0 && F > 0) || sim.tick() < p->nextZigZag) return;
+  float ox = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
+  float oy = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
+  float oz = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
+  p->zigOffset = {ox, oy, oz};
+  static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
+  if (dbgProj) {
+    const Entity* e0 = p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
+    const Unit* tu = e0 && e0->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e0) : nullptr;
+    Logf(LogLevel::Info, "pdbg %u %u zigzag (launcher %u, target unit %d%s, dead %d destroy queued %d)", sim.tick(),
+         p->id, p->launcher ? p->launcher->id : 0u, tu ? static_cast<int>(tu->id) : -1,
+         p->target.viaBlip ? " via its blip" : "", tu ? static_cast<int>(tu->dead) : -1,
+         tu ? static_cast<int>(tu->destroyQueued) : -1);
+  }
+  p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
+}
+
 void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   Vec3 pos = p->position;
   // CAiTarget::HasTarget 0x5e2a10: a unit target is gone when the unit is dead, a recon blip target (a shell of a
@@ -416,7 +437,19 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
     if (!IsNaN(t)) p->lastTargetPos = t;
   }
   Vec3 aim = p->lastTargetPos;
-  if (IsNaN(aim)) return;
+  // An invalid aim point (a NaN target place: SetNewTargetGround with the place of a gone target) still gets its
+  // zig-zag draws: nothing between the target test (0x69c901) and the draws (0x69ccf7..0x69cd35) asks whether the
+  // point is valid. (What the original then does with the NaN point, the turn and the step, is not modelled: ours
+  // stops there as before.) Seen: FAF 3840 pro replay 6v6_3, 8100: a Cybran Loa tactical missile split by an
+  // anti-missile; FAF's SplitComponent.OnSplit gives its three children (cifmissiletacticalsplit01) the mother's
+  // GetCurrentTargetPosition (NaN: its target gone) and its ZigZagThread turns their tracking on (MaxZigZag 10): the
+  // original makes nine FRand (three per child, 0x51b5c6) at their first step in that beat; ours none.
+  if (IsNaN(aim)) {
+    const ProjBp& b0 = GetProjBp(sim, sim.L(), *p->blueprint);
+    ZigZagDraw(sim, p, p->ovMaxZigZag >= 0 ? p->ovMaxZigZag : b0.maxZigZag,
+               p->ovZigZagFreq >= 0 ? p->ovZigZagFreq : b0.zigZagFrequency);
+    return;
+  }
   Entity* te = TargetEntity(sim, p->target);
   if (p->leadTarget && p->maxSpeed > 0 && te && has) {
     // (a shell that has taken its step already: its velocity of the beat's start goes with its place of the
@@ -462,22 +495,7 @@ void UpdateTracking(Sim& sim, Projectile* p, Quat& q, Vec3& v) {
   float Z = p->ovMaxZigZag >= 0 ? p->ovMaxZigZag : b.maxZigZag;
   float F = p->ovZigZagFreq >= 0 ? p->ovZigZagFreq : b.zigZagFrequency;
   if (Z > 0 && F > 0) {
-    if (sim.tick() >= p->nextZigZag) {
-      float ox = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
-      float oy = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
-      float oz = static_cast<float>(sim.EFRand(p, Sim::RandPurpose::kZigZag, -Z, Z));
-      p->zigOffset = {ox, oy, oz};
-      static const bool dbgProj = getenv("MOHO64_DEBUG_PROJ") != nullptr;  // (read once)
-      if (dbgProj) {
-        const Entity* e0 = p->target.entityId ? sim.FindEntity(p->target.entityId) : nullptr;
-        const Unit* tu = e0 && e0->kind == Entity::Kind::Unit ? static_cast<const Unit*>(e0) : nullptr;
-        Logf(LogLevel::Info, "pdbg %u %u zigzag (launcher %u, target unit %d%s, dead %d destroy queued %d)", sim.tick(),
-             p->id, p->launcher ? p->launcher->id : 0u, tu ? static_cast<int>(tu->id) : -1,
-             p->target.viaBlip ? " via its blip" : "", tu ? static_cast<int>(tu->dead) : -1,
-             tu ? static_cast<int>(tu->destroyQueued) : -1);
-      }
-      p->nextZigZag = sim.tick() + static_cast<uint32_t>(std::floor(F * 10));
-    }
+    ZigZagDraw(sim, p, Z, F);
     const Vec3 e = Sub(aim, pos);
     float s = std::min(std::sqrt((e.x * e.x + e.z * e.z) + e.y * e.y) / Z, 1.0f);  // (0x69cd8c..0x69cda6)
     Vec3 n = Norm(d);
