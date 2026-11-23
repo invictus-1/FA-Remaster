@@ -1187,6 +1187,13 @@ void StartHead(Sim& sim, Unit* u) {
       default:
         break;
     }
+    // A FormMove whose formation is made here, by its first dispatch, runs a CUnitFormAndMoveTask too (DispatchTask
+    // 0x608ef0, type 4 at 0x609335: GetFormation after GenerateFormation, then 0x619a90), whose ctor suspends the thread
+    // (0x6194b8): FormationTaskStarted (above) ran before the formation existed. Seen: FAF 3840 pro replay 6v6_1, army
+    // 4's 0x400055 given a FormMove with clear at 7970 (a new formation): the original re-links it at its group's
+    // at-goal event of 8047 (its formation slot asked after 0x400054's at 8049, so 0x400054 keeps its raw slot (123,541));
+    // ours had no suspended mark and left it in place.
+    if (c.type == CommandType::FormMove && c.form) u->formMoveAsleep = true;
     // (no Immobile test anywhere in DispatchTask 0x608ef0: a unit standing unpacked (Unit:SetImmobile) is given its
     // move or patrol task as any other; the task's ctor packs it up (AttackerUnpackStop) and the steering holds
     // still while the state lasts. Seen: LAND 1679, two heavy artillery (url0304) unpacked and firing were given a
