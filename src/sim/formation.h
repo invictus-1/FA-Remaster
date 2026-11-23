@@ -73,6 +73,9 @@ struct Formation {
   // The members whose CUnitFormAndMoveTask has heard "your group is at goal" (its latch +0x64, set by the listener
   // 0x619770 on the event 1 that Update raises at 0x59bd19); cleared when such a task is made (FormationTaskStarted)
   std::set<uint32_t> heard;
+  // The tasks that listener woke in this update (their threads go to the command run list's end), resumed after the
+  // update in the registry's order (FormationsTick / FormationsTickParallel: the update may run on the pool)
+  std::vector<Unit*> woken;
   bool released = false;
 };
 

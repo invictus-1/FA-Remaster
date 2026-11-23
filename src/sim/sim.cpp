@@ -2675,6 +2675,7 @@ const std::vector<Unit*>& Sim::ArmyStageOrder() {
   return armyOrder_;
 }
 void Sim::ResumeCommandThread(Unit* u) {
+  u->formMoveAsleep = false;  // (a resumed thread is no longer suspended in a form-and-move task)
   if (u == resumeHeld) return;  // (re-linked already by its queue's clear event: see resumeHeld)
   cmdChanges_.push_back({u->cmdSeq, u, false});
   u->cmdSeq = ++cmdSeqNext_;

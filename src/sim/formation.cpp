@@ -31,6 +31,7 @@
 #include "sim/write_trap.h"
 
 namespace moho {
+bool FormMoveTaskOf(const Unit* u, const void* form);  // (sim/commands.cpp)
 namespace {
 
 constexpr float kInfF = std::numeric_limits<float>::infinity();
@@ -752,10 +753,23 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   // 0x59bd0d..0x59bd19: the group's flag, then the broadcast of event 1 to the formation's listeners; each member's
   // CUnitFormAndMoveTask (0x619770, case 1) asks the formation whether ITS group is at goal (vt+0x50) and sets its
   // latch +0x64 (and wakes its thread)
+  // The listener's case 1 (0x6197a4..0x6197b3) also zeroes the thread's counter and, when the thread is suspended
+  // (+0x18: the task sleeps between its wakes), resumes it (0x409420), which links it at the run list's END. Seen
+  // (oracle probes P5D1 / P5D2, FAF 3840 pro replay 4v4_3): army 7's 0x70009f ends its FormMove at 8158 (its group at
+  // goal); from then on the original runs its command thread after 0x70005d's (thread order at 8190: 7a 93 94 95 9e a0
+  // 32 0c 5d 9f 96 ...), so at 8200 its formation slot is taken after 5d's; ours never re-linked it (no resume after
+  // 7800), kept it sixth and gave 0x700032 another slot (4v4_3 8207).
   for (int k = 0; k < 2; ++k)
     for (FormGroup& x : F.groups[k])
       if (x.atGoal)
-        for (auto& [id, n] : x.nodes) F.heard.insert(id);
+        for (auto& [id, n] : x.nodes)
+          if (F.heard.insert(id).second)
+            if (Unit* m = UnitOf(sim, n.ref); FormMoveTaskOf(m, &F)) F.woken.push_back(m);
+}
+
+void ResumeWoken(Sim& sim, Formation& F) {
+  for (Unit* m : F.woken) sim.ResumeCommandThread(m);
+  F.woken.clear();
 }
 
 // vt+0x44 Update (4.1), after its rebuild (EnsureBuilt): reads the units, the terrain, the path and unit grids, and
@@ -1182,6 +1196,7 @@ bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out) {
 bool FormationHeardAtGoal(UnitCommand& c, Unit* u) { return c.form && c.form->heard.count(u->id) != 0; }
 void FormationTaskStarted(UnitCommand& c, Unit* u) {
   if (c.form) c.form->heard.erase(u->id);
+  u->formMoveAsleep = c.form != nullptr;  // (the ctor suspends the thread)
 }
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
   (void)sim;
@@ -1226,6 +1241,7 @@ void FormationsTick(Sim& sim) {
     auto f = reg[i].lock();
     if (!f || f->released) continue;
     Update(*f);
+    ResumeWoken(sim, *f);
   }
   reg.erase(std::remove_if(reg.begin(), reg.end(),
                            [](const std::weak_ptr<Formation>& w) {
@@ -1339,6 +1355,9 @@ void FormationsTickParallel(Sim& sim) {
       st.hold.push_back(std::move(f));
     }
     run();
+    // the woken tasks' threads, in the registry's order (= the serial loop's: each formation's in its update's order)
+    for (size_t i = 0; i < reg.size(); ++i)
+      if (auto f = reg[i].lock(); f && !f->woken.empty()) ResumeWoken(sim, *f);
     auto forth = [&](size_t b, size_t e, int) {
       for (size_t i = b; i < e; ++i)
         if (Unit* u = st.who[i]) {

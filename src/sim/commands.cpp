@@ -1405,6 +1405,15 @@ bool NavEventWakesCommandThread(const Unit* u) {
   return true;
 }
 
+// Whether the unit's running head task is the CUnitFormAndMoveTask of formation `form` and its thread is still suspended
+// in it (formation.cpp: the at-goal broadcast's listener resumes only a suspended thread, 0x6197ab..0x6197b3; one the
+// navigator's event already woke is not linked again. Seen: MP2 9402, army 1's 0x1000ef / 0x100114 / 0x10012d, each
+// re-linked at its own arrival (9304 / 9362 / 9393) before their group's at-goal event).
+bool FormMoveTaskOf(const Unit* u, const void* form) {
+  return IsAlive(u) && !u->commands.empty() && u->headState == kRunning && HeadTaskType(u) == CommandType::FormMove &&
+         u->commands.front()->form.get() == form && u->formMoveAsleep;
+}
+
 void ForgetUnitCommands(Unit* u) {
   NoteHeadLeaving(*Sim::From(u->luaState()), u);  // (ClearCommandQueue 0x6ee2da; ui REQUESTS 54)
   EndMoveTaskRect(u);

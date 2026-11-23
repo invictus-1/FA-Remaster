@@ -198,8 +198,8 @@ Vec3 PredictAhead(Sim& sim, Unit* u, float t, bool other = false);
 // The terrain's height tiers (LookAheadForMaxTerrain's) made now if they are not yet: before a stage whose tasks fly
 // aircraft on the pool (parallel order's phase A), which would otherwise make them at the first look ahead.
 void AirTiersReady(const Sim& sim);
-// Warp: re-sync the body and the terrain height.
-void AirWarp(Sim& sim, Unit* u);
+// Warp: re-sync the body and the terrain height (resetTerrain false: the smoothed terrain height m+0x54 is kept).
+void AirWarp(Sim& sim, Unit* u, bool resetTerrain = true);
 // CUnitMotion::ProcessFuelLevels 0x6b9940 (fuel.md 3): burn in the air, refuel on the ground or
 // docked on a staging platform (which also repairs, paid through an economy request).
 void FuelTick(Sim& sim, Unit* u);

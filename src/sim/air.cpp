@@ -2121,14 +2121,16 @@ void AirInit(Sim& sim, Unit* u) {
   BodySetTransform(pb, Transform{q, u->position});
 }
 
-void AirWarp(Sim& sim, Unit* u) {
+void AirWarp(Sim& sim, Unit* u, bool resetTerrain) {
   if (!u->motion.air) return;
   AirMotion& a = A(u);
   BodySetTransform(a.body, Transform{ToW(u->orientation), u->position});
-  const TerrainMap* map = sim.map();
-  float s = Elevation(map, u->position.x, u->position.z);
-  if (map && map->hasWater) s = std::max(s, map->waterElevation);
-  a.curTerrain = s;
+  if (resetTerrain) {
+    const TerrainMap* map = sim.map();
+    float s = Elevation(map, u->position.x, u->position.z);
+    if (map && map->hasWater) s = std::max(s, map->waterElevation);
+    a.curTerrain = s;
+  }
   SetTarget(sim, u, u->position, Vec3{}, 0);
   a.fullSpeed = u->motion.airSpeedThrough;
 }

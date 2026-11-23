@@ -319,6 +319,9 @@ class Unit : public Entity {
   // set while the queue is cleared for a new order under which CUnitMoveTask's destructor (0x618700, the table
   // 0x618998) does NOT abort the navigator: a task whose move child is torn down then leaves the move running
   bool clearKeepsMove = false;
+  // the command thread is suspended in its CUnitFormAndMoveTask: set by the task's ctor (0x6194b8, +0x18 = 1), cleared by
+  // any resume (the navigator's event 0x6196db or the formation's at-goal event 0x619770 wake it; Sim::ResumeCommandThread)
+  bool formMoveAsleep = false;
   // the head Move task reserved its spot in the o-grid (CUnitMoveTask +0x92: a factory's rally Move put through
   // PrepareMove, ctor 0x618622); its dtor frees it (0x618891)
   bool moveTaskReserved = false;

@@ -678,7 +678,11 @@ void NotifyDetachedMotion(Sim& sim, Unit* child, bool skipBallistic) {
     SetUnitLayer(sim, child, "Air");
   }
   AirNotifyDetached(sim, child);
-  if (CanFly(child)) AirWarp(sim, child);
+  // (NotifyDetached 0x6b9570..0x6b9728 writes no smoothed terrain height m+0x54: a flier let go climbs from the one it
+  // had before it docked. Seen: FAF 3840 pro replay 1v1_4, army 1's bomber 0x1000b1 docked on the staging platform
+  // 0x1001c2 from 10875 (it came from (135, 735), terrain 15.54) leaves it at 10885: the original's m+0x54 is 16.54
+  // (15.54 + one step), ours had taken the ground under the dock (26.96) and climbed 11 more.)
+  if (CanFly(child)) AirWarp(sim, child, false);
   sim.MarkUnitsMoved();
 }
 
@@ -2531,7 +2535,20 @@ int TickRefuel(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
       case 3:  // docked: wait for full fuel and health
         if (RefuelDone(sim, u)) {
           TransportDetach(sim, O, u);
-          AirSetGoal(sim, u, u->position, sim.tick(), 0x10);
+          // The take-off is a NewMoveTask too (0x621e44..0x621e5b: the unit's own cell, layer 0x10), so the CUnitMoveTask
+          // ctor's rally override applies as at the landing (state 1): an aircraft whose only order is its factory's
+          // rally order takes off toward that order's point. Seen: FAF 3840 pro replay 1v1_4, army 1's bomber 0x1000b1
+          // (xsa0103), docked on the staging platform 0x1001c2 from 10875, leaves it at 10885: the original's air target
+          // is (135, 735) (its factory's AggressiveMove); ours took its own place and rose straight up.
+          Vec3 rally;
+          int rr[4];
+          if (MoveTaskOverrideGoal(sim, u, &rally, rr)) {
+            AirSetGoal(sim, u, rally, sim.tick(), 0x10, false);
+            GroundReserveRect(sim, u, rr);
+            u->moveTaskReserved = true;
+          } else {
+            AirSetGoal(sim, u, u->position, sim.tick(), 0x10);
+          }
           d.childMove = true;  // the move task sets Moving
           SetState(u, US("Moving"), true);
           AirSpeedThroughEvent(sim, u);
@@ -3036,7 +3053,14 @@ int TickPod(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
   if (t.waitUntil > sim.tick()) return kTaskRunning;
   if (u->dead || u->destroyQueued) return kTaskDone;
   const bool mobile = PodMobile(u);
-  Unit* owner = UnitRef(sim, d.transport);
+  // The owner is the task's weak link +0x34 (0x61e075..0x61e0bb: null -> the end, then the owner's vt+0x28 dead test
+  // and its transport +0x55c): it holds until the owner's object is deleted by the beat's destroy queue, not from its
+  // Destroy(). Seen: FAF 3840 pro replay 6v6_2, army 11's Kennel drone 0xb00033 (xea3204) repairs the upgrade of its
+  // Kennel 0xb0009c into 0xb000a1; the upgrade ends at 12343 (the old Kennel destroyed in that beat) with the repair:
+  // the original's pod task still finds its owner, goes to state 1 (return 3) and ends at 12345 (AssistingCommander off
+  // there, on again at 12346, Repairing at 12347); ours took the destroy-queued Kennel for gone and ended at 12343.
+  Entity* oe = d.transport ? sim.FindEntity(d.transport) : nullptr;
+  Unit* owner = oe && oe->kind == Entity::Kind::Unit ? static_cast<Unit*>(oe) : nullptr;
   if (mobile && (!owner || owner->dead || !owner->transport)) return kTaskDone;
   if (u->commands.size() >= 2 && u->commands[1]) return kTaskDone;  // HasNextCommand 0x61d9c0
   if (InCat(sim, u, "STATIONASSISTPOD")) {
