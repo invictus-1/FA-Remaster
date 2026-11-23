@@ -3679,6 +3679,13 @@ void KillCleanupTick(Sim& sim) {
     // factory's rally orders lose their factory, and an order no unit holds then is deleted at the Sync
     // (CCommandDb::PublishSyncData 0x6e0f50). (Read; the case seen is the destroy without a kill: sim.cpp, ~Unit.)
     ClearFactoryCommandQueue(u);
+    // ... and its silo builder is deleted (0x6a884c..0x6a8862: unit+0x558, vt[0](1) = CAiSiloBuildImpl's dtor 0x5cf640
+    // -> 0x5cedf0), which unlinks its economy request (silo+0x2c) from the army's list and frees it: from the next
+    // share-out on the dead launcher asks for nothing. Seen: FAF 3840 pro replay 2v2_2, army 3's Seraphim launcher
+    // 0x200123 (xsb2108, captured at 8880) killed at 9593 while it builds a missile (12 E and 0.8333 M a beat): the
+    // original's share-out of 9594 no longer has its request; ours kept it until the unit's destruction, granted it 12 E
+    // and 0.8333 M at 9594 that nothing spent, and the army's storage stayed that much lower (economy, 9594).
+    SiloRelease(u);
     // ... and its navigator and steering are deleted (unit+0x54c and +0x550 set to null, 0x6a8804..0x6a8832): the
     // spline and the collision record go with the steering. ResolvePossibleCollision asks a unit with no steering for
     // no spline point (0x597103: [X+0x550] null) and takes its position. Seen: MP2 6877, army 0's Mantis 0xda resolves

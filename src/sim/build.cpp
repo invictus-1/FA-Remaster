@@ -4596,6 +4596,14 @@ std::vector<Unit*> Overlapping(Sim& sim, Unit* u) {
 // The Unit ctor for a complete immobile unit (0x6a646d) and Unit::Materialize at completion (0x6aa272): for each unit
 // it touches, u:OnAdjacentTo(o, u), then o:OnAdjacentTo(u, u) (the third argument is the unit that caused it).
 void AdjacencyGained(Sim& sim, lua_State* L, Unit* u) {
+  // OverlapsWith 0x62d2b0 asks IsDead (vt+0x28) of BOTH units first (0x62d2c7..0x62d2e3: either dead, no overlap), so a
+  // unit that is finished while dead touches nothing (the other's test is Overlapping's). Unit::Kill's own collect
+  // (0x6a81fe) runs before its unit is marked dead; ours marks it first, so the test is here, not in OverlapsWith.
+  // Seen: 6v6_3 (FAF 3840) 6310, army 6's mass storage 0x50008d, killed at 6307 while being built and repaired on to
+  // 100 % on the dead shell: the original calls no OnAdjacentTo (watch v53: its AdjacentUnits stays nil, the
+  // extractor 0x50001b keeps one neighbour), ours paired it with the extractor, whose mass income rose 12.5 % (6311)
+  // and whose new beam made a Lua Random the original does not.
+  if (u->dead) return;
   for (Unit* o : Overlapping(sim, u)) {
     PushObject(L, o);
     PushObject(L, u);
