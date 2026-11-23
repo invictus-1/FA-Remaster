@@ -1932,8 +1932,25 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
     return kTaskRunning;
   if (!oldForm && t.reclaimAtPoint) return TickPropReclaim(sim, L, u, t);
   Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
-  if (!e || e->destroyQueued || e->dead || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
-  Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  Unit* tu = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
+  // CUnitReclaimTask::TaskTick 0x61f0fa..0x61f160: the task ends (0x620098: OnStopReclaim if it was started) when the
+  // target is gone or its Destroy is queued (+0x1b9), and, for a unit, when its attributes say it may not be reclaimed
+  // (vt+0x40, +0x68 == 0: what Unit:SetReclaimable 0x6c9460 writes). Nothing there asks whether the unit is dead: a
+  // dead unit is left by its reclaimers only because FAF's Unit.DoTakeDamage (unit.lua 1422) calls
+  // SetReclaimable(false) before Kill, for every unit but a VOLATILE one. A dead VOLATILE unit is reclaimed on: state 2's
+  // health test (0x61f8db) finds its 0 health below the step, OnReclaimed and Destroy follow (0x61f98f, 0x61f9dc).
+  // Seen (oracle probe P10, FAF 3840 pro replay falcon): army 3's T3 generator 0x30005b (urb1301, VOLATILE), killed at
+  // 14793 by 0x3000e2's death blast while 0x300075 and 0x300096 reclaim it, is destroyed by 0x300075's reclaim at
+  // 14794; ours ended both reclaims on the death and the generator stood dead to 14806. The wall 0x45 killed at 8517
+  // while 0x100040 reclaims it (not VOLATILE) stays: its reclaim ends at 8518 in both. (A prop keeps the old test.)
+  // (helper pro6's fixV, merged by the lead onto batch 202's NoReclaim test below)
+  bool unreclaimable = false;
+  if (tu && tu->HasLuaObject()) {
+    PushObjectValue(L, tu, "Reclaimable");  // (Unit:SetReclaimable's value; true until a script says otherwise)
+    unreclaimable = !lua_isnil(L, -1) && lua_toboolean(L, -1) == 0;
+    lua_pop(L, 1);
+  }
+  if (!e || e->destroyQueued || (tu ? unreclaimable : e->dead) || e == u) return t.state >= 2 ? kTaskDone : kTaskFailed;
   // 0x61f0a8..0x61f0ec: NoReclaim ends the task only for a target that is a unit BEING BUILT (Entity vt+0x2c, then
   // IsUnitState(0x28)); a finished unit a repairer marked NoReclaim (CUnitRepairTask's state 3) is reclaimed on.
   // Seen (oracle probe P5B3, FAF 3840 pro replay 6v6_1): at 9154 army 1's Hives 0x100071 / 0x100006 start reclaiming

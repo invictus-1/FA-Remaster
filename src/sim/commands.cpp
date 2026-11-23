@@ -1660,16 +1660,26 @@ void CommandStage(Sim& sim) {
   sim.CommandLinkBegin();
   uint64_t hi = sim.CommandSeqHigh();
   size_t mark = sim.CommandLinkMark();
-  for (Unit* u : order) step(u);
+  // The stage's run list is a linked list: a thread re-linked while the pass runs (a listener met it suspended) is
+  // unlinked from its place and put at the end, so it does not run at the place it had: a unit whose cmdSeq is above
+  // the pass's start was re-linked in it and waits for its new place below. Seen (oracle probe P22, FAF 3840 pro
+  // replay 6v6_3): at 7007 a Guard's new target wakes army 8's 0x800055 (its Repair child's walk, suspended); the
+  // original's 0x800079 / 0x80006a, whose guards end too, take [436,405] and [434,405] for their BuildMobile walks
+  // (NewMoveTask goals), so 0x800055's BuildMobile reserves after them; ours ran 0x800055 at its old place first,
+  // it took [436,405], and 0x800079 / 0x80006a took [434,405] / [438,406].
+  for (Unit* u : order)
+    if (u->cmdSeq <= hi) step(u);
   std::vector<Unit*> more;
   for (;;) {
     // the units whose cmdSeq is above hi, in cmdSeq order (Sim::CommandLinkedSince: from the list of the units given a
     // new cmdSeq since the mark, not a scan of every unit; the same list)
     sim.CommandLinkedSince(mark, hi, &more);
     if (more.empty()) break;
-    hi = sim.CommandSeqHigh();
+    const uint64_t passHi = sim.CommandSeqHigh();
+    hi = passHi;
     mark = sim.CommandLinkMark();
-    for (Unit* u : more) step(u);
+    for (Unit* u : more)
+      if (u->cmdSeq <= passHi) step(u);
   }
   // path searches, first come first served
   auto& q = sim.pathQueue;

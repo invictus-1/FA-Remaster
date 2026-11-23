@@ -644,9 +644,19 @@ bool HasTarget(Sim& sim, const AiTarget& t) {
   return true;
 }
 // CAiTarget::EntityLost 0x5e2db0: the entity behind the target (a blip's unit, GetEntity 0x5e2ce0) is killed (+0x99)
+// A target that IS a recon blip (an order given on the blip after its unit died, or a weapon's): GetEntity (0x5e2cfc
+// vt+0x1c IsReconBlip, then the blip's unit link +0x270) is the blip's unit, and a blip without one is lost too
+// (0x5e2dc6: je 0x5e2dd6, al = 1), as TaskTargetLost below says. Seen (FAF 3840 pro replay 6v6_4): at 13349 army 3's
+// five T2 point defences (ueb2301, 0x300010 ...) take their second Attack, on the blip 0x30200096 whose unit is gone;
+// at 13350 the original's queues are empty (acquire code 4 = lost; for an immobile attacker AttackEvent ends it);
+// ours asked the blip itself (not dead), reported 3 and the orders stood.
 bool EntityLost(Sim& sim, const AiTarget& t) {
   if (t.type != 1) return false;
   const Entity* e = TargetEntity(sim, t);
+  if (e && e->kind == Entity::Kind::Blip) {
+    const Unit* s = static_cast<const ReconBlip*>(e)->source;
+    return !s || s->dead || !sim.FindEntity(EntityRef(s));
+  }
   return e && e->dead;
 }
 

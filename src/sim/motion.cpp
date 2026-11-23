@@ -2028,6 +2028,21 @@ void MotionTick(Sim& sim, Unit* u) {
     LandBallisticTick(sim, u);
     return;
   }
+  // A dead unit takes the layer test too: MotionTick has no IsDead test before UpdateCurrentLayer 0x6c35c0 (0x6b9f64,
+  // and Unit::UpdateTerrainType 0x6a9b50 at 0x6b9f6f), only the held test (0x6b9f10..0x6b9f27: vt+0x3c(1) Immobile,
+  // u+0x29c stunned) and the last move |m+0x38|^2 > 1e-6 (0x6b9f2d..0x6b9f60); 0x6c35c0 asks nothing of the unit's
+  // death (vt+0x1c only). A dead unit keeps the velocity it died with, so it takes the layer of the place where it
+  // stopped. Seen (FAF 3840 pro replay 6v6_4): army 2's 0x20008b, killed at 12856 by beams as it drove into the water
+  // (463.13, 528.58), is on the Water layer at 12857 in the original (max speed 3.6 from 12858); ours stayed Land.
+  // (ProcessSurfaceCollisionFromLastMove 0x6b9e2c, before it in MotionTick, has no IsDead test either: not modelled
+  // here for a dead unit.)
+  if (m.bp && m.bp->mobile() && m.bp->motionType != kMotionAir && u->dead && !m.ballistic && !u->immobile &&
+      !u->unitStates.Has(US("Immobile")) && !u->stunned &&
+      (m.vel.x * m.vel.x + m.vel.y * m.vel.y) + m.vel.z * m.vel.z > 1e-6f) {
+    const Vec3 at = u->position;
+    UpdateLayer(sim, u);
+    UpdateTerrainType(sim, u, at.x, at.z);
+  }
   if (m.bp && m.bp->motionType == kMotionHover && u->dead && HoverRuns(u)) {  // dead hovers still wobble
     Vec3 s0 = u->position;
     HoverMove(sim, u);
