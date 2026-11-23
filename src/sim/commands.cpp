@@ -2217,6 +2217,17 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
     if (d.type == static_cast<int>(CommandType::Reclaim) &&
         !ReclaimOrderValid(sim.L(), u, const_cast<Entity*>(seen)))
       continue;
+    // The Capture case (0x6f043c: type 21, index 9 of the type switch 0x6efdc2), its unit side (read): the unit does
+    // not take the order (0x6efe44) when it rides a transport and is no POD (GetTransportedBy 0x5e3c30, 0x6f043c..
+    // 0x6f04a7) or when it is not in CAPTURE (0xe2ec50, IsInCategory 0x67b050 at 0x6f04d0, 0x6f04ee); its queue is
+    // untouched by the clear. (Then, with a target (0x6f04f6), the target side: no unit behind it (vt+0x1c blip ->
+    // 0x579670, else vt+0x10), not capturable (vt+0x40 +0x69), an ally (GetAllianceWith 0x579430 == 1), dead (vt+0x28)
+    // or being built (vt+0x34) refuse too: not modelled here.) Seen (FAF 3840 pro replay eonnacia): at 9465 army 0's
+    // player gives a Capture to three engineers and the Cybran build drones 0xb0, 0xd3, 0xef (ura0001o / ura0002o:
+    // POD, no CAPTURE); the original's drones keep their queues (0xb0 none, 0xd3 / 0xef one order), ours queued it.
+    if (d.type == static_cast<int>(CommandType::Capture) &&
+        ((u->transportedBy && !BpInCategory(sim, u->blueprint, "POD")) || !BpInCategory(sim, u->blueprint, "CAPTURE")))
+      continue;
     // (with the entity slot zeroed the place test reads the order's own point, cmd+0x18 (0x6efcad), which a stream order
     // on an entity leaves at (0, 0, 0): outside a map whose playable rect starts above 0. Seen: 6v6_1 (FAF 3840) 6143,
     // army 2's player gives an Attack (blip 0x30900000) to two units and the point defence 0x20004f (uab2301: CQUEMOV)

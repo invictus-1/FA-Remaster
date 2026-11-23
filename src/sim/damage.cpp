@@ -255,11 +255,20 @@ std::vector<Absorb> ShieldPrePass(Sim& sim, lua_State* L, const DamageSpec& d, f
   return out;
 }
 
+// 0x736e40: each shield of the pre-pass whose primitive holds the target's place (vt+0x24 with entity+0xac,
+// 0x736e66) takes its absorption off the amount. +0xac is the COMMITTED place, written by Entity::AdvanceCoords
+// (step 13) only: a unit that has moved earlier in this beat is still where the beat began (its held shape's
+// place). Seen (oracle probe P20, FAF 3840 pro replay adrastea): at 13379 the shells 0x1000002e / 0x1000002f of
+// 0x1d6 burst by army 5's 0x50005a, which had moved already (to 404.27, 266.28; 7.52 from the centre of army 4's
+// shield 0x40500000, radius 7.5); the original measured it where 13379 began (404.53, 266.32: 7.31, inside), the
+// shield took both 92s and 0x50005a kept 586. Ours measured the moved place and dealt 2 x 92.
+static const Vec3& CommittedPos(const Entity* e) { return e->shapeHeld ? e->shapePos : e->position; }
+
 float ShieldReduce(const std::vector<Absorb>& S_, Entity* e, float amount) {
   for (const Absorb& a : S_) {
     WorldShape ws;
     if (!GetWorldShape(a.sh, &ws)) continue;
-    if (PointInShape(ws, e->position)) amount -= a.absorbed;
+    if (PointInShape(ws, CommittedPos(e))) amount -= a.absorbed;
   }
   return amount;
 }
@@ -307,10 +316,10 @@ void DoDamageArea(Sim& sim, lua_State* L, const DamageSpec& d, float r0, float r
     if (e->blueprint && BpInCategory(sim, e->blueprint, "NOSPLASHDAMAGE")) continue;
     float amt = ShieldReduce(shields, e, d.amount);
     if (amt <= 0) continue;
-    DoDamagePoint(sim, L, d, e, amt, Sub(e->position, d.origin));
+    DoDamagePoint(sim, L, d, e, amt, Sub(CommittedPos(e), d.origin));  // (0x737881..0x7378a3: +0xac - origin)
   }
-  if (!ring)
-    for (const Absorb& a : shields) DoDamagePoint(sim, L, d, a.sh, a.absorbed, Sub(a.sh->position, d.origin));
+  if (!ring)  // (0x73797c..0x7379aa: the shield's +0xac - origin)
+    for (const Absorb& a : shields) DoDamagePoint(sim, L, d, a.sh, a.absorbed, Sub(CommittedPos(a.sh), d.origin));
 }
 
 // Damage(instigator, origin, target, amount, damageType)
@@ -416,12 +425,14 @@ void KillUnit(Sim& sim, lua_State* L, Unit* u, Entity* instigator, const std::st
       u->motion.airSpeedThrough = keep;
       u->motion.air->fullSpeed = keep;
     }
-  } else if (hadCommands && u->motion.nav) {
-    // and a ground unit's: IAiCommandDispatchImpl::OnEvent 0x599030 (event 0) -> UpdateSpeedThroughStatus, whose
-    // empty queue gives navigator->SetSpeedThroughGoal(false) (0x6acaf1, vt+0x18) -> CAiSteeringImpl 0x5d2390
-    // (seen: Skirmish 2764, two engineers 0xd / 0x15 killed on a move with another queued, each 1 -> 0)
-    LandNavSetSpeedThrough(u, false);
   }
+  // (A ground unit's byte is not touched here: Unit::UpdateSpeedThroughStatus 0x6ac940 returns at once for a dead unit
+  // (vt+0x28, 0x6ac970), and the only writer at the kill is a torn-down task's AbortMove (vt+0x18(0) at 0x5a3772 ->
+  // SetSpeedThroughGoal 0x5d2390): a move task's dtor, or a patrol's when the unit moved this beat (0x61b1bd), both made
+  // by IssueClearCommandsTo above. Seen (oracle probe P19, FAF 3840 pro replay 4v4_5 eonnacia): army 6's 0x60001b on two
+  // Patrol orders, standing, its patrol task setting the byte to 1 at 9393 (UpdateSpeedThroughStatus from
+  // CUnitPatrolTask::TaskTick 0x61c3b5), killed later in that beat: no setter call after, the byte stays 1 (records
+  // 9393-9395); ours set it to 0 at the kill.)
   u->unitStates.Erase(US("Moving"));  // (the move task goes with the queue: a unit killed on its way is not "Moving")
   u->unitStates.Erase(US("Patrolling"));  // (nor "Patrolling": the patrol task goes the same way)
   u->unitStates.Erase(US("Guarding"));    // (nor guarding)

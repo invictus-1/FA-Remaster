@@ -2943,6 +2943,9 @@ bool PodFocused(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, Unit* own
   }
   if (State(owner, US("Reclaiming"))) {
     PodLeave(sim, u, t, d);
+    // (0x61dfc9: the reclaim branch makes a CAiTarget of the entity first, UpdateTarget 0x5d55b0, as
+    // TryIssueNearbyAssistTask's does (see PodNearby): one Unit::PickTargetPoint draw for a unit with TargetBones)
+    TargetPointDraw(sim, F);
     PodStartWork(sim, d, MakeReclaimChild(sim, u, F));
     return true;
   }
@@ -3009,8 +3012,17 @@ bool PodNearby(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d) {
     return true;
   }
   PodLeave(sim, u, t, d);
-  if (State(best, US("BeingReclaimed"))) PodStartWork(sim, d, MakeReclaimChild(sim, u, best));
-  else PodStartWork(sim, d, MakeRepairChild(sim, u, best, false));
+  // The reclaim branch (0x61ddac..0x61dddf: Kill 0x61d820, IsUnitState BeingReclaimed, then UpdateTarget 0x5d55b0 on a
+  // CAiTarget of the unit before IssueReclaimTask 0x61ef60) draws one Unit::PickTargetPoint for a unit with
+  // TargetBones; the repair branch (CUnitRepairTask::new 0x5f9e50) none. Seen (oracle probe P5F2, FAF 3839 pro replay
+  // Seton's 3): beat 9675 opens with three PickTargetPoint draws on 0x30005a from CAiTarget::UpdateTarget+0x6d <-
+  // TryIssueNearbyAssistTask+0x3ce; ours drew none there and the stream parted at draw 1273234.
+  if (State(best, US("BeingReclaimed"))) {
+    TargetPointDraw(sim, best);
+    PodStartWork(sim, d, MakeReclaimChild(sim, u, best));
+  } else {
+    PodStartWork(sim, d, MakeRepairChild(sim, u, best, false));
+  }
   return true;
 }
 

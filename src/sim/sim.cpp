@@ -3806,7 +3806,14 @@ void Sim::Tick() {
     for (size_t i = 0; i < motionOrder.size(); ++i) {
       Unit* u = motionOrder[i];
       prefetchFor(i);
-      beamsBefore(u->handle);
+      // (the run list's place: a unit sent to the list's end (orderHandle, see turnMotion) comes after every beam made
+      // before that, as it does after the shells. Ours compared the beams with the unit's creation handle. Seen
+      // (oracle probe P21, FAF 3840 pro replay setons_1): the HiroCannon beams of army 4's 0x40014f (handles 67296..)
+      // are older than the place the hovers 0x600045, 0x6000b9 (orderHandle 67347) and 0x6000bf (67402) were sent to,
+      // and younger than 0x3000f5 (67248); at 13555 a beam hits army 3's 0x3000af, whose OnHealthChanged draws two Lua
+      // Randoms between 0x3000f5's and 0x600045's wobble pairs in the original; ours ran the beams after 0x6000bf, and
+      // the three hovers' wobble took the next pairs.)
+      beamsBefore(u->orderHandle ? u->orderHandle : u->handle);
       projectilesBefore(u->orderHandle ? u->orderHandle : u->handle);
       wtrap::Turn trapTurn(u);  // (MOHO64_PAR_WRITETRAP: the unit's own pages writable for its turn)
       Quat prevOri;
