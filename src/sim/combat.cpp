@@ -3870,12 +3870,32 @@ bool CommandOrSacuOf(Unit* u) {
 void MakeCombatData(const std::vector<Unit*>& units) {
   for (Unit* u : units) (void)CB(u);
 }
-Unit* GuardBestEnemy(Sim& sim, Unit* u) {
+// CUnitGuardTask's GetBestEnemy 0x612af0: the unit's attacker (unit+0x544) is asked for its primary weapon (vt+0x3c,
+// 0x5d6e30) and then FindBestEnemy (vt+0x34, 0x5d7a10) with the unit's blip list (unit+0x5b8, as GetBlipsInRange
+// last built it), GuardScanRadius (bp+0x460) and no angle: the same list, entries and all, that the weapon's own
+// acquire searches. So an entry that is a recon BLIP counts as the blip (its own flags and place), and the blip of a
+// unit that just died lives on: the guard attacks it. Seen: 4v4_setons_2 (FAF 3839) 11951, army 0's interceptor 0xa
+// guarding 0x6000c8: its list of 11944 holds army 7's air units 0x700026 and 0x70017a and their blips, both units
+// shot down at 11950; the original's guard attacks at 11951 (Attacking, speed 15, until 11957), its weapon holding
+// the dead target (oracle probe P11: no blip rebuild from 11944 on); ours passed the entries as units, took none,
+// and the attack came only at 11957 on another unit.
+Unit* GuardBestEnemy(Sim& sim, Unit* u, bool* viaBlip, bool* pastDeath, uint32_t* fakeId) {
+  *viaBlip = false;
+  *pastDeath = false;
+  *fakeId = 0;
   UnitWeapon* w = PrimaryWeapon(u);
   if (!w || !w->bp) return nullptr;
   float r = CB(u).guardScanRadius;
-  Unit* best = FindBestEnemy(sim, w, u->blipCache, r, false);
-  if (best && DistXZ(best->position, u->position) > r) return nullptr;
+  bool bestBlip = false;
+  uint32_t bestFake = 0;
+  Unit* best = FindBestEnemy(sim, w, u->blipCache, r, false, &u->blipCacheBlip, &bestBlip, &u->blipCacheFake, &bestFake);
+  if (!best) return nullptr;
+  const Entity* fake = bestFake ? sim.FindEntity(bestFake) : nullptr;
+  const Vec3 at = fake ? fake->position : bestBlip && best->blip ? best->blip->position : best->position;
+  if (DistXZ(at, u->position) > r) return nullptr;
+  *viaBlip = bestBlip;
+  *pastDeath = bestBlip && best->dead;
+  *fakeId = bestFake;
   return best;
 }
 
@@ -4561,7 +4581,7 @@ void AttackTaskCommandEvent(Sim& sim, Unit* u, BuildTask& t, const UnitCommand& 
 int AttackTaskResult(const BuildTask& t) { return t.adata ? t.adata->result : 0; }
 
 // new CUnitAttackTargetTask(target e) (the guard's and the patrol's child)
-BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
+BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e, bool viaBlip, bool pastDeath, uint32_t fakeId) {
   // both callers (CUnitPatrolTask::TaskTick 0x61c229, CUnitGuardTask::SetEnemy 0x61390f) first build a CAiTarget of
   // the enemy they found (UpdateTarget 0x5d55b0: one target-point draw when it has AI.TargetBones), then make the task
   const int targetPoint = TargetPointDraw(sim, e);
@@ -4571,6 +4591,10 @@ BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e) {
   t->order = "Attack";
   t->goalId = EntityRef(e);
   t->targetPoint = targetPoint;
+  // (the guard's enemy may be a recon blip: GuardBestEnemy; the target as the acquire's auto-attack names it)
+  t->targetViaBlip = viaBlip;
+  t->targetPastDeath = pastDeath;
+  t->targetFakeId = viaBlip ? fakeId : 0;
   t->site = e->position;
   t->child = true;
   InitAttack(sim, u, *t, false);

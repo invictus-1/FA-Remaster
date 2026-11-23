@@ -356,7 +356,8 @@ float GuardScanRadiusOf(Unit* u);
 // MOHO64_CATCACHE_CHECK=1 asks BpInCategory too at every call and stops on a difference.
 bool PatrolHelperOf(Unit* u);
 bool CommandOrSacuOf(Unit* u);
-Unit* GuardBestEnemy(Sim& sim, Unit* u);
+// (viaBlip / pastDeath / fakeId: the enemy found is that unit's recon blip, as the acquire's FindBestEnemy gives it)
+Unit* GuardBestEnemy(Sim& sim, Unit* u, bool* viaBlip, bool* pastDeath, uint32_t* fakeId);
 // The patrol's search box (an OBB in xz: centre, unit direction along the leg, half extents across / along).
 struct PatrolBox {
   float cx = 0, cz = 0, dx = 0, dz = 1, side = 0, along = 0;
@@ -365,7 +366,7 @@ struct PatrolBox {
 // CUnitPatrolTask::FindTarget 0x61b710: the primary weapon's best enemy among the cached blips that touch the
 // box, within GuardScanRadius.
 Unit* PatrolFindTarget(Sim& sim, Unit* u, const PatrolBox& box);
-BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e);
+BuildTask* MakeAttackTaskOn(Sim& sim, Unit* u, Entity* e, bool viaBlip = false, bool pastDeath = false, uint32_t fakeId = 0);
 // What the attack task's attacker-event listener (0x5f3ee0) wrote through the task's +0x28 into its parent's result
 // word (the dispatcher's +0x2c for a head attack and for a patrol's child): 1 (event 8), 2 (events 2, 3, 4, 5, 7 by
 // the unit's mobility), 0 when no event wrote (the CCommandTask ctor 0x5f095f cleared it).

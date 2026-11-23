@@ -3678,13 +3678,15 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
         break;
       }
       if (!g.engAssistFactory && !g.engAssistEngineer && !U->weapons.empty()) {
-        if (Unit* e = GuardBestEnemy(sim, U)) {
+        bool eBlip = false, ePast = false;
+        uint32_t eFake = 0;
+        if (Unit* e = GuardBestEnemy(sim, U, &eBlip, &ePast, &eFake)) {
           if (!IsZero(g.anchor)) {
             g.anchor = {};
             GroundFreeRect(sim, U);
           }
           GuardAbort(U);
-          child = MakeAttackTaskOn(sim, U, e);
+          child = MakeAttackTaskOn(sim, U, e, eBlip, ePast, eFake);
           t.state = 2;
           break;
         }
