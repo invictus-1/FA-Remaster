@@ -1099,6 +1099,8 @@ void StartHead(Sim& sim, Unit* u) {
   while (!u->commands.empty()) {
     UnitCommand& c = *u->commands.front();
     u->headType = static_cast<int>(c.type);  // (HeadTaskType)
+    u->headStartTick = sim.tick();
+    if (c.type == CommandType::FormMove) FormationTaskStarted(c, u);
     if (c.type == CommandType::Stop) {
       // DispatchTask's case for Stop (0x608f98 -> 0x60a490) does not touch the motion: it clears the attacker's
       // desired target (0x5d56f0), calls unit+0x558's vt+0x2c and sets unit+0xa2. What stops the unit is the
@@ -1594,9 +1596,19 @@ void CommandStep(Sim& sim, Unit* u) {
     return;
   }
   // a form move ends when its group (or every group) is at goal: FormationAtGoal / u+0x590
+  // CUnitFormAndMoveTask::TaskTick 0x619650: done when its latch +0x64 is set, or it has no formation, or the unit's
+  // all-at-goal byte u+0x590 is set; else it waits (1). The latch is set by its formation listener 0x619770 (event 1,
+  // when the formation's vt+0x50 says the unit's group is at goal), and the formation raises that event in its Update
+  // (step 11, after the command stage) each time the group passes its at-goal test (0x59bd0d..0x59bd19: group +0x39 = 1,
+  // then the broadcast 0x56b070 with 1), and wakes the task, whose next tick ends it. A task otherwise sleeps: it is
+  // not asked about u+0x590 every beat, only when it is made (its first tick) or woken. So: in the beat it is made,
+  // u+0x590; later, only the latch (FormationHeardAtGoal). Seen: FAF 3840 pro replay 4v4_4, army 5's aircraft:
+  // 0x500044 ends its two Moves at 8085 and starts its FormMove in a group at goal: the original keeps the FormMove at
+  // 8085 (u+0x590 = 1 from that beat's update) and ends it at 8086; 0x500013 and 0x50003b start theirs at 8092 and keep
+  // them with u+0x590 = 1 from 8092 on (no event: their group does not pass again). Ours ended each in its first beat.
   if (st == kRunning && !u->commands.empty() && HeadTaskType(u) == CommandType::FormMove &&
       FormationHas(*u->commands.front(), u) &&
-      (u->formAllAtGoal || FormationGroupAtGoal(sim, *u->commands.front(), u))) {
+      (u->headStartTick == sim.tick() ? u->formAllAtGoal : FormationHeardAtGoal(*u->commands.front(), u))) {
     PopHead(u);
     u->motion.arrived = u->motion.failed = false;
     SetMoving(u, false);

@@ -1661,8 +1661,14 @@ bool ArrivalTurn(Sim& sim, Unit* u, bool slaved, Vec3 T) {
     fv = Vec3{T.x - u->position.x, T.y - u->position.y, T.z - u->position.z};
   } else {
     if (LandNavActive(u)) return false;  // the navigator is not idle (0x6c25d4)
+    // Unit::GetFormationVector 0x6a8c20 (0x6c25f2): zero in states 8 / 0x1e (TransportLoading, Refueling) or without a
+    // formation (+0x580), else the formation's forward (vt+0x4c / vt+0x48; an air unit with a land leader: the leader's).
+    // It does not ask the unit's target: ours skipped the formation's forward while the unit had a desired target.
+    // Seen: FAF 3840 pro replay 1v1_1, 10774, army 0's hover 0x60 in a FormAggressiveMove formation (its desired target
+    // set), pushed off its path with its navigator idle: the original turns 18 degrees a beat toward the formation's
+    // forward (93.4 degrees) from 10775 until its navigator takes a goal again at 10781; ours stood at -36.4 degrees.
     if (u->form && FormationIsForm(*u->form) && !u->unitStates.Has(US("TransportLoading")) &&
-        !u->unitStates.Has(US("Refueling")) && !combat::HasTarget(sim, u->desiredTarget))
+        !u->unitStates.Has(US("Refueling")))
       fv = FormationVector(sim, u);
     // (both tests are memcmps with the zero vector, 0x6c25fe and 0x6c2631: a -0.0 part is not zero)
     if (vm::BitsZero(fv)) fv = m.faceDir;  // (0x6c2607: the motion's own facing)

@@ -1634,6 +1634,12 @@ int TickCall(Sim& sim, Unit* u, BuildTask& t, TransportTaskData& d, const BuildT
   // army 5's transport 0x5000ab dies while its cargo, the engineer 0x500076, waits in state 0 (asked at 9285): the
   // original's call ends at 9294 (9285 + 9), ours at once (9289).
   if (t.waitUntil > sim.tick()) return kTaskRunning;
+  // The walk of state 1 is a NewMoveTask child on the thread (CUnitCallTransport 0x5ffc70 pushes it and returns):
+  // while it runs the call task is not ticked at all, so none of its transport tests below comes before the walk has
+  // ended. Seen: FAF 3840 pro replay 2v2_4, army 2's ferry 0x200030's load ends at 8025 while its cargo (0x200006,
+  // 0x20003d, 0x200062, 0x2000c9 ...) walk to their pickup cells: the original's cargo walk on with TransportLoadUnits
+  // and their states; ours failed the calls at 8026 and dropped the orders.
+  if (t.state == 2 && d.moving && u->motion.hasGoal) return kTaskRunning;
   if (!T || T->dead || !T->transport) return kTaskFailed;
   if (t.state != 0 && !State(T, US("TransportLoading"))) return kTaskFailed;
   TransportObj& O = *T->transport;
@@ -1983,6 +1989,14 @@ bool RunChild(Sim& sim, Unit* u, BuildTask& parent, TransportTaskData& d) {
     // 0 and the table 0x618998 says "abort" for 0): an aircraft's motion target becomes the point one second
     // ahead and its drive-through flag goes, until the ferry task gives it the next leg
     if (CanFly(u) && u->motion.arrived) AirAbort(sim, u);
+    // A land navigator is aborted too (0x618884, no goal test), after Moving went (0x6187bd): MakeIdle ->
+    // SetWaypoints(0, 0) makes the brake spline afresh and predicts again (0x5d2b69), now with the unit standing for
+    // UnitPriority. Seen (oracle probe P5A1, FAF 3840 pro replay 2v2_4): army 2's tank 0x200006, walking beside a
+    // ferry beacon, is assigned by the ferry's load at 7995: the load's AbortMove (first SetWaypoints(0, 0), 0x200104
+    // predicted against as the mover with priority), then the woken walk's dtor (second SetWaypoints(0, 0), 0x200006
+    // no longer Moving: 0x200104 yields, its record due 7995); 0x200104 resolves it at 7996 and its CheckCollisions
+    // moves the scout 0x200119's record to 7999, where the original brakes; ours braked at 8000.
+    else if (!CanFly(u) && !u->clearKeepsMove && u->motion.bp && u->motion.bp->mobile()) MotionStop(u);
   }
   return false;
 }

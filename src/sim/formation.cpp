@@ -702,7 +702,11 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
   Sim& sim = *F.sim;
   Unit* GL = GroupLeader(F, g);
   if (!GL) return;
-  bool st = GL->motion.passThrough;
+  // (0x59b9dd..0x59ba04: the group leader's motion byte +0x8c, unit+0x4b0, the speed-through flag; for an aircraft that
+  // byte is ours' airSpeedThrough, as the recorder reads it, not the land motion's passThrough. Seen: FAF 3840 pro replay
+  // 4v4_4, 8085, army 5's air FormMove group of 0x50002e / 0x500044, leader flying through (1): the original's radius
+  // takes the 0.67 factor and the group is at its goal at 8085; ours took 0.25 and was there a beat later.)
+  bool st = GL->motion.air ? GL->motion.airSpeedThrough : GL->motion.passThrough;
   float R = std::max(static_cast<float>(F.largest) * 2.0f, g.speed * (st ? 0.67f : 0.25f));
   static const bool dbg = getenv("MOHO64_DEBUG_ATGOAL") != nullptr;
   if (dbg) {
@@ -745,6 +749,13 @@ void AtGoalCheck(Formation& F, FormGroup& g) {
     }
   }
   g.atGoal = true;
+  // 0x59bd0d..0x59bd19: the group's flag, then the broadcast of event 1 to the formation's listeners; each member's
+  // CUnitFormAndMoveTask (0x619770, case 1) asks the formation whether ITS group is at goal (vt+0x50) and sets its
+  // latch +0x64 (and wakes its thread)
+  for (int k = 0; k < 2; ++k)
+    for (FormGroup& x : F.groups[k])
+      if (x.atGoal)
+        for (auto& [id, n] : x.nodes) F.heard.insert(id);
 }
 
 // vt+0x44 Update (4.1), after its rebuild (EnsureBuilt): reads the units, the terrain, the path and unit grids, and
@@ -1168,6 +1179,10 @@ bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out) {
   return true;
 }
 
+bool FormationHeardAtGoal(UnitCommand& c, Unit* u) { return c.form && c.form->heard.count(u->id) != 0; }
+void FormationTaskStarted(UnitCommand& c, Unit* u) {
+  if (c.form) c.form->heard.erase(u->id);
+}
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u) {
   (void)sim;
   if (!c.form) return false;

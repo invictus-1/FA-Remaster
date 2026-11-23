@@ -11,6 +11,7 @@
 #pragma once
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,9 @@ struct Formation {
   };
   std::vector<Reservation> reservations;
   uint32_t rebuilds = 0;        // FormationUpdated broadcasts
+  // The members whose CUnitFormAndMoveTask has heard "your group is at goal" (its latch +0x64, set by the listener
+  // 0x619770 on the event 1 that Update raises at 0x59bd19); cleared when such a task is made (FormationTaskStarted)
+  std::set<uint32_t> heard;
   bool released = false;
 };
 
@@ -90,6 +94,9 @@ bool FormationAdjustedOfForm(UnitCommand& c, Unit* u, float* x, float* z);
 bool FormationGoalOfForm(UnitCommand& c, Unit* u, Vec3* out);
 // u's group has reached the goal (FormationAtGoal + IsInFormation(u)).
 bool FormationGroupAtGoal(Sim& sim, UnitCommand& c, Unit* u);
+// The member's form-and-move task heard its group at goal (latch +0x64); FormationTaskStarted clears it (the task's ctor)
+bool FormationHeardAtGoal(UnitCommand& c, Unit* u);
+void FormationTaskStarted(UnitCommand& c, Unit* u);
 // Per tick: the formation DB update (beat step 11).
 void FormationsTick(Sim& sim);
 // The same step in parallel order, with the moves of every unit to its committed transform and back (Sim::AdvanceBeat's
