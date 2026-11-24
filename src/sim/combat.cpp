@@ -1842,26 +1842,35 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // fakes (ReconGetJamingBlips 0x5c20c0: every blip of the unit in the army's database, the real one too). The
   // list is only as fresh as the weapon that asks needs it (a 20-beat weapon reads what a 10-beat one built), and
   // a blip does not die with its unit: so a weapon can take the blip of a jammer that died since the list was
-  // made. The query collects them in a set sorted by the blips' ADDRESSES (0x5c3a90); here the real blip, made
-  // first, and then the fakes in the order they were made, which is what a heap that only grows gives.
+  // made. The query collects them in a sorted vector of the blips' POINTERS (0x5c3a90: lower_bound 0x5cb710 on the
+  // 4-byte values), so in ADDRESS order. A blip is a 0x4d0 block of the game's own allocator (FindOrCreateBlip
+  // 0x5c09b0 -> operator new 0xa825b9 -> 0x958b20), whose blocks of that size are reused: an address cannot be had
+  // here. STAND-IN (not the original's rule): the blips' ids, which come from the lowest free serial (DoReserveId
+  // 0x684480) and are reused too. Seen: FAF 3840 pro replay 2v2_5, oracle probe PJ2 (11502): every jammer's blips in
+  // the original's lists of army 2's cruiser 0x2000d2 stand in ascending id order (7 of 7), among them 0x1000d4's
+  // fakes 0x301000bd / 0x301000be (made 11282) BEFORE its real blip 0x301000e5 (8877); ours put the real one first,
+  // so the held fake 0x301000bd kept its place and no new target came (the original's weapons 0 and 3 took the real
+  // blip: SetTarget's aim-spot draws, 0x6d612c -> 0x5e2950).
   u->blipCacheFake.clear();
   {
     std::vector<Unit*> withBlips;
+    std::vector<std::pair<uint32_t, uint32_t>> bl;  // (blip id, fake ref; 0 for the real blip)
     for (Unit* t : u->blipCache) {
       withBlips.push_back(t);
       u->blipCacheBlip.push_back(0);
       u->blipCacheFake.push_back(0);
       if (!(t->intel && t->intel->has[9] && t->intel->on[9])) continue;
-      if (t->blip && (t->recon[a] & kReconInUse) && !(t->recon[a] & 0x20)) {
-        withBlips.push_back(t);
-        u->blipCacheBlip.push_back(1);
-        u->blipCacheFake.push_back(0);
-      }
+      bl.clear();
+      if (t->blip && (t->recon[a] & kReconInUse) && !(t->recon[a] & 0x20)) bl.push_back({t->blip->id, 0u});
       for (const ReconBlip* f : t->fakeBlips) {
         if (f->destroyQueued || !(f->rflags[a] & kReconInUse) || (f->rflags[a] & 0x20)) continue;
+        bl.push_back({f->id, EntityRef(f)});
+      }
+      std::stable_sort(bl.begin(), bl.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+      for (const auto& e : bl) {
         withBlips.push_back(t);
         u->blipCacheBlip.push_back(1);
-        u->blipCacheFake.push_back(EntityRef(f));
+        u->blipCacheFake.push_back(e.second);
       }
     }
     u->blipCache.swap(withBlips);
