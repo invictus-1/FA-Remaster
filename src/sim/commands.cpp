@@ -1462,9 +1462,14 @@ bool ArrivalStep(Sim& sim, Unit* u) {
   }
   UnitCommand& c = *u->commands.front();
   const CommandType task = HeadTaskType(u);  // (the move task's kind: the type the head was dispatched as)
-  // CUnitFormAndMoveTask: arriving does not end it; it waits for its group to be at goal (formations.md 11)
-  if (task == CommandType::FormMove && !m.failed && FormationHas(c, u)) {
-    m.arrived = false;
+  // CUnitFormAndMoveTask: arriving does not end it; it waits for its group to be at goal (formations.md 11). Nor does
+  // the navigator's failure: its navigator listener OnEvent 0x619680 only writes the result word (events 0 / 1 -> 2,
+  // event 2 -> 1) and re-links a suspended thread (0x6196a8..0x6196db), and its TaskTick 0x619650 ends on the latch
+  // +0x64, a missing formation +0x60 or u+0x590 only, never on that word. Seen: FAF 3840 pro replay 6v6_3 8765, army 8's
+  // 0x8000d0 on a FormMove (from the stream, 8760) whose continuations find no way (dead end, navigator failed at
+  // 8765): the original keeps the FormMove (cmd 4) and turns in place; ours ended the order that beat.
+  if (task == CommandType::FormMove && FormationHas(c, u)) {
+    m.arrived = m.failed = false;
     return false;
   }
   // The dispatcher reads the command's type as it is NOW (cmd+0x98, TaskTick 0x598ebb / 0x598f47): a Patrol or

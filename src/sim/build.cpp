@@ -2220,6 +2220,7 @@ struct GuardData {
   bool goalSet = false;
   std::weak_ptr<UnitCommand> cmd;     // +0x4c: the Guard command
   std::weak_ptr<UnitCommand> ownCmd;  // +0x44: an own-queue factory command being built
+  bool ownCmdTaken = false;           // the child build was made from it (its CFactoryBuildTask +0x88)
   BuildTask* child = nullptr;         // a pushed child task (its parent: the guard or the dispatcher)
   bool childToGuard = false;          // the child's result lands in the guard (+0x2c)
   uint32_t childFrom = 0;             // its first tick (the thread's wait counter)
@@ -2501,6 +2502,7 @@ BuildTask* FactoryWork(Sim& sim, Unit* U, GuardData& g, Unit* G) {
     const BlueprintInfo* bp = sim.blueprints().Find(c->blueprintId);
     if (!bp) continue;
     g.ownCmd = c;
+    g.ownCmdTaken = c->type == CommandType::BuildFactory;
     BuildTask* t = NewChild(sim, c->type, c->type == CommandType::Upgrade ? "Upgrade" : "FactoryBuild");
     t->bp = bp;
     // The CUnitUpgradeTask ctor (0x5f847b..0x5f8499, read) sets Upgrading (+0x4a0 |= 0x40) and the workProgress
@@ -3416,8 +3418,13 @@ BuildTask* StartGuardTask(Sim& sim, Unit* u, const UnitCommand& c) {
   // in the command stage. The first Guard ends (dtor: both Guards queued, speed-through on); the original makes the
   // second one's task, whose dtor (the second Guard, then BuildMobile) turns it off again (0 at 5417); ours took the
   // second Guard for one without a target and left it on.
+  // A blip-held order (an enemy's recon blip, as the player's orders name them) is the blip for CAiTarget: HasTarget
+  // 0x5e2a10 asks the blip, which lives on a few beats past its unit's death and is then gone; with it the target. Seen:
+  // FAF 3839 pro replay Seton's 3, 9940: army 6's spy plane 0x60001e reaches a Guard queued at 9085 on the blip
+  // 0x304000ea of a UEF sonar destroyed long before: the original's Guard goes the way of Stop (the next Move is the head
+  // at 9940); ours kept the order's place and guarded it.
   if (c.targetId && !(FindUnitAny(sim, c.targetId) && !FindUnitAny(sim, c.targetId)->dead) &&
-      (!c.hasPos || !c.targetViaBlip))
+      !(c.targetViaBlip && c.targetBlipRef && sim.FindEntity(c.targetBlipRef)))
     return nullptr;
   auto t = std::make_unique<BuildTask>();
   t->type = CommandType::Guard;
@@ -3593,7 +3600,20 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
   if (g.child) {  // the child runs; when it ends the guard runs again in the same tick
     if (sim.tick() < g.childFrom) return kTaskRunning;
     BuildTask* c = g.child;
-    int r = TickBuildTask(sim, U, *c);
+    // A factory build the guard made from U's OWN queue (TryDispatchFactoryOrUpgradeFromGuardQueues 0x6127f0 ->
+    // CFactoryBuildTask::Create 0x5fad00 with the command, 0x612924..0x612929) holds that command by a weak link
+    // (+0x88 set, +0x8c), and its Execute 0x5fa790 ends at once (-1, 0x5fa7bd..0x5fa7d8 -> 0x5facba) when the command
+    // is gone: deleted at the Sync of the beat its last holder let go of it (Sim::commandsEmptied). Seen: FAF 3839 pro
+    // replay Seton's 3, 10619: the stream's DecreaseCommandCount takes army 3's naval factory 0x300050's own sub order
+    // 0x03000005 to 0 while its guard (it assists a factory) builds that sub (0x3000a3): the original's 0x3000a3 is gone
+    // and the factory no longer Building at 10621; ours built on.
+    int r;
+    if (g.ownCmdTaken && g.ownCmd.expired() && c->type == CommandType::BuildFactory) {
+      EndBuildTask(sim, U, *c, false);
+      r = kTaskFailed;
+    } else {
+      r = TickBuildTask(sim, U, *c);
+    }
     if (r == kTaskRunning) return kTaskRunning;
     if (g.childToGuard) g.result = r == kTaskDone ? 1 : 2;
     g.child = nullptr;
@@ -3644,6 +3664,7 @@ int TickGuard(Sim& sim, lua_State* L, Unit* U, BuildTask& t) {
     }
     g.ownCmd.reset();
   }
+  g.ownCmdTaken = false;
   g.result = 0;
   // (b) a changed U+0x4e0 (upgrade hand-over), 0x6142d3..0x614369: the Guard command, found in U's queue by its id
   // (FindCommandIndex 0x6edd30), is retargeted with CUnitCommandQueue::SetCommandTarget 0x6ee470: for an entity not
