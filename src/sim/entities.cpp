@@ -662,6 +662,8 @@ int l_SetPosition(lua_State* L) {  // SetPosition(vector, immediate): a warp
     // once, where the original's GetPosition answers the old one until AdvanceCoords.
     if (lua_toboolean(L, 3)) GridUpdate(*S(L), e, false);
     else MotorsNoteMoved(*S(L), e);
+  } else {
+    S(L)->LinkThird(e, false);  // (SetPendingTransform 0x678e90 links the entity if it is not linked: Sim::LinkThird)
   }
   return 0;
 }
@@ -1335,11 +1337,14 @@ void EntityAdjustHealth(lua_State* L, Entity* e, Entity* /*instigator*/, float a
   // (Entity::SetHealth 0x679a3c..0x679a6b: the entity goes to the newest end of the dirty list, linked or not)
   // (parallel order's phases: in the phase's commit, in the turns' order, so the dirty order is the same whichever turn
   // ran first)
-  if (e->kind == Entity::Kind::Unit)
+  if (e->kind == Entity::Kind::Unit) {
     if (Sim* sim = S(L)) {
       if (sim->DeferringScripts()) sim->DeferAction([sim, u = static_cast<Unit*>(e)] { sim->MarkDirty(u); });
       else sim->MarkDirty(static_cast<Unit*>(e));
     }
+  } else if (Sim* sim = S(L)) {
+    sim->LinkThird(e, true);  // (a shell, shield or script entity the same: Sim::LinkThird; serial order only)
+  }
   if (Sim* sim = S(L); sim && sim->collectHealth) {  // (a host's list; reads only. Parallel order's phases: in the commit)
     if (sim->DeferringScripts()) sim->DeferAction([sim, e, before, mx = e->maxHealth] { RecordHealth(*sim, e, before, mx); });
     else RecordHealth(*sim, e, before, e->maxHealth);
@@ -2284,6 +2289,7 @@ Entity* Sim::AdoptScriptEntity(lua_State* L, int t, int spec, bool shield) {
   RegisterEntity(e);
   if (shield) shields.push_back(static_cast<ShieldEntity*>(e));
   scriptEntities.push_back(e);
+  LinkThird(e, true);  // (Entity::StandardInit 0x678483..: on the dirty-entity list from its making)
   return e;
 }
 

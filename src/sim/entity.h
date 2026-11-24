@@ -157,6 +157,10 @@ class Entity : public ScriptObject {
   bool gridSeen = false;  // its cells were worked out at least once, for the transform below
   Vec3 gridPos;
   Quat gridOri;
+  // A shell's, shield's or script entity's place in the sim's dirty-entity list (Sim::LinkThird): the key of its last
+  // link and the beat it was made in. A shield or script entity leaves the list at every beat's sync, a shell never.
+  uint64_t thirdLinkSeq = 0;
+  uint32_t thirdLinkTick = 0;
 };
 
 // The engine's fields that refer to an entity store EntityRef(e): its handle, unique for the whole

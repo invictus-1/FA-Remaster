@@ -2660,6 +2660,13 @@ void Sim::MarkDirty(Unit* u) {
   u->dirtySeq = ++dirtySeqNext_;
   dirtyOrderDirty_ = true;
 }
+void Sim::LinkThird(Entity* e, bool always) {
+  if (order == SimOrder::kParallel || !e || e->kind == Entity::Kind::Unit) return;
+  // (a shell, +0x1b8 set by Projectile::Projectile 0x69b50e, stays linked from its making on)
+  if (!always && e->thirdLinkSeq && (e->kind == Entity::Kind::Projectile || e->thirdLinkTick == tick_)) return;
+  e->thirdLinkSeq = ++thirdSeqNext_;
+  e->thirdLinkTick = tick_;
+}
 const std::vector<Unit*>& Sim::ArmyStageOrder() {
   if (armyOrderDirty_) {
     // (an entity id holds its army above bit 20, so id order already goes army by army; kept as MotionOrder is: the
@@ -3527,10 +3534,36 @@ void Sim::Tick() {
   // after it): its OnImpact's four Random draws come between the drones' circling draws in the original; ours drew
   // them after both drones, and the second drone circled the other way.
   size_t entityProjAt = 0;
-  auto projectilesBefore = [&](uint32_t handle) {
-    while (entityProjAt < projectiles.size() && projectiles[entityProjAt]->handle < handle)
-      ProjectileStep(*this, projectiles[entityProjAt++]);
+  size_t plainTurnAt = 0;
+  std::vector<Entity*>& plainTurns = plainTurnScratch_;
+  auto plainBefore = [&](uint32_t handle) {  // (the plain entities' turns: below)
+    while (plainTurnAt < plainTurns.size() && plainTurns[plainTurnAt]->handle < handle)
+      LinkThird(plainTurns[plainTurnAt++], false);
   };
+  auto projectilesBefore = [&](uint32_t handle) {
+    while (entityProjAt < projectiles.size() && projectiles[entityProjAt]->handle < handle) {
+      plainBefore(projectiles[entityProjAt]->handle);
+      ProjectileStep(*this, projectiles[entityProjAt++]);
+    }
+    plainBefore(handle);
+  };
+  // A plain entity attached to something (a shield, FAF's torpedo-decoy sphere) has its turn in the same pass, by
+  // creation handle: Entity::TaskTick 0x679c40 (task +0x34, stage sim+0x930, linked by Entity::StandardInit
+  // 0x678466..0x678477) takes its attached transform (CalculateAttachedTransform 0x67a020) into SetPendingTransform
+  // 0x678e90 (0x679ca7), which links it on the dirty-entity list sim+0xa5c if it is not (0x678ed9). It is not: the
+  // last sync took it off (Entity::Sync 0x67a104..0x67a12a unlinks an entity whose +0x1b8 is 0; only a shell's and a
+  // blip's are 1). So its AdvanceCoords comes after everything linked earlier in the beat, a sphere made this beat
+  // included (GridAdvanceCoords). Ours moves these entities after the pass (below); only their link takes its place
+  // here. Seen (oracle watch PE5, FAF 3840 pro replay 4v4_5 eonnacia): at 9986 the decoy shell 268435514 is launched
+  // and its DepthCharge sphere made (linked) before the turn of the older decoy 268435468's sphere (handle 41364), so
+  // 468's sphere, moved into new cells that beat, is re-registered after 514's and heads the cells they share; the
+  // torpedo 273678588 asks 468's sphere first at 9996, 514's last, keeps 514 as its target and strikes it at 10003
+  // (its impact's Lua Random). Ours re-registered by handle (514's last, in front), the torpedo was turned to 468.
+  plainTurns.clear();
+  if (order != SimOrder::kParallel)
+    for (uint32_t r : attachedEntities)
+      if (Entity* e = FindEntity(r); e && !e->destroyQueued && e->attachParent) plainTurns.push_back(e);
+  std::sort(plainTurns.begin(), plainTurns.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
   static const size_t prefetchAhead = getenv("MOHO64_PREFETCH") ? static_cast<size_t>(std::max(0, atoi(getenv("MOHO64_PREFETCH")))) : 2;
   // A unit's turn (Unit::MotionTick 0x6a9010) in three parts, one code path for both orders: its motion
   // (turnMotion: the scroller, the attach, the held shape, fuel, the info cache, the motion itself), its pose and aim
@@ -4133,9 +4166,11 @@ void Sim::Tick() {
     for (size_t i = 0;;) {
       if (i < projectiles.size()) {
         unitsMadeBefore(projectiles[i]->handle);
+        plainBefore(projectiles[i]->handle);
         ProjectileStep(*this, projectiles[i++]);
         continue;
       }
+      plainBefore(0xffffffffu);
       unitsMadeBefore(0xffffffffu);
       if (i == projectiles.size()) break;
     }

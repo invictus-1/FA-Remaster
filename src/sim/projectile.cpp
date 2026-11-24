@@ -240,6 +240,7 @@ Projectile* Sim::CreateProjectile(lua_State* L, const BlueprintInfo& bp, Army* a
   owned_.push_back(std::move(owned));
   RegisterEntity(p);
   projectiles.push_back(p);
+  LinkThird(p, true);  // (Projectile::Projectile 0x69b9d3: on the dirty-entity list from its making)
   ++projectilesMade;
   lua_settop(L, top);
   CallMethod(L, p, "OnPreCreate", 0);
@@ -1034,6 +1035,9 @@ void ProjectileStep(Sim& sim, Projectile* p) {
   if (!p->HasLuaObject() || p->noMotionTask || p->steppedTick == sim.tick()) return;
   wtrap::Turn trapTurn(p);  // (MOHO64_PAR_WRITETRAP: the shell's own pages writable for its step)
   p->steppedTick = sim.tick();
+  // (Projectile::MotionTick 0x69bf35..0x69bf5b: every step moves the shell to the newest end of the dirty-entity list,
+  // so its AdvanceCoords comes in the order of the steps; GridAdvanceCoords)
+  sim.LinkThird(p, true);
   PurgeShooters(sim, p);
   sim.HoldShape(p);
   p->heldVel = EntityVelocity(p);

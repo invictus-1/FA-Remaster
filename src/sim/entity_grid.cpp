@@ -384,9 +384,14 @@ void GridAdvanceCoords(Sim& sim) {
       continue;
     GridUpdate(sim, u, true);
   }
-  // The third list: shells, shields, script entities. Their turns set their transforms in the order they were
-  // made (one entity stage), and that is the order UpdateCollision goes through them here; one whose cells change
-  // goes to the head of its cells, so of two that change in one beat the younger ends up in front.
+  // The third list: shells, shields, script entities, in the dirty-entity list's order as units are (AdvanceBeat's
+  // walk 0x74a239..0x74a25f), the order Sim::LinkThird keeps: a shell from its making on, moved to the newest end by
+  // each of its steps (Projectile::MotionTick 0x69bf35..0x69bf5b); a shield or script entity linked when made
+  // (StandardInit), by its attached turn (SetPendingTransform 0x678ed9, if not linked), by SetHealth / the intel calls,
+  // and taken off at every sync (Entity::Sync 0x67a104..0x67a12a: +0x1b8 is 0): one not linked in this beat is not
+  // walked (ours: first, by handle; its transform did not change). One whose cells change goes to the head of its
+  // cells, so of two that change in one beat the one linked later ends up in front. (Before: by handle. Seen: FAF 3840
+  // pro replay 4v4_5 eonnacia 9986, two torpedo-decoy spheres: sim.cpp, the plain entities' turns.)
   std::vector<Entity*>& o = sim.gridScratch;
   o.clear();
   for (Projectile* p : sim.projectiles)
@@ -396,7 +401,15 @@ void GridAdvanceCoords(Sim& sim) {
   for (Entity* s : sim.scriptEntities)
     if (!s->destroyQueued && s->kind == Entity::Kind::Entity && (s->shape.type != ShapeType::None || s->gridW))
       o.push_back(s);
-  std::sort(o.begin(), o.end(), [](const Entity* a, const Entity* b) { return a->handle < b->handle; });
+  const uint32_t now = sim.tick();
+  auto key = [now](const Entity* e) -> uint64_t {
+    if (e->kind == Entity::Kind::Projectile || e->thirdLinkTick == now) return e->thirdLinkSeq;
+    return 0;
+  };
+  std::sort(o.begin(), o.end(), [&key](const Entity* a, const Entity* b) {
+    const uint64_t ka = key(a), kb = key(b);
+    return ka != kb ? ka < kb : a->handle < b->handle;
+  });
   for (Entity* e : o) GridUpdate(sim, e, false);
 }
 

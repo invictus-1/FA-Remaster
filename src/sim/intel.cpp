@@ -1398,6 +1398,7 @@ int TypeArg(lua_State* L, int idx) { return EnumValue(L, kEnumIntel, luaL_checks
 // at 18050.
 static void IntelRelink(Sim& sim, Entity* e) {
   if (e->kind == Entity::Kind::Unit) sim.MarkDirty(static_cast<Unit*>(e));
+  else sim.LinkThird(e, true);  // (the third list's entities the same: Sim::LinkThird)
 }
 int l_InitIntel(lua_State* L) {
   Entity* e = CheckObject<Entity>(L, 1);

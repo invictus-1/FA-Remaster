@@ -566,6 +566,10 @@ class Sim {
     bool kept = false;
   };
   void MarkDirty(Unit* u);
+  // The dirty-entity list's order for the grid's third list (shells, shields, script entities; GridAdvanceCoords):
+  // the entity is linked at the newest end; `always` false links it only if it is not linked in this beat
+  // (SetPendingTransform 0x678ed9). Serial order only (the parallel order's cells are canonical).
+  void LinkThird(Entity* e, bool always);
   void ResumeCommandThread(Unit* u);
   // A queue clear's event re-links the unit's thread BEFORE its tasks are torn down (IAiCommandDispatchImpl::OnEvent
   // 0x599030: 0x599050..0x599083, then TaskInterruptSubtasks 0x408d70). The thread is then no longer suspended
@@ -983,6 +987,8 @@ class Sim {
   bool armyOrderDirty_ = true;
   std::vector<Unit*> dirtyOrder_;
   uint64_t dirtySeqNext_ = 0;
+  uint64_t thirdSeqNext_ = 0;  // (LinkThird's keys)
+  std::vector<Entity*> plainTurnScratch_;  // (Tick: the attached plain entities' turns in the entity pass)
   bool dirtyOrderDirty_ = true;
   KeptOrder motionKept_, armyKept_, dirtyKept_;  // (KeptOrder: the orders kept instead of sorted again)
   // MOHO64_ORDERKEEP_CHECK: a kept order against the sort of units_ by less; stops at the first difference
