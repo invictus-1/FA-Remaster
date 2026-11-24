@@ -3457,7 +3457,14 @@ void UnitAimTickManipulators(Sim& sim, Unit* u, bool anims) {
       const bool stepped = a->alive && BuilderArmSlotStep(sim, u, a);
       const int call = a->trackCall;  // (its step's tracking callback, after the bones turned: see ArmStep)
       a->trackCall = 0;
-      if (!stepped && a->alive && a->enabled) {  // (no step this beat: the last angles)
+      // (no step this beat: the last angles.) CBuilderArmManipulator::MoveManipulator 0x636590 returns at once, the
+      // bones untouched, when its unit is gone (+0x80), has no builder (unit+0x554, deleted by the kill's KillCleanup)
+      // or is dead (vt+0x28, 0x6365e6..0x6365ed): the pose keeps only what the rest pose and the animations give.
+      // Seen (oracle probe P5N1): FAF 3840 pro replay 6v6_1 9584, army 5's dead uel0105 0x500041 sinking with its
+      // BuildingOpenAnimManip at fraction 1: the original's Turret_Muzzle (bone 12) stands 0.36 above the hull
+      // (649.510376, 62.614807, 626.190063) and SinkDestructionEffects takes its above-the-surface branch (two
+      // Randoms); ours turned the arm's last yaw / pitch onto the bones, the muzzle at 62.27166 under the surface 62.3.
+      if (!stepped && a->alive && a->enabled && !u->dead && u->bpData && u->bpData->hasBuilder) {
         PoseRotate(u, a->yawBone, AxisAngle({0, 1, 0}, a->heading));
         PoseRotate(u, a->pitchBone, AxisAngle({1, 0, 0}, -a->pitch));
       }
@@ -4081,9 +4088,16 @@ void InitAttack(Sim& sim, Unit* u, BuildTask& t, bool coordinated) {
   u->unitStates.Insert(US("Attacking"));
   if (!coordinated) u->navIgnoreFormation = true;
   AiTarget target = CommandTarget(sim, t);
+  // +0x8c (ctor 0x5f2c00..0x5f2c17) is the task's CAiTarget's mobile flag +0x1c, made by 0x5e2860: the target holds an
+  // entity (+4) whose blueprint (+0x6c) is in MOBILE (0x5e2880..0x5e28d4) - any entity, so also a recon blip the order
+  // holds itself (a blip carries its unit's blueprint), its unit dead and gone. Seen (oracle probe P5L1): FAF 3840 pro
+  // replay 4v4_4 10858 / 10860, army 4's 11-unit formation Attack on the blip 0x307000c1 of army 7's dead uel0103: the
+  // original's Update takes the mobile branch (UpdatePos: lastPos = the blip's point, the formation centred there), and
+  // the lost-target branch asks VectorIsWithinAttackRange of that point (8.1 from 0x400059: the order ends at once);
+  // ours took the fixed branch (lastPos = the formation cell, 14.50 away at 10860) and kept 0x400059 attacking.
   if (target.type == 1)
     if (Entity* e = sim.FindEntity(target.entityId))
-      d->trackMobile = e->kind == Entity::Kind::Unit && BpInCategory(sim, e->blueprint, "MOBILE");
+      d->trackMobile = e->blueprint && BpInCategory(sim, e->blueprint, "MOBILE");
   // UpdatePos 0x5f2e90: lastPos = the target's position when the target holds (HasTarget 0x5e2a10); then, only when a
   // component is NaN (0x5657f0: _isnan per component), the unit's own position. The zero vector the ctor starts with
   // is a valid point and stays: a task whose target is already gone keeps lastPos (0, 0, 0), which is never within
