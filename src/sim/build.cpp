@@ -994,6 +994,23 @@ static bool ReclaimCosts(Sim& sim, lua_State* L, Unit* u, Entity* e, float* time
 //     Anything else: state 3 next beat;
 //   3 wait for the arm, the costs, what is left := min(left, health / max health);
 //   4 a step a beat, paid out as it goes; the end is the next beat's first test.
+// The entity a reclaim task holds (+0x44). A player's order holds the army's recon BLIP of the unit until the task is
+// in range (state 1's swap, 0x61f574..0x61f5be); ours keeps the unit (goalId) with targetViaBlip as its stand-in, and
+// the two only part when the unit is gone or its Destroy is queued: then the task holds the blip, which lives on. So
+// TaskTick's entry tests (0x61f0fa..0x61f160: the held entity gone or destroy-flagged (+0x1b9), a unit's attributes)
+// ask the blip, which none of them stops, and the task goes on (state 0 walks to it; state 1's swap finds the blip's
+// creator link empty once the unit is freed and ends the task). Seen (oracle probe PK1, FAF 3840 pro replay 6v6_4):
+// at 15253 sixteen of army 7's engineers start a Reclaim (stream, 15252) of the blip 0x30b0000c of army 12's ual0105
+// 0xb0000c; 0x7000b7 reclaims it in its first tick (OnReclaimed, Destroy), and the reclaimers after it in the run
+// list (0x7000e8, 0x700077, 0x70004e) run state 0 on the blip and walk (Reclaim x1, Moving); ours ended them on the
+// destroy-queued unit.
+static Entity* HeldReclaimTarget(Sim& sim, const BuildTask& t) {
+  Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  if (t.targetViaBlip && t.targetBlipRef && !t.targetFakeId && (!e || e->destroyQueued))
+    if (Entity* b = sim.FindEntity(t.targetBlipRef); b && b->kind == Entity::Kind::Blip) return b;
+  return e;
+}
+
 int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
   // the move (state 0's NewMoveTask) sits on top of this task on the unit's thread: Execute, and so the target
   // test below, runs again only when the move has ended (mobile_build.md 8.4). Seen in the bench at 492: an
@@ -1055,7 +1072,7 @@ int TickPropReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& c) {
     c.moving = true;
     return kTaskRunning;
   }
-  Entity* e = c.goalId ? sim.FindEntity(c.goalId) : nullptr;
+  Entity* e = HeldReclaimTarget(sim, c);
   if (!e || e->destroyQueued) return kTaskFailed;
   Unit* tu = e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   // Every Execute, before the states (0x61f166..0x61f19d): a target that is not being built (Entity vt+0x2c,
@@ -1931,7 +1948,7 @@ int TickReclaim(Sim& sim, lua_State* L, Unit* u, BuildTask& t) {
   if (!oldForm && t.moving && t.state == 1 && u->motion.hasGoal && !u->motion.arrived && !u->motion.failed)
     return kTaskRunning;
   if (!oldForm && t.reclaimAtPoint) return TickPropReclaim(sim, L, u, t);
-  Entity* e = t.goalId ? sim.FindEntity(t.goalId) : nullptr;
+  Entity* e = HeldReclaimTarget(sim, t);
   Unit* tu = e && e->kind == Entity::Kind::Unit ? static_cast<Unit*>(e) : nullptr;
   // CUnitReclaimTask::TaskTick 0x61f0fa..0x61f160: the task ends (0x620098: OnStopReclaim if it was started) when the
   // target is gone or its Destroy is queued (+0x1b9), and, for a unit, when its attributes say it may not be reclaimed
@@ -3913,6 +3930,8 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
       t->order = "Reclaim";
       t->goalId = c.targetId;
       t->targetViaBlip = c.targetViaBlip;  // (its target link holds the order's blip until it is in range: TickPropReclaim)
+      t->targetFakeId = c.targetFakeId;
+      t->targetBlipRef = c.targetBlipRef;  // (the blip itself, which outlives its unit: HeldReclaimTarget)
       ReclaimTaskAbortMove(u);  // (the reclaim task's ctor: DispatchTask 0x60989c -> IssueReclaimTask 0x61ef60)
       break;
     case CommandType::Capture:  // DispatchTask 0x6098a9 -> CUnitCaptureTask::Create; the ctor takes the focus

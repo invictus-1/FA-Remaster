@@ -621,6 +621,23 @@ Entity* TargetEntity(Sim& sim, const AiTarget& t) {
   // and turn from 2952; ours dropped it at 2949 and they hit the water a beat early.)
   return e;
 }
+// A target held through the army's recon blip of a unit (viaBlip) whose unit is gone (deleted): the original's
+// CAiTarget holds the BLIP (its weak pointer +4), which outlives the unit, so HasTarget 0x5e2a10 (0x5e2a5a: the
+// blip's +0x99, which nothing sets for a blip) stays true and GetTargetPosGun 0x5e2a90 gives the blip's own point
+// (ReconBlip::GetTargetPoint 0x5bf5f0 with no unit, BlipPointUnitGone) while the blip exists. Ours keeps the unit's
+// handle and the blip's (blipId, set when the weapon took the target): that blip, while it exists (as the shells'
+// BlipOfTarget, projectile.cpp, for UpdateTracking 0x69c8f0 and the ctor's 0x69bb61). Seen: 4v4_3 (FAF 3840) 10301,
+// army 2's ACU 0x200000 (xsl0001): its ChronotronCannon, enabled again after the overcharge of 10300, held the blip
+// of 0x7000d2 (killed by that overcharge, gone at 10301); the original's turret tracks the blip's point at 10301, is
+// on target, and the fire task fires at 10302 (OnFire; the shot after MuzzleChargeDelay at 10306, the projectile
+// 270532821 before the tactical missile's three Randoms); ours held still (no target), fired at 10307 / 10308.
+static const Entity* GoneUnitsBlip(Sim& sim, const AiTarget& t) {
+  if (t.type != 1 || !t.viaBlip || t.fakeId || !t.blipId) return nullptr;
+  if (t.entityId && sim.FindEntity(t.entityId)) return nullptr;
+  const Entity* b = sim.FindEntity(t.blipId);
+  return b && !b->destroyQueued && b->kind == Entity::Kind::Blip ? b : nullptr;
+}
+
 // CAiTarget::HasTarget 0x5e2a10
 bool HasTarget(Sim& sim, const AiTarget& t) {
   if (t.type == 2) return true;
@@ -630,7 +647,7 @@ bool HasTarget(Sim& sim, const AiTarget& t) {
     return f && !f->destroyQueued;
   }
   Entity* e = TargetEntity(sim, t);
-  if (!e) return false;
+  if (!e) return GoneUnitsBlip(sim, t) != nullptr;
   if (e->kind == Entity::Kind::Unit) {
     // A target held as the army's recon BLIP (a player's order, or a blip a weapon took after its unit died): the
     // blip itself is asked (0x5e2a5a: its +0x99, which only Entity::Kill 0x679a80 sets, and nothing kills a blip),
@@ -739,7 +756,10 @@ Vec3 TargetPos(Sim& sim, const AiTarget& t, bool centre) {
       return f->position;
     }
     Entity* e = TargetEntity(sim, t);
-    if (!e) return NaNVec();
+    if (!e) {  // (the blip of a unit that is gone: its own place with the centre flag, 0x5e2b44, else 0x5bf5f0)
+      if (const Entity* b = GoneUnitsBlip(sim, t)) return centre ? b->position : BlipPointUnitGone(sim, b);
+      return NaNVec();
+    }
     if (e->kind == Entity::Kind::Unit) return centre ? e->position : UnitTargetPoint(static_cast<Unit*>(e), t.aimBone);
     // A recon blip as the target's entity (Projectile:SetNewTarget with a blip: FAF's RetargetThread hands a homing
     // shell its weapon's current target, which can be a blip): the blip is no unit (vt+0x10 0x5bdb10 gives null), so
