@@ -2907,8 +2907,14 @@ BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
   bool shieldDamaged = false;
   if (shieldOn && Cat(sim, c, "SHIELD"))
     if (Entity* s = sim.FindEntity(c->focusId)) shieldDamaged = s->maxHealth > s->health;
-  if (c->maxHealth > c->health || c->unitStates.Has(US("Enhancing")) || shieldDamaged ||
-      c->unitStates.Has(US("SiloBuildingAmmo"))) {
+  // 0x613b35..0x613bc1: a repair is wanted (health below the maximum, Enhancing (state 0x26), or a shield on and
+  // damaged); only when none is does a silo building its missile (+0x558 and state 0x2d, 0x613c03..0x613c19) make
+  // the child a silo helper (the task's flag, push 1 at 0x613c1b): a damaged silo is repaired (push 0, 0x613bff).
+  // Seen (oracle probe P5P1): FAF 3840 pro replay 6v6_1 9633, army 2's five T2 engineers guarding the paused TML
+  // 0x20006c (silo mid-build, health 964.9 of 1080) start a Repair whose work is the TML's health fraction, and its
+  // health rises 26.67 a beat from 9635; ours made them silo helpers (no health) and the TML only regenerated.
+  const bool wantsRepair = c->maxHealth > c->health || c->unitStates.Has(US("Enhancing")) || shieldDamaged;
+  if (wantsRepair || c->unitStates.Has(US("SiloBuildingAmmo"))) {
     // 0x613a80: new CUnitRepairTask for any guard in REPAIR (the selection's test, 0x613110), with or without a
     // CAiBuilder (unit+0x554, made only for a blueprint with Economy.BuildableCategory or a REBUILDER, Unit ctor
     // 0x6a600f..0x6a60c2); the repair task asks for the builder only to aim it (0x5f99d5, 0x5f9b37). Seen: MP2 1972,
@@ -2916,7 +2922,7 @@ BuildTask* AssistTask(Sim& sim, Unit* U, Unit* c) {
     // 1978); ours started nothing and stood.
     if (!U->bpData) return nullptr;
     BuildTask* t = NewChild(sim, CommandType::Repair, "Repair");
-    InitRepair(sim, U, *t, c, c->unitStates.Has(US("SiloBuildingAmmo")) != 0);
+    InitRepair(sim, U, *t, c, !wantsRepair);
     return t;
   }
   return nullptr;

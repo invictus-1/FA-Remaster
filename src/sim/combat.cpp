@@ -2786,7 +2786,16 @@ AimTargetIn AimTargetRead(Sim& sim, AimController* c) {
     // FAF patch 0x128b054: a target the entity stage has not ticked yet this beat (entity+0x174 != the sim's
     // tick; for a recon blip (vf+0x1c) the stamp of its source unit, blip+0x270) is taken one tick of its
     // velocity ahead
-    const bool ticked = tu ? tu->lastPosTick == sim.tick() : te->lastMoveTick == sim.tick();
+    // The stamp is Entity::TaskTick's (0x679cac..0x679cbb: +0x174 = the sim's tick, before the motion tick vt+0x50):
+    // a shell's turn stamps it whether the shell moves or not, so a shell whose turn this beat only handles its impact
+    // (no move) counts as ticked. Seen (oracle probe P5O1): FAF 3839 pro replay setons_2 14297, army 4's anti-missile
+    // beam 0x40002d fires at a Seraphim missile that struck the ground in its 14296 step: the original's turret ends
+    // the beat at yaw -0.60294 / pitch -0.071857 (the missile's point, no lead); ours led it by a beat of its
+    // velocity (pitch -0.1783), came on target for the next missile at 14317 one aim step late and fired at 14318.
+    const bool ticked = tu ? tu->lastPosTick == sim.tick()
+                           : te->kind == Entity::Kind::Projectile
+                                 ? static_cast<const Projectile*>(te)->steppedTick == sim.tick()
+                                 : te->lastMoveTick == sim.tick();
     if (!ticked) tPos = Add(tPos, tVel);
   }
   return {tPos, tVel};
