@@ -994,7 +994,19 @@ void MotionTick(Sim& sim, Projectile* p) {
     float f = p->hitFraction >= 0 ? std::clamp(p->hitFraction, 0.0f, 1.0f) : 0.0f;
     // (0x69c7ec: func_QuatLERP 0x4eba80 of the committed and the pending orientation; seen: a torpedo's turn at its
     // hit on the sea floor one ulp off with the textbook form)
-    p->orientation = NlerpExe(qStart, q, f);
+    // Those are the entity's transforms as they stand after the sweep (ecx = +0x9c, eax = +0x150 at 0x69c7d2..0x69c7ec),
+    // not the step's own: a script that warped the shell inside the sweep (Entity::Warp 0x679210: pending, then
+    // AdvanceCoords twice) left both at the warped orientation, so the hit keeps it; only the place is the hit's
+    // (+0x31c, 0x69c821; SetPendingTransform 0x678e90 at 0x69c85a). Seen: FAF 3840 pro replay 2v2_4 13522, the shell
+    // 270532702 that army 2's dead uea0103 0x200051 hangs on is warped to the plane's orientation in its step, which
+    // also hits: the original's wreck has that orientation at 13523, ours the shell's orientation of before the warp.
+    if (p->warpedInStep) {
+      p->warpedInStep = false;
+      p->prevPos = p->position;  // (the committed place is the warped one too)
+      p->orientation = NlerpExe(p->orientation, p->orientation, f);
+    } else {
+      p->orientation = NlerpExe(qStart, q, f);
+    }
     p->position = p->hitPos;
     if (p->bouncePending) p->hitPos = {};
   } else if (p->warpedInStep) {

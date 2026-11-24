@@ -3923,7 +3923,13 @@ BuildTask* StartBuildTask(Sim& sim, Unit* u, const UnitCommand& c) {
     case CommandType::OverCharge:
       return StartOverchargeTask(sim, u, c);
     case CommandType::Reclaim:
-      if (!u->bpData || !u->bpData->hasBuilder) return nullptr;
+      // DispatchTask's Reclaim case (0x609894 -> IssueReclaimTask 0x61ef60) asks only for a live entity, not for a
+      // builder: the task (ctor 0x61eb60) works without one, skipping the builder's SetAimTarget when unit+0x554 is
+      // null (0x61f5d9..0x61f5e1). A unit in RECLAIM with no BuildableCategory reclaims as any other. Seen: FAF 3840
+      // pro replay 4v4_3, 11474: army 4's player gives a Reclaim of the rock 0x2ff00035 to three Harbingers (ual0303:
+      // RECLAIM, BuildRate 5, no BuildableCategory); the original's 0x400077 / 0x400095 are Reclaiming at 11475; ours
+      // made no task and walked to the rock as an approach (Moving).
+      if (!u->bpData) return nullptr;
       // (an order without a live entity, a place included, makes no task: IssueReclaimTask 0x61ef60; the
       // dispatcher pops it before this, StartHead)
       if (!c.targetId || !sim.FindEntity(c.targetId)) return nullptr;
