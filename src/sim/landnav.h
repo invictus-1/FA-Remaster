@@ -83,6 +83,7 @@ void LandNavBackground(Sim& sim);
 void LandNavSetGoalRect(Sim& sim, Unit* u, int x0, int z0, int x1, int z1, bool speedThrough);
 // The unit's move is aborted: the navigator forgets its goal (no event).
 void LandNavStop(Sim& sim, Unit* u);
+void LandNavGone(Sim& sim, Unit* u);  // KillCleanup deleted the navigator: its waiting search leaves the queue
 void LandNavSetSpeedThrough(Unit* u, bool on);
 // Per tick, the navigators' stages. CArmyImpl::OnTick 0x6ffd70 runs each army's brain stages in turn, army by army
 // (0x6ffe83..0x6ffe9f: navigators brain+0xa8, steering +0xac, attackers +0xb0), so an army's navigators come after

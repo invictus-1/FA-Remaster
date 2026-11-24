@@ -1842,11 +1842,11 @@ const std::vector<Unit*>& BlipsInRange(Sim& sim, Unit* u, int period) {
   // fakes (ReconGetJamingBlips 0x5c20c0: every blip of the unit in the army's database, the real one too). The
   // list is only as fresh as the weapon that asks needs it (a 20-beat weapon reads what a 10-beat one built), and
   // a blip does not die with its unit: so a weapon can take the blip of a jammer that died since the list was
-  // made. The query collects them in a sorted vector of the blips' POINTERS (0x5c3a90: lower_bound 0x5cb710 on the
-  // 4-byte values), so in ADDRESS order. A blip is a 0x4d0 block of the game's own allocator (FindOrCreateBlip
-  // 0x5c09b0 -> operator new 0xa825b9 -> 0x958b20), whose blocks of that size are reused: an address cannot be had
-  // here. STAND-IN (not the original's rule): the blips' ids, which come from the lowest free serial (DoReserveId
-  // 0x684480) and are reused too. Seen: FAF 3840 pro replay 2v2_5, oracle probe PJ2 (11502): every jammer's blips in
+  // made. The query (0x5c20c0: the unit's blips in the recon database's map, 0x5c2170..0x5c2193) inserts each blip
+  // pointer into a vector kept sorted by the blip's ENTITY ID (0x5c3a90 -> lower_bound 0x5cb710: 0x5cb71f / 0x5cb72c
+  // compare [blip + 0x68], unsigned; 0x5c3ac3 tests the pointer only to refuse a duplicate). (Not by address: probe
+  // PJ3, 2v2_5 8000-11502, the blocks' addresses part from id order in 90 of 112 makings, the lists never do.)
+  // Seen: FAF 3840 pro replay 2v2_5, oracle probe PJ2 (11502): every jammer's blips in
   // the original's lists of army 2's cruiser 0x2000d2 stand in ascending id order (7 of 7), among them 0x1000d4's
   // fakes 0x301000bd / 0x301000be (made 11282) BEFORE its real blip 0x301000e5 (8877); ours put the real one first,
   // so the held fake 0x301000bd kept its place and no new target came (the original's weapons 0 and 3 took the real
@@ -2412,7 +2412,7 @@ void FireNow(Sim& sim, UnitWeapon* w) {
 // CFireWeaponTask::Execute 0x6d3dc0
 void FireTick(Sim& sim, UnitWeapon* w) {
   Unit* u = w->unit;
-  if (w->fireClock != 0) --w->fireClock;
+  if (w->fireClock != 0) w->fireClock = static_cast<int>(static_cast<uint32_t>(w->fireClock) - 1u);  // (0x6d3dcd: add -1, wraps)
   static const long dbgUnit = getenv("MOHO64_DEBUG_WEAPON") ? atol(getenv("MOHO64_DEBUG_WEAPON")) : -1;
   if (dbgUnit >= 0 && static_cast<long>(u->id) == dbgUnit) {  // why it does or does not fire this tick
     const bool has = HasTarget(sim, w->target);
@@ -2439,9 +2439,17 @@ void FireTick(Sim& sim, UnitWeapon* w) {
   if (TargetStatus(sim, w, w->target) != 0) return;
   if (w->bp->cannotAttackGround && w->target.type == 2) return;
   FireNow(sim, w);
-  // the clock restarts after the task's own shot: round(10 / RateOfFire) (0x6d3e8d..0x6d3ec8)
+  // the clock restarts after the task's own shot: round(10 / RateOfFire) (0x6d3e8d..0x6d3ec8: divss, then fld / fistp).
+  // A RateOfFire of 0 gives 10 / 0 = +inf, and fistp of a value out of the int range stores the integer indefinite
+  // 0x80000000: the clock is not 0, Execute's decrement (0x6d3dcd, add -1) wraps it to 0x7fffffff, and the weapon does
+  // not fire again (2^31 beats). Seen: FAF 3839 pro replay Seton's 3, 12581: army 7's strategic bomber 0x7000fe
+  // (ura0304, its first weapon: RateOfFire 0, MaxRadius 64, no projectile) fires once on its ground Attack (probe P5I1:
+  // one Fire 0x6d61f0, shots 1 of AttackGroundTries 3 to 12660); ours had clock 0, fired every beat and reported 8
+  // (tries spent) at 12583, ending the Attack 77 beats early.
   const float rof = RoF(w);
-  w->fireClock = rof > 0 ? static_cast<int>(std::nearbyint(10.0f / rof)) : 0;
+  const float period = 10.0f / rof;
+  w->fireClock = (period >= -2147483648.0f && period < 2147483648.0f) ? static_cast<int>(std::nearbyint(period))
+                                                                      : std::numeric_limits<int>::min();
 }
 
 }  // namespace
@@ -3749,6 +3757,7 @@ void KillCleanupTick(Sim& sim) {
     // drove on.
     UnitMotion& m = u->motion;
     AirNavigatorGone(u);  // (an aircraft's navigator: its status, for the escorts that follow it)
+    LandNavGone(sim, u);  // (a land navigator's path finder leaves the army's queue)
     EndNavigatorObject(u);  // (the navigator's Lua side goes with it)
     AirSteeringGone(sim, u);  // (the steering's dtor stops an aircraft's motion where it stands)
     m.spline.clear();

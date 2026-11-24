@@ -4203,7 +4203,13 @@ void EndBuildTask(Sim& sim, Unit* u, BuildTask& t, bool success) {
       }
       if (Unit* w = FindUnitAny(sim, t.workId)) w->unitStates.Erase(US("NoReclaim"));
     }
-    if (t.started && Alive(u)) StopBuild(sim, L, u, t, true);
+    // OnStopBuild (CBuildTaskHelper::OnStopBuild 0x5f5a20) asks the builder's IsDead only (0x5f5a36): a repairer whose
+    // Destroy is queued in this beat (reclaimed: Unit.OnReclaimed -> Destroy; IsDead is set only by the drain) still
+    // gets it, and FAF's OnStopRepair turns its consumption off, handing the unused grant back to the army. Seen: FAF
+    // 3840 pro replay 6v6_1, 9167: army 2's engineer 0x100067, repairing (guard) with seven others, is reclaimed by the
+    // Hive 0x10007e before the repairs end in the same beat: the original's army income of 9168 has eight refunds
+    // (8 x 3.10625 E, 0.1278 M), ours seven; the overflow of the full army 2 then reached its allies short.
+    if (t.started && u && !u->dead) StopBuild(sim, L, u, t, true);
   } else {
     // CFactoryBuildTask's dtor 0x5fa010: Busy and Building off, the work progress back to 0, THEN OnStopBuild.
     // (A factory stopped half way through a unit kept its last progress here: the work bar stayed under it.)

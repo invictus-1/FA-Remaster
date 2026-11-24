@@ -1448,6 +1448,17 @@ void LandNavStop(Sim& sim, Unit* u) {
   u->unitStates.Erase(US("PathFinding"));
 }
 
+// Unit::KillCleanup 0x6a8790 deletes the navigator (0x6a8804..0x6a881a), and with it its CAiPathFinder, whose dtor
+// 0x5aa000 unlinks the finder from the army's path queue (the node +4, 0x5aa038..0x5aa051, and +0xc): a killed unit's
+// waiting search is never begun. (The unit's PathFinding state stays: the original's dead units keep it.) Seen: FAF
+// 3840 pro replay 1v1_4, army 0x1's xsl0105 0x1000fe, given a goal at 12391 and killed at 12392 with its search queued
+// behind the army's backlog of failed searches: probe P5D6 shows the original's queue going on without it at 12399;
+// ours began it (8 work units), and the backlog's phase moved: 0x100053's continuation came a beat early (12434).
+void LandNavGone(Sim& sim, Unit* u) {
+  LandNav* n = Nav(u);
+  if (n) PathCancel(sim, &n->pf);
+}
+
 void LandNavSetSpeedThrough(Unit* u, bool on) {
   // CAiNavigatorLand::SetSpeedThroughGoal 0x5a4240 -> CAiSteeringImpl 0x5d2390: the request is stored, and the
   // motion's byte becomes it when the steering's last waypoint lay in the goal (also when the navigator is idle:
