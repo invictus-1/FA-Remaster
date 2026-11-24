@@ -41,9 +41,10 @@ on every beat, every army's economy, and every random draw in the same order. Th
 games made for the tests; the other three are high-level multiplayer games from FAF's replay vault, an
 18-minute 2v2 on Funeral Plains, a 20-minute 1v1 on Abhor and a 31-minute 4v4 on Seton's Clutch with
 eight players, the last of them identical to its final beat since 1 November 2026. Twenty-two more
-high-level games from FAF's vault (1v1 to 6v6) were taken up in early November: two of them play out
-identically through their whole recordings, and the other twenty matched for their first 10 to 18 minutes
-when that work paused for the multicore work; it is picked up again after it.
+high-level games from FAF's vault (1v1 to 6v6, FAF version 3840) were taken up in early November and are
+compared over their first 18 minutes (10,800 beats). Since 24 November 2026 **all twenty-two agree with
+the original over those 18 minutes** (the three shorter games over their whole recordings), in every
+unit, every army's economy and every random draw. The work goes on past the 18 minutes, game by game.
 
 Beside the replays there is a **weapons range**: 79 small scenes (stock units, mod units, AI armies) with
 1,347 measured cases of who fires at what, when, and with what result, each equal to the original game's.
@@ -266,8 +267,9 @@ watched while it plays the replay, to see what it does at that beat.
 | Multiplayer 4v4, Seton's Clutch (31 minutes) | 18,601 | **identical to the end** |
 
 "Identical" means every unit on every beat, every army's economy, and all random draws in the same
-order. Beyond these sixteen, twenty-two more high-level FAF games (1v1 to 6v6) are being matched, each
-fix read from the original and proven against all of them; see "Where it stands" above.
+order. Beyond these sixteen, twenty-two more high-level FAF games (1v1 to 6v6) all agree with the
+original over their first 18 minutes (24 November 2026), each fix read from the original and proven
+against all of them; the matching now goes on past the 18 minutes. See "Where it stands" above.
 
 Where the original's own behaviour is broken and fixing it does no harm, the engine may fix it in
 new games, never while a replay plays. Every such case is listed in
