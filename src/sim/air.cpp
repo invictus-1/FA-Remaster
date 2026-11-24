@@ -2223,6 +2223,13 @@ void AirSetGoal(Sim& sim, Unit* u, Vec3 goal, uint32_t tick, int layer, bool lan
     SetState(u, US("MovingUp"), false);
     SetState(u, US("MovingDown"), false);
   }
+  // ... and SetTarget lets the flight's landing rect go there and then as well (0x6b8883..0x6b88dc: FreeOgridRect
+  // 0x6ab760 when unit+0x5a8 is the copy motion+0x158, the copy cleared either way). Seen (probe P5A5, FAF 3840 pro
+  // replay 2v2_4 11602): army 3's aircraft 0x3000c3, landed on [900,271,902,273], gets its guard-follow goal from
+  // UpdateGuardFollowMoveGoal (0x6144f9) and frees that rect from SetTarget+0x2e2 in the command stage; 0x30008c,
+  // whose guard runs next, finds (901,271) free and lands there ([901,271]). Ours freed it in 0x3000c3's motion step,
+  // after the command stage: 0x30008c found it held and took (906,264).
+  if (!State(u, US("Attached"))) FreeLandRect(sim, u);
   (void)sim;
 }
 

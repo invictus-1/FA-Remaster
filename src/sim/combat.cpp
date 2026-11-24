@@ -797,7 +797,23 @@ Vec3 TargetPosLastPose(Sim& sim, const AiTarget& t, const Unit* u) {
 // transform is committed at the beat's end, so a target WITHOUT an aim bone - the centre of its collision
 // primitive, from the entity's own transform - still stands and lies as the beat began, also when the target
 // has taken its step already. (With an aim bone the point comes from the pose, which moved with that step.)
+// A jammer's FAKE blip the same: ReconBlip::GetTargetPoint 0x5bf5f0 is its unit's Unit::GetTargetPoint 0x6ab340 plus
+// the fake's offset +0x27c (0x5bf624..0x5bf658), and with the pick -1 that is Entity::GetBoneWorldTransform(-1)
+// 0x679ce0 (0x6ab357), on the unit's committed transform +0x9c / +0xac (0x679d53..0x679d9c). Seen: FAF 3839 pro replay
+// 4v4_setons_2, 13408: army 2's cruiser 0x2000e0 has 12 AA nanodarts (115 each) homing on a fake of army 7's spy plane
+// 0x7000b9 (14 units off it); the plane steps before them, so ours aimed one beat of its flight (2.7) ahead of the
+// original's point. One of the original's darts, circling the fake, struck the plane at 13408 (its impact's Lua
+// Random is draw 3554528, right after the fourth dart's zig-zag draws); ours's all passed ten units wide.
 Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
+  if (t.type == 1 && t.aimBone == -1 && t.fakeId)
+    if (const Entity* f = sim.FindEntity(t.fakeId); f && f->kind == Entity::Kind::Blip) {
+      const ReconBlip* fb = static_cast<const ReconBlip*>(f);
+      const Unit* src = fb->source && sim.FindEntity(EntityRef(fb->source)) ? fb->source : nullptr;
+      if (src && src->shapeHeld && src->blueprint) {
+        const Vec3 tp = Add(src->shapePos, RotateM(src->shapeOri, src->bpCenter));
+        return Vec3{fb->offset.x + tp.x, fb->offset.y + tp.y, fb->offset.z + tp.z};
+      }
+    }
   if (t.type == 1 && t.aimBone == -1 && !t.fakeId)
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)

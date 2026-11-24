@@ -1345,6 +1345,16 @@ static bool PatrolTaskDecidesAbort(const Unit* u) {
 static bool ThreadAsleepOnMove(const Unit* u) {
   if (u->commands.empty() || u->headState == kNotStarted) return false;
   if (HeadTaskType(u) == CommandType::Move) return true;
+  // A form move dispatched with its formation runs a CUnitFormAndMoveTask, whose ctor suspends the thread (0x6194b8:
+  // +0x18 = 1) until a listener wakes it (formMoveAsleep: FormMoveTaskOf); the queue's clear event re-links a suspended
+  // thread first (OnEvent 0x599030, 0x599050..0x599083), whatever task suspended it. Seen (probe P5F5, FAF 3839 pro
+  // replay Seton's 3): at 9765 army 3's eight ships, seven of them on a FormMove and the battleship 0x300082 idle, get
+  // a formation Move with clear; at 9766 the original dispatches 0x300082 first, then 0x300024, 0x300045, 0x30005c,
+  // 0x300063, 0x300067, 0x30006c, 0x30006e (the message's order: re-linked at the run list's end), and each reserves
+  // its slot (FindSlotFor 0x59aa20) in that order: 0x30005c takes the raw slot (99.74, 429.05) and 0x30006c rings out
+  // to (95.74, 425.05), goal [95,424]. Ours re-linked none of them, kept their old thread order (0x300063, 0x30006c,
+  // ...), and 0x30006c took the raw slot, goal (99,428) (the first unit difference at 9773).
+  if (HeadTaskType(u) == CommandType::FormMove && FormationHas(*u->commands.front(), u)) return u->formMoveAsleep;
   // an attack task with its target in reach suspends the thread until its weapon reports (TaskTick's in-range branch
   // returns -2, 0x5f3a63; ours marks it waitUntil = ~0); the queue's events re-link a suspended thread whatever
   // suspended it (OnEvent 0x599030). Seen (probe mp1_5234): MP1 5232, eleven of army 1's ships given a formation
@@ -2341,6 +2351,14 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // point in the message and the second in the beat's steering, two steps at once.
       const bool undispatched = hadCommands && u->headState == kNotStarted;
       const bool patrolSelf = PatrolTaskDecidesAbort(u);
+      // Nor is a guard that steers itself (its follow goal handed to the navigator, no move task, no child): its dtor
+      // 0x611850 aborts only when the unit moved this beat (0x611947..0x611972; EndGuard), as for IssueClearCommandsTo.
+      // Seen (oracle probe PM1, FAF 3840 pro replay 6v6_3): at 8128 the stream's Stop with clear reaches army 4's
+      // engineers on a Guard; 0x40006f, its follow spline (idx 5 of 20) at the place it stood the beat before, gets no
+      // AbortMove from ~CUnitGuardTask (only the moved 0x400084 does, 0x611974) and its navigator drives on to the next
+      // waypoint (190.5, 569.5) at 8129 (speed-through 0, moving); ours stopped it at the clear. (Land units only, as
+      // there.)
+      const bool guardSelf = !u->motion.air && hadCommands && u->headState == kRunning && GuardSteersItself(u);
       // Nor is a mobile build without its walking child (CUnitMobileBuildTask dtor 0x5f6ac0: arm, NoReclaim, OnStopBuild,
       // OnFailedToBuild, FreeOgridRect; neither the navigator nor CUnitMotion::Stop 0x6b8460, as IssueClearCommandsTo's
       // buildSelf below). A walk SIM_TryToBuild 0x51ed80 gave the builder to step off the site (state 3, a navigator
@@ -2369,7 +2387,7 @@ std::shared_ptr<UnitCommand> IssueFromStream(Sim& sim, const std::vector<Unit*>&
       // down puts its record on the neighbour that still moves; the neighbour's own teardown wipes that record
       // and, both standing now, the formation rule decides: one of the two brakes hard, not both.
       if (moveAsleep || formTask) SetMoving(u, false);
-      if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf && !buildNoWalk) MotionStop(u);
+      if (!keep && hadCommands && !stopped && !undispatched && !patrolSelf && !guardSelf && !buildNoWalk) MotionStop(u);
       SetMoving(u, false);
       at = -1;
     }
