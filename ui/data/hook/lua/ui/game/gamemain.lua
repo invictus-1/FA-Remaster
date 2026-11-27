@@ -216,6 +216,10 @@ do
                         LayoutHelpers.AtCenterIn(line, parent, 300)
                     end
                     line:SetText(text)
+                    -- (into the log once a kind: a report then shows that the load was long and why)
+                    if string.sub(text, 1, 30) ~= string.sub(RemasterLoadLine.text, 1, 30) then
+                        LOG("moho64ui: the loading screen says: " .. text)
+                    end
                     RemasterLoadLine.text = text
                 end
             end
