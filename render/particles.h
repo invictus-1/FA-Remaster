@@ -265,6 +265,18 @@ class Particles {
   // The effects quality setting: the share of particles emitters throw out (1 all; 0.5 for a slower
   // card), but for those whose blueprint says KeepAtLowQuality.
   float quality = 1;
+  // [emitahead] Where a moving emitter's particles are born. An emitter throws a tick's particles when that tick of its
+  // own time begins, their births spread over the tick (InterpolateEmission). Before, they were laid along the way it
+  // had come during the tick BEFORE: each was born where its emitter had been a tick earlier, so a trail, an exhaust
+  // or a glow hung a tick's travel behind what carried it (a gunship's glow about a world unit behind the craft)
+  // whenever the clock and the game's beats ran in step, as they do in a game. The original lays a tick's particles
+  // between the two beats its picture is blended from, so they are born where the thing is drawn. On: what is thrown
+  // for a moment still to come waits with its emitter and is born at the frame that moment comes, where the emitter
+  // is then (between its places at the last frame and at this one, by the moment); an emitter that is stopped or
+  // hidden first gives birth to none of them, and one whose own time is over stays until its last are born. The
+  // numbers drawn at random are the same and in the same order, and an emitter that stands still throws exactly as
+  // before. Off: as before (viewer --emit-behind).
+  bool emitAhead = true;
   // The light of flashes and explosions (the remastered look's): what emitters started lately throw.
   // The world turns each into a small light, fading over its time; `color` it fills in from `ramp`
   // the first time (colored).
@@ -316,11 +328,19 @@ class Particles {
     const EmitterBlueprint* blueprint = nullptr;
     std::vector<Particle> particles;
   };
+  struct Pending {  // [emitahead] a particle thrown for a moment still to come
+    Particle p;
+    Vec3 from;          // where its emitter was when it was thrown: its place is counted from there
+    uint8_t snap = 0;   // the water's surface: 0 nothing, 1 laid on it, 2 kept under it, 3 kept over it
+    bool collide = false;  // its ground's height is read where it is born
+  };
   struct Emitter {
     uint32_t id = 0;
     const EmitterBlueprint* blueprint = nullptr;
     Set* set = nullptr;
     Vec3 position, positionBefore;  // now, and at the tick before (emission is spread between the two)
+    Vec3 frameBefore;               // [emitahead] at the frame before
+    std::vector<Pending> pending;   // [emitahead] thrown, not yet born
     Quat orientation;
     float scale = 1;
     float lifetime = 1, repeatTime = 1, lodCutoff = 0;  // the blueprint's, or what a script set
@@ -344,6 +364,7 @@ class Particles {
   const EmitterBlueprint* Blueprint(const std::string& path, const std::string& faction);
   Emitter* Find(uint32_t id);
   void Emit(Emitter* emitter, int tick);
+  void Release(Emitter* emitter, double before, double now);  // [emitahead] what of its pending is due is born
   float Random();  // 0..1
 
   gfx::Device* device_;
