@@ -2238,6 +2238,8 @@ struct GuardData {
   std::weak_ptr<UnitCommand> cmd;     // +0x4c: the Guard command
   std::weak_ptr<UnitCommand> ownCmd;  // +0x44: an own-queue factory command being built
   bool ownCmdTaken = false;           // the child build was made from it (its CFactoryBuildTask +0x88)
+  Vec3 lastRef;                       // the last valid reference place of a Guard order's point or entity
+  bool lastRefSet = false;            // (kept for docs/deviations.md 14 only; the original has no such field)
   BuildTask* child = nullptr;         // a pushed child task (its parent: the guard or the dispatcher)
   bool childToGuard = false;          // the child's result lands in the guard (+0x2c)
   uint32_t childFrom = 0;             // its first tick (the thread's wait counter)
@@ -2410,6 +2412,14 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
       // PG1, FAF 3840 pro replay eonnacia): at 9980 army 6's aircraft 0x60006a guards a blip that is gone: the
       // original's follow asks PrepareMove for (1, 44.17, 1) and flies to the corner (5, 45.53, 5); ours kept the
       // order's old point (227, 34.25, 521).
+      // docs/deviations.md 14 (Sim::fixes: a new game, never a replay of the original): the guard keeps the last
+      // valid place it had for this order instead, or stays where it is when it never had one. (Chris, 2026-11-27.)
+      if (sim.fixes) {
+        if (g.lastRefSet) return g.lastRef;
+        const Vec3& up = U->position;
+        return Vec3{static_cast<float>(std::nearbyint(up.x - fp.sizeX * 0.5f)) + fp.sizeX * 0.5f, up.y,
+                    static_cast<float>(std::nearbyint(up.z - fp.sizeZ * 0.5f)) + fp.sizeZ * 0.5f};
+      }
       const float x = fp.sizeX * 0.5f, z = fp.sizeZ * 0.5f;
       const TerrainMap* map = sim.map();
       float y = map ? map->TerrainHeight(x, z) : 0.0f;
@@ -2418,7 +2428,9 @@ Vec3 ReferencePos(Sim& sim, Unit* U, GuardData& g) {
     }
     int cx = static_cast<int>(std::nearbyint(p.x - fp.sizeX * 0.5f));
     int cz = static_cast<int>(std::nearbyint(p.z - fp.sizeZ * 0.5f));
-    return Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};
+    g.lastRef = Vec3{cx + fp.sizeX * 0.5f, p.y, cz + fp.sizeZ * 0.5f};  // (deviations.md 14: read only with Sim::fixes)
+    g.lastRefSet = true;
+    return g.lastRef;
   }
   return g.pos;
 }

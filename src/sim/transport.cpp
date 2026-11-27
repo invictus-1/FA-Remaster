@@ -3747,7 +3747,7 @@ int l_TransportDetachAllUnits(lua_State* L) {
 // its mobile cargo change sides first, one by one, and are put back on the new transport. nullptr: the unit is
 // dead, or the army's unit cap refuses it (the brain's OnFailedUnitTransfer; the old unit stays, its cargo has
 // changed sides by then). Not carried over here: the custom name (this engine does not keep it yet). The
-// original walks the cargo in the order it was attached; this walks it in unit order.
+// cargo is walked in the order it was attached (below).
 Unit* TransferUnit(Sim& sim, lua_State* L, Unit* u, Army* army) {
   if (!u || u->dead || u->destroyQueued) return nullptr;
   std::vector<Unit*> newStored, newCargo;
@@ -3765,9 +3765,17 @@ Unit* TransferUnit(Sim& sim, lua_State* L, Unit* u, Army* army) {
     }
     for (Unit* x : stored) newStored.push_back(TransferUnit(sim, L, x, army));
     uint32_t ref = EntityRef(u);
-    for (Unit* x : sim.units()) {
-      if (x->parentId != ref || x->dead || x->destroyQueued || !(x->motion.bp && x->motion.bp->mobile())) continue;
-      cargo.push_back(x);
+    for (Unit* x : sim.units())
+      if (x->parentId == ref && !x->dead && !x->destroyQueued && x->motion.bp && x->motion.bp->mobile())
+        cargo.push_back(x);
+    // The original walks the transport's children list (entity+8 vt+0x58, 0x746b0c..0x746ba9: units, mobile (vt+0x40),
+    // not dead (+0x99), no destroy pending (+0x1b9)), which is in attach order (Entity::AttachTo 0x679550 appends,
+    // DetachFrom 0x6796f0 keeps the others' order: Sim::NextAttachSeq), so the cargo gets its new ids in the order it
+    // was loaded. Seen: FAF 3840 pro replay 4v4_4 13781, army 0's units shared to army 6: transport 0xb7's five
+    // engineers become 0x6000bb..bf as 0x2, 0x12, 0x25, 0x29, 0xc in the original (0xc loaded last); ours gave
+    // them in unit order (0x2, 0xc, 0x12, ...), the ids rotated over the four spots.
+    std::stable_sort(cargo.begin(), cargo.end(), [](const Unit* a, const Unit* b) { return a->attachSeq < b->attachSeq; });
+    for (Unit* x : cargo) {
       parentBones.push_back(x->parentBone);
       ownBones.push_back(x->ownBone);
     }

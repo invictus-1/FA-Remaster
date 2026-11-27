@@ -1481,13 +1481,23 @@ bool ArrivalStep(Sim& sim, Unit* u) {
   // task.
   const bool patrol = c.type == CommandType::Patrol || c.type == CommandType::FormPatrol;
   const bool failed = m.failed;
-  std::shared_ptr<UnitCommand> keep = u->commands.front();
-  PopHead(u);
-  m.arrived = false;
-  if (patrol && (failed || !u->commands.empty())) {  // patrols cycle through their points
-    u->commands.push_back(keep);
-    keep->units.insert(u);
+  if (patrol && failed) {
+    // The result-2 branch is MoveFirstCommandToBackOfQueue 0x6edfc0 alone (0x598ebb -> 0x598ee0): the unit keeps
+    // holding the order and stays in its formation (FormRemoveUnit 0x6e8d70 is only the other branch's, 0x598ff8).
+    // Seen (oracle probes P5U1 / P5U2): FAF 3840 pro replay 4v4_4 12259, army 7's 0x7000bb, the last member of patrol
+    // point 0x7000008's formation, walks a move task under that Patrol to an unreachable cell: its navigator fails, the
+    // dispatcher ends with result 2 and no FormRemoveUnit; the formation lives on, and the scouts 0x70008d / 0x700076
+    // still fly to their cached cells of it at 12321. Ours released the unit, the formation emptied and was dropped.
+    HeadToBack(u);
+  } else {
+    std::shared_ptr<UnitCommand> keep = u->commands.front();
+    PopHead(u);
+    if (patrol && !u->commands.empty()) {  // patrols cycle through their points
+      u->commands.push_back(keep);
+      keep->units.insert(u);
+    }
   }
+  m.arrived = false;
   m.failed = false;
   SetMoving(u, false);  // the move task's dtor clears it; a following move sets it again
   // ... and the same destructor (0x618700) calls the navigator's AbortMove when the task ends by itself

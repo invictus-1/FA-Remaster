@@ -904,7 +904,7 @@ uint32_t Particles::Start(const std::string& blueprint, Vec3 position, const Qua
   e.id = nextId_++;
   e.blueprint = bp;
   e.set = set.get();
-  e.position = e.positionBefore = position;
+  e.position = e.positionBefore = e.frameBefore = position;
   e.orientation = orientation;
   e.scale = scale;
   e.lifetime = bp->lifetime;
@@ -1063,7 +1063,8 @@ void Particles::Emit(Emitter* emitter, int tick) {
     if (life <= 0) continue;
     // where it starts: its place in the emitter's own frame, then anywhere on the emitter's disc
     // (a level disc, denser toward the middle)
-    const Vec3 origin = bp.interpolateEmission ? Lerp(emitter->positionBefore, emitter->position, fraction) : emitter->position;
+    // ([emitahead] with it: thrown from where the emitter is, and moved to where it is at the birth: Release)
+    const Vec3 origin = bp.interpolateEmission && !emitAhead ? Lerp(emitter->positionBefore, emitter->position, fraction) : emitter->position;
     Vec3 position = origin + Rotate(emitter->orientation, Vec3{read(bp.xPos), read(bp.yPos), read(bp.zPos)} * scale);
     const float disc = read(bp.size) * scale;
     if (disc != 0) {
@@ -1083,13 +1084,16 @@ void Particles::Emit(Emitter* emitter, int tick) {
       else velocity = forward;                                    // standing along the bone, where it is
     }
     // the water's surface
+    uint8_t snap = 0;  // ([emitahead] Pending::snap)
     if (haveWater_) {
       if (bp.onlyEmitOnWater) {
         if (groundHeight_ && groundHeight_(position.x, position.z) > waterLevel_) continue;
         position.y = waterLevel_ + 0.01f;
+        snap = 1;
       } else if (bp.snapToWaterline) {
         if (bp.sortOrder < -101) position.y = std::min(position.y, waterLevel_ - 0.01f);
         else position.y = std::max(position.y, waterLevel_ + 0.01f);
+        snap = bp.sortOrder < -101 ? 2 : 3;
       }
     }
     const float size0 = read(bp.startSize) * scale, size1 = read(bp.endSize) * scale;
@@ -1114,9 +1118,45 @@ void Particles::Emit(Emitter* emitter, int tick) {
     p.rampV = read(bp.rampSelection);  // (as it is: the ramp texture is read at this height, held at its edges)
     p.drag = bp.resistance ? std::max(0.0f, read(bp.resistanceCurve)) / kTick : 0;
     p.unused = bp.collideGround ? (groundHeight_ ? groundHeight_(position.x, position.z) : emitter->position.y) : 0;
-    emitter->set->particles.push_back(p);
+    // [emitahead] (particles.h) one of an emitter that spreads its births over the tick waits for its moment
+    if (emitAhead && bp.interpolateEmission) emitter->pending.push_back({p, emitter->position, snap, bp.collideGround});
+    else emitter->set->particles.push_back(p);
   }
   emitter->positionBefore = emitter->position;
+}
+
+// [emitahead] (particles.h) What the emitter threw for moments up to `now` is born: each where the emitter is at its
+// moment, between its places at the frame before (`before`: that frame's time) and at this one.
+void Particles::Release(Emitter* emitter, double before, double now) {
+  std::vector<Pending>& waiting = emitter->pending;
+  const double span = now - before;
+  size_t kept = 0;
+  for (size_t i = 0; i < waiting.size(); ++i) {
+    Pending& w = waiting[i];
+    const double born = static_cast<double>(w.p.startTime);
+    if (born > now) {
+      // (still to come; one more than two ticks ahead is of a clock that has gone back, a replay's rewind: dropped)
+      if (born <= now + 2 * static_cast<double>(kTick)) {
+        if (kept != i) waiting[kept] = w;
+        ++kept;
+      }
+      continue;
+    }
+    const float share = span > 1e-6 ? static_cast<float>(std::clamp((born - before) / span, 0.0, 1.0)) : 1.0f;
+    const Vec3 at = Lerp(emitter->frameBefore, emitter->position, share);
+    const Vec3 shift = at - w.from;
+    if (shift.x != 0 || shift.y != 0 || shift.z != 0) {  // (an emitter that stands still: exactly as thrown)
+      w.p.position[0] += shift.x;
+      w.p.position[1] += shift.y;
+      w.p.position[2] += shift.z;
+      if (w.snap == 1) w.p.position[1] = waterLevel_ + 0.01f;
+      else if (w.snap == 2) w.p.position[1] = std::min(w.p.position[1], waterLevel_ - 0.01f);
+      else if (w.snap == 3) w.p.position[1] = std::max(w.p.position[1], waterLevel_ + 0.01f);
+      if (w.collide) w.p.unused = groundHeight_ ? groundHeight_(w.p.position[0], w.p.position[2]) : at.y;
+    }
+    emitter->set->particles.push_back(w.p);
+  }
+  waiting.resize(kept);
 }
 
 float Particles::ShowsFor(const std::string& blueprint) {  // [heldworld] (particles.h)
@@ -1156,7 +1196,7 @@ void Particles::Hide(uint32_t emitter, bool hidden) {
   Emitter* e = Find(emitter);
   if (!e || e->hidden == hidden) return;
   e->hidden = hidden;
-  e->positionBefore = e->position;  // (seen again: it starts where it is, not along the way it came unseen)
+  e->positionBefore = e->frameBefore = e->position;  // (seen again: it starts where it is, not along the way it came unseen)
 }
 
 // [restart] (particles.h)
@@ -1174,6 +1214,7 @@ void Particles::Clear() {
 
 void Particles::Update(double now, const View* view) {
   const auto t0 = std::chrono::steady_clock::now();
+  const double nowBefore = now_;  // [emitahead] (the frame before's time)
   now_ = now;
   gathered_ = false;  // (a new frame: what was gathered for the last one is old)
   quietEmitters = 0;
@@ -1191,6 +1232,8 @@ void Particles::Update(double now, const View* view) {
     if (e.hidden) {  // what it hangs on is not seen: nothing now, and nothing made up later
       ++quietEmitters;
       e.ticksDone = last;
+      e.pending.clear();  // [emitahead] (nor what it threw for moments still to come)
+      e.frameBefore = e.position;
       if (e.lifetime >= 0 && due > last) e.stopped = true;
       continue;
     }
@@ -1217,11 +1260,17 @@ void Particles::Update(double now, const View* view) {
         ++quietEmitters;
         if (e.blueprint->createIfVisible && e.ticksDone == 0) e.stopped = true;  // never seen: never there
         if (e.lifetime >= 0 && due > last) e.stopped = true;                     // its time ran out unseen
+        if (!e.pending.empty()) Release(&e, nowBefore, now);  // [emitahead] (what it threw while seen)
+        e.frameBefore = e.position;
         continue;  // (its ticks wait; the last of them are made up when it is seen again)
       }
     }
     while (!e.stopped && e.ticksDone < last) Emit(&e, e.ticksDone++);
-    if (e.lifetime >= 0 && e.ticksDone >= last && due > last) e.stopped = true;
+    // [emitahead] what is due of what it has thrown is born, where it is now; one whose own time is over stays until
+    // its last are born (one stopped from outside, Stop, goes with this frame and what is not due with it)
+    if (!e.pending.empty()) Release(&e, nowBefore, now);
+    e.frameBefore = e.position;
+    if (e.lifetime >= 0 && e.ticksDone >= last && due > last && e.pending.empty()) e.stopped = true;
   }
   if (std::any_of(emitters_.begin(), emitters_.end(), [](const Emitter& e) { return e.stopped; })) {
     emitters_.erase(std::remove_if(emitters_.begin(), emitters_.end(), [](const Emitter& e) { return e.stopped; }), emitters_.end());

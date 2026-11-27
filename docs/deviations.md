@@ -379,6 +379,25 @@ says `the rules are loaded again with the engine's script fixes`, about one seco
   and no other script error ("Hooked /lua/effectutilitiesuef.lua"). FAF 3840's off-map shell still impacts below 0
   (tests/faf3840_rules.txt scene D, beat 138).
 
+### 14. A guard whose target is gone flies to the map's corner (2026-11-27)
+
+- **What is broken:** a unit on a Guard order whose target has gone (a recon blip that has faded after its unit
+  died, an entity destroyed) asks for the target's place and gets the engine's invalid vector (NaN,
+  `CAiTarget::GetTargetPosGun` 0x5e2a90). `CUnitCommand::GetPosition` 0x6e8a30 turns it into a map cell through
+  `fistp` (0x6e8aa5 / 0x6e8acc: the integer indefinite), whose low 16 bits are 0: the cell (0, 0). The guard's
+  follow goal becomes the map's top-left corner, and the unit leaves for it and stays there (seen in the original:
+  oracle probe PG1, FAF 3840 pro replay eonnacia, beat 9980, army 6's aircraft 0x60006a guarding a blip that is
+  gone flies from (232, 529) to the corner (5, 5)). The player sees a guard walk or fly off across the map.
+- **What we do:** with `Sim::fixes` the guard keeps the last valid place it had for that order (the cell centre it
+  last made from the target or the order's point), or its own cell when it never had one (`src/sim/build.cpp`
+  `ReferencePos`, `GuardData::lastRef`). Without `fixes` the cell (0, 0) as the original (batch 205).
+- **Why it is safe, what it changes:** only a guard whose target place is invalid, which in the original is always
+  the trip to the corner; the order itself, its end and every other guard are untouched. It changes where such a
+  unit goes, so a game played with it must be played back with it (the replay mark above).
+- **Tested** (2026-11-27): the eonnacia replay to beat 10,150 with `MOHO64_DEBUG_AIR=6291562`: with
+  `MOHO64_FIXES=0` the aircraft's target becomes (5, 5) at 9982 and it is at (61, 139) by 10140, as the original's;
+  with `MOHO64_FIXES=1` its target stays (227, 521) and it circles there (10140: (221, 491)).
+
 ## Looked broken, left alone
 
 ### The other weak tables of the sim's scripts (2026-10-21, with 7-10)

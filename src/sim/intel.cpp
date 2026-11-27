@@ -593,17 +593,34 @@ void ReconTick(Sim& sim, lua_State* L, int a) {
       if (army.get() == us) continue;
       const std::vector<Unit*> list = army->units;
       for (Unit* u : list) {
-        if (!u->destroyQueued || !(u->recon[a] & kReconInUse)) continue;
-        ReconBlip* b = u->blip;
-        bool mobile = b ? b->mobile : true;
-        bool allied = u->army && combat::Relation(u->army, us) == 2;
-        Vec3 p = b ? b->position : u->position;
-        if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p, 8) & 8)) {
-          if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);
-          DeleteEntry(sim, L, a, u);
-          if (b) DestroyIfUnused(sim, b);
-        } else {
-          u->recon[a] |= 0x40;
+        if (!u->destroyQueued) continue;
+        const bool allied = u->army && combat::Relation(u->army, us) == 2;
+        if (u->recon[a] & kReconInUse) {
+          ReconBlip* b = u->blip;
+          bool mobile = b ? b->mobile : true;
+          Vec3 p = b ? b->position : u->position;
+          if (mobile || allied || (CanDetect(sim, a, b ? static_cast<Entity*>(b) : u, p, 8) & 8)) {
+            if (!mobile && b) ThreatRemoveEntry(sim, a, b->id);
+            DeleteEntry(sim, L, a, u);
+            if (b) DestroyIfUnused(sim, b);
+          } else {
+            u->recon[a] |= 0x40;
+          }
+        }
+        // The jammer's fakes this army holds are map entries of the same source (intel.md 3.1 step 2: every entry
+        // whose source is DestroyQueued is erased), so they go in the same pass, not at the next recon tick from the
+        // gone list. Seen: FAF 3839 pro replay setons_2, army 7's 0x700093 (fakes 0x30700206..9) is destroy-pending
+        // at 13896, army 6's recon beat: ours kept army 6's four fakes until 13906, so their ids came back at 14011,
+        // and the new 0x700093's real blip at 14001 took 0x30700210, not 0x30700206 (probe P5S2: the original's
+        // 0x30700206 is that real blip at 14400; every army-7 blip id after it was off by that, 14427).
+        // (A structure's fake out of sight is kept, as before: ours has no MaybeDead orphan for a fake.)
+        const std::vector<ReconBlip*> fakes = u->fakeBlips;
+        for (ReconBlip* f : fakes) {
+          if (!(f->rflags[a] & kReconInUse)) continue;
+          if (f->mobile || allied || (CanDetect(sim, a, f, f->position, 8) & 8)) {
+            if (!f->mobile) ThreatRemoveEntry(sim, a, f->id);
+            DropFake(sim, L, a, f);
+          }
         }
       }
     }
