@@ -1763,10 +1763,18 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   // M28 cleared the transport's load at 1615 (the load's dtor aborts the walker's navigator; its move ends, then its
   // call fails, in the next command stage): the original's engineer is out of Moving at 1616, ours kept it until
   // its next order's task four beats later.
-  const bool walking = d.moving;
+  // The walk's dtor runs whole before the call's own dtor (CTask::TaskInterruptSubtasks, as EndCallTeleport /
+  // EndCallStaging): Moving off, then its AbortMove (0x618884) -> MakeIdle -> SetWaypoints(0, 0) -> CheckCollisions,
+  // while the unit still holds WaitingForTransport / TransportLoading (the call's dtor 0x5ff7f0 clears those after).
+  // UnitIgnores 0x62eea0 lets a WaitingForTransport unit go to IsHigherPriorityThan (0x62efd9..0x62f012), where it,
+  // standing now, outranks a mover. Seen (oracle probe P5Q1): FAF 3840 pro replay 4v4_4 11020, army 2's engineers
+  // 0x20001f / 0x200035 walking to the transport 0x2000a6 whose load failed: the original's 0x20001f predicts nothing
+  // against 0x200035 (still walking); ours cleared WaitingForTransport first, made a record against it and side-
+  // stepped at 11021.
   if (d.moving) {
     d.moving = false;
     SetState(u, US("Moving"), false);
+    if (!u->clearKeepsMove) MotionStop(u);
   }
   SetState(u, US("TransportLoading"), false);
   SetState(u, US("WaitingForTransport"), false);
@@ -1794,8 +1802,8 @@ void EndCall(Sim& sim, Unit* u, TransportTaskData& d) {
   // already: AbortMove on the idle navigator -> MakeIdle -> SetWaypoints(0, 0) builds the brake spline afresh from
   // the speed and facing of now. Seen: Skirmish 1616, that engineer 0x200022: stopped at 1615 by the transport's load
   // dtor 0x624dbf, its call ends at 1616 and the walk's dtor brakes again; the original's 1616 point is the fresh
-  // brake's (z 423.774933), ours went on along the first brake (423.774902).
-  if (walking && !u->clearKeepsMove) MotionStop(u);
+  // brake's (z 423.774933), ours went on along the first brake (423.774902). (That abort is made at the top now, as
+  // the walk's dtor comes first.)
 }
 
 // --- unload (CUnitUnloadUnits 0x625ee0 / 0x626390) ---------------------------------------------
