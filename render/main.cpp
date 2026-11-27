@@ -167,6 +167,8 @@
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording); a remastered one
 //           with the game's own model beside it, unless --place-alone
+// --place-army <0..7>  [placearmy] which of the viewer's army colours placed units wear (0 blue, as before; 1 red,
+//           2 grey, 3 yellow, 4 orange, 5 purple, 6 pink, 7 green): a faction's pictures in its own colour
 // --emit-behind  [emitahead] a moving emitter's particles born along the way it came a tick before, as until 2026-11-27
 //           (Particles::emitAhead off): a trail or an exhaust hangs a tick's travel behind what carries it
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
@@ -1468,6 +1470,7 @@ struct Options {
   unsigned seed = 0;
   std::vector<std::string> data, mods, maps, previews, remasters, place, crowd;
   bool placeAlone = false;  // --place-alone
+  int placeArmy = 0;        // --place-army ([placearmy])
   std::string turn;    // --turn: the bone placed units turn
   std::vector<std::string> emit;  // --emit: emitters played over and over
   float emitScale = 1;
@@ -1802,6 +1805,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--preview") o->previews.push_back(v);
     else if (a == "--remasters") o->remasters.push_back(v);
     else if (a == "--place") o->place.push_back(v);
+    else if (a == "--place-army") o->placeArmy = atoi(v);  // [placearmy]
     else if (a == "--crowd") o->crowd.push_back(v);
     else if (a == "--ground-kind") o->groundKind.push_back(v);
     else if (a == "--tracks-test") o->tracksTest.push_back(v);
@@ -5232,6 +5236,7 @@ int main(int argc, char** argv) {
         if (bubble && bubble->ok) meshes.Add(bubble, Mat4::FromTRS(where, Quat{}, bubble->scale * 12), {1, 1, 1});
       }
     }
+    const Vec3 placeColor = kArmyColors[std::clamp(opt.placeArmy, 0, 7)];  // [placearmy]
     for (PlacedUnit& u : placedUnits) {
       Pose pose;
       if (u.turned < 0 && animation.frames > 0) {
@@ -5320,7 +5325,7 @@ int main(int argc, char** argv) {
       }
       const bool posed = pose.nowCount > 0 || pose.nextCount > 0;
       // ((level band) with --level-band keyed, as the game's units are: the band holds them and their changes are counted)
-      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), kArmyColors[0],
+      meshes.Add(u.model, Mat4::FromTRS(u.position, Quat{}, u.model->scale), placeColor,
                  opt.warpIn >= 0 && world.warpInColours && world.look == Look::Modern && world.effectsLook == World::EffectsLook::Remastered
                      ? 7.0f + 0.9f * std::clamp(opt.warpIn + time / static_cast<float>(World::kWarpInSeconds), 0.0f, 1.0f)  // [warpin]
                      : (opt.shielded || opt.warpIn >= 0) && !world.ShieldOnlyHits(u.id) ? 3.0f : opt.built,  // ([shieldhit] nothing at rest)
@@ -5328,10 +5333,10 @@ int main(int argc, char** argv) {
                  nullptr, nullptr, opt.levelBand >= 0 ? placedId : 0);
       meshes.Belt(belt);
       if (const WearLook* w = world.WearOf(0x40000000u | static_cast<uint32_t>(&u - placedUnits.data()))) meshes.Wear(*w);  // (--wear-test)
-      world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &kArmyColors[0], placedId, u.building);
+      world.AddLamps(u.model, u.position, Quat{}, posed ? &pose : nullptr, &placeColor, placedId, u.building);
       world.water.AddAfloat(u.position, Quat{}, u.model->boundsMin * u.model->scale, u.model->boundsMax * u.model->scale);  // [floatfoam]
-      world.MarkOutline(u.model, u.position, kArmyColors[0], u.building, static_cast<uint32_t>(&u - placedUnits.data()), u.icon);  // (as the player's own)
-      icons.Add(u.icon, u.position, kArmyColors[0]);
+      world.MarkOutline(u.model, u.position, placeColor, u.building, static_cast<uint32_t>(&u - placedUnits.data()), u.icon);  // (as the player's own)
+      icons.Add(u.icon, u.position, placeColor);
     }
     if (!drivers.empty()) {  // --tracks-test: round their loops, their treads laid as they go
       const float dt = driversAt < 0 ? 0 : std::clamp(time - driversAt, 0.0f, 0.1f);
