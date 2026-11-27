@@ -201,9 +201,12 @@ do
             local first = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
             local before = first and first.compiled or 0
             local line = false
+            -- (a look at once, then one a second: a compile at work is said from the screen's first frames)
+            local looked = false
             while WorldIsLoading() and not IsDestroyed(movie) do
-                WaitSeconds(1)
-                if IsDestroyed(movie) then break end
+                if looked then WaitSeconds(1) end
+                looked = true
+                if IsDestroyed(movie) or not WorldIsLoading() then break end
                 local work = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
                 local text = RemasterLoadLineText(work, before, moho64ui_WallSeconds() - began)
                 before = work and work.compiled or before
