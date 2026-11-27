@@ -340,7 +340,10 @@ bool LoadScm(gfx::Device* device, const std::string& given, const std::vector<Mo
   const int64_t vertexOffset = h[3], vertexCount = h[5], indexOffset = h[6], indexCount = h[7];
   // version 6 is this project's extension for models of more than 65,535 vertices: version 5 with
   // indices of 32 bits (render/REQUESTS.md, item 4)
-  if (h[0] != 5 && h[0] != 6) return fail("unsupported .scm version");
+  // [scm7] version 7: one mod's file is stamped so (of 400 mod models looked at, 2026-11-27): version 5's layout to the
+  // byte (68 bytes a vertex, indices of 16 bits), with the header's second vertex stream in use (4 bytes a vertex after
+  // the indices, which nothing here reads). Read as version 5; before, the unit was not drawn at all.
+  if (h[0] != 5 && h[0] != 6 && h[0] != 7) return fail("unsupported .scm version");
   const int64_t indexBytes = h[0] == 6 ? 4 : 2;
   if (vertexCount <= 0 || indexCount <= 0 || vertexOffset < 0 || indexOffset < 0 ||
       vertexOffset + vertexCount * static_cast<int64_t>(sizeof(ScmVertex)) > static_cast<int64_t>(file.size()) ||
