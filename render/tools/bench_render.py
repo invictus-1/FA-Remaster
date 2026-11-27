@@ -245,6 +245,12 @@ def run_one(exe, name, size, folder, stats, shader_cache, tries=6, base=None, fr
     log = folder + "/" + base + ".log"
     args = scene_args(name, size, folder, stats, shader_cache, base, frames)
     env = dict(os.environ, MSYS_NO_PATHCONV="1")
+    # (2026-11-27: the scenes' game needs the engine's script fixes, data/fixes of the tree this tool lies in; the viewer finds
+    # them beside its own exe, which a copied build (the lab's merges/<name>) does not have: without them the session does
+    # not start, and a whole run measured the empty map)
+    fixes = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "fixes")
+    if "MOHO64_FIXES_DIR" not in env and os.path.isdir(fixes):
+        env["MOHO64_FIXES_DIR"] = fixes.replace("\\", "/")
     for attempt in range(tries):
         t0 = time.time()
         with open(log, "w", encoding="utf-8", errors="replace") as f:
@@ -259,6 +265,12 @@ def run_one(exe, name, size, folder, stats, shader_cache, tries=6, base=None, fr
                 f.write("\n# bench_render.py: over an hour, stopped\n")
         seconds = time.time() - t0
         if code != 3:
+            try:  # (a scene with a game whose session did not start is no measure of it: said, and the run fails)
+                if "the session could not be started" in open(log, encoding="utf-8", errors="replace").read():
+                    print("  %s: THE SESSION DID NOT START (no game in this run): not a measure" % base, flush=True)
+                    return 5, seconds
+            except OSError:
+                pass
             return code, seconds
         print("  %s: the gate says busy or held (exit 3); again in 3 minutes" % base, flush=True)
         time.sleep(180)
