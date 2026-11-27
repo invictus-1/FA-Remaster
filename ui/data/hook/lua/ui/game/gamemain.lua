@@ -169,3 +169,57 @@ function OnFirstUpdate()
         import("/moho64ui/lua/timeline.lua").Create()
     end
 end
+
+-- FA Remastered: a line on the loading screen when graphics are being prepared (ui/REQUESTS.md 58, 2026-11-27). A
+-- first game after an install or an update takes longer: shaders are compiled where none came with the build, and the
+-- card's driver makes its own pipelines for a set it has not seen (26 s measured on a first start, behind this
+-- screen, which keeps moving). The original says nothing; a new player would wonder. While the renderer compiles
+-- shaders the line counts them; once a load has lasted twelve seconds it says that the first game takes longer.
+-- The game's own screen (LoadDialog, a local of this chunk) stays as it is; the line is its movie's child.
+-- What is shown, for the tests: text (as shown, "" when none), looks (how often the thread looked).
+RemasterLoadLine = { text = "", looks = 0 }
+
+-- The line's text for what the shader compiler says (`work`: moho64ui_ShaderWork's table or nil), the count at the
+-- look before (`before`) and the seconds the load has lasted; "" for no line.
+function RemasterLoadLineText(work, before, waited)
+    if work and (work.compiling > 0 or work.compiled ~= before) and work.compiled + work.compiling > 0 then
+        return "Preparing graphics (once after an install or an update): " .. work.compiled .. " shaders so far"
+    end
+    if waited >= 12 then
+        return "Preparing graphics for this PC: the first game after an install or an update takes longer"
+    end
+    return ""
+end
+
+do
+    local RemasterGameLoadDialog = LoadDialog
+    LoadDialog = function(parent)
+        local movie = RemasterGameLoadDialog(parent)
+        RemasterLoadLine.text, RemasterLoadLine.looks = "", 0
+        ForkThread(function()
+            local began = moho64ui_WallSeconds()
+            local first = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
+            local before = first and first.compiled or 0
+            local line = false
+            while WorldIsLoading() and not IsDestroyed(movie) do
+                WaitSeconds(1)
+                if IsDestroyed(movie) then break end
+                local work = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
+                local text = RemasterLoadLineText(work, before, moho64ui_WallSeconds() - began)
+                before = work and work.compiled or before
+                RemasterLoadLine.looks = RemasterLoadLine.looks + 1
+                if text ~= "" then
+                    if not line then
+                        line = UIUtil.CreateText(movie, "", 16, UIUtil.bodyFont)
+                        line:SetColor('FFA0A8B0')
+                        line:SetDropShadow(true)
+                        LayoutHelpers.AtCenterIn(line, parent, 300)
+                    end
+                    line:SetText(text)
+                    RemasterLoadLine.text = text
+                end
+            end
+        end)
+        return movie
+    end
+end
