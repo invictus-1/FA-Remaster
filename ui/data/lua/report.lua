@@ -41,6 +41,53 @@ function KeyText()
     return table.concat(parts, " + ")
 end
 
+-- The box that says where the report is (or why there is none). Ours, of the game's own parts (its Popup, its text
+-- and its button): the game's QuickDialog is too narrow for the report's file name and broke it in two (Chris's
+-- picture of 2026-11-20). `head` and `name` each on a line of their own, `rest` wrapped under them. Enter, Escape, Ok
+-- or a click beside it closes it.
+local function Tell(head, name, rest)
+    local Popup = import("/lua/ui/controls/popups/popup.lua").Popup
+    local Group = import("/lua/maui/group.lua").Group
+    local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
+    local parent = GetFrame(0)
+    local content = Group(parent)
+    local probe = UIUtil.CreateText(content, "", 14, UIUtil.bodyFont)
+    probe:Hide()
+    local wrapped = import("/lua/maui/text.lua").WrapText(rest or "", LayoutHelpers.ScaleNumber(520),
+        function(t) return probe:GetStringAdvance(t) end)
+    local rows = { { text = head, size = 16, colour = UIUtil.fontColor } }
+    if name and name ~= "" then table.insert(rows, { text = name, size = 16, colour = 'FFFFFFFF' }) end
+    table.insert(rows, { text = "", size = 8 })
+    for _, line in wrapped do table.insert(rows, { text = line, size = 14, colour = 'FFA0A8B0' }) end
+    LayoutHelpers.SetDimensions(content, 580, 84 + 22 * table.getn(rows))
+    local above, texts = false, {}
+    for _, row in rows do
+        local t = UIUtil.CreateText(content, row.text, row.size, UIUtil.bodyFont)
+        if row.colour then t:SetColor(row.colour) end
+        if above then LayoutHelpers.Below(t, above, 4) else LayoutHelpers.AtTopIn(t, content, 14) end
+        LayoutHelpers.AtHorizontalCenterIn(t, content)
+        above = t
+        table.insert(texts, t)
+    end
+    local ok = UIUtil.CreateButtonWithDropshadow(content, '/BUTTON/medium/', "<LOC _Ok>Ok")
+    LayoutHelpers.AtHorizontalCenterIn(ok, content)
+    LayoutHelpers.AtBottomIn(ok, content, 10)
+    local box = Popup(parent, content)
+    box.texts, box.nameText, box.content = texts, (name and name ~= "") and texts[2] or false, content
+    -- (the game's popup takes its escape handler off the stack twice when Escape closes it by that handler: once here)
+    local escaped = false
+    box.OnEscapePressed = function(self)
+        escaped = true
+        self:Close()
+    end
+    box.OnClosed = function(self)
+        if not escaped then import("/lua/ui/dialogs/eschandler.lua").PopEscapeHandler() end
+    end
+    ok.OnClick = function() box:Close() end
+    UIUtil.MakeInputModal(box, function() box:Close() end, function() box:Close() end)
+    return box
+end
+
 -- The report written onto the Desktop with `note`, and a box that says where it is (or why there is none). `asked`
 -- is the game's time in seconds when the question came up (nil outside a game): the player saw the problem then, and
 -- typed after; it goes into the note, so that whoever reads the report knows where in the game's record to look.
@@ -53,22 +100,21 @@ function Write(note, asked)
     State.note = note
     local file, why = moho64ui_Report(note, true)
     State.last, State.why = file or false, why or false
-    local text
+    local head, name, rest
     if file then
         State.count = State.count + 1
         -- (the Desktop said as such; any other folder as it is: the reports folder where the system names no Desktop)
         local folder = Folder(file)
-        local where = string.find(string.lower(folder), "[/\\]desktop$") and "The report is on your Desktop:\n" .. FileName(file)
-            or "The report is written:\n" .. FileName(file) .. "\nin " .. folder
-        text = where ..
-            "\n\nSend this file to us. It holds this game's log and recording, your settings and a description of your PC. Nothing was sent anywhere."
+        local onDesktop = string.find(string.lower(folder), "[/\\]desktop$") ~= nil
+        head, name = onDesktop and "The report is on your Desktop:" or "The report is written:", FileName(file)
+        rest = (onDesktop and "" or ("It is in " .. folder .. ". ")) ..
+            "Send this file to us. It holds this game's log and recording, your settings and a description of your PC. Nothing was sent anywhere."
     else
-        text = "The report could not be written:\n" .. tostring(why)
+        head, name, rest = "The report could not be written:", "", tostring(why)
     end
     LOG("moho64ui: a report by hand: " .. tostring(file or ("none (" .. tostring(why) .. ")")))
     if Controls.told and not IsDestroyed(Controls.told) then Controls.told:Destroy() end
-    Controls.told = UIUtil.QuickDialog(GetFrame(0), text, "<LOC _Ok>Ok", nil, nil, nil, nil, nil, true,
-        { worldCover = false, enterButton = 1, escapeButton = 1 })
+    Controls.told = Tell(head, name, rest)
     return file
 end
 

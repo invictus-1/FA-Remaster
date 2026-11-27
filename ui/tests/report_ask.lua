@@ -118,6 +118,12 @@ if rawget(_G, "SessionIsActive") and SessionIsActive() then
         -- the box that says where the file is
         local told = Report.Controls.told
         check("a box says where the file is", up(told), true)
+        if up(told) and told.nameText then
+            -- (its own box since 2026-11-27: the file's name on ONE line, inside the box)
+            check("the file's name stands on one line of the box", told.nameText:GetText(), string.gsub(Report.State.last, "^.*[/\\]", ""))
+            check("and fits inside it", told.nameText.Left() >= told.content.Left() and told.nameText.Right() <= told.content.Right(), true)
+            check("the box lies inside the screen", told.Left() >= 0 and told.Top() >= 0 and told.Right() <= GetFrame(0).Right() and told.Bottom() <= GetFrame(0).Bottom(), true)
+        end
         if pic == "told" then
             LOG("TEST done: " .. failed .. " failed")
             return
