@@ -846,7 +846,14 @@ bool WillCollide(const Unit* Y, const Unit* X, const Vec3& vY, const Vec3& pY, c
   }
   if (Dist2(pY, pX) > (r[0] + r[1]) * (r[0] + r[1])) return false;
   for (int i = 0; i < 2; ++i) {
-    const Quat& q = U[i]->orientation;
+    // 0x596b4c..0x596be6: the unit's COMMITTED orientation (Unit+0xa4..+0xb0 = Entity+0x9c..+0xa8, w x y z), the
+    // transform AdvanceCoords writes at the beat's end (step 13): inside the entity stage, after the unit's own
+    // motion, still the one the beat began with (ours: the held shape). Seen (oracle probes PN1 / PN2, FAF 3840 pro
+    // replay 4v4_3 12854): a shell's impact runs shield.lua's IssueClearCommands on 0x1000f0 after both units' motion;
+    // its brake spline's CheckCollisions predicts 0x10005c against it with the committed orientations (q w -0.0099 /
+    // 0.5297 ...): no meeting at k = 0 or 3, one at k = 6 (record due 12860, no Resolve at 12855); ours took the new
+    // orientations, met at k = 0 and side-stepped 0x10005c at 12855.
+    const Quat& q = U[i]->shapeHeld ? U[i]->shapeOri : U[i]->orientation;
     const MotionBlueprint& b = *U[i]->motion.bp;
     float fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
     float rx = 1 - 2 * (q.y * q.y + q.z * q.z), rz = 2 * (q.x * q.z - q.w * q.y);

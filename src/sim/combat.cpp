@@ -834,6 +834,21 @@ Vec3 TargetPosBeatStart(Sim& sim, const AiTarget& t) {
         return Vec3{fb->offset.x + tp.x, fb->offset.y + tp.y, fb->offset.z + tp.z};
       }
     }
+  // A recon blip that IS the target's entity (a shell Lua turned onto it: Projectile:SetNewTarget with the weapon's
+  // current target, FAF's RetargetThread) the same as a fake: ReconBlip::GetTargetPoint 0x5bf5f0 asks its unit's
+  // Unit::GetTargetPoint 0x6ab340 (bone -1: the committed transform), plus the blip's offset. Seen (oracle probes
+  // P5K2b / P5K3): FAF 3839 pro replay setons_3 14306, army 7's dart 275775638 retargeted onto the blip 0x306000db of
+  // army 6's 0x6000d4: the original steers at the unit's place as the beat began; ours at where it had moved this
+  // beat (the point the original's watch reads a beat later), and the dart turned 0.013 aside.
+  if (t.type == 1 && t.aimBone == -1 && !t.fakeId)
+    if (const Entity* b = TargetEntity(sim, t); b && b->kind == Entity::Kind::Blip) {
+      const ReconBlip* rb = static_cast<const ReconBlip*>(b);
+      const Unit* src = rb->source && sim.FindEntity(EntityRef(rb->source)) ? rb->source : nullptr;
+      if (src && src->shapeHeld && src->blueprint) {
+        const Vec3 tp = Add(src->shapePos, RotateM(src->shapeOri, src->bpCenter));
+        return Vec3{rb->offset.x + tp.x, rb->offset.y + tp.y, rb->offset.z + tp.z};
+      }
+    }
   if (t.type == 1 && t.aimBone == -1 && !t.fakeId)
     if (Entity* e = TargetEntity(sim, t); e && e->shapeHeld) {
       if (e->kind == Entity::Kind::Unit && static_cast<Unit*>(e)->blueprint)
