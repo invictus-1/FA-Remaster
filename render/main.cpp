@@ -167,6 +167,8 @@
 // --preview <unit id>=<folder>  a remastered model's meshes and LabPBR textures, in place of that unit's
 // --place <unit id>  stand that unit at the camera's starting point (to look at a model without a recording); a remastered one
 //           with the game's own model beside it, unless --place-alone
+// --emit-behind  [emitahead] a moving emitter's particles born along the way it came a tick before, as until 2026-11-27
+//           (Particles::emitAhead off): a trail or an exhaust hangs a tick's travel behind what carries it
 // --look    modern (the default: physically based lighting) or original (the game's own formulas)
 // --inspect <what>  a view for checking art (modern look): every lit surface shows one of its own numbers in
 //           place of its lit colour: albedo, normals, roughness, metal, occlusion, shadow, lights (the small
@@ -1382,6 +1384,7 @@ struct Options {
   float surroundShoreLap = -1;          // --surround-shore-lap [surshore] (-1: the world's own)
   bool surroundScenery = true;          // --no-surround-scenery
   bool surroundTreeShadows = true;      // --no-surround-tree-shadows ([surshadow])
+  bool emitBehind = false;              // --emit-behind ([emitahead])
   float surroundSceneryPixels = -1;     // --surround-scenery-pixels (-1: World's own)
   float surroundSceneryLod = -1;        // --surround-scenery-lod (-1: World's own)
   float surroundSceneryReach[2] = {-1, -1};  // --surround-scenery-reach (-1: World's own)
@@ -1731,6 +1734,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--no-surround-ahead") o->surroundAhead = false;         // [surahead]
     else if (a == "--no-surround-scenery") o->surroundScenery = false;
     else if (a == "--no-surround-tree-shadows") o->surroundTreeShadows = false;  // [surshadow]
+    else if (a == "--emit-behind") o->emitBehind = true;  // [emitahead]
     else if (a == "--noicons") o->icons = false;
     else if (a == "--unexplored") o->unexplored = true;
     else if (a == "--ranges") o->ranges = true;
@@ -3233,6 +3237,7 @@ int main(int argc, char** argv) {
   if (opt.surroundShoreLap >= 0) world.surroundShoreLap = opt.surroundShoreLap;  // [surshore]
   world.surroundScenery = opt.surroundScenery;
   world.surroundTreeShadows = opt.surroundTreeShadows;  // [surshadow]
+  world.particles.emitAhead = !opt.emitBehind;  // [emitahead]
   if (opt.surroundSceneryPixels >= 0) world.surroundSceneryPixels = opt.surroundSceneryPixels;
   world.surroundForestFloor = opt.surroundForestFloor;
   if (opt.surroundEdgeBand >= 0) world.surroundEdgeBand = opt.surroundEdgeBand;  // [edgeband]
