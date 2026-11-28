@@ -412,3 +412,50 @@ made ahead; the first three frames after the switch at 4K D3D12 (M28 SETONS_R): 
 the same as the frames after them. The loading screen's film no longer stops (the longest frame while a map loads ~25
 ms). Vulkan: present waited 130-260 ms on new host-visible staging memory; a reserve of min(1 GB, RAM / 16) is taken at
 the start.
+
+## 11. The cost map of 2026-11-27 (measured only)
+
+Where a frame's time goes with every look on at its highest, before any of the optimisation run's work on it. RTX 4090,
+render 31a638db, `render/tools/bench_render.py` scenes R2, R3, R4 (the test game on Seton's Clutch Remastered at minute 10,
+20 and 22), one run each, the typical frame (the median of about 1,140). Milliseconds.
+
+| Scene | Size | The card | The processor's own work | The frame as shown |
+|---|---|---|---|---|
+| R4, the big battle close (1,742 models, 47,000 particles, 8,030 live effects, 940 lights) | 3840x2160 | 23.6 | 13.0 | 24.0 |
+| | 2560x1440 | 10.0 | 10.8 | 10.9 |
+| | 1920x1080 | 7.3 | 10.2 | 10.2 |
+| R3, the whole map from far up (1,561 models, 12,000 particles, 7,586 live effects) | 2560x1440 | 10.2 | 10.9 | 12.3 |
+| | 1920x1080 | 6.7 | 10.5 | 10.6 |
+| R2, a base at night in snow (1,386 lights) | 2560x1440 | 9.1 | 8.0 | 9.1 |
+| | 1920x1080 | 8.1 | 9.0 | 9.1 |
+
+At 2560x1440 and below the processor sets the frame rate in a game, not the card: the renderer's own work is 8 to 11 ms a
+frame (about 2 ms with no game). At 3840x2160 the card sets it.
+
+The card's largest stages:
+
+| Stage | R2 1440p | R3 1440p | R4 1440p | R4 2160p |
+|---|---|---|---|---|
+| ground | 1.98 | 2.52 | 2.56 | 6.76 |
+| units and scenery | 2.66 | 2.85 | 1.00 | 1.74 |
+| water | 0.51 | 1.16 | 0.97 | 2.32 |
+| ambient occlusion | 0.37 | 0.19 | 0.57 | 1.36 |
+| marks on the ground | 0.20 | under 0.10 | 0.35 | 1.29 |
+| energy shields | under 0.10 | 0.14 | 0.45 | 1.22 |
+| particles | under 0.10 | under 0.10 | 0.47 | 1.11 |
+
+The ground is 22 to 29 % of the frame in every scene and grows faster than the pixel count (2.25 times the pixels, 2.6
+times the time). Units and scenery are 28 to 29 % where trees are in view, and 4.0 to 4.5 ms over the thickest wood
+(3.5 to 4 million triangles). The many small looks (ray tracing scene, bounce light, light in the air, light shafts,
+cloud shadows) are 0.1 to 0.25 ms each and do not grow with the size.
+
+The processor in R4 at 1440p, averages: recording the drawing 5.6, listing the game's frame 5.1; inside those, effects
+2.8, units listed 1.9, lights and lamp shadows placed 1.4, ray tracing scene 0.6.
+
+With no game on the map's land at 1440p: 8.6 with every look, 3.6 with none.
+
+How sure: R2 to R4 at 1440p and 1080p ran with the machine nearly alone; the 2160p run and the scenes without a game ran
+beside other work on the processor's other half. Where the processor sets the pace the card idles part of each frame and
+its stages read high (R2 at 1080p): read the card at 1440p and 2160p. A first attempt of the day measured an empty map,
+because the test game does not start for a copied build without the script fixes folder; the tool now names that folder
+itself and fails a run whose game did not start.
