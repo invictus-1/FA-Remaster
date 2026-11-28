@@ -472,3 +472,25 @@ E. Chris's own look (two 4K screens, 240 / 160 Hz): goes on the ONE playtest lis
 - Not done: 3.3's WM_DISPLAYCHANGE handling (head 1's screen gone, or the primary moved onto it: nothing hides
   window 2 yet), the `/dual` command line, a full-screen second head on a real second screen (not tried: the checks
   use the framed test window on one screen), the SDL path (compiled only).
+
+### Part 3 (2026-11-27 19:16, the ui lead): tried on two real screens (Chris: "Go ahead with the second monitor test now")
+
+- Chris's PC: screen 1 3840x2160 at 240 Hz (the main one), screen 2 3840x2160 at 160 Hz to its right. A copy of the
+  test profile with `secondary_adapter = "0,0,0,1"` (its Primary Adapter is a full screen), build-ui 7dc6ba69,
+  `ui/tests/dualhead_real.lua`: 9 of 9. The log: "a second head: full screen on screen 2, 3840x2160 at 160 pictures a
+  second", "window 2 (the second head): full screen on screen 2, 3840x2160; shown by the renderer's second window".
+  The second view fills frame 1, is a view of the picture, and a click and a right click on it select and order by
+  its perspective picture.
+- Numbers (a skirmish's first 25 seconds on Seton's, the test profile's looks, the PC shared with the engine's gate):
+  the main window 8.6 to 11.4 ms a frame in the first seconds, then 10 ms (120 a second); window 2 drawn 35 to 46
+  times a second at first, then 78 to 80; over a whole run "the renderer drew it in 1229 of 2051 counted frames
+  (60%; 86 a second)". Not optimised.
+- ONE FAULT, the renderer's (ui/REQUESTS.md, to the renderer, 2026-11-27): the range rings in the second view are as
+  thick as the MAIN view's zoom makes them: bands tens of map units wide when the main camera is far out and the
+  second is close. Pictures in the lab: `_scratch\ui\ideas_2026-11-27\second_monitor_screen1.jpg` / `screen2.jpg`.
+- The check is the lab's `window_checks.sh '^wc_dualreal$'` (only on a PC with two screens; both screens for about
+  40 s; tell Chris first).
+- Still not done: WM_DISPLAYCHANGE (head 1's screen gone while the game runs), the `/dual` command line, the SDL path.
+  And a rule to decide with Chris: the second head opens only beside a FULL-SCREEN primary (the original's rule);
+  his own profile has the primary windowed, so for him the Secondary Adapter does nothing until that is changed or
+  the rule is lifted (our windows are borderless anyway; the test window already runs beside a windowed primary).

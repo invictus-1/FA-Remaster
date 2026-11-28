@@ -2948,6 +2948,24 @@ share inside my frames, the warm frames, the swap at MapReady), so part 2 is his
 `<the folder of moho64ui.exe>/shaders_shipped`, handed to him by the call, `--shipped-shaders <folder>` for tests;
 the installer lays the same folder down when it exists.
 
+### 59. The range rings in a second view are as thick as the MAIN view's zoom makes them (2026-11-27, seen on Chris's second screen; not blocking)
+
+**ASKED 2026-11-27** (by message the same hour).
+
+Who: ui. Why: Chris had the second head tried on his two real screens today (ui/tests/dualhead_real.lua: full screen
+3840x2160 on screen 1, window 2 full screen 3840x2160 on screen 2, the second view from `SetViews` with window = 1;
+9 of 9 checks, 120 frames a second on the main window with window 2 drawn 80 times a second). The second view itself
+is right. One fault in its picture: with the main camera far out (the whole map) and the second view's camera close
+(CameraHead2 at 60 over the commander), the selected commander's range rings are drawn in the second view as BANDS
+tens of map units wide, in the main view as thin lines. The pictures: the lab's
+`_scratch\ui\ideas_2026-11-27\second_monitor_screen1.jpg` (main view) and `second_monitor_screen2.jpg` (the second
+view, read back by CaptureNextSecondWindowFrame).
+What I think it is (not read in your code): `SetRanges(groups, zoomNear, zoomFar)` gives a thickness in world units
+that goes with THE camera's distance, and the one distance used is the main view's, so the far zoom's 4 world units
+are drawn in the near view too. A split view's or an inset's picture would show the same when its zoom differs.
+What I ask: the rings' thickness by each view's own camera distance (or tell me what the host should give per view;
+`PictureView` has the view's camera already).
+
 ## To the visuals track
 
 ### 1. The rebuilt UEF commander for the stock commander too (UEL0001)
