@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -52,14 +54,30 @@ struct MotorState {
   bool added = false;
   uint64_t destroysSeen = ~uint64_t(0);
   std::vector<Entity*> moved;     // moved this beat (for the grid at step 13)
-  // Level 2 (MotorsSweep): every motor made and not deleted yet; a sweep is due when a motor lost its slot or its
-  // Lua object since the last one
+  // Level 2 (MotorsSweep): the motors that lost their slot AND their Lua object since the last sweep (SetMotor's old
+  // motor, MotorsEntityPurged's), the only ones a sweep can delete (see MotorsSweep). `all` (every motor made and not
+  // deleted yet) is kept only for MOHO64_MOTORSWEEP_CHECK's walk.
+  std::vector<Motor*> lost;
   std::vector<Motor*> all;
   bool sweepDue = false;
   uint32_t sweep = 0;
 };
 
 namespace {
+
+// MOHO64_MOTORSWEEP_CHECK=1: each sweep also walks every motor as before (2026-11-27) and stops on a difference.
+bool MotorSweepCheck() {
+  static const bool on = getenv("MOHO64_MOTORSWEEP_CHECK") && strcmp(getenv("MOHO64_MOTORSWEEP_CHECK"), "0");
+  return on;
+}
+uint64_t g_motorChecks = 0, g_motorCheckFreed = 0;
+struct MotorSweepCheckReport {
+  ~MotorSweepCheckReport() {
+    if (MotorSweepCheck())
+      fprintf(stderr, "moho64 MOHO64_MOTORSWEEP_CHECK: %llu sweeps compared with the walk of every motor: all equal (%llu motors freed)\n",
+              static_cast<unsigned long long>(g_motorChecks), static_cast<unsigned long long>(g_motorCheckFreed));
+  }
+} g_motorSweepCheckReport;
 
 MotorState& MS(Sim& sim) {
   if (!sim.motorState) sim.motorState = std::make_shared<MotorState>();
@@ -79,7 +97,10 @@ void SetMotor(Sim& sim, Entity* e, Motor* m) {
   std::vector<MotorSlot>& motors = MS(sim).motors;
   for (auto& s : motors)
     if (s.ref == EntityRef(e)) {
-      if (s.m) s.m->UnbindLua();  // the old motor is deleted
+      if (s.m) {
+        s.m->UnbindLua();  // the old motor is deleted
+        if (Sim::FreeDeadLevel() >= 2) MS(sim).lost.push_back(s.m);
+      }
       MS(sim).sweepDue = true;
       s.m = m;
       return;
@@ -96,7 +117,7 @@ Motor* NewMotor(lua_State* L, Entity* e, bool sink) {
   CreateObject(L, m, "MotorFallDown");  // pushed
   if (Sim::FreeDeadLevel() >= 2) {
     m->ownedSlot = S(L)->OwnedCount();
-    MS(*S(L)).all.push_back(m);
+    if (MotorSweepCheck()) MS(*S(L)).all.push_back(m);
   }
   S(L)->Own(std::move(o));
   return m;
@@ -268,7 +289,10 @@ void MotorsEntityPurged(Sim& sim, const Entity* e) {
   std::vector<MotorSlot>& motors = MS(sim).motors;
   for (size_t i = 0; i < motors.size(); ++i)
     if (motors[i].ref == EntityRef(e)) {
-      if (motors[i].m) motors[i].m->UnbindLua();
+      if (motors[i].m) {
+        motors[i].m->UnbindLua();
+        if (Sim::FreeDeadLevel() >= 2) MS(sim).lost.push_back(motors[i].m);
+      }
       MS(sim).sweepDue = true;
       motors.erase(motors.begin() + static_cast<std::ptrdiff_t>(i));
       return;
@@ -314,23 +338,65 @@ void MotorsNoteMoved(Sim& sim, Entity* e) { MS(sim).moved.push_back(e); }
 // that lost both (its entity was purged: MotorsEntityPurged; another motor took its slot: SetMotor) is deleted.
 // One whose slot went while its entity only waited to be destroyed (MotorsTick's erase pass) keeps its Lua object
 // and stays, as before.
+// Only those two places take a motor's Lua object (UnbindLua; a motor is bound once, by CreateObject, and its
+// registry reference keeps the object from the collector), and each takes the slot with it; a motor is in one slot
+// at most (NewMotor -> SetMotor). So the motors a walk of every motor would delete are exactly the ones they listed
+// (`lost`), less any whose owner place no longer holds it (FreeOwned false: kept and asked again, as the walk kept
+// it in `all`); they are deleted in the walk's order, creation order (ownedSlot grows with each made motor). Before
+// (to 2026-11-27): every slot marked, every motor made walked, on each due sweep (a fallen tree's motor stays for
+// good: late in an AI game thousands).
 void MotorsSweep(Sim& sim) {
   if (!sim.motorState) return;
   MotorState& ms = MS(sim);
-  if (!ms.sweepDue || ms.all.empty()) return;
+  if (!ms.sweepDue) return;
   ms.sweepDue = false;
-  const uint32_t sweep = ++ms.sweep;
-  for (const MotorSlot& s : ms.motors)
-    if (s.m) s.m->heldSweep = sweep;
+  std::vector<Motor*> ref;
+  if (MotorSweepCheck() && !ms.all.empty()) {  // the walk of every motor, as before (deletes nothing here)
+    const uint32_t sweep = ++ms.sweep;
+    for (const MotorSlot& s : ms.motors)
+      if (s.m) s.m->heldSweep = sweep;
+    size_t keep = 0;
+    for (Motor* m : ms.all) {
+      if (m->heldSweep == sweep || m->HasLuaObject() || sim.OwnedAt(m->ownedSlot) != m) {
+        ms.all[keep++] = m;
+        continue;
+      }
+      ref.push_back(m);
+    }
+    ms.all.resize(keep);
+  }
+  std::sort(ms.lost.begin(), ms.lost.end(), [](const Motor* a, const Motor* b) { return a->ownedSlot < b->ownedSlot; });
   size_t keep = 0;
-  for (Motor* m : ms.all) {
-    if (m->heldSweep == sweep || m->HasLuaObject() || !sim.FreeOwned(m->ownedSlot, m)) {
-      ms.all[keep++] = m;
+  std::vector<Motor*> freed;
+  for (Motor* m : ms.lost) {
+    if (MotorSweepCheck()) {
+      if (sim.OwnedAt(m->ownedSlot) != m) {
+        ms.lost[keep++] = m;
+        continue;
+      }
+      freed.push_back(m);
+      continue;
+    }
+    if (!sim.FreeOwned(m->ownedSlot, m)) {
+      ms.lost[keep++] = m;
       continue;
     }
     ++sim.motorsFreed;
   }
-  ms.all.resize(keep);
+  ms.lost.resize(keep);
+  if (MotorSweepCheck()) {
+    if (freed != ref) {
+      fprintf(stderr, "moho64 MOHO64_MOTORSWEEP_CHECK: %zu motors to delete from the lost list, the walk finds %zu (beat %u)\n",
+              freed.size(), ref.size(), sim.tick());
+      abort();
+    }
+    ++g_motorChecks;
+    g_motorCheckFreed += freed.size();
+    for (Motor* m : freed) {
+      sim.FreeOwned(m->ownedSlot, m);
+      ++sim.motorsFreed;
+    }
+  }
 }
 
 void MotorsForget(Sim& sim) { sim.motorState.reset(); }

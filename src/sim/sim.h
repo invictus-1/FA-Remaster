@@ -914,6 +914,7 @@ class Sim {
   // For a file that owns a class of objects through Own and deletes its dead ones (prop_motor.cpp, level 2): the
   // place the next owned object will take, and the deletion of the object at a place (only if it is `o`).
   uint32_t OwnedCount() const { return static_cast<uint32_t>(owned_.size()); }
+  const ScriptObject* OwnedAt(uint32_t slot) const { return slot < owned_.size() ? owned_[slot].get() : nullptr; }
   bool FreeOwned(uint32_t slot, const ScriptObject* o) {
     if (slot >= owned_.size() || owned_[slot].get() != o) return false;
     owned_[slot].reset();

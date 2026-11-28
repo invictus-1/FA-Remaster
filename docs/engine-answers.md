@@ -5,7 +5,7 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
-## 2026-11-27 18:50, for the interface: which mod's version of a doubly defined unit is used (request 63)
+## 2026-11-27 18:20, for the interface: which mod's version of a doubly defined unit is used (request 63)
 
 The picks are now plain data that a front-end script can read before a game. Nothing of it is in this repository:
 the file lies in the player's own fix mod (the lab's `local_mod_fixes`).

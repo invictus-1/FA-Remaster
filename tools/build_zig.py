@@ -13,6 +13,13 @@
     py tools/build_zig.py --tracy             the profiler build (docs/profiling.md): Tracy's client
                                                (third_party/tracy) and the marks of src/core/trace.h compiled in;
                                                out build-tracy/ unless --out. Without it no line of Tracy is built.
+    py tools/build_zig.py --lto               link-time optimisation: every file but mimalloc compiled to bitcode
+                                               (-flto), lld optimises across them at the link (Lua's table reads
+                                               inlined into the VM and the bindings). Same results as the plain build
+                                               (strict floating point holds at the link too: proof in the gate). Its
+                                               objects go to <out>/obj-lto, so a plain and an LTO build into the same
+                                               --out do not rebuild each other; every link optimises the whole program
+                                               again (slow, see --help).
 
 Same sources and flags as CMakeLists.txt (C++20, -ffp-contract=off -fno-fast-math, mimalloc for the Lua heap,
 static link on Windows). Incremental: an object is rebuilt when its source or any header under src/ or
@@ -56,6 +63,8 @@ def main():
     ap.add_argument("--lua-api-check", action="store_true", help="Lua's API checks on, a trap at the first (a C function pushing past its stack; a test build, as ui/build_ui.py)")
     ap.add_argument("--mi-debug", action="store_true", help="mimalloc's own checks on (MI_DEBUG=3, MI_SECURE=4: freed and overrun blocks caught; a test build)")
     ap.add_argument("--tracy", action="store_true", help="the profiler build: Tracy's client and the marks of src/core/trace.h (docs/profiling.md)")
+    ap.add_argument("--lto", action="store_true", help="link-time optimisation (-flto on every compile but mimalloc; objects in <out>/obj-lto; "
+                    "the link optimises the whole program each time, so a one-file change costs a full optimising link)")
     a = ap.parse_args()
     if not a.out:
         a.out = os.path.join(ROOT, "build-tracy" if a.tracy else "build-zig")
@@ -63,7 +72,8 @@ def main():
     target = a.target or ("x86_64-windows-gnu" if os.name == "nt" else None)
     windows = (target or "").find("windows") >= 0 or (target is None and os.name == "nt")
     tflag = ["-target", target] if target else []
-    os.makedirs(os.path.join(a.out, "obj"), exist_ok=True)
+    objdir = os.path.join(a.out, "obj-lto" if a.lto else "obj")
+    os.makedirs(objdir, exist_ok=True)
     # -mcpu=x86_64_v2: SSE4.2 and POPCNT, every processor since about 2009 (Chris, 2026-11-09; the README names it).
     # The results are the same as the plain x86-64 build's (the gate), the sim's beat about 2.7% shorter.
     common = ["-O2", "-mcpu=x86_64_v2", "-ffp-contract=off", "-fno-fast-math"] + ([] if a.no_debug else ["-g"])
@@ -72,9 +82,14 @@ def main():
     mi_inc = ["-I", os.path.join(ROOT, "third_party", "mimalloc", "include")]
     jobs = []  # (source, object, command)
 
+    # --lto: bitcode objects, which lld links with link-time optimisation. Two things of zig 0.16 shape it: -flto on
+    # the LINK line makes zig build its own libc with LTO, which fails (lld-link: undefined symbol __SNANL), so the link
+    # line gets none (lld optimises the bitcode objects all the same); and mimalloc's static.c as bitcode defines
+    # std::get_new_handler a second time beside libc++abi's, so mimalloc stays a plain object.
     def add(src, flags, cxx):
-        obj = os.path.join(a.out, "obj", os.path.relpath(src, ROOT).replace(os.sep, "_").replace("/", "_") + ".o")
-        cmd = zig("c++" if cxx else "cc", *tflag, *common, *flags, "-c", src, "-o", obj)
+        obj = os.path.join(objdir, os.path.relpath(src, ROOT).replace(os.sep, "_").replace("/", "_") + ".o")
+        lto = ["-flto"] if a.lto and os.path.join("third_party", "mimalloc") not in src else []
+        cmd = zig("c++" if cxx else "cc", *tflag, *common, *lto, *flags, "-c", src, "-o", obj)
         jobs.append((src, obj, cmd))
 
     std_c = ["-std=c99", "-w"]
@@ -93,7 +108,7 @@ def main():
     for d in ("core", "script", "sim", "ai"):
         for f in sorted(glob.glob(os.path.join(ROOT, "src", d, "*.cpp"))):
             # the build's identity (core/build_stamp.h): that one file is compiled on every build
-            add(f, cxxflags + (['-DMOHO64_BUILD_STAMP="' + build_stamp() + '"'] if f == stamp_src else []), True)
+            add(f, cxxflags + (['-DMOHO64_BUILD_STAMP="' + build_stamp() + (", LTO" if a.lto else "") + '"'] if f == stamp_src else []), True)
     # the interface's network transport (ui/net/: no interface dependencies), for --net's two-copy lockstep tests
     netflags = cxxflags + ["-I", os.path.join(ROOT, "ui")]
     for n in ("socket", "message", "connector_tcp", "connector_udp", "beat_exchange_net"):
