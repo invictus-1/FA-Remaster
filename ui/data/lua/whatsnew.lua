@@ -15,6 +15,7 @@ Entries = {
         "If the game stutters, its log now says what the stutter was made of, so a report shows it.",
         "Your settings can be saved as a small file on your Desktop and loaded again, on this PC or another: Options > Interface, at the end of the list.",
         "Where two of your mods bring the same unit, the mods manager now says whose version is used (hover over the mod).",
+        "Seraphim units' own glow dims at night, as the other factions' lights do.",
         "A unit guarding something that vanishes now stays where it is (in new games).",
         "Exhausts and trails sit on the craft that makes them, and some mod units that were invisible are drawn.",
     } },
