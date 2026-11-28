@@ -125,6 +125,49 @@ function RemasterShowReportLink(parent)
     return true
 end
 
+-- "What's new" on the main menu (Chris, 2026-11-27, the ideas' number 4; /moho64ui/lua/whatsnew.lua): a small line in
+-- the menu's bottom right corner, level with "Report a Problem": the date of the build that runs and "What's new",
+-- with "(new)" while the list holds an entry this profile has not opened. Grey (white while there is news and under
+-- the mouse); a click opens the list's box.
+-- What is shown, for the tests: link (the control, false when none), text (as shown).
+RemasterMenuBuild = { link = false, text = "" }
+
+function RemasterShowBuildLink(parent)
+    if not parent then return false end
+    if RemasterMenuBuild.link and not IsDestroyed(RemasterMenuBuild.link) then RemasterMenuBuild.link:Destroy() end
+    local News = import("/moho64ui/lua/whatsnew.lua")
+    local link = RemasterMenuUIUtil.CreateText(parent, "", 14, RemasterMenuUIUtil.bodyFont)
+    link:SetDropShadow(true)
+    link.Depth:Set(function() return parent.Depth() + 400 end)
+    RemasterMenuLayout.AtRightIn(link, parent, 20)
+    RemasterMenuLayout.AtBottomIn(link, parent, 44)
+    local over = false
+    local function Refresh()
+        local text = News.LineText()
+        link:SetText(text)
+        link:SetColor((over or News.IsNew(News.Seen())) and 'FFFFFFFF' or 'FFA0A8B0')
+        RemasterMenuBuild.text = text
+    end
+    Refresh()
+    link:EnableHitTest()
+    link.HandleEvent = function(self, event)
+        if event.Type == 'MouseEnter' then
+            over = true
+            Refresh()
+        elseif event.Type == 'MouseExit' then
+            over = false
+            Refresh()
+        elseif event.Type == 'ButtonPress' then
+            News.Show()
+            Refresh()  -- (opened: no longer new)
+            return true
+        end
+        return false
+    end
+    RemasterMenuBuild.link = link
+    return true
+end
+
 -- "Preparing graphics" on the main menu (ui/REQUESTS.md 58, 2026-11-20): while the renderer compiles shaders (a first
 -- start after an install or a new build: the menu's live background comes late and the picture may stand), a line
 -- above "Report a Problem" says so with the count so far; it goes four seconds after the last shader.
@@ -180,6 +223,8 @@ function CreateUI(...)
     -- (only as the menu's own child, so that it goes with the menu)
     local linked, whyNoLink = pcall(RemasterShowReportLink, group)
     if not linked then WARN("FA Remastered: the menu's Report a Problem line: " .. tostring(whyNoLink)) end
+    local built, whyNoBuild = pcall(RemasterShowBuildLink, group)
+    if not built then WARN("FA Remastered: the menu's What's new line: " .. tostring(whyNoBuild)) end
     -- (a notice that comes while the menu is up, as when the graphics device was lost and the background could not
     -- be restored, is shown within two seconds too, with those already there)
     if group then
@@ -194,6 +239,8 @@ function CreateUI(...)
                     pcall(RemasterShowNotices, group)
                 end
                 pcall(RemasterShowShaderWork, group)
+                -- (the first start's recommendation, once per profile: /moho64ui/lua/firstadvice.lua)
+                pcall(function() import("/moho64ui/lua/firstadvice.lua").Try() end)
             end
         end)
     end

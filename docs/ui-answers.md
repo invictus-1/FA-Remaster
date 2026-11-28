@@ -35,6 +35,26 @@ preparing the interface (2.1 s into the load)"), so a report shows which step a 
 graphics being prepared (ui REQUESTS 58) is one row lower now. Hook `lua/ui/game/gamemain.lua`; tests
 `ui/tests/load_line.lua` (18 checks) and `wc_report`'s read of the log.
 
+**1. The first start recommends, and changes nothing by itself** ("make sure it starts on ultra for everyone but
+recommends lower settings if their pc is too weak"). Every look still starts at its highest on every PC. Once per
+profile, on the main menu, `data/lua/firstadvice.lua` asks the renderer's `SuggestedPreset` (by the card's memory and
+ray tracing: `moho64ui_SuggestedPreset`); where that is LOWER than what is set, a box names the card and what is
+recommended (only what would change) with two buttons: "Use recommended" puts the Remastered Preset, Texture Detail
+and Shadow Fidelity in as the Options' OK would, "Keep my settings" (or Escape, or a click beside it) changes nothing.
+Nothing is ever raised; a Custom preset is left alone; the profile's `remaster_first_start_advice = 1` then keeps the
+box from coming again. A menu without its live background has no device to ask: then the measured check in the
+first game (the hook of gamemain.lua, 2026-10-18: by speed, a question, Ray Tracing first) is the only one, as before;
+both stay. The Options' graphics-memory strip keeps showing the recommendation with its own button. Test
+`ui/tests/firstadvice.lua`.
+
+**4. The main menu names the build and what is new.** Bottom right, level with "Report a Problem": "FA Remastered,
+build of 27 November 2026  -  What's new", with "(new)" and in white while the list holds an entry this profile has
+not opened. The date is the commit's the program was built from (`ui/build_ui.py` stamps `kBuildDate` beside
+`kBuildCommit`; `moho64ui_Build()`). A click opens a box with the three newest entries of `data/lua/whatsnew.lua`: a
+list kept by hand, an entry a day that changed what a player sees or feels, in a player's words. THE LIST IS THE
+INTERFACE TRACK'S TO KEEP at each landing that changes something a player notices (the other tracks' changes too, from
+their messages). Test `ui/tests/whatsnew.lua`.
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's

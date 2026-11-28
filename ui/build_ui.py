@@ -188,7 +188,13 @@ def main():
     except (OSError, subprocess.CalledProcessError):
         commit = "unknown"
     stamp = os.path.join(a.out, "build_commit.cpp")
-    text = 'namespace moho::ui {\nextern const char kBuildCommit[] = "' + commit + '";\n}\n'
+    # (and that commit's date, for the main menu's line "build of ...": the commit's, not the clock's, so that the
+    # stamp changes only when the commit does)
+    try:
+        date = subprocess.check_output(["git", "-C", ROOT, "log", "-1", "--format=%cs"], text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        date = ""
+    text = ('namespace moho::ui {\nextern const char kBuildCommit[] = "' + commit + '";\nextern const char kBuildDate[] = "' + date + '";\n}\n')
     stamp_changes = not os.path.exists(stamp) or open(stamp, encoding="utf-8").read() != text
     if stamp_changes and not a.dry_run:
         with open(stamp, "w", encoding="utf-8", newline="\n") as f:

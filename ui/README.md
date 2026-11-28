@@ -144,6 +144,13 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   the game's window as it was when the player asked, taken before the question's box comes up
   (`moho64ui_ReportPicture`; the JPEG is written by `JpegOf` in `user/report.cpp`; `tests/report_picture.lua`, in a
   live window).
+- The main menu's two small lines and the first start's box (ours; Chris's ideas of 2026-11-27, numbers 4 and 1; the
+  detail in docs/ui-answers.md): bottom right "FA Remastered, build of <date>  -  What's new" with a box of the three
+  newest entries of a list kept by hand (`data/lua/whatsnew.lua`, `moho64ui_Build()`, `build_ui.py`'s `kBuildDate`;
+  `tests/whatsnew.lua`); once per profile a box that RECOMMENDS lower settings where the renderer's suggestion for the
+  card is lower than what is set, and changes nothing without "Use recommended" (`data/lua/firstadvice.lua`;
+  `tests/firstadvice.lua`). On the main menu Escape goes to the menu's own handler, past the popups' stack: a box of
+  ours names its Escape in `data/hook/lua/ui/uimain.lua` while it is up.
 - The automatic crash report (ours; the first step of Chris's debugger: 2026-11-15, "something that auto activates the
   second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
   details on desktop and the user can send it over"; 2026-11-18, "Yes, on the Desktop"): when the main menu is made

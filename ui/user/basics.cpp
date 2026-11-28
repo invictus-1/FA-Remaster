@@ -34,6 +34,10 @@ extern char** environ;
 #endif
 
 namespace moho::ui {
+
+extern const char kBuildCommit[];  // (build_ui.py: the commit the program was built from, and its date)
+extern const char kBuildDate[];
+
 namespace {
 
 // CurrentTime() / GetSystemTimeSeconds(): the seconds of the host's clock (real time in a window, fixed frame
@@ -441,6 +445,19 @@ void RegisterBasicBindings(lua_State* L) {
   SetGlobal(L, "WorldIsLoading", [](lua_State* S) -> int {
     const auto& loading = UserState::From(S)->config().worldLoading;
     lua_pushboolean(S, loading && loading() ? 1 : 0);
+    return 1;
+  });
+  // moho64ui_Build() -> { commit = "1a2b3c4d", date = "2026-11-27" }: the build that runs (build_ui.py's stamp: the
+  // commit it was built from and that commit's date; date "" where git gave none). Ours, for the main menu's line
+  // "build of ..." (ui/data/lua/whatsnew.lua).
+  lua_register(L, "moho64ui_Build", [](lua_State* S) -> int {
+    lua_newtable(S);
+    lua_pushstring(S, "commit");
+    lua_pushstring(S, kBuildCommit);
+    lua_rawset(S, -3);
+    lua_pushstring(S, "date");
+    lua_pushstring(S, kBuildDate);
+    lua_rawset(S, -3);
     return 1;
   });
   // moho64ui_LoadStep() -> which step of a load is running, 1 to 5 (UserState::Config::loadStep), 0 while none loads:

@@ -80,7 +80,13 @@ local function Tell(head, name, rest)
         escaped = true
         self:Close()
     end
+    -- (and on the main menu Escape goes past that handler to the menu's own: named here while the box is up,
+    -- ui/data/hook/lua/ui/uimain.lua)
+    local uimain = import("/lua/ui/uimain.lua")
+    local function OnEscape() box:Close() end
+    uimain.RemasterEscapePush(OnEscape)
     box.OnClosed = function(self)
+        uimain.RemasterEscapeDrop(OnEscape)
         if not escaped then import("/lua/ui/dialogs/eschandler.lua").PopEscapeHandler() end
     end
     ok.OnClick = function() box:Close() end
