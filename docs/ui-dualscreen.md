@@ -485,9 +485,15 @@ E. Chris's own look (two 4K screens, 240 / 160 Hz): goes on the ONE playtest lis
   the main window 8.6 to 11.4 ms a frame in the first seconds, then 10 ms (120 a second); window 2 drawn 35 to 46
   times a second at first, then 78 to 80; over a whole run "the renderer drew it in 1229 of 2051 counted frames
   (60%; 86 a second)". Not optimised.
-- ONE FAULT, the renderer's (ui/REQUESTS.md, to the renderer, 2026-11-27): the range rings in the second view are as
-  thick as the MAIN view's zoom makes them: bands tens of map units wide when the main camera is far out and the
-  second is close. Pictures in the lab: `_scratch\ui\ideas_2026-11-27\second_monitor_screen1.jpg` / `screen2.jpg`.
+- ONE FAULT SEEN, AND IT WAS OURS: the range rings in the second view were as thick as the MAIN view's zoom made
+  them: bands tens of map units wide when the main camera is far out and the second is close. I took it for the
+  renderer's (ui/REQUESTS.md 59 to him); he read both sides' code and showed that his rings are built for every view
+  with that view's camera, and that `ui/user/range_rings.cpp` gave him ONE thickness, worked out from the main
+  view's zoom, at both ends. Fixed the same evening (`ToGroups` gives the two ends of the original's rule;
+  `worldview.cpp` gives `zoomNear = 0` and a `zoomFar` at which the main view's share is the original's exactly, so
+  the main view's rings are as before to the last digit and a second view's follow its own distance). Seen again on
+  the two screens: thin lines in both. Pictures in the lab, `_scratch\ui\ideas_2026-11-27\`:
+  `second_monitor_screen2.jpg` (before), `second_monitor_screen2_fixed.jpg` (after), `second_monitor_screen1.jpg`.
 - The check is the lab's `window_checks.sh '^wc_dualreal$'` (only on a PC with two screens; both screens for about
   40 s; tell Chris first).
 - Still not done: WM_DISPLAYCHANGE (head 1's screen gone while the game runs), the `/dual` command line, the SDL path.

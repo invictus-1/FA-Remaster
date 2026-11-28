@@ -527,10 +527,16 @@ void ToGroups(const RangeStore& store, const RangeView& view, const std::vector<
     WorldRangeGroup g;
     g.color = 0xff000000u | (p.color & 0x00ffffffu);
     g.glow = static_cast<int>(p.color >> 24);
-    // (the thickness as the original works it out for this frame: the same at both ends, so that the
-    // renderer's own blend by the camera's distance changes nothing)
-    g.outer[0] = g.outer[1] = Thickness(p.filter->outer, store.outerCoeff, view.zoomShare, view.playable);
-    g.inner[0] = g.inner[1] = Thickness(p.filter->inner, store.innerCoeff, view.zoomShare, view.playable);
+    // (the two ends of the original's rule, the thickness at a zoom of nothing and at the farthest zoom: the
+    // renderer goes between them by EACH VIEW's own camera distance (the scene's zoomNear = 0 and a zoomFar that
+    // makes the main view's share the original's exactly: worldview.cpp). Until 2026-11-27
+    // this frame's thickness for the MAIN view was given at both ends, and a second view at another zoom, the
+    // second screen's or a split one, drew its rings as thick as the main view's zoom made them: bands tens of map
+    // units wide on Chris's second screen; the renderer's reading of both sides, his answer to ui request 59)
+    g.outer[0] = Thickness(p.filter->outer, store.outerCoeff, 0, view.playable);
+    g.outer[1] = Thickness(p.filter->outer, store.outerCoeff, 1, view.playable);
+    g.inner[0] = Thickness(p.filter->inner, store.innerCoeff, 0, view.playable);
+    g.inner[1] = Thickness(p.filter->inner, store.innerCoeff, 1, view.playable);
     g.fill = store.fill;  // (range_Fill: every group, as the original; the renderer's RangeGroup::fill, render a8ac1f0)
     std::vector<uint32_t> ids;
     for (const Found& r : p.rings) {
@@ -616,7 +622,11 @@ int l_RangeRings(lua_State* L) {
       lua_newtable(L);
       number("x", r.centre[0]), number("z", r.centre[2]), number("radius", r.radius), number("inner", r.innerRadius);
       number("glow", groups[g].glow), number("group", static_cast<double>(g + 1));
-      number("outer", groups[g].outer[0]), number("innerLine", groups[g].inner[0]);
+      // (the thickness in the main view: between the two ends by its zoom share, as the renderer draws it there;
+      // and the ends themselves)
+      number("outer", groups[g].outer[0] + (groups[g].outer[1] - groups[g].outer[0]) * store.zoomShare);
+      number("innerLine", groups[g].inner[0] + (groups[g].inner[1] - groups[g].inner[0]) * store.zoomShare);
+      number("outerNear", groups[g].outer[0]), number("outerFar", groups[g].outer[1]);
       char color[16];
       std::snprintf(color, sizeof color, "%06x", groups[g].color & 0x00ffffffu);
       text("color", color);

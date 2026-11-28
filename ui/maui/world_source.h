@@ -94,7 +94,7 @@ struct WorldRangeGroup {
   uint32_t color = 0xffffffffu;      // 0xAARRGGBB
   int glow = 0;                      // 0..255, the first byte of the script's colour
   // The outline's thickness at the nearest and the farthest zoom, and a hole's outline's (range_rings.cpp gives
-  // this frame's thickness at both ends, worked out by the original's rule).
+  // the two ends of the original's rule: at a zoom of nothing and at the farthest zoom).
   float outer[2] = {0.04f, 4.0f};
   float inner[2] = {0.04f, 4.0f};
   bool fill = false;  // range_Fill: white at 1/8 over what the group covers inside its lines (RangeFill)
@@ -132,9 +132,9 @@ struct WorldScene {
   std::vector<WorldOrderLeg> orderLegs;
   std::vector<WorldOrderMark> orderMarks;
   WorldOrderSettings orderSettings;
-  // The range rings, and the camera's distances at its nearest and its farthest zoom (the rings'
-  // thickness goes between its two numbers with them; the world view leaves them as they are, its rings
-  // have the same thickness at both ends).
+  // The range rings, and the camera's distances that count as the nearest and the farthest zoom: the rings'
+  // thickness goes between its two numbers with EACH VIEW's own camera distance. The world view gives 0 and the
+  // distance at which the main view's share is the original's (zoom / the farthest zoom): worldview.cpp.
   std::vector<WorldRangeGroup> ranges;
   float zoomNear = 10, zoomFar = 1000;
   std::vector<WorldMeshView> meshes;

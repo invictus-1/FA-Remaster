@@ -2950,7 +2950,11 @@ the installer lays the same folder down when it exists.
 
 ### 59. The range rings in a second view are as thick as the MAIN view's zoom makes them (2026-11-27, seen on Chris's second screen; not blocking)
 
-**ASKED 2026-11-27** (by message the same hour).
+**ANSWERED 2026-11-27, AND THE FAULT WAS MINE** (the renderer read both sides' code within the hour: docs/render-answers.md,
+render c911b069: his `Ranges::Build` runs for every view with that view's camera; `ui/user/range_rings.cpp` gave him
+one thickness, worked out from the main view's zoom, at both ends. Fixed on my side the same evening: the two ends of
+the original's rule are given, with a `zoomFar` that makes the main view's share the original's exactly. Seen on the
+two real screens: thin lines in both views.)
 
 Who: ui. Why: Chris had the second head tried on his two real screens today (ui/tests/dualhead_real.lua: full screen
 3840x2160 on screen 1, window 2 full screen 3840x2160 on screen 2, the second view from `SetViews` with window = 1;

@@ -1346,6 +1346,14 @@ class WorldView : public Control {
         return true;
       };
       RangeRingsForWorld(L, rings, &scene.ranges);
+      // (the ends the renderer goes between by each view's own camera distance: range_rings.cpp, ToGroups. The
+      // original's share is zoom / the farthest zoom; the renderer's is the EYE's distance over zoomFar, and the eye
+      // stands at zoom / (2 tan(fov / 2)) with a field of view that narrows from 65 to 60 degrees as the zoom grows
+      // (EyeDistance), so the two are not one straight line. zoomFar is therefore the distance at which THIS view's
+      // share is the original's exactly: the main view's rings are as thick as before to the last digit, and a
+      // second view's, at its own distance, within a tenth of the original's rule)
+      scene.zoomNear = 0;
+      scene.zoomFar = rings.zoomShare > 0 ? EyeDistance(c) / rings.zoomShare : 1000;
     }
     lap("(the picture's scene: range rings)");
     // The meshes the game's script has placed in the world, and the marks of orders just given.
