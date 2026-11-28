@@ -54,6 +54,15 @@ void DropLargest(DdsImage* image, int drop) {
   image->mips -= k;
 }
 
+// [texcap] How many of its largest sizes to leave out: the detail setting's, or as many as bring its larger side down to
+// `cap` (0: no cap), whichever is more.
+int DropCount(const DdsImage& image, int detail, int cap) {
+  int over = 0;
+  if (cap > 0)
+    while ((std::max(image.width, image.height) >> over) > cap) ++over;
+  return std::max(detail, over);
+}
+
 // [seasons] The bytes of a texture's largest levels, for as many levels as it takes to come down to `width` (0: it
 // cannot: not that much larger by whole levels, or its file lacks them); `levels` how many that is.
 size_t BytesAbove(const DdsImage& image, int width, int* levels) {
@@ -156,6 +165,7 @@ struct TextureCache::Making {
   struct Job {
     std::string key;
     int detail = 0;
+    int cap = 0;                       // ([texcap] a unit's texture: its largest side at most; 0 none)
     std::optional<std::string> bytes;  // (what Fetch had read already, handed over when asked)
     Later* fetching = nullptr;         // (FetchLater has it or is reading it: taken from there)
     bool begun = false, done = false;
@@ -191,7 +201,7 @@ struct TextureCache::Making {
         if (!ParseDds(*file, &image, &job->error)) {
           if (job->error.empty()) job->error = "not a picture";
         } else {
-          DropLargest(&image, job->detail);
+          DropLargest(&image, DropCount(image, job->detail, job->cap));
           job->dataSize = image.dataSize;
           job->prepared = device->PrepareTexture(image.Desc());
           if (!job->prepared) job->error = "the device refused it";
@@ -222,6 +232,7 @@ void TextureCache::MakeAhead(const std::vector<std::string>& paths, bool later) 
       auto job = std::make_unique<Making::Job>();
       job->key = key;
       job->detail = detail;
+      job->cap = UnitTexture(key) ? unitCap : 0;  // [texcap]
       auto fetched = fetched_.find(key);
       if (fetched != fetched_.end()) {  // (read already by Fetch: handed over)
         job->bytes = std::move(fetched->second);
@@ -364,14 +375,18 @@ bool TextureCache::Made(const std::string& path) const { return cache_.count(moh
 
 gfx::Texture TextureCache::FromDds(std::string_view file, const char* what) { return Make(file, what, 0); }
 
-gfx::Texture TextureCache::Make(std::string_view file, const char* what, int drop) {
+bool TextureCache::UnitTexture(const std::string& path) {  // [texcap]
+  return path.rfind("/preview/", 0) == 0 || path.find("/units/") != std::string::npos;
+}
+
+gfx::Texture TextureCache::Make(std::string_view file, const char* what, int drop, int cap) {
   DdsImage image;
   std::string error;
   if (!ParseDds(file, &image, &error)) {
     fprintf(stderr, "render: texture %s: %s\n", what, error.c_str());
     return {};
   }
-  DropLargest(&image, drop);
+  DropLargest(&image, DropCount(image, drop, cap));
   gfx::Texture t = device_->CreateTexture(image.Desc());
   if (!t) fprintf(stderr, "render: texture %s: the device refused it\n", what);
   else bytes += image.dataSize;
@@ -696,7 +711,7 @@ gfx::Texture TextureCache::Get(const std::string& path, gfx::Texture fallback) {
   const auto start = std::chrono::steady_clock::now();
   if (auto file = ReadFile(key)) {
     const auto read = std::chrono::steady_clock::now();
-    t = Make(*file, key.c_str(), detail);
+    t = Make(*file, key.c_str(), detail, UnitTexture(key) ? unitCap : 0);  // ([texcap])
     if (HitchLog::on) {  // [hitches] (its size, and how much of its time was reading the file)
       char size[64];
       snprintf(size, sizeof size, " (%.1f MB, read in %.1f ms)", static_cast<double>(bytes - before) / 1048576.0,
