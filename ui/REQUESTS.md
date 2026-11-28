@@ -1480,7 +1480,9 @@ included there, and the Windows headers bring it in by another way. Nothing of m
 
 ### 63. The duplicate-unit picks of the local mod fixes as data a script can read before a game (2026-11-27, Chris approved the idea today; not blocking)
 
-**ASKED 2026-11-27** (by message the same hour).
+**DONE 2026-11-27** (asked by message; the engine answered the same evening: docs/engine-answers.md, "which mod's version of a doubly
+defined unit is used", main 8ed75abb; `local_mod_fixes/antares-rework/duplicates.lua`, 18 entries; my side is built:
+`ui/data/lua/modduplicates.lua` and the mods manager's hook).
 
 Who: ui. Why: Chris approved, with the other ideas of 2026-11-27, that the mods manager says WHICH MOD'S VERSION of a
 unit is used when two mods define the same unit (his rule of 2026-11-06: the latest / strongest is kept, the other

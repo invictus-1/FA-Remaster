@@ -95,6 +95,41 @@ Cancel leaves everything.
 - Also: `MOHO64UI_BUILD_DATE` (a test switch) says another build date to `moho64ui_Build()`, so that the stored
   pictures of the main menu, whose line names the date, hold from day to day (`suite/pictures.sh` sets it).
 
+**8. The mods manager says whose version of a shared unit is used.** Where two mods define the same unit, Chris's
+fix mod keeps the stronger or newer one (his rule of 2026-11-06); the engine put the picks into the fix mod as data
+(`duplicates.lua`, his answer to ui request 63). `data/lua/modduplicates.lua` reads every such file among the mods
+(in an empty environment, as data), and the hook `data/hook/lua/ui/lobby/ModsManager.lua` adds a note under the
+description of each of the two mods when the manager makes its row: "FA Remastered: 18 units of this mod are also in
+<the other>. With both mods on, one version of each is used, the stronger or newer one: - 8 from this mod: ... - 10
+from <the other>: ...", a renamed unit and a unit that is always left out said as such. In full in the row's
+tooltip; in the row's own text as far as the manager shows a description. The mod's own table is as it was once the
+row is made. Without a fix mod that carries the file nothing is said. Nothing of the mods or the fix is in the
+repository. Test `ui/tests/modduplicates.lua` with the lab's `suite/modduplicates.sh` (a PLANTED fix mod with made-up
+picks, a broken file, a file without a list: 11 checks).
+
+**5, its first part: THE INSTALLED COPY** (Chris, 2026-11-27: "Go ahead with the installer, small installer plus art
+packs"). A program started with NO `--init` that finds `install.cfg` beside itself is a player's start
+(`ui/app/main.cpp`, `installed`):
+- the init file is the PLAYER'S OWN `<faf>/bin/init_faf.lua` (`faf` from install.cfg, else C:/ProgramData/FAForever),
+  as it is: it mounts FAF's game data, the game's own archives (FAF's `fa_path.lua` names the game's folder) and the
+  player's maps and mods from where they lie. Nothing of them is copied into our folder or shipped. (The lab's own
+  init file is that same file with five lab changes: read and compared 2026-11-27.)
+- FAF's init file empties the ORIGINAL GAME'S shader cache under LOCAL_APPDATA at every start (its rule for its own
+  program). For the init file alone LOCAL_APPDATA is answered with a folder of ours
+  (`<LOCAL_APPDATA>/FA Remastered/faf-init`), so a start of ours deletes nothing of the original's: checked from
+  outside, the cache's file list is the same after a start as before.
+- a window as `--window` (not with `--frames`: a test's run), no console echo; our art from beside the program where
+  the art packs will put it (`maps/`, `units/`, `units-faf/`, `units-mods/`, each only when there); the settings,
+  logs and replays where a live window keeps them anyway (`<LOCAL_APPDATA>/FA Remastered/`).
+- FAF missing: a message box says what to do (install FAF, start it once), exit code 3 (`MOHO64UI_NO_BOX=1`: the log
+  only, for tests).
+- FAF IS NEEDED: the scripts our hooks sit on are FAF's. Plain Forged Alliance without FAF is not supported.
+- Tests: `ui/tests/installed.lua` with the lab's `suite/installed.sh` (a staged folder outside the worktree, the PC's
+  own FAF: 7 checks inside, 7 from outside: the log, the folder of ours, the cache untouched, a wrong FAF folder, no
+  install.cfg). Seen in a live window: the main menu with the flight over stock Seton's (no art pack in the folder).
+- NOT BUILT YET: the installer program itself, the packaging step, the art packs' format, a program without a
+  console window (the link's subsystem), shortcuts, the uninstall.
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's

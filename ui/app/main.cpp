@@ -18,6 +18,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -163,6 +164,26 @@ bool noWorld = false;             // --no-world: a launched game gets no picture
 // shares). A test that loses the graphics device on purpose (moho64ui_RecoverDevice("lose")) must give one: the
 // renderer's first such test wrote a short pipelines file over the player's.
 std::string shaderCache;
+// THE INSTALLED COPY (Chris, 2026-11-27: the installer; the ship model of 2026-10-18: our own folder, the player's game
+// files only read). A program started with NO --init that finds a file `install.cfg` beside itself is a player's
+// start: what Chris's launchers pass by hand comes from the folder the installer made.
+//   install.cfg   lines `name = value`; today one name, `faf` = the player's FAF folder (C:/ProgramData/FAForever when
+//                 the line is missing). Forged Alliance's own folder is not in it: FAF's client keeps it in
+//                 <faf>/fa_path.lua, and FAF's init file reads it there.
+//   the init file <faf>/bin/init_faf.lua, the player's own, as it is: FAF's game data, the game's own archives and the
+//                 player's maps and mods are mounted from where they lie; nothing of them is in our folder.
+//   LOCAL_APPDATA for the init file ALONE is a folder of ours (<our settings folder>/faf-init): FAF's init file empties
+//                 the original game's shader cache under LOCAL_APPDATA at every start (its own rule for its own
+//                 program), and through this answer it finds an empty folder of ours instead. Nothing of the
+//                 original's or of FAF's is written or deleted by a start of ours.
+//   a window      as --window (full screen or not as the Options have it), no echo to a console; not with --frames (a
+//                 test's run of a staged folder: the lab's suite/installed.sh).
+//   our art       beside the program, where the art packs put it: maps/ (--maps), units/ (--remasters), units-faf/
+//                 (--remasters-faf), units-mods/ (--remasters-mods); each only when it is there.
+// The settings, logs and replays are where a live window keeps them anyway: <LOCAL_APPDATA>/FA Remastered/.
+bool installed = false;
+std::string installProblem;                        // (why this installed copy cannot start; shown in a box)
+std::map<std::string, std::string> initFolders;    // (SHGetFolderPath answers for the init file alone)
 std::string shippedShaders;  // (--shipped-shaders: the folder of compiled shaders that came with the build; "" = beside the program)
 std::string sessionIn;            // --session file: a recorded game configuration to start a game from at once
 std::string gameLuaFile;          // --game-lua file: a host Lua file run in a launched game's state once its interface is up
@@ -342,6 +363,36 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
+  // (the installed copy: see `installed` above)
+  if (o.init.empty()) {
+    std::string dir = hostfs::ProgramFolder();
+    if (dir.empty()) dir = ".";
+    if (const auto text = hostfs::ReadFile(dir + "/install.cfg")) {
+      installed = true;
+      std::string faf = "C:/ProgramData/FAForever";
+      std::istringstream lines(*text);
+      for (std::string line; std::getline(lines, line);) {
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos || line.find_first_not_of(" \t") == std::string::npos || line[line.find_first_not_of(" \t")] == '#') continue;
+        auto trim = [](std::string v) {
+          const size_t a = v.find_first_not_of(" \t\r\n\""), b = v.find_last_not_of(" \t\r\n\"");
+          return a == std::string::npos ? std::string() : v.substr(a, b - a + 1);
+        };
+        if (trim(line.substr(0, eq)) == "faf" && !trim(line.substr(eq + 1)).empty()) faf = trim(line.substr(eq + 1));
+      }
+      o.init = faf + "/bin/init_faf.lua";
+      if (!hostfs::IsFile(o.init) || !hostfs::IsFile(faf + "/fa_path.lua"))
+        installProblem = "FA Remastered needs Forged Alliance Forever (FAF) on this PC, started at least once, and did not find it in\n" + faf +
+                         "\n\nInstall FAF (faforever.com), start it once so that it fetches its game files, then start FA Remastered again. "
+                         "If FAF lies in another folder, run the FA Remastered installer again and choose that folder.";
+      if (o.frames <= 0) windowed = true;  // (a player's start; a test's run names its frames and stays as it is asked)
+      o.quiet = true;
+      if (hostfs::IsDirectory(dir + "/maps")) moreMaps.push_back(dir + "/maps");
+      if (hostfs::IsDirectory(dir + "/units")) remastersFolders.push_back(dir + "/units");
+      if (hostfs::IsDirectory(dir + "/units-faf")) fafRemastersFolders.push_back(dir + "/units-faf");
+      if (remastersModsRoot.empty() && hostfs::IsDirectory(dir + "/units-mods")) remastersModsRoot = dir + "/units-mods";
+    }
+  }
   // The run's log. One named by --log; without it a run with a window writes one all the same (ours; Chris's pick of
   // 2026-11-09, "always-on log": the engine's LogOpenDefault, core/log.h): moho64ui_<date>_<time>.log in the folder
   // "logs" beside the preferences, its first line the build, the newest ten kept. A run without a window (tests,
@@ -451,6 +502,17 @@ int main(int argc, char** argv) {
   }
 #endif
   if (o.quiet) LogSetEcho(false);
+  if (!installProblem.empty()) {
+    Logf(LogLevel::Error, "moho64ui: an installed copy cannot start: %s", installProblem.c_str());
+#ifdef _WIN32
+    // (a player's start has no console to read: a box. MOHO64UI_NO_BOX=1: none, for tests)
+    if (!std::getenv("MOHO64UI_NO_BOX")) {
+      const std::wstring wide(installProblem.begin(), installProblem.end());  // (plain ASCII text and a path)
+      MessageBoxW(nullptr, wide.c_str(), L"FA Remastered", MB_OK | MB_ICONERROR);
+    }
+#endif
+    return 3;
+  }
   if (o.init.empty() || width < 1 || height < 1 ||
       (o.stage != "userinit" && o.stage != "setup" && o.stage != "frontend")) {
     std::fprintf(stderr,
@@ -533,7 +595,18 @@ int main(int argc, char** argv) {
   }
   // The init file's `path` mounted and its `hook` taken by the engine's function, as its host does (script/mount.h;
   // ui/REQUESTS.md, engine 1), its `protocols` in the same run (engine 52).
-  if (!MountFromInitFile(o.init, o.folders, vfs, cfg.hookDirs, nullptr, &cfg.protocols)) return 1;
+  // (the installed copy: the init file's LOCAL_APPDATA is a folder of ours, so that FAF's init file empties no cache
+  // of the original game's; see `installed`)
+  std::map<std::string, std::string> initAnswers = o.folders;
+  if (installed) {
+    const std::string ours = BelowFolder("LOCAL_APPDATA", "FA Remastered/faf-init");
+    std::error_code made;
+    std::filesystem::create_directories(std::filesystem::path(std::u8string(ours.begin(), ours.end())), made);
+    initAnswers["LOCAL_APPDATA"] = ours;
+    Logf(LogLevel::Info, "moho64ui: an installed copy: the init file is the player's own %s; its LOCAL_APPDATA is %s", hostfs::DisplayPath(o.init).c_str(),
+         hostfs::DisplayPath(ours).c_str());
+  }
+  if (!MountFromInitFile(o.init, initAnswers, vfs, cfg.hookDirs, nullptr, &cfg.protocols)) return 1;
   for (const auto& [folder, at] : modFixes) {
     if (vfs.Mount(folder, at)) Logf(LogLevel::Info, "moho64ui: our mod fix %s from %s", at.c_str(), hostfs::DisplayPath(folder).c_str());
     else Logf(LogLevel::Warning, "moho64ui: %s could not be mounted", folder.c_str());
