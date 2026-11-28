@@ -611,6 +611,23 @@ void ReadSameCandidates(const void* obj, void* out) {
   *static_cast<unsigned char*>(out) = same ? 1 : 0;
 }
 
+// MOHO64_SELFBOX_CHECK=1: SurfaceSearch's self test is also made at once (as before 2026-11-27) and the depth every
+// reader takes is compared with it bit for bit (a difference stops the run); the counts go to stderr at exit.
+bool SelfBoxCheck() {
+  static const bool on = getenv("MOHO64_SELFBOX_CHECK") && strcmp(getenv("MOHO64_SELFBOX_CHECK"), "0");
+  return on;
+}
+std::atomic<uint64_t> g_selfDeferred{0}, g_selfMade{0}, g_selfReads{0};
+struct SelfBoxCheckReport {
+  ~SelfBoxCheckReport() {
+    if (SelfBoxCheck())
+      std::fprintf(stderr, "moho64 MOHO64_SELFBOX_CHECK: %llu self tests deferred, %llu of them made for a reader; %llu "
+                   "depth reads compared with the test made at once: all equal\n",
+                   static_cast<unsigned long long>(g_selfDeferred.load()), static_cast<unsigned long long>(g_selfMade.load()),
+                   static_cast<unsigned long long>(g_selfReads.load()));
+  }
+} g_selfBoxCheckReport;
+
 // ProcessSurfaceCollision's search: the entities under the unit's box and what its box test finds, into out (the
 // motion's contact list and the hits DoCollisionsFor acts on). It only reads. One code path for the serial turn (log
 // null: the grid's own marking gather) and for the search made ahead (log: every read the result depends on noted;
@@ -684,6 +701,27 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
   // 0x500056 brushing the corner of 0x500076's collision sphere (overlap 0.079), the first entity of its list: the
   // original's depth is 0 there, no push (it is pushed at 12806); ours pushed it at once.
   float infoDepth = 0.0f;
+  // The unit's own box test only ever matters as that last depth: its own entry is passed over (below), so its depth
+  // is read only by a later SPHERE that meets the box without its centre inside (the one reader that takes a depth it
+  // did not write), and only if no test in between wrote one (a box that meets, a sphere centre inside, a prop hit).
+  // So the self test (BoxBoxSat: pure, its inputs, the unit's shape and the box, fixed for the whole search) is made
+  // only when such a reader comes with it still the last writer. Before (to 2026-11-27): made at once, on every search
+  // of every moving unit (batch 197): in 6v6_2 about 40 % of the beat time the week's batches added.
+  // (MOHO64_DEBUG_COL on this unit: made at once, so its "sat" line comes where it did.)
+  const bool selfCheck = SelfBoxCheck();
+  bool selfPending = false;
+  Obb selfObb;
+  float eagerDepth = 0.0f;  // (MOHO64_SELFBOX_CHECK: the last depth as the test made at once leaves it)
+  auto selfDepth = [&]() -> float {
+    if (selfPending) {
+      selfPending = false;
+      Vec3 n;
+      float d = 0;
+      if (BoxBoxSat(selfObb, box, &n, &d)) infoDepth = d;
+      if (selfCheck) g_selfMade.fetch_add(1, std::memory_order_relaxed);
+    }
+    return infoDepth;
+  };
   auto visit = [&](Unit* e) {
     if (log) {
       log->Derived(&ReadShape, e, sizeof(ShapeRead));
@@ -706,11 +744,26 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
       // DoCollisionsFor skips a hit below 0.001: two hulls crossing corner to corner do not push each other
       Vec3 n;
       static const long dbgSat = getenv("MOHO64_DEBUG_COL") ? atol(getenv("MOHO64_DEBUG_COL")) : -1;
-      g_satDebug = dbgSat >= 0 && static_cast<long>(u->id) == dbgSat;
+      const bool dbgThis = dbgSat >= 0 && static_cast<long>(u->id) == dbgSat;
+      if (e == u && !dbgThis) {  // (the self test, deferred: above)
+        selfObb = o;
+        selfPending = true;
+        if (selfCheck) {
+          g_selfDeferred.fetch_add(1, std::memory_order_relaxed);
+          float d = 0;
+          if (BoxBoxSat(o, box, &n, &d)) eagerDepth = d;
+        }
+        return;  // (its own entry: passed over below)
+      }
+      g_satDebug = dbgThis;
       meets = BoxBoxSat(o, box, &n, &depth);
       if (!meets) depth = 0;
       g_satDebug = false;
-      if (meets) infoDepth = depth;
+      if (meets) {
+        infoDepth = depth;
+        selfPending = false;
+        eagerDepth = depth;
+      }
     } else if (s.type == ShapeType::Sphere) {
       depth = ObbSphereDepth(box, s.c, s.r);
       meets = depth >= 0;
@@ -720,7 +773,11 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
         const float hs[3] = {box.h.x, box.h.y, box.h.z};
         bool inside = true;
         for (int i = 0; i < 3; ++i) inside = inside && !(hs[i] < std::fabs(Dot(d, box.ax[i])));
-        if (inside) infoDepth = s.r;
+        if (inside) {
+          infoDepth = s.r;
+          selfPending = false;
+          eagerDepth = s.r;
+        }
       }
     }
     if (e == u) return;
@@ -735,7 +792,17 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
            "half %.3f %.3f %.3f r %.3f) depth %.5f",
            sim.tick(), u->id, box.c.x, box.c.y, box.c.z, box.ax[2].x, box.ax[2].z, box.h.x, box.h.y, box.h.z, e->id,
            static_cast<int>(s.type), s.c.x, s.c.y, s.c.z, s.ax[2].x, s.ax[2].z, s.half.x, s.half.y, s.half.z, s.r, depth);
-    if (meets && infoDepth > 0) out->hits.push_back({e, infoDepth});
+    if (!meets) return;
+    const float taken = selfDepth();
+    if (selfCheck) {
+      g_selfReads.fetch_add(1, std::memory_order_relaxed);
+      if (std::memcmp(&taken, &eagerDepth, sizeof taken) != 0) {
+        std::fprintf(stderr, "moho64 MOHO64_SELFBOX_CHECK: beat %u unit %u, entity %u: deferred depth %a, at once %a\n",
+                     sim.tick(), u->id, e->id, static_cast<double>(taken), static_cast<double>(eagerDepth));
+        std::abort();
+      }
+    }
+    if (taken > 0) out->hits.push_back({e, taken});
   };
   for (Entity* e : cand) {
     if (!e) continue;
@@ -747,6 +814,8 @@ void SurfaceSearch(Sim& sim, Unit* u, bool withProps, SurfaceContacts* out, Read
       float d = 0;
       if (PropHitTest(e, box, amn, amx, &n, &d)) {
         infoDepth = d;
+        selfPending = false;
+        eagerDepth = d;
         out->hits.push_back({nullptr, d, e, n});
       }
     }
