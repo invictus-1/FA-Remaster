@@ -46,6 +46,16 @@ class TextureCache {
   // memory. Textures already loaded keep theirs: set it before a map is opened. Map data (FromDds),
   // cube maps and arrays of layers given whole stay whole.
   int detail = 0;
+  // [texcap] The cap on a unit's texture: one loaded by path (Get, MakeAhead) from a unit's folder (UnitTexture) that is
+  // wider or higher than this starts at the size that is not (its file's smaller sizes, as the detail setting takes them);
+  // 0: no cap (the "Ultra" tier). So one file of 8192 serves both tiers: all of it for Ultra, from its 4096 size for the
+  // rest, and a unit's set of 8192 (89 MB a map against 22 MB) costs a player nothing who has not asked for it. Nothing
+  // else is capped: the ground's materials have 8192 tiers of their own. Set before a map is opened, as `detail`. No cap
+  // by default (as before): the interface sets 4096 with its option for it.
+  int unitCap = 0;
+  // Whether a path is a unit's texture: in a remastered unit's folder (/preview/<id>/...) or under a /units/ folder
+  // (the game's, a mod's).
+  static bool UnitTexture(const std::string& path);
   // What the textures made here take on the graphics card, in bytes (all their sizes).
   size_t bytes = 0;
 
@@ -90,7 +100,7 @@ class TextureCache {
   gfx::Texture GreyCube() const { return greyCube_; }      // a cube map of one colour, for a missing sky
 
  private:
-  gfx::Texture Make(std::string_view file, const char* what, int drop);
+  gfx::Texture Make(std::string_view file, const char* what, int drop, int cap = 0);  // ([texcap] cap: its largest side at most)
   gfx::Device* device_;
   const moho::Vfs* vfs_;
   std::unordered_map<std::string, gfx::Texture> cache_;

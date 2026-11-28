@@ -785,6 +785,8 @@
 // --shadow-size <texels>  the sun's shadow maps' width and height (2048; 4096 sharper, 1024 and 512 cheaper)
 // --texture-detail 0|1|2  textures larger than 256 without their largest size (1) or two (2): for cards
 //           with less memory (0: all, as at first)
+// --unit-texture-cap <size>  [texcap] a unit's texture larger than this starts at the size that is not (0, the default: no
+//           cap, the "Ultra" tier: a unit's 8192 set read whole). No unit's set is larger than 4096 unless it was made so
 // --fx <template or emitters>  the effects test stand (fx_stand.h): an effect template of the game's
 //           /lua/EffectTemplates.lua (TGaussCannonFlash) or emitters with commas between, played at --fx-at
 //           x,z[,height] (else where the camera looks) every --fx-repeat seconds (2)
@@ -1375,6 +1377,7 @@ struct Options {
   bool fsr3Plain = false;               // --fsr3-plain [fsrthin]
   int shadowSize = 2048;                // --shadow-size
   int textureDetail = 0;                // --texture-detail
+  int unitTextureCap = 0;               // --unit-texture-cap [texcap]
   bool frame = true;                    // --no-frame
   bool beyondHaze = true;               // --no-beyond-haze
   bool surround = true;   // --no-surround (Chris, 2026-11-10: on by default; --surround is taken and changes nothing)
@@ -2087,6 +2090,7 @@ bool ParseOptions(int argc, char** argv, Options* o) {
     else if (a == "--record-threads") o->recordThreads = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--jobs-awake") o->jobsAwake = std::max(atoi(v), 0);  // [mcrec]
     else if (a == "--texture-detail") o->textureDetail = std::clamp(atoi(v), 0, 2);
+    else if (a == "--unit-texture-cap") o->unitTextureCap = std::max(0, atoi(v));  // [texcap]
     else if (a == "--fsr3-bias") o->fsr3Bias = static_cast<float>(atof(v));
     else if (a == "--fall-size") o->fallSceneSize = std::string(v) == "scene";  // [fallsize]
     else if (a == "--fall-pace") o->fallWorldPace = std::string(v) == "world";  // [fallpace]
@@ -2869,6 +2873,7 @@ int main(int argc, char** argv) {
     wo.propsAsGame = opt.propsAsGame;  // [proplift]
     wo.verbose = opt.debug;
     world.textures.detail = opt.textureDetail;
+    world.textures.unitCap = opt.unitTextureCap;  // [texcap]
     world.bloom = opt.bloom;
     world.mapSurround = opt.surround;  // [surahead] (before the map opens: its surround is read ahead beside the load)
     world.surroundAhead = opt.surroundAhead;
