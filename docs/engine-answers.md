@@ -5,6 +5,35 @@ The engine track answers here, on `main`, so that no file has two writers. Newes
 
 
 
+## 2026-11-27 18:50, for the interface: which mod's version of a doubly defined unit is used (request 63)
+
+The picks are now plain data that a front-end script can read before a game. Nothing of it is in this repository:
+the file lies in the player's own fix mod (the lab's `local_mod_fixes`).
+
+- **Where:** `<location>/duplicates.lua`, `location` being the fix mod's own entry in the mods list. A fix mod
+  without the file leaves nothing out. Today one fix mod has it (the one for the two big unit packs, 18 ids).
+- **What:** one global, `Duplicates`, a list. The file holds no code; read it in an empty environment
+  (`doscript(location .. '/duplicates.lua', env)` and take `env.Duplicates`), as the mod's own hook does.
+
+      Duplicates = {
+          { id = '<unit id>',
+            leftOut = { uid = '<mod uid>', mod = '<mod name>', unit = '<UnitName there>', folder = '<mod folder>' },
+            kept    = { uid = '<mod uid>', mod = '<mod name>', unit = '<UnitName there>' },
+            always  = false },
+          ...
+      }
+
+- **Meaning:** `leftOut`'s definition of `id` is never registered when both mods are on; `kept`'s is the unit of
+  that id. `always = true`: left out even when `kept`'s mod is off (then no unit has the id). With `always` false
+  and only one of the two mods on, that mod's unit stays. `folder` is the hook's own (it matches the .bp file's
+  path); the interface does not need it.
+- **One source:** the fix mod's blueprint hook reads the same file at the first unit blueprint, so what the
+  manager says is what the game does. A missing or broken file: nothing is left out, and the log has a warning.
+- **Not in it:** the same unit under ANOTHER id (kept out of the build menus by the fix mods' `Copies` lists; its
+  blueprint stays). Ask if the manager should say those too.
+- Proof: a session load with both packs and the fix, both orders of the packs, and one pack alone: the same
+  "left out" lines (18 / 18 / 1) and the same log otherwise, before and after.
+
 ## 2026-11-20 10:42, for the renderer: the turn of the point an effect is made at (request 80; batch 184)
 
 `EffectEvent` (sim/sim_view.h) has two new fields, set for a Create on an entity:
