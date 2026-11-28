@@ -992,7 +992,13 @@ float4 Shade(VOut i, bool front) {
         base = lerp(saturate(alloy), tint, teamMask * 0.8);
         metallic = 0.9 * (1 - teamMask * 0.6);
         roughness = clamp(0.85 - sqrt(spec.g) * 0.6, 0.15, 0.85);
-        emission = tint * teamMask * rim * 0.25 + saturate(spec.b - 0.1) * 1.2;
+        // [seraphnight] (its own light, of one strength: right against the day's picture, but in the night's, which is
+        // shown many times brighter, every Seraphim unit blazed: its team colour a flat glowing yellow with a halo, its
+        // pale plates pure white, the unit as bright as by day or brighter while the ground beside it fell to half
+        // (measured 2026-11-27 over all 113: 20 units with over 1,000 pure-white pixels, a radar 21,097). The night's
+        // dimming of glowing things, as the veil, the build light and the game's glowing effects have it)
+        const float ownNight = falling.w > 0 ? falling.w : 1;
+        emission = (tint * teamMask * rim * 0.25 + saturate(spec.b - 0.1) * 1.2) * ownNight;
       } else {
         metallic = saturate(spec.r * 1.2) * 0.7 * (1 - teamMask);
         roughness = lerp(0.75, 0.35, saturate(spec.g * 1.5));
