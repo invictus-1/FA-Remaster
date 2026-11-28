@@ -443,6 +443,13 @@ void RegisterBasicBindings(lua_State* L) {
     lua_pushboolean(S, loading && loading() ? 1 : 0);
     return 1;
   });
+  // moho64ui_LoadStep() -> which step of a load is running, 1 to 5 (UserState::Config::loadStep), 0 while none loads:
+  // ours, for the loading screen's line (ui/data/hook/lua/ui/game/gamemain.lua).
+  lua_register(L, "moho64ui_LoadStep", [](lua_State* S) -> int {
+    const auto& step = UserState::From(S)->config().loadStep;
+    lua_pushnumber(S, step ? step() : 0);
+    return 1;
+  });
   SetGlobal(L, "GpgNetSend", kNothing);
   // moho64ui_MenuFlight() -> the main menu's flight as it stands (the host's own function for tests, app/menu_flight.h:
   // {state, map, tick, moment, loops, endTick, paused, fallbackReason, mode, ...}); nil without one.

@@ -10,6 +10,31 @@ The row "Shadows of Trees Outside the Map" is in Options > Remastered > Sky & Li
 Off the picture as before; set in `WorldLooks`, in a running game too. In no preset; one switch, no levels (your
 0.12 ms). The detail and the tests: docs/ui-options-layout.md, "Shadows of Trees Outside the Map". Nothing asked of you.
 
+## Chris, 2026-11-27: the ideas' numbers 3 and 7 ("1-4 yes that works for me ... 6-9 all of those work")
+
+**3. "Report a Problem" holds a picture of that moment.** In a window the question's script asks the host for the
+window's next shown frame BEFORE its box comes up (`moho64ui_ReportPicture("take" | "state" | "drop")`,
+`UserState::Config::captureWindow`, `GameSession::CaptureWindowInto`: the renderer's read-back of the shown frame, the
+one `--window-capture` uses); the box follows one or two frames later, so it is not in the picture. The report
+written holds it as `screenshot.jpg` and its README and the box that names the file say so; a question called off
+forgets its picture; the console's `remaster_report` and the automatic reports take none.
+- A JPEG of quality 90 without colour subsampling, written in `ui/user/report.cpp` (`JpegOf`: the tree holds no JPEG
+  writer and none was brought in). Measured on a game's picture at 1920x1080: 1.0 MB in 67 ms, against 4.2 MB packed
+  without loss (PNG, 160 ms), which would be about 16 MB at 3840x2160. Whole at the window's size while that is at
+  most 6 MB, else halved (`MOHO64UI_REPORT_PICTURE_MAX` for tests). The game's own picture only: nothing else of the
+  screen can be in it.
+- Tests: `ui/tests/report_picture.lua` in a live window (the lab's `suite/window_checks.sh`, check `wc_report`: a game
+  and the main menu, 19 checks each, then the zips read with an independent decoder, 22 checks); a run without a
+  window takes no picture and is `report_ask`'s as before.
+
+**7. The loading screen names the step of the load.** Under the game's tip: "Loading (2 of 5): setting up the
+battlefield". The steps are the loading thread's own (`GameSession::LoadStep`, `moho64ui_LoadStep()`): 1 the rules
+read, 2 the simulation started, 3 the interface's state made, 4 the game's first beats, 5 the map's picture made
+ready. Each step goes into the log with the load's seconds ("moho64ui: the loading screen says: Loading (3 of 5):
+preparing the interface (2.1 s into the load)"), so a report shows which step a long load stood in. The line for
+graphics being prepared (ui REQUESTS 58) is one row lower now. Hook `lua/ui/game/gamemain.lua`; tests
+`ui/tests/load_line.lua` (18 checks) and `wc_report`'s read of the log.
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's

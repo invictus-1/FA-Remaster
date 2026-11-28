@@ -2505,6 +2505,7 @@ void GameSession::BeginLoad() {
   load_ = Load::Running;
   g_crashTick = 0;  // (a crash while it loads names no beat of the game before)
   loadBegan_ = std::chrono::steady_clock::now();
+  loadStep_ = 1;  // (the load's steps for the loading screen: LoadStep)
   loadThreadDone_ = loadHandedAt_ = loadMapReadyAt_ = -1;
   loadStateSeconds_ = 0;
   loadNextNote_ = 10;
@@ -2540,6 +2541,7 @@ void GameSession::BeginLoad() {
       return;
     }
     const auto t1 = std::chrono::steady_clock::now();
+    loadStep_ = 2;
     sim->collectSync = true;
     sim->collectPrints = true;  // (the scripts' print, for the game's console: ui REQUESTS 41)
 #ifdef MOHO64UI_WORLD_PICTURE
@@ -2571,11 +2573,13 @@ void GameSession::BeginLoad() {
     // the session's user Lua state made, 0x885ec9, its functions registered, 0x885f37..0x885f8a, the rules exported
     // into it, 0x885ff2, and /lua/SessionInit.lua run in it, 0x88603e); the main thread only takes it (FinishLoad).
     const auto t2 = std::chrono::steady_clock::now();
+    loadStep_ = 3;
     if (prepareInterface) prepareInterface(sim, loadUids_, loadSession_->header.mods);
     const auto t3 = std::chrono::steady_clock::now();
     loadStateSeconds_ = secs(t2, t3);
     // Then, for an aheadInLoad game, its first beats (game_session.h): after the hand-over, while the map still opens.
-    if (loadAhead_) RunLoadAhead(sim);
+    if (loadAhead_) loadStep_ = 4, RunLoadAhead(sim);
+    loadStep_ = 5;  // (what is left is the map's picture, opening behind since the load began)
     loadThreadDone_ = secs(loadBegan_, std::chrono::steady_clock::now());  // (read on the main thread once the worker is through: its release)
   });
   // Meanwhile the game's map opens behind the window's picture (render request 37), the loading screen drawn over
@@ -3689,7 +3693,7 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (!rewinding_) GiveBackdrop(wp, w, h);
   // (a frame read back: CaptureWindow's, or the picture a jump back holds, FreezePicture; into a member, as the
   // renderer fills it in the next DrawToWindow, whichever frame that is)
-  const bool capturing = !captureTo_.empty() || freezeAsked_;
+  const bool capturing = !captureTo_.empty() || freezeAsked_ || captureInto_;
   if (capturing) captureRgba_.clear(), wp.picture.CaptureNextWindowFrame(&captureRgba_);
   bool drawn = false;
   const auto t0 = std::chrono::steady_clock::now();
@@ -3861,6 +3865,15 @@ void GameSession::PresentToWindow(const SoftwareTarget& target, const IntRect& c
   if (freezeAsked_ && drawn) TakeFrozen(captureRgba_, w, h);
   else if (freezeAsked_ && ++freezeWaits_ >= 3) TakeFrozen({}, w, h);  // (no frame of the world drawn: held black)
   if (!captureTo_.empty()) SaveWindowCapture(captureRgba_, w, h, captureTo_), captureTo_.clear();
+  if (captureInto_) {
+    // (the report's screenshot: this frame's picture when it was read back, else the next one's, three frames at most)
+    const bool whole = captureRgba_.size() == static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
+    if (whole || ++captureIntoWaits_ >= 3) {
+      auto got = std::move(captureInto_);
+      captureInto_ = nullptr;
+      got(whole ? captureRgba_ : std::vector<uint8_t>(), w, h);
+    }
+  }
   // ([head2] the second window's picture, once the renderer has read it back: the frame it was next drawn in)
   if (!capture2To_.empty() && wp.layer2W > 0 &&
       capture2Rgba_.size() == static_cast<size_t>(wp.layer2W) * static_cast<size_t>(wp.layer2H) * 4)
@@ -4371,6 +4384,15 @@ void GameSession::PushDeviceState(lua_State* L) {
   }
 #else
   boolean("lost", false);
+#endif
+}
+
+void GameSession::CaptureWindowInto(std::function<void(const std::vector<uint8_t>& rgba, int w, int h)> got) {
+#ifdef MOHO64UI_WORLD_PICTURE
+  captureInto_ = std::move(got);
+  captureIntoWaits_ = 0;
+#else
+  (void)got;
 #endif
 }
 

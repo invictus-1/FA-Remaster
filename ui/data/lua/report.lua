@@ -98,8 +98,11 @@ function Write(note, asked)
         note = note .. (note ~= "" and " " or "") .. string.format("[asked at game time %d:%02d]", math.floor(s / 60), math.mod(s, 60))
     end
     State.note = note
+    -- (the picture taken before the question came up goes into the zip, when there is one)
+    local pictured = rawget(_G, 'moho64ui_ReportPicture') and moho64ui_ReportPicture("state") == "taken" or false
     local file, why = moho64ui_Report(note, true)
     State.last, State.why = file or false, why or false
+    State.pictured = file and pictured or false
     local head, name, rest
     if file then
         State.count = State.count + 1
@@ -108,7 +111,8 @@ function Write(note, asked)
         local onDesktop = string.find(string.lower(folder), "[/\\]desktop$") ~= nil
         head, name = onDesktop and "The report is on your Desktop:" or "The report is written:", FileName(file)
         rest = (onDesktop and "" or ("It is in " .. folder .. ". ")) ..
-            "Send this file to us. It holds this game's log and recording, your settings and a description of your PC. Nothing was sent anywhere."
+            "Send this file to us. It holds this game's log and recording, " .. (pictured and "a picture of the game's screen, " or "") ..
+            "your settings and a description of your PC. Nothing was sent anywhere."
     else
         head, name, rest = "The report could not be written:", "", tostring(why)
     end
@@ -118,14 +122,12 @@ function Write(note, asked)
     return file
 end
 
--- The question: one line for what happened. Enter or Ok writes the report; Escape, Cancel or a click beside it
--- writes none. A second call while it is up does nothing.
-function Ask()
-    if State.open and Controls.ask and not IsDestroyed(Controls.ask) then return Controls.ask end
-    State.open = true
-    local asked = rawget(_G, 'SessionIsActive') and SessionIsActive() and GetGameTimeSeconds() or nil
+-- The question's box, up. `asked`: the game's time of the asking.
+local function Open(asked)
+    local written = false
     local dialog = UIUtil.CreateInputDialog(GetFrame(0), "Report a Problem: what happened?", function(self, text)
         State.open = false
+        written = true
         Write(text, asked)
     end)
     Controls.ask = dialog
@@ -144,6 +146,14 @@ function Ask()
     dialog.OnClosed = function(self)
         State.open = false
         if not escaped then import("/lua/ui/dialogs/eschandler.lua").PopEscapeHandler() end
+        -- (called off: the picture taken for it is forgotten. A frame later, as the box may close before or after
+        -- its line is handed on, and a report being written still needs the picture)
+        if rawget(_G, 'moho64ui_ReportPicture') then
+            ForkThread(function()
+                WaitFrames(1)
+                if not written and not State.open then moho64ui_ReportPicture("drop") end
+            end)
+        end
     end
     -- (Escape while the line has the keyboard goes to the line, not to the escape handlers: it cancels here)
     if dialog.inputBox then
@@ -153,4 +163,29 @@ function Ask()
         end
     end
     return dialog
+end
+
+-- The question: one line for what happened. Enter or Ok writes the report; Escape, Cancel or a click beside it
+-- writes none. A second call while it is up, or about to be, does nothing.
+-- In a window the screen is pictured FIRST, as it was when the player asked (the picture goes into the report as
+-- screenshot.jpg): the box comes up once that frame is shown, a frame or two later, so that it is not in the picture.
+-- Returns the box, or nil while the picture is being taken (Controls.ask has it then).
+function Ask()
+    if State.open and (State.picturing or (Controls.ask and not IsDestroyed(Controls.ask))) then return Controls.ask end
+    State.open = true
+    local asked = rawget(_G, 'SessionIsActive') and SessionIsActive() and GetGameTimeSeconds() or nil
+    if not (rawget(_G, 'moho64ui_ReportPicture') and moho64ui_ReportPicture("take")) then return Open(asked) end
+    State.picturing = true
+    Controls.ask = nil
+    ForkThread(function()
+        local frames = 0
+        while moho64ui_ReportPicture("state") == "waiting" and frames < 10 do
+            WaitFrames(1)
+            frames = frames + 1
+        end
+        State.picturing = false
+        State.pictureFrames = frames
+        Open(asked)
+    end)
+    return nil
 end

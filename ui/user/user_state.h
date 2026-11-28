@@ -118,8 +118,16 @@ class UserState {
     std::string userDir;
     std::function<bool(lua_State* L, const std::string& file, std::string* why)> launchReplay;
     std::function<std::string()> currentReplay;
+    // The window's next shown frame read back and handed to `got` as RGBA bytes (w * h * 4; empty when the renderer
+    // read none back): the screenshot of the report by hand (report.cpp). False, and `got` never called, where the
+    // program draws into no window. Unset: none.
+    std::function<bool(std::function<void(const std::vector<uint8_t>& rgba, int w, int h)> got)> captureWindow;
     // Whether a launched game is loading (the front end's WorldIsLoading(); unset: never).
     std::function<bool()> worldLoading;
+    // Which step of a load is running (moho64ui_LoadStep, for the loading screen's line: Chris, 2026-11-27, the
+    // ideas' number 7): 1 the game's rules read, 2 the simulation started, 3 the interface's state made, 4 the game's
+    // first beats, 5 the map's picture made ready; 0 while nothing loads. Unset: 0.
+    std::function<int()> loadStep;
     // The main menu's flight as it stands, pushed as a table (moho64ui_MenuFlight, for tests: app/menu_flight.h
     // PushInfo); unset: moho64ui_MenuFlight returns nil.
     std::function<void(lua_State* L)> menuFlightInfo;

@@ -140,7 +140,10 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   in small letters, in the system code page's bytes and in UTF-16 at any byte, so a name with letters outside ASCII is
   hidden too. Nothing is sent anywhere (`user/report.cpp`, its own small zip writer on zlib's deflate;
   `moho64ui_Report([note])`; `tests/report.lua`; the lab's suite/report.sh reads the zips, with a made-up user folder
-  and both ways of naming).
+  and both ways of naming). A report by hand ("Report a Problem": `data/lua/report.lua`) also holds `screenshot.jpg`,
+  the game's window as it was when the player asked, taken before the question's box comes up
+  (`moho64ui_ReportPicture`; the JPEG is written by `JpegOf` in `user/report.cpp`; `tests/report_picture.lua`, in a
+  live window).
 - The automatic crash report (ours; the first step of Chris's debugger: 2026-11-15, "something that auto activates the
   second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
   details on desktop and the user can send it over"; 2026-11-18, "Yes, on the Desktop"): when the main menu is made

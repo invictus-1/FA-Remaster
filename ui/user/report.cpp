@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -665,6 +666,215 @@ void AddFreezeDump(ZipWriter& zip, const std::filesystem::path& dumpFile, const 
   Logf(LogLevel::Info, "moho64ui: the report: a freeze dump put in (%s), masked in %zu + %zu place(s)", which.c_str(), environment, masked);
 }
 
+// The screenshot of the report by hand (Chris, 2026-11-27, the ideas' number 3: "Report a Problem" also saves a
+// picture of that moment). The question's script (/moho64ui/lua/report.lua) asks for it BEFORE its box comes up:
+// the window's next shown frame, read back by the renderer (UserState::Config::captureWindow), kept here as it came
+// and made a PNG only when the report is written (the packing takes a moment; the asking must not). It goes into the
+// zip as screenshot.jpg (a JPEG of quality 90: a game's picture packed without loss is too large to pass on): whole
+// when that is at most 6 MB (MOHO64UI_REPORT_PICTURE_MAX, bytes, for tests), else halved while it is larger and at
+// least 1280 wide after. It shows the game's window only, never the Desktop or another program.
+struct ReportPicture {
+  enum State { None, Waiting, Taken } state = None;
+  std::vector<uint8_t> rgba;
+  int w = 0, h = 0;
+};
+ReportPicture g_picture;
+
+// RGB rows (3 bytes a pixel) as a JPEG, written here (the tree holds no JPEG writer, and a picture of a game packed
+// without loss is 4 MB at 1920x1080 and four times that at 3840x2160: measured 2026-11-27): the baseline kind, 8 bits,
+// no colour subsampling (the interface's coloured text stays sharp), the standard's example tables (ITU T.81 annex K)
+// with the quantisation scaled to `quality` (1..100) the usual way.
+std::string JpegOf(const std::vector<uint8_t>& rgb, int w, int h, int quality) {
+  static const uint8_t zigzag[64] = {0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,  12, 19, 26, 33, 40, 48,
+                                     41, 34, 27, 20, 13, 6,  7,  14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23,
+                                     30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+  static const uint8_t baseQ[2][64] = {
+      {16, 11, 10, 16, 24,  40,  51,  61,  12, 12, 14, 19, 26,  58,  60,  55,  14, 13, 16, 24, 40,  57,  69,  56,
+       14, 17, 22, 29, 51,  87,  80,  62,  18, 22, 37, 56, 68,  109, 103, 77,  24, 35, 55, 64, 81,  104, 113, 92,
+       49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99},
+      {17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99,
+       99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}};
+  static const uint8_t dcBits[2][16] = {{0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0}, {0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0}};
+  static const uint8_t dcVals[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+  static const uint8_t acBits[2][16] = {{0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d}, {0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77}};
+  static const uint8_t acVals[2][162] = {
+      {0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81,
+       0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18,
+       0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+       0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+       0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99,
+       0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+       0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5,
+       0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa},
+      {0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08,
+       0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25,
+       0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47,
+       0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
+       0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+       0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
+       0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4,
+       0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa}};
+  if (w <= 0 || h <= 0 || w > 65535 || h > 65535 || rgb.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 3) return "";
+  quality = std::clamp(quality, 1, 100);
+  const int scale = quality < 50 ? 5000 / quality : 200 - 2 * quality;
+  uint8_t qt[2][64];
+  for (int t = 0; t < 2; ++t)
+    for (int i = 0; i < 64; ++i) qt[t][i] = static_cast<uint8_t>(std::clamp((baseQ[t][i] * scale + 50) / 100, 1, 255));
+  struct Huffman {
+    uint16_t code[256] = {};
+    uint8_t size[256] = {};
+    Huffman(const uint8_t* bits, const uint8_t* vals) {
+      int next = 0, k = 0;
+      for (int len = 1; len <= 16; ++len) {
+        for (int i = 0; i < bits[len - 1]; ++i, ++k) code[vals[k]] = static_cast<uint16_t>(next++), size[vals[k]] = static_cast<uint8_t>(len);
+        next <<= 1;
+      }
+    }
+  };
+  const Huffman dc[2] = {Huffman(dcBits[0], dcVals), Huffman(dcBits[1], dcVals)};
+  const Huffman ac[2] = {Huffman(acBits[0], acVals[0]), Huffman(acBits[1], acVals[1])};
+
+  std::string out;
+  out.reserve(static_cast<size_t>(w) * static_cast<size_t>(h) / 2 + 1024);
+  auto put8 = [&](int v) { out.push_back(static_cast<char>(v)); };
+  auto put16 = [&](int v) { put8(v >> 8), put8(v & 0xff); };
+  put16(0xffd8);
+  put16(0xffe0), put16(16), out.append("JFIF\0", 5), put16(0x0101), put8(0), put16(1), put16(1), put16(0);
+  for (int t = 0; t < 2; ++t) {
+    put16(0xffdb), put16(67), put8(t);
+    for (int i = 0; i < 64; ++i) put8(qt[t][zigzag[i]]);
+  }
+  put16(0xffc0), put16(17), put8(8), put16(h), put16(w), put8(3);
+  for (int c = 0; c < 3; ++c) put8(c + 1), put8(0x11), put8(c ? 1 : 0);
+  for (int t = 0; t < 2; ++t) {
+    put16(0xffc4), put16(19 + 12), put8(t);
+    out.append(reinterpret_cast<const char*>(dcBits[t]), 16), out.append(reinterpret_cast<const char*>(dcVals), 12);
+    put16(0xffc4), put16(19 + 162), put8(0x10 | t);
+    out.append(reinterpret_cast<const char*>(acBits[t]), 16), out.append(reinterpret_cast<const char*>(acVals[t]), 162);
+  }
+  put16(0xffda), put16(12), put8(3);
+  for (int c = 0; c < 3; ++c) put8(c + 1), put8(c ? 0x11 : 0x00);
+  put8(0), put8(63), put8(0);
+
+  uint32_t held = 0;
+  int heldBits = 0;
+  auto bits = [&](uint32_t value, int count) {
+    held = (held << count) | (value & ((1u << count) - 1)), heldBits += count;
+    while (heldBits >= 8) {
+      const uint8_t byte = static_cast<uint8_t>(held >> (heldBits - 8));
+      out.push_back(static_cast<char>(byte));
+      if (byte == 0xff) out.push_back('\0');
+      heldBits -= 8;
+    }
+  };
+  auto category = [](int v) {
+    int n = 0;
+    for (int a = v < 0 ? -v : v; a; a >>= 1) ++n;
+    return n;
+  };
+  float cosine[8][8];
+  for (int u = 0; u < 8; ++u)
+    for (int x = 0; x < 8; ++x) cosine[u][x] = 0.5f * (u ? 1.0f : 0.70710678f) * std::cos((2 * x + 1) * u * 3.14159265358979f / 16.0f);
+  int before[3] = {0, 0, 0};
+  float plane[3][64], rows[64];
+  int q[64];
+  for (int by = 0; by < h; by += 8)
+    for (int bx = 0; bx < w; bx += 8) {
+      // (a block over the edge repeats the edge's pixels)
+      for (int y = 0; y < 8; ++y) {
+        const uint8_t* line = rgb.data() + static_cast<size_t>(std::min(by + y, h - 1)) * static_cast<size_t>(w) * 3;
+        for (int x = 0; x < 8; ++x) {
+          const uint8_t* px = line + static_cast<size_t>(std::min(bx + x, w - 1)) * 3;
+          const float r = px[0], g = px[1], b = px[2];
+          plane[0][y * 8 + x] = 0.299f * r + 0.587f * g + 0.114f * b - 128.0f;
+          plane[1][y * 8 + x] = -0.168736f * r - 0.331264f * g + 0.5f * b;
+          plane[2][y * 8 + x] = 0.5f * r - 0.418688f * g - 0.081312f * b;
+        }
+      }
+      for (int c = 0; c < 3; ++c) {
+        const int t = c ? 1 : 0;
+        const float* f = plane[c];
+        for (int y = 0; y < 8; ++y)
+          for (int u = 0; u < 8; ++u) {
+            float sum = 0;
+            for (int x = 0; x < 8; ++x) sum += f[y * 8 + x] * cosine[u][x];
+            rows[y * 8 + u] = sum;
+          }
+        float freq[64];
+        for (int u = 0; u < 8; ++u)
+          for (int v = 0; v < 8; ++v) {
+            float sum = 0;
+            for (int y = 0; y < 8; ++y) sum += rows[y * 8 + u] * cosine[v][y];
+            freq[v * 8 + u] = sum;
+          }
+        for (int i = 0; i < 64; ++i) q[i] = static_cast<int>(std::lround(freq[zigzag[i]] / static_cast<float>(qt[t][zigzag[i]])));
+        const int diff = q[0] - before[c];
+        before[c] = q[0];
+        int n = category(diff);
+        bits(dc[t].code[n], dc[t].size[n]);
+        if (n) bits(static_cast<uint32_t>(diff < 0 ? diff + (1 << n) - 1 : diff), n);
+        int run = 0;
+        for (int i = 1; i < 64; ++i) {
+          if (!q[i]) {
+            ++run;
+            continue;
+          }
+          for (; run > 15; run -= 16) bits(ac[t].code[0xf0], ac[t].size[0xf0]);
+          n = category(q[i]);
+          bits(ac[t].code[(run << 4) | n], ac[t].size[(run << 4) | n]);
+          bits(static_cast<uint32_t>(q[i] < 0 ? q[i] + (1 << n) - 1 : q[i]), n);
+          run = 0;
+        }
+        if (run) bits(ac[t].code[0], ac[t].size[0]);
+      }
+    }
+  bits(0x7f, 7);  // (the last byte filled with ones)
+  put16(0xffd9);
+  return out;
+}
+
+// The picture taken for the report into the zip as screenshot.jpg (nothing when none was taken), and forgotten.
+bool AddReportPicture(ZipWriter& zip, std::string* inside) {
+  if (g_picture.state != ReportPicture::Taken) return g_picture = ReportPicture(), false;
+  int w = g_picture.w, h = g_picture.h;
+  const int fullW = w, fullH = h;
+  std::vector<uint8_t> rgb(static_cast<size_t>(w) * static_cast<size_t>(h) * 3);
+  for (size_t i = 0, n = static_cast<size_t>(w) * static_cast<size_t>(h); i < n; ++i)
+    rgb[i * 3] = g_picture.rgba[i * 4], rgb[i * 3 + 1] = g_picture.rgba[i * 4 + 1], rgb[i * 3 + 2] = g_picture.rgba[i * 4 + 2];
+  g_picture = ReportPicture();
+  const char* asked = std::getenv("MOHO64UI_REPORT_PICTURE_MAX");
+  const size_t most = asked && *asked ? static_cast<size_t>(std::strtoull(asked, nullptr, 10)) : size_t(6) * 1000 * 1000;
+  const auto t0 = std::chrono::steady_clock::now();
+  std::string jpeg = JpegOf(rgb, w, h, 90);
+  while (!jpeg.empty() && jpeg.size() > most && w / 2 >= 1280) {
+    // (halved: each pixel the mean of four)
+    const int hw = w / 2, hh = h / 2;
+    std::vector<uint8_t> half(static_cast<size_t>(hw) * static_cast<size_t>(hh) * 3);
+    for (int y = 0; y < hh; ++y)
+      for (int x = 0; x < hw; ++x)
+        for (int c = 0; c < 3; ++c) {
+          const uint8_t* p = rgb.data() + (static_cast<size_t>(y) * 2 * static_cast<size_t>(w) + static_cast<size_t>(x) * 2) * 3 + c;
+          half[(static_cast<size_t>(y) * static_cast<size_t>(hw) + static_cast<size_t>(x)) * 3 + c] =
+              static_cast<uint8_t>((p[0] + p[3] + p[static_cast<size_t>(w) * 3] + p[static_cast<size_t>(w) * 3 + 3] + 2) / 4);
+        }
+    rgb.swap(half), w = hw, h = hh;
+    jpeg = JpegOf(rgb, w, h, 90);
+  }
+  if (jpeg.empty()) {
+    Logf(LogLevel::Warning, "moho64ui: the report: the window's picture could not be packed; the report goes without it");
+    return false;
+  }
+  zip.Add("screenshot.jpg", jpeg);
+  const std::string size = std::to_string(w) + "x" + std::to_string(h);
+  *inside += "- screenshot.jpg: the game's window as it was when the report was asked for, before the question came up\n  (" + size +
+             (w != fullW ? ", made smaller from " + std::to_string(fullW) + "x" + std::to_string(fullH) + " to keep the report small" : std::string()) +
+             "; the game's own picture only, nothing else of the screen)\n";
+  Logf(LogLevel::Info, "moho64ui: the report: the window's picture put in (%s%s, %zu bytes, packed in %.0f ms)", size.c_str(),
+       w != fullW ? (" of " + std::to_string(fullW) + "x" + std::to_string(fullH)).c_str() : "", jpeg.size(),
+       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+  return true;
+}
+
 std::string Stamp(const char* form) {
   std::time_t now = std::time(nullptr);
   std::tm t = {};
@@ -972,6 +1182,8 @@ std::string WriteReportInto(lua_State* L, const std::string& note, const std::fi
     zip.Add("game.prefs", ShortenUserFolder(text));
     inside += "- game.prefs: the preferences (the options, the key bindings, the profiles)\n";
   }
+  // (the screenshot of the report by hand; a report written by itself has none and takes none)
+  if (byItself.empty()) AddReportPicture(zip, &inside);
   std::string readme = std::string("FA Remastered: a report (") +
                        (!byItself.empty() ? "written by itself at the start after " + byItself + ": the option Crash Reports, Options > Interface"
                                           : into.empty() ? std::string("the console's remaster_report")
@@ -1021,6 +1233,37 @@ int l_Report(lua_State* L) {
   return 1;
 }
 
+// moho64ui_ReportPicture(what) (the screenshot of the report by hand, above): "take" asks for the window's next shown
+// frame and says whether one will come (false where the program draws into no window); "state" says "none", "waiting"
+// or "taken"; "drop" forgets it (the question was called off).
+int l_ReportPicture(lua_State* L) {
+  const std::string what = lua_isstring(L, 1) ? lua_tostring(L, 1) : "state";
+  if (what == "take") {
+    g_picture = ReportPicture();
+    const UserState::Config& cfg = UserState::From(L)->config();
+    const bool coming = cfg.captureWindow && cfg.captureWindow([](const std::vector<uint8_t>& rgba, int w, int h) {
+      if (g_picture.state != ReportPicture::Waiting) return;  // (called off meanwhile)
+      if (rgba.size() != static_cast<size_t>(w) * static_cast<size_t>(h) * 4 || w <= 0 || h <= 0) {
+        g_picture = ReportPicture();
+        Logf(LogLevel::Info, "moho64ui: the report: the window's picture was not read back; the report goes without one");
+        return;
+      }
+      g_picture.rgba = rgba, g_picture.w = w, g_picture.h = h, g_picture.state = ReportPicture::Taken;
+      Logf(LogLevel::Info, "moho64ui: the report: the window's picture taken (%dx%d)", w, h);
+    });
+    // (the state after the asking: the hook may not answer before it returns, but would it, its answer stands)
+    if (coming && g_picture.state == ReportPicture::None) g_picture.state = ReportPicture::Waiting;
+    lua_pushboolean(L, coming);
+    return 1;
+  }
+  if (what == "drop") {
+    g_picture = ReportPicture();
+    return 0;
+  }
+  lua_pushstring(L, g_picture.state == ReportPicture::Taken ? "taken" : g_picture.state == ReportPicture::Waiting ? "waiting" : "none");
+  return 1;
+}
+
 // moho64ui_AutoCrashReport() -> the zip's file | nil, why: the automatic crash report (AutoCrashReport), asked by the
 // main menu's hook once the option allows it; a second call in a run writes nothing and says what the first did.
 int l_AutoCrashReport(lua_State* L) {
@@ -1040,6 +1283,7 @@ int l_AutoCrashReport(lua_State* L) {
 void RegisterReportBindings(lua_State* L) {
   lua_register(L, "moho64ui_Report", l_Report);
   lua_register(L, "moho64ui_AutoCrashReport", l_AutoCrashReport);
+  lua_register(L, "moho64ui_ReportPicture", l_ReportPicture);
 }
 
 }  // namespace moho::ui

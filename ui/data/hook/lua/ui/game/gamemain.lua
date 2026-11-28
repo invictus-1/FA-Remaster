@@ -177,7 +177,28 @@ end
 -- shaders the line counts them; once a load has lasted twelve seconds it says that the first game takes longer.
 -- The game's own screen (LoadDialog, a local of this chunk) stays as it is; the line is its movie's child.
 -- What is shown, for the tests: text (as shown, "" when none), looks (how often the thread looked).
-RemasterLoadLine = { text = "", looks = 0 }
+-- Since 2026-11-27 (Chris, the ideas' number 7) a second line above it names the step of the load that is running:
+-- "Loading (2 of 5): setting up the battlefield". What is shown, for the tests: step (the step's line, "" when none),
+-- stepSeen (each step's number seen so far, in order).
+RemasterLoadLine = { text = "", looks = 0, step = "", stepSeen = {} }
+
+-- The load's steps as the host numbers them (moho64ui_LoadStep; ui/user/user_state.h Config::loadStep), in a
+-- player's words.
+RemasterLoadSteps = {
+    "reading the units and weapons",
+    "setting up the battlefield",
+    "preparing the interface",
+    "starting the game",
+    "drawing the map",
+}
+
+-- The step's line for the host's step number; "" for none (0, or a number this script does not know).
+function RemasterLoadStepText(step)
+    local name = RemasterLoadSteps[step or 0]
+    if not name then return "" end
+    return "Loading (" .. step .. " of " .. table.getn(RemasterLoadSteps) .. "): " .. name
+end
+
 
 -- The line's text for what the shader compiler says (`work`: moho64ui_ShaderWork's table or nil), the count at the
 -- look before (`before`) and the seconds the load has lasted; "" for no line.
@@ -195,36 +216,56 @@ do
     local RemasterGameLoadDialog = LoadDialog
     LoadDialog = function(parent)
         local movie = RemasterGameLoadDialog(parent)
-        RemasterLoadLine.text, RemasterLoadLine.looks = "", 0
+        RemasterLoadLine.text, RemasterLoadLine.looks, RemasterLoadLine.step, RemasterLoadLine.stepSeen = "", 0, "", {}
+        -- (a line of the two, placed as the screen's own: its ":: IN TRANSIT ::" is 200 below the middle and its tip,
+        -- one line, 40 under that; ours come under the tip)
+        local function Line(below)
+            local line = UIUtil.CreateText(movie, "", 16, UIUtil.bodyFont)
+            line:SetColor('FFA0A8B0')
+            line:SetDropShadow(true)
+            LayoutHelpers.AtCenterIn(line, parent, below)
+            return line
+        end
         ForkThread(function()
             local began = moho64ui_WallSeconds()
             local first = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
             local before = first and first.compiled or 0
-            local line = false
-            -- (a look at once, then one a second: a compile at work is said from the screen's first frames)
-            local looked = false
+            local line, stepLine = false, false
+            local lastLook, lastStep = false, 0
+            -- (the step looked at ten times a second; the graphics at once, then once a second: a compile at work is
+            -- said from the screen's first frames)
             while WorldIsLoading() and not IsDestroyed(movie) do
-                if looked then WaitSeconds(1) end
-                looked = true
-                if IsDestroyed(movie) or not WorldIsLoading() then break end
-                local work = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
-                local text = RemasterLoadLineText(work, before, moho64ui_WallSeconds() - began)
-                before = work and work.compiled or before
-                RemasterLoadLine.looks = RemasterLoadLine.looks + 1
-                if text ~= "" then
-                    if not line then
-                        line = UIUtil.CreateText(movie, "", 16, UIUtil.bodyFont)
-                        line:SetColor('FFA0A8B0')
-                        line:SetDropShadow(true)
-                        LayoutHelpers.AtCenterIn(line, parent, 300)
+                local step = rawget(_G, 'moho64ui_LoadStep') and moho64ui_LoadStep() or 0
+                if step ~= lastStep then
+                    lastStep = step
+                    local text = RemasterLoadStepText(step)
+                    if text ~= "" then
+                        if not stepLine then stepLine = Line(300) end
+                        stepLine:SetText(text)
+                        RemasterLoadLine.step = text
+                        -- (into the log with the load's seconds: a report shows which step a long load stood in)
+                        LOG(string.format("moho64ui: the loading screen says: %s (%.1f s into the load)", text, moho64ui_WallSeconds() - began))
+                        table.insert(RemasterLoadLine.stepSeen, step)
                     end
-                    line:SetText(text)
-                    -- (into the log once a kind: a report then shows that the load was long and why)
-                    if string.sub(text, 1, 30) ~= string.sub(RemasterLoadLine.text, 1, 30) then
-                        LOG("moho64ui: the loading screen says: " .. text)
-                    end
-                    RemasterLoadLine.text = text
                 end
+                local now = moho64ui_WallSeconds()
+                if not lastLook or now - lastLook >= 1 then
+                    lastLook = now
+                    local work = rawget(_G, 'moho64ui_ShaderWork') and moho64ui_ShaderWork()
+                    local text = RemasterLoadLineText(work, before, now - began)
+                    before = work and work.compiled or before
+                    RemasterLoadLine.looks = RemasterLoadLine.looks + 1
+                    if text ~= "" then
+                        if not line then line = Line(326) end
+                        line:SetText(text)
+                        -- (into the log once a kind: a report then shows that the load was long and why)
+                        if string.sub(text, 1, 30) ~= string.sub(RemasterLoadLine.text, 1, 30) then
+                            LOG("moho64ui: the loading screen says: " .. text)
+                        end
+                        RemasterLoadLine.text = text
+                    end
+                end
+                WaitSeconds(0.1)
             end
         end)
         return movie

@@ -351,6 +351,9 @@ class GameSession {
   bool FrameGenerationOn() const;  // (the window's picture: render::WorldPicture::FrameGenerationOn)
   // For checking: the next shown frame is read back and saved as a PNG.
   void CaptureWindow(const std::string& path);
+  // The next shown frame read back and handed to `got` as RGBA bytes (the report's screenshot, user/report.cpp);
+  // empty bytes when three frames went by with none read back.
+  void CaptureWindowInto(std::function<void(const std::vector<uint8_t>& rgba, int w, int h)> got);
 
   // --- The graphics device lost, and every picture made anew (the renderer's request 71 B, render/REQUESTS.md; its
   // calls: render/world_picture.h [devicelost]). Ours: nothing of the original's was read for it (its device is of
@@ -431,6 +434,8 @@ class GameSession {
   // The folder of the map being launched ("/maps/SETONS_R"; empty when no launch is due or loading).
   std::string LoadingMapFolder() const;
   bool Loading() const { return load_ != Load::None; }
+  // Which step of the load is running, 1 to 5 (UserState::Config::loadStep says which is which); 0 while none loads.
+  int LoadStep() const { return load_ != Load::None ? loadStep_.load(std::memory_order_relaxed) : 0; }
   void BeginLoad();
   // Once a frame while a launch loads: the loaded simulation handed to the game's map opening behind (ServeLoad).
   void ServeLoad();
@@ -692,6 +697,8 @@ class GameSession {
   void OpenPicture();
   bool pictureDue_ = false;
   std::string captureTo_;  // (the next shown frame is saved here: CaptureWindow)
+  std::function<void(const std::vector<uint8_t>& rgba, int w, int h)> captureInto_;  // (or handed here: CaptureWindowInto)
+  int captureIntoWaits_ = 0;
   std::string capture2To_;            // ([head2] the second window's next picture shown is saved here: CaptureSecondWindow)
   std::vector<uint8_t> capture2Rgba_;  // (what the renderer reads it back into)
   void ViewerControls(const std::string& orders);  // the player's pause / resume / end while a replay plays
@@ -858,6 +865,7 @@ class GameSession {
   bool loadPrepared_ = false;  // (the loaded simulation handed to the map opening behind: ServeLoad)
   std::string loadWhy_;
   double loadRulesSeconds_ = 0, loadStartSeconds_ = 0;
+  std::atomic<int> loadStep_{0};  // (the load's step, written by the loading thread: LoadStep)
   // The load's parts, for its log (Chris's big test, 2026-11-01: 51 s of load, ~2 s of it in the lines then): seconds
   // from BeginLoad; -1 not yet. loadThreadDone_ and loadStateSeconds_ are the loading thread's, read once it is through.
   std::chrono::steady_clock::time_point launchAt_{}, loadBegan_{};

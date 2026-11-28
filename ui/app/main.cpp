@@ -789,7 +789,14 @@ int main(int argc, char** argv) {
   // (the replay put out to its disk first: the report copies the file as it is, report.cpp; the Replay dialog's copy
   // gains by it too)
   cfg.currentReplay = [&session]() { session.FlushReplay(); return session.currentReplay; };
+  // (the report's screenshot: what the window shows next, read back by the renderer; none where no window is drawn into)
+  cfg.captureWindow = [&session](std::function<void(const std::vector<uint8_t>& rgba, int w, int h)> got) {
+    if (!session.DrawsToWindow()) return false;
+    session.CaptureWindowInto(std::move(got));
+    return true;
+  };
   cfg.worldLoading = [&session]() { return session.Loading(); };
+  cfg.loadStep = [&session]() { return session.LoadStep(); };
   cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
   cfg.cardBackdrop = session.cardBackdrop();  // (the loading screen's film and the "IN TRANSIT" cover, where the window's picture shows)
   // (tests: moho64ui_RecoverDevice, moho64ui_DeviceState; the graphics device's recovery, GameSession::ServeDevice)
