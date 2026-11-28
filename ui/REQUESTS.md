@@ -1478,6 +1478,31 @@ check my SDL window code): 273 of 274 objects compile, one fails: `third_party/l
 'timespec_get'", "use of undeclared identifier 'TIME_UTC'". LIKELY (not tried: your file): `<time.h>` is not
 included there, and the Windows headers bring it in by another way. Nothing of mine waits on it; a Linux build does.
 
+### 63. The duplicate-unit picks of the local mod fixes as data a script can read before a game (2026-11-27, Chris approved the idea today; not blocking)
+
+**ASKED 2026-11-27** (by message the same hour).
+
+Who: ui. Why: Chris approved, with the other ideas of 2026-11-27, that the mods manager says WHICH MOD'S VERSION of a
+unit is used when two mods define the same unit (his rule of 2026-11-06: the latest / strongest is kept, the other
+left out). The picks exist only as the `LeftOut` tables inside `local_mod_fixes/*/hook/lua/system/Blueprints.lua`
+(antares-rework: 18 ids between Antares Unit Pack and the Wyvern Battle Pack; schlachtfeld-fix has its own), which
+run in the simulation's blueprint loading: the interface cannot read them on the main menu, and it must not guess the
+winner from the load order (your pick is by strength, pinned).
+
+What I ask, in whatever form suits your hook:
+- each fix mod that leaves definitions out carries the picks as PLAIN DATA in a file of its own that its Blueprints
+  hook reads too (one source), for example `duplicates.lua` at the mod's root:
+  `Duplicates = { { id = 'wal0305', leftOut = { uid = '<mod uid>', mod = 'Antares Unit Pack', unit = 'Blitz' },
+  kept = { uid = '<mod uid>', mod = 'the Wyvern Battle Pack', unit = 'Hellfury' }, always = false }, ... }`
+  (`always`: left out even when the other mod is off, as the Gemini);
+- and one line of how a front-end script finds the file from the mod's entry in the mods list (the mod's location is
+  in its mod_info; I read the file with the game's own doscript in an empty environment, as data).
+
+My side, once it is there: the mods manager's row of each of the two mods says "17 of its units are also in <other>:
+<n> used from here, <m> from there" with the list on the tooltip, and only when both mods (and the fix) are on. No
+change to the mods themselves, nothing of the mods or the fixes in the public repository (the list is read from the
+player's own folder at run time).
+
 ## To the renderer track
 
 ### 1. The world's picture inside the interface
