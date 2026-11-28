@@ -1264,6 +1264,86 @@ int l_ReportPicture(lua_State* L) {
   return 1;
 }
 
+// moho64ui_SettingsFile(what, ...): a player's settings as a file on the Desktop (Chris, 2026-11-27, the ideas' number
+// 9: "settings exported to and imported from a file"; the script is /moho64ui/lua/settingsfile.lua, which makes and
+// reads the text). Only files named FA_Remastered_settings*.txt in the Desktop folder (in tests:
+// MOHO64UI_REPORT_FOLDER) are written, listed and read: a script cannot name another place.
+//   "write", text -> the file written (FA_Remastered_settings_<date>_<time>.txt) | nil, why
+//   "list"        -> { { name = "FA_Remastered_settings_....txt", when = "2026-11-27 17:50" }, ... } newest first, 12 at most
+//   "read", name  -> the file's text (256 KB at most) | nil, why
+int l_SettingsFile(lua_State* L) {
+  const std::string what = lua_isstring(L, 1) ? lua_tostring(L, 1) : "";
+  auto fail = [L](const std::string& why) {
+    lua_pushnil(L);
+    lua_pushstring(L, why.c_str());
+    return 2;
+  };
+  const std::filesystem::path folder = DesktopFolder();
+  if (folder.empty()) return fail("this PC names no Desktop folder");
+  static const std::string head = "FA_Remastered_settings", tail = ".txt";
+  auto ours = [](const std::string& name) {
+    return name.size() > head.size() + tail.size() && name.compare(0, head.size(), head) == 0 &&
+           name.compare(name.size() - tail.size(), tail.size(), tail) == 0 && name.find_first_of("/\\:") == std::string::npos &&
+           name.find("..") == std::string::npos;
+  };
+  std::error_code ec;
+  if (what == "write") {
+    if (!lua_isstring(L, 2)) return fail("no text to write");
+    const std::string text(lua_tostring(L, 2), lua_strlen(L, 2));
+    std::filesystem::create_directories(folder, ec);
+    std::filesystem::path file = folder / (head + "_" + Stamp("%Y-%m-%d_%H-%M-%S") + tail);
+    for (int n = 2; std::filesystem::exists(file, ec) && n < 100; ++n)
+      file = folder / (head + "_" + Stamp("%Y-%m-%d_%H-%M-%S") + "_" + std::to_string(n) + tail);
+    std::ofstream out(file, std::ios::binary);
+    if (!out || !out.write(text.data(), static_cast<std::streamsize>(text.size()))) return fail("cannot write " + ShortenUserFolder(TextOf(file)));
+    out.close();
+    Logf(LogLevel::Info, "moho64ui: the settings file: written, %zu bytes: %s", text.size(), ShortenUserFolder(TextOf(file)).c_str());
+    lua_pushstring(L, TextOf(file).c_str());
+    return 1;
+  }
+  if (what == "list") {
+    struct Found {
+      std::string name, when;
+      std::filesystem::file_time_type time;
+    };
+    std::vector<Found> found;
+    for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+      std::error_code each;
+      if (!it->is_regular_file(each)) continue;
+      const std::string name = Name(it->path());
+      if (ours(name)) found.push_back({name, FileTime(it->path()), it->last_write_time(each)});
+    }
+    std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.time != b.time ? a.time > b.time : a.name > b.name; });
+    if (found.size() > 12) found.resize(12);
+    lua_newtable(L);
+    int i = 0;
+    for (const Found& f : found) {
+      lua_newtable(L);
+      lua_pushstring(L, "name");
+      lua_pushstring(L, f.name.c_str());
+      lua_rawset(L, -3);
+      lua_pushstring(L, "when");
+      lua_pushstring(L, f.when.c_str());
+      lua_rawset(L, -3);
+      lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+  }
+  if (what == "read") {
+    const std::string name = lua_isstring(L, 2) ? lua_tostring(L, 2) : "";
+    if (!ours(name)) return fail("not a settings file's name");
+    const std::filesystem::path file = folder / PathOf(name);
+    const auto size = std::filesystem::file_size(file, ec);
+    if (ec) return fail("there is no such file on the Desktop");
+    if (size > 256 * 1024) return fail("the file is too large to be a settings file");
+    std::string text;
+    if (!ReadWhole(file, &text)) return fail("the file cannot be read");
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+  }
+  return fail("moho64ui_SettingsFile: 'write', 'list' or 'read'");
+}
+
 // moho64ui_AutoCrashReport() -> the zip's file | nil, why: the automatic crash report (AutoCrashReport), asked by the
 // main menu's hook once the option allows it; a second call in a run writes nothing and says what the first did.
 int l_AutoCrashReport(lua_State* L) {
@@ -1284,6 +1364,7 @@ void RegisterReportBindings(lua_State* L) {
   lua_register(L, "moho64ui_Report", l_Report);
   lua_register(L, "moho64ui_AutoCrashReport", l_AutoCrashReport);
   lua_register(L, "moho64ui_ReportPicture", l_ReportPicture);
+  lua_register(L, "moho64ui_SettingsFile", l_SettingsFile);
 }
 
 }  // namespace moho::ui

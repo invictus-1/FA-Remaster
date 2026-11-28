@@ -1244,6 +1244,39 @@ table.insert(options.ui.items, {
     },
 })
 
+-- The settings as a file (Chris, 2026-11-27, the ideas' number 9; /moho64ui/lua/settingsfile.lua): two buttons (the
+-- dialog's 'button' type: no value kept). Save writes the options as the dialog shows them now onto the Desktop as
+-- plain text; Load lists the settings files on the Desktop and puts the picked one's values into the dialog, to be
+-- applied by its own Apply or OK.
+table.insert(options.ui.items, {
+    title = "Save Settings",
+    key = 'remaster_settings_save',
+    tip = "Writes your settings, as this window shows them now, as a small text file onto your Desktop (FA_Remastered_settings_<date>.txt). Keep it as a copy, or put it on another PC's Desktop and load it there. The screen's resolution and the key bindings are not in it: they belong to a PC.",
+    type = 'button',
+    default = 0,
+    update = function(control, value)
+        import('/moho64ui/lua/settingsfile.lua').Save()
+    end,
+    set = function(key, value, startup) end,
+    custom = {
+        text = "To Desktop...",
+    },
+})
+table.insert(options.ui.items, {
+    title = "Load Settings",
+    key = 'remaster_settings_load',
+    tip = "Shows the settings files that lie on your Desktop and puts the one you pick into this window. Nothing is kept until you press Apply or OK; Cancel leaves everything as it was. A setting this build does not know is left out.",
+    type = 'button',
+    default = 0,
+    update = function(control, value)
+        import('/moho64ui/lua/settingsfile.lua').Choose()
+    end,
+    set = function(key, value, startup) end,
+    custom = {
+        text = "From Desktop...",
+    },
+})
+
 -- What plays behind the main menu (Chris approved the flight on 2026-11-08: docs/ui-menuflight.md; the ui chat's lead
 -- put both here, on the Interface tab, until the Remaster options are laid out anew): the live flight over a staged
 -- battle on Seton's Clutch Remastered (the default; without that map: Dusk), the evening flight over the stock map as

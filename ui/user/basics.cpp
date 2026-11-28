@@ -456,7 +456,9 @@ void RegisterBasicBindings(lua_State* L) {
     lua_pushstring(S, kBuildCommit);
     lua_rawset(S, -3);
     lua_pushstring(S, "date");
-    lua_pushstring(S, kBuildDate);
+    // (MOHO64UI_BUILD_DATE=<date>: another date said, for the stored pictures of the main menu, whose line names it)
+    static const char* const said = std::getenv("MOHO64UI_BUILD_DATE");
+    lua_pushstring(S, said && *said ? said : kBuildDate);
     lua_rawset(S, -3);
     return 1;
   });

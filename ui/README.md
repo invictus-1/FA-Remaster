@@ -151,6 +151,11 @@ moho64ui --init <the game's init .lua> [--mods uids.txt] [--prefs <our preferenc
   card is lower than what is set, and changes nothing without "Use recommended" (`data/lua/firstadvice.lua`;
   `tests/firstadvice.lua`). On the main menu Escape goes to the menu's own handler, past the popups' stack: a box of
   ours names its Escape in `data/hook/lua/ui/uimain.lua` while it is up.
+- The settings as a file (ours; Chris's ideas of 2026-11-27, number 9; the detail in docs/ui-answers.md): Options >
+  Interface, "Save Settings" and "Load Settings": the options as plain `name = value` lines in a text file on the
+  Desktop, loaded into the Options dialog to be applied by its own OK; a file is read as data, an unknown name or a
+  value the option cannot take is left out and counted (`data/lua/settingsfile.lua`, `moho64ui_SettingsFile`;
+  `tests/settingsfile.lua`).
 - The automatic crash report (ours; the first step of Chris's debugger: 2026-11-15, "something that auto activates the
   second the app runs and is a background thing that can be disabled in settings but if a crash occurs it post the
   details on desktop and the user can send it over"; 2026-11-18, "Yes, on the Desktop"): when the main menu is made

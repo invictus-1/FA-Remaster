@@ -74,6 +74,27 @@ of. The variable still sets another threshold (and lifts the limit), `=0` or `=o
   with what ran long in them (a live window's default ...)", and a 52 ms frame of a game's third second with its
   names (a model made ahead 4.3 ms, CMauiText:SetText 1.9 ms, ...).
 
+**9. The settings to and from a file.** Options > Interface, at the tab's end under our header: "Save Settings: To
+Desktop..." and "Load Settings: From Desktop..." (`data/lua/settingsfile.lua`; the rows in
+`data/hook/lua/options/options.lua`, buttons as "Import from FAF..."). Save writes the options AS THE DIALOG SHOWS
+THEM NOW as plain text onto the Desktop (`FA_Remastered_settings_<date>_<time>.txt`: a `name = value` line an option,
+150 of them today, under the tab's name as a note, CR LF so that Notepad reads it). Load lists the settings files on
+the Desktop, newest first; the one clicked is read and its values go INTO THE DIALOG (its working set and the rows
+shown: `RemasterWorkingSet` in the dialog's hook), so nothing is kept until the dialog's own Apply or OK, and its
+Cancel leaves everything.
+- A file is data, never run: each line is read by a pattern; a key that is no option of this build is left out, a
+  value its option cannot take is left out (not one of its states, outside a slider's range), and the box counts
+  both. Not written and not read: the screen's resolution (`primary_adapter`, `secondary_adapter`: a PC's, and a
+  wrong one could leave a black screen), this program's notes of what a profile was shown, and the key bindings
+  (they are not options; FAF's import stays the way to carry those).
+- The host keeps the place (`moho64ui_SettingsFile` in `ui/user/report.cpp`: "write", "list", "read"): only files
+  named `FA_Remastered_settings*.txt` in the Desktop folder (in tests `MOHO64UI_REPORT_FOLDER`), 256 KB at most; a
+  script cannot name another path.
+- Tests: `ui/tests/settingsfile.lua` with the lab's `suite/settingsfile.sh` (a Desktop of the test's and a planted
+  file: 31 checks, and 7 on the file written).
+- Also: `MOHO64UI_BUILD_DATE` (a test switch) says another build date to `moho64ui_Build()`, so that the stored
+  pictures of the main menu, whose line names the date, hold from day to day (`suite/pictures.sh` sets it).
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's

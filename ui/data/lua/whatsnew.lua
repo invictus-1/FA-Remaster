@@ -13,6 +13,7 @@ Entries = {
         "The loading screen names the step of the load that is running, and says when graphics are being prepared: the first game after an install or an update takes longer.",
         "The main menu shows the date of your build and this list. On a PC whose graphics card is too small for the highest settings, the first start recommends lower ones; nothing changes unless you say so.",
         "If the game stutters, its log now says what the stutter was made of, so a report shows it.",
+        "Your settings can be saved as a small file on your Desktop and loaded again, on this PC or another: Options > Interface, at the end of the list.",
         "A unit guarding something that vanishes now stays where it is (in new games).",
         "Exhausts and trails sit on the craft that makes them, and some mod units that were invisible are drawn.",
     } },

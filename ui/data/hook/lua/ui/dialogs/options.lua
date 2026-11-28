@@ -30,6 +30,13 @@ do
     end
     -- (for the tests: the lookup itself, through the dialog's CreateDialog; ui/tests/options_tabs.lua)
     function RemasterHookLocal(name) return Upvalue(RemasterGameCreateDialog, name) end
+    -- The dialog's working set while the dialog is up (what its rows show, applied or not), nil when it is not: for
+    -- the settings file, which saves what the player sees and loads into it (/moho64ui/lua/settingsfile.lua).
+    function RemasterWorkingSet()
+        local dialog = Upvalue(RemasterGameCreateDialog, 'dialog')
+        if not dialog or IsDestroyed(dialog) then return nil end
+        return Upvalue(RemasterGameCreateDialog, 'currentOptionsSet')
+    end
 
     -- A 'button' option's row cleans up after itself. The game's dialog makes such a row as a Bitmap and then gives it
     -- an OnDestroy of its own (controlTypeCreate.button: `bg.OnDestroy = function ... end`), which hides Bitmap's
