@@ -70,7 +70,8 @@ ForkThread(function()
     WaitFrames(2)
     local box = News.Controls.box
     check("a click on it: the box is up", up(box), true)
-    check("it shows three entries at most", News.State.shown, math.min(3, table.getn(News.Entries)))
+    check("it shows the newest entry, and three at most", News.State.shown >= 1 and News.State.shown <= math.min(3, table.getn(News.Entries)), true)
+    LOG("TEST note entries shown: " .. News.State.shown .. " of " .. table.getn(News.Entries) .. " on a screen " .. GetFrame(0).Height() .. " high")
     if up(box) then
         local frame = GetFrame(0)
         check("the box lies inside the screen", box.Left() >= 0 and box.Top() >= 0 and box.Right() <= frame.Right() and box.Bottom() <= frame.Bottom(), true)

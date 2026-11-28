@@ -273,7 +273,7 @@ void UiManager::Render(lua_State* L, DrawTarget& target, int head) {
     DrawCost& sorting = DrawCosts()["(collecting and sorting the controls)"];
     sorting.seconds += std::chrono::duration<double>(Clock::now() - t0).count(), sorting.draws += static_cast<long long>(all.size());
   }
-  static const bool timeEach = LongFramesVariable() > 0;  // (MOHO64UI_LONG_FRAMES set to a threshold; not a window's default)
+  static const bool timeEach = LongFrameDetail();  // (MOHO64UI_LONG_FRAMES set to a threshold, or a live window's default)
   g_slowestDrawn.clear(), g_slowestDrawnMs = 0;
   auto draw = [&](Control* c) {
     if (c->dead()) return;  // (a script run by an earlier Draw may have destroyed it)

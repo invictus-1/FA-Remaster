@@ -11,6 +11,8 @@ Entries = {
     { date = "2026-11-27", lines = {
         "Report a Problem now puts a picture of the game's screen into its report, as the screen was when you asked.",
         "The loading screen names the step of the load that is running, and says when graphics are being prepared: the first game after an install or an update takes longer.",
+        "The main menu shows the date of your build and this list. On a PC whose graphics card is too small for the highest settings, the first start recommends lower ones; nothing changes unless you say so.",
+        "If the game stutters, its log now says what the stutter was made of, so a report shows it.",
         "A unit guarding something that vanishes now stays where it is (in new games).",
         "Exhausts and trails sit on the craft that makes them, and some mod units that were invisible are drawn.",
     } },
@@ -87,21 +89,29 @@ function Show()
     probe:Hide()
     local width = 640
     local rows = { { text = "What's new in FA Remastered", size = 18, colour = UIUtil.fontColor, centre = true }, { text = "", size = 6 } }
+    -- (three entries at most, and only as many as the screen's height takes: the newest always, an older one while
+    -- the box with it stays 120 clear of the screen's height, in the layout's own units)
+    local room = parent.Height() / LayoutHelpers.ScaleNumber(1) - 120
+    local height = 14
+    for _, row in rows do height = height + (row.size + 6) end
     local shown = 0
     for i, entry in Entries do
         if i > 3 then break end
-        shown = shown + 1
-        table.insert(rows, { text = DateText(entry.date), size = 14, colour = 'FFFFFFFF' })
+        local more = { { text = DateText(entry.date), size = 14, colour = 'FFFFFFFF' } }
         for _, line in entry.lines do
             local wrapped = WrapText(line, LayoutHelpers.ScaleNumber(width - 24), function(t) return probe:GetStringAdvance(t) end)
             for n, part in wrapped do
-                table.insert(rows, { text = part, size = 14, colour = 'FFA0A8B0', indent = 12, bullet = n == 1 })
+                table.insert(more, { text = part, size = 14, colour = 'FFA0A8B0', indent = 12, bullet = n == 1 })
             end
         end
-        table.insert(rows, { text = "", size = 6 })
+        table.insert(more, { text = "", size = 6 })
+        local taller = 0
+        for _, row in more do taller = taller + (row.size + 6) end
+        if shown > 0 and height + taller + 56 > room then break end
+        for _, row in more do table.insert(rows, row) end
+        height = height + taller
+        shown = shown + 1
     end
-    local height = 14
-    for _, row in rows do height = height + (row.size + 6) end
     LayoutHelpers.SetDimensions(content, width + 40, height + 56)
     local above, texts, top = false, {}, 14
     for _, row in rows do

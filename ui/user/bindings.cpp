@@ -186,10 +186,11 @@ std::map<std::string, BindingCost>& BindingCosts() {
   return costs;
 }
 bool Profiling() {  // (MOHO64UI_BEAT_LOG too: its waits are logged with the function that waited; MOHO64UI_LONG_FRAMES set
-                    // to a threshold: a long frame names the functions that ran long in it. Not with a window's default
-                    // long-frame log, the variable unset: every engine function's call would be timed in every game)
+                    // to a threshold, or a live window with it unset: a long frame names the functions that ran long in
+                    // it. The cost was measured before the window's default took it on, 2026-11-27: user_state.h,
+                    // LongFrameDetail)
   static const bool on = std::getenv("MOHO64UI_BINDING_PROFILE") != nullptr || std::getenv("MOHO64UI_BEAT_LOG") != nullptr ||
-                         LongFramesVariable() > 0;
+                         LongFrameDetail();
   return on;
 }
 int TimedBinding(lua_State* L) {

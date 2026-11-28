@@ -122,6 +122,17 @@ double LongFramesVariable() {
 }
 
 namespace {
+bool g_liveWindowRun = false;
+}  // namespace
+
+void SetLiveWindowRun(bool live) { g_liveWindowRun = live; }
+
+bool LongFrameDetail() {
+  const double v = LongFramesVariable();
+  return v > 0 || (v < 0 && g_liveWindowRun);
+}
+
+namespace {
 // The log on at `ms` on this thread (it notes, and the Lua collections are watched from now on).
 void LongFramesOn(LongFrameLog& l, double ms) {
   l.thresholdMs = ms;
@@ -149,8 +160,8 @@ void LongFramesInWindow() {
   if (v < 0 && l.thresholdMs <= 0) {
     LongFramesOn(l, LongFrameLog::kWindowDefaultMs);
     Logf(LogLevel::Info,
-         "moho64ui: frames longer than %.1f ms are logged (a live window's default; MOHO64UI_LONG_FRAMES=<ms> sets another, =0 "
-         "or =off none), at most %d lines a minute",
+         "moho64ui: frames longer than %.1f ms are logged with what ran long in them (a live window's default; "
+         "MOHO64UI_LONG_FRAMES=<ms> sets another, =0 or =off none), at most %d lines a minute",
          l.thresholdMs, LongFrameLimit::kLines);
   } else if (v == 0) {
     Logf(LogLevel::Info, "moho64ui: long frames are not logged (MOHO64UI_LONG_FRAMES=%s)", std::getenv("MOHO64UI_LONG_FRAMES"));

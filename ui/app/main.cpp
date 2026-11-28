@@ -798,6 +798,9 @@ int main(int argc, char** argv) {
   cfg.worldLoading = [&session]() { return session.Loading(); };
   cfg.loadStep = [&session]() { return session.LoadStep(); };
   cfg.liveClock = windowed;  // (a test run's clock goes in fixed frame steps)
+  // (a live window's long frames name what ran long in them, by default: said before the first state is made, as the
+  // engine functions are wrapped for timing when they are registered; user_state.h, LongFrameDetail)
+  ui::SetLiveWindowRun(windowed);
   cfg.cardBackdrop = session.cardBackdrop();  // (the loading screen's film and the "IN TRANSIT" cover, where the window's picture shows)
   // (tests: moho64ui_RecoverDevice, moho64ui_DeviceState; the graphics device's recovery, GameSession::ServeDevice)
   cfg.recoverDevice = [&session](const std::string& mode, std::string* why) { return session.AskDeviceRecovery(mode, why); };

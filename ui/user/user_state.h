@@ -989,7 +989,9 @@ struct LongFrameLimit {
   std::string Flush();
 };
 struct LongFrameLog {
-  static constexpr double kWindowDefaultMs = 100.0;
+  // (33 since 2026-11-27, Chris's idea 2, "stutter details in the log by default": until then 100, and a stutter one
+  // feels at 60 frames a second is a frame of two or three; his own launchers have set 33 since October)
+  static constexpr double kWindowDefaultMs = 33.0;
   double thresholdMs = 0;  // 0: off
   float cardMs = -1;  // this frame's: the card's time the world's picture last gave (below 0: no picture drawn)
   LongFrameLimit limit;  // (the window's lines)
@@ -1016,6 +1018,15 @@ struct LongFrameLog {
 LongFrameLog& LongFrames();
 // MOHO64UI_LONG_FRAMES as it is set: below 0 not set, 0 off ("0", "off", a number not above 0), else the threshold.
 double LongFramesVariable();
+// Whether a long frame's line also names what ran long in it (the engine functions the scripts called, the control
+// whose Draw took longest): with the variable set to a threshold, and, since 2026-11-27, in a live window with the
+// variable not set (SetLiveWindowRun: said by the host once its options are read, before the first state is made,
+// because the functions are wrapped for timing as they are registered). Measured before it became the default
+// (the suite's job `scale`, 5,000 units, on CPUs 0-15, twice each): a paused frame 0.57 and 0.67 ms without the
+// timing, 0.81 and 0.63 ms with it (inside the runs' own spread); the one cost seen is the selection of all 5,000
+// units at once, 42 ms without and 49 to 53 ms with (about 70 ns for each engine function called).
+void SetLiveWindowRun(bool live);
+bool LongFrameDetail();
 // A live window's loop, on its thread before its first frame: with the variable not set, the log on at
 // kWindowDefaultMs on this thread (the Lua collections' hook with it); one line says which case it is.
 void LongFramesInWindow();

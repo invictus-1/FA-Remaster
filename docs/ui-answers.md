@@ -55,6 +55,25 @@ list kept by hand, an entry a day that changed what a player sees or feels, in a
 INTERFACE TRACK'S TO KEEP at each landing that changes something a player notices (the other tracks' changes too, from
 their messages). Test `ui/tests/whatsnew.lua`.
 
+**2. A stutter's details are in the log by default.** A live window has logged its long frames since October, but
+by default only those over 100 ms and without the names of what ran long (that needed `MOHO64UI_LONG_FRAMES`, which
+Chris's launchers set to 33; a player who starts the program without a launcher had the bare lines). Now a live window
+with the variable NOT set logs every frame over 33 ms with its parts, the card's time, the engine functions the
+scripts called that ran long and the control whose Draw took longest (`LongFrameDetail`, `SetLiveWindowRun`), still at
+most 30 lines a minute with the rest counted in one line. So a report from any player holds what a stutter was made
+of. The variable still sets another threshold (and lifts the limit), `=0` or `=off` turns it off.
+- MEASURED FIRST (the timing wraps every engine function the scripts call, so it was held back until now): the
+  suite's job `scale` (5,000 units; build cd1a7e69; CPUs 0-15; two runs each way). A paused frame with nothing
+  selected: 0.57 and 0.67 ms without, 0.81 and 0.63 ms with (`MOHO64UI_BINDING_PROFILE=1`), 0.66 ms with the whole
+  detail (`MOHO64UI_LONG_FRAMES=50`); all selected, over idle: 0.59 / 0.61 against 0.49 / 0.80; the interface's share
+  of a beat 3.6 / 3.9 against 3.6 / 3.5 ms. No difference outside the runs' own spread. The one cost seen: selecting
+  all 5,000 units at once, 42.3 / 42.5 ms without, 49.2 / 52.0 / 49.2 ms with: about 70 ns for each engine function
+  called, in the one moment that calls a hundred thousand of them. (A fourth run with the detail fell into the start
+  of the engine's gate on the other cores and is left out: its draw time doubled with nothing selected.)
+- Seen in a live window without the variable (`wc_report` on the side build): "frames longer than 33.0 ms are logged
+  with what ran long in them (a live window's default ...)", and a 52 ms frame of a game's third second with its
+  names (a model made ahead 4.3 ms, CMauiText:SetText 1.9 ms, ...).
+
 ## Chris, 2026-11-20: the debugger's next steps ("I'll let you decide what is the best as in most convenient and gets us the best info")
 
 Two things, both built on the report of 15 to 18 November (`ui/user/report.cpp`: the zip with the logs, the game's
