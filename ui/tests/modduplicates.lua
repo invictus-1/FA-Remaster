@@ -42,6 +42,10 @@ ForkThread(function()
         .. "- 1 from this mod: Flyer")
     check("a description with its note under it", Dups.Describe({ uid = C, description = "Planes." }, entries),
         "Planes.\n\nFA Remastered: 1 unit of this mod is also in Pack A. With both mods on, one version of each is used, the stronger or newer one:\n- 1 from Pack A: Flyer")
+    check("the few words for a row", Dups.Short(B, entries), "3 units shared with Pack A")
+    check("with two other mods", Dups.Short(A, entries), "4 units shared with Pack B and 1 other mod")
+    check("one unit", Dups.Short(C, entries), "1 unit shared with Pack A")
+    check("none: no words", Dups.Short('uid-z', entries), nil)
     check("a mod that shares nothing keeps its description", Dups.Describe({ uid = 'uid-z', description = "Plain." }, entries), "Plain.")
     check("no description at all: the note alone", string.sub(Dups.Describe({ uid = C }, entries), 1, 14), "FA Remastered:")
 

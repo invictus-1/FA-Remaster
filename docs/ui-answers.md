@@ -98,14 +98,17 @@ Cancel leaves everything.
 **8. The mods manager says whose version of a shared unit is used.** Where two mods define the same unit, Chris's
 fix mod keeps the stronger or newer one (his rule of 2026-11-06); the engine put the picks into the fix mod as data
 (`duplicates.lua`, his answer to ui request 63). `data/lua/modduplicates.lua` reads every such file among the mods
-(in an empty environment, as data), and the hook `data/hook/lua/ui/lobby/ModsManager.lua` adds a note under the
-description of each of the two mods when the manager makes its row: "FA Remastered: 18 units of this mod are also in
-<the other>. With both mods on, one version of each is used, the stronger or newer one: - 8 from this mod: ... - 10
-from <the other>: ...", a renamed unit and a unit that is always left out said as such. In full in the row's
-tooltip; in the row's own text as far as the manager shows a description. The mod's own table is as it was once the
+(in an empty environment, as data), and the hook `data/hook/lua/ui/lobby/ModsManager.lua` gives the row of each of
+the two mods a few amber words on its name line ("18 units shared with Wyvern Battle Pack") and, in the row's
+tooltip, the whole note under the mod's description: "FA Remastered: 18 units of this mod are also in <the other>.
+With both mods on, one version of each is used, the stronger or newer one: - 8 from this mod: ... - 10 from <the
+other>: ...", a renamed unit and a unit that is always left out said as such. The row's own description stays the
+mod's (the first version, landed the same evening as 85357a7a, put the note into it and the row, made for three
+lines, ran over the row below: seen in the picture of the real manager, corrected within the hour). The
 row is made. Without a fix mod that carries the file nothing is said. Nothing of the mods or the fix is in the
 repository. Test `ui/tests/modduplicates.lua` with the lab's `suite/modduplicates.sh` (a PLANTED fix mod with made-up
-picks, a broken file, a file without a list: 11 checks).
+picks, a broken file, a file without a list: 15 checks); seen on the real manager with the lab's own fix mod (18
+picks, two rows).
 
 **5, its first part: THE INSTALLED COPY** (Chris, 2026-11-27: "Go ahead with the installer, small installer plus art
 packs"). A program started with NO `--init` that finds `install.cfg` beside itself is a player's start

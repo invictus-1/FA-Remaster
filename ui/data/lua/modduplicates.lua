@@ -79,6 +79,27 @@ function NoteFor(uid, entries)
     return table.concat(lines, "\n")
 end
 
+-- The few words for the mod's row itself: "18 units shared with Wyvern Battle Pack" (with two mods or more: "... and
+-- 1 other mod"); nil when it shares none.
+function Short(uid, entries)
+    local count, others, first = 0, 0, nil
+    local seen = {}
+    for _, e in entries or {} do
+        local other = e.kept.uid == uid and e.leftOut or (e.leftOut.uid == uid and e.kept or nil)
+        if other then
+            count = count + 1
+            if not seen[other.uid] then
+                seen[other.uid] = true
+                others = others + 1
+                first = first or other.mod
+            end
+        end
+    end
+    if count == 0 then return nil end
+    return count .. (count == 1 and " unit" or " units") .. " shared with " .. first
+        .. (others > 1 and (" and " .. (others - 1) .. (others == 2 and " other mod" or " other mods")) or "")
+end
+
 -- A mod's description with the note under it (the description alone when there is nothing to say).
 function Describe(mod, entries)
     local note = NoteFor(mod.uid, entries)

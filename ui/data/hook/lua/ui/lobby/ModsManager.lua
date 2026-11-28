@@ -2,8 +2,10 @@
 -- is a hook: the program reads it after the game's /lua/ui/lobby/ModsManager.lua, which stays as it is). Chris,
 -- 2026-11-27, the ideas' number 8. The picks are the player's own fix mod's data (/moho64ui/lua/modduplicates.lua
 -- reads <the fix mod>/duplicates.lua); each time the manager shows its list they are read, and the row of a mod that
--- shares units with another gets a note under its description: in the row's tooltip in full, in the row's own text
--- as far as the manager shows a description. The mod's own table is as it was once its row is made.
+-- shares units with another gets two things: a few amber words on its name line ("18 units shared with <the
+-- other>") and, in its tooltip, the whole note under the mod's description (how many are used from which mod, with
+-- the units' names). The row's own description stays the mod's: the first version (the same day) put the note into
+-- it, and the manager's row, which is made for three lines, ran over the row below.
 -- What was read and said, for the tests: entries (the picks, false before the first showing), notes (rows that got
 -- a note at the last showing).
 RemasterModDuplicates = { entries = false, notes = 0 }
@@ -23,18 +25,31 @@ do
     end
 
     function CreateListElement(parent, mod, index)
+        local group = RemasterGameCreateListElement(parent, mod, index)
         local entries = RemasterModDuplicates.entries
-        local was = mod.description
-        if entries and table.getn(entries) > 0 then
-            local ok, text = pcall(import("/moho64ui/lua/modduplicates.lua").Describe, mod, entries)
-            if ok and text ~= tostring(was or "") then
-                mod.description = text
-                RemasterModDuplicates.notes = RemasterModDuplicates.notes + 1
+        if not group or not entries or table.getn(entries) == 0 then return group end
+        local ok, why = pcall(function()
+            local Dups = import("/moho64ui/lua/modduplicates.lua")
+            local short = Dups.Short(mod.uid, entries)
+            if not short then return end
+            RemasterModDuplicates.notes = RemasterModDuplicates.notes + 1
+            -- (the tooltip made again, as the game's row makes it, with the note between the description and the place)
+            if group.tooltip then
+                AddTooltip(group.tooltip, mod.title, Dups.Describe(mod, entries) .. '\n\n' .. 'Location: ' .. tostring(mod.location), nil)
             end
-        end
-        local made, group = pcall(RemasterGameCreateListElement, parent, mod, index)
-        mod.description = was
-        if not made then error(group, 0) end
+            -- (the words on the name line, after the author; cut off at the row's icons on the right)
+            if group.author and group.check then
+                local words = UIUtil.CreateText(group.check, short, 12, UIUtil.bodyFont)
+                words:DisableHitTest()
+                words:SetColor('FFE0C060')
+                LayoutHelpers.AtTopIn(words, group.check, 9)
+                LayoutHelpers.RightOf(words, group.author, 14)
+                words:SetClipToWidth(true)
+                words.Right:Set(function() return math.max(words.Left() + 1, group.check.Right() - LayoutHelpers.ScaleNumber(70)) end)
+                group.remasterShared = words
+            end
+        end)
+        if not ok then WARN("FA Remastered: a mod's shared units could not be shown: " .. tostring(why)) end
         return group
     end
 end
