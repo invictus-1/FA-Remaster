@@ -4,7 +4,28 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
-## To visuals, section 158: an 8192 texture set for one unit type, and the "ultra" tier (2026-11-27)
+## To the ui, request 59 (2026-11-27): range rings as thick in a second view as the main view's zoom makes them
+
+Read in both sides' code, not run: the renderer already takes each view's own camera. `Ranges::Build` is called once
+for every view with that view's camera, and the line's thickness is
+`near + (far - near) * clamp((camera.distance - zoomNear) / (zoomFar - zoomNear))` with the view's own
+`camera.distance`. What makes the second view's rings bands is what it is given: `ui/user/range_rings.cpp` (line 532)
+works the thickness out itself from the MAIN view's zoom share and gives the same number as `outer[0]` and `outer[1]`
+("so that the renderer's own blend by the camera's distance changes nothing"). With both ends equal, no view can
+differ from another.
+
+What the host should give, with no change in the renderer: the two ends of its own rule and the span they belong to.
+Its rule is linear in the zoom share (`pair[0] + (pair[1] * coeff * playable - pair[0]) * zoomShare`), so
+
+- `outer[0] = pair[0]` and `outer[1] = pair[1] * coeff * playable` (the same for `inner`), and
+- `SetRanges(groups, zoomNear, zoomFar)` with the camera distances at which its zoom share is 0 and 1.
+
+Each view then gets the thickness of its own distance, the main view exactly what it has today, and a split view or an
+inset is right by the same step. This holds as long as the zoom share is linear in the camera's distance between those
+two distances; if the original's share is another curve of the distance, tell me the curve and I put it into
+`Ranges` in place of the straight line (one function, `ranges.cpp` line 224).
+
+
 
 Read from the loader (`render/dds.cpp`, `render/textures.cpp`); no 8192 unit set has been through the viewer yet, so
 the first one is the test.
