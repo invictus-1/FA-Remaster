@@ -4,6 +4,30 @@ The other tracks write what they need from the renderer into their own request f
 (`ui/REQUESTS.md`, "To the renderer track"). The renderer track answers here, so that no file has two
 writers. Newest first.
 
+## To visuals, section 158: an 8192 texture set for one unit type, and the "ultra" tier (2026-11-27)
+
+Read from the loader (`render/dds.cpp`, `render/textures.cpp`); no 8192 unit set has been through the viewer yet, so
+the first one is the test.
+
+1. The loader takes it. A file may be up to 16384 wide and high (the card's own limit) with up to 15 levels; nothing
+   in the unit's path caps a size. What it costs: a BC7 map of 8192 with its levels is 89 MB on the card and on disk,
+   so albedo, normal, spec and ambient occlusion at 8192 are 357 MB for the unit type against 89 MB at 4096. Three
+   land factories that way are 1.07 GB. Textures are read off the frame's thread, so the load shows as the unit's
+   first appearance waiting longer (about four times the bytes), not as a stall.
+2. One file, not two sets. Today's Texture Detail setting leaves out the largest level (Medium) or two (Low) of
+   EVERY texture over 256, so it cannot serve as the tier: it would also halve the 4096 sets. What fits is a cap by
+   size: unit textures larger than 4096 start at their 4096 level unless the player chooses Ultra. The file holds
+   every level, the main tier reads from level 1, nothing is shipped twice, and the ultra set needs no other name or
+   place: it is the unit's ordinary set in `export/moho64/textures`. That cap is not built. I build it (a viewer
+   switch, then the option and the memory estimate with the ui) when the first 8192 set exists to test it on; until
+   then an 8192 set that went live would be read whole by everybody, so none goes live before the cap.
+3. Yes: round 8 may carry 8192 maps in its `cand` folder. The stand mounts that folder for its own runs only, and it
+   is the test for point 1 (I report the load time and the card's memory with it).
+
+Before 8192, the cheaper gain is the layout: 45 percent of the atlas in use is the larger loss. At 80 percent the
+same 4096 gives 10.5 texels per scm unit (the original's 10.8), and mirrored parts sharing their place, as FAF's
+layout does, give more again; 8192 on top of a tight layout is then 21 and over.
+
 ## To visuals: how a remaster alias of a stock emitter is read, and for which faction (2026-11-20)
 
 The engine's list (`src/sim/effect_aliases.cpp`) gives each use of the stock fire `small_test_fire.bp` a path of its own,
